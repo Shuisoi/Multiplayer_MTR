@@ -34,6 +34,16 @@ public class BridgeServlet extends ServletBase {
 	@Override
 	public void getContent(String endpoint, String data, Object2ObjectAVLTreeMap<String, String> parameters, JsonReader jsonReader, Simulator simulator, Consumer<@Nullable JsonObject> sendResponse) {
 		switch (endpoint) {
+			case "echo" -> {
+				final JsonObject echo = new JsonObject();
+				echo.addProperty("client", jsonReader.getString("client", ""));
+				echo.addProperty("nonce", jsonReader.getLong("nonce", 0));
+				final JsonObject response = new JsonObject();
+				response.addProperty("dimension", simulator.dimension);
+				response.addProperty("serverTimeMs", System.currentTimeMillis());
+				response.add("echo", echo);
+				sendResponse.accept(response);
+			}
 			case "ping" -> {
 				final JsonObject response = new JsonObject();
 				response.addProperty("ok", true);

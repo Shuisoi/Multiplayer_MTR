@@ -75,3 +75,8 @@ public final class NetworkEngineBridge  implements EngineBridge { /* TCP/WebSock
 - standalone 端点清单与 /mmtr/api/bridge/* 原型（BridgeServlet，engine fork 已提交）；
 - ping/vehicles 200 OK；localhost 往返 ~15ms（20 次采样）。
 - 缺口清单（实现顺序）：op(C2S) 桥 → 车辆快照字段增强 → MC 侧 EngineBridge 双实现 → 端到端 → 带宽基准。
+
+## 附录2：原型进度（round3）
+- engine BridgeServlet 增加 `echo`（双向相关校验）；端点清单见 notes/03。
+- game 新增 `org.mtr.mod.bridge`：EngineConfig/EngineBridge/NetworkEngineBridge（JDK HttpClient + relocated gson），fabric:compileJava 通过。
+- 跨进程实测 echo p50≈15.3ms / p90≈16ms / ~194B；带宽基线段记录 notes/04。
