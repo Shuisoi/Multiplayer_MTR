@@ -65,6 +65,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * the game stays fully playable (equivalent to having no consist-type policy).
 	 */
 	private boolean mmtrManualOverride;
+	private @Nullable ControlState mmtrActiveControl;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -416,6 +417,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public void setMmtrManualOverride(boolean enabled) { mmtrManualOverride = enabled; }
 
 	/**
+	 * Applies an explicit separated ControlState from the MMTR input layer (throttle/brake/
+	 * reverser/axes). Enables the explicit control path for this vehicle.
+	 */
+	public void applyMmtrControl(ControlState controlState) {
+		mmtrActiveControl = controlState == null ? null : controlState.copy();
+		mmtrManualOverride = controlState != null;
+	}
+
+	/**
 	 * Lazily resolves the MMTR consist type + controller for this vehicle from the simulator's
 	 * server-side policy. Returns true when MMTR control is active (never for DEFAULT mode).
 	 */
@@ -517,25 +527,22 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final double stoppingDistance = stoppingPoint - railProgress;
 			speed = stoppingDistance <= 0 ? Siding.ACCELERATION_DEFAULT : Math.max(speed - (0.5 * speed * speed / stoppingDistance) * millisElapsed, Siding.ACCELERATION_DEFAULT);
 		} else if (mmtrManualOverride && !isClientside && isCurrentlyManual() && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
-			// MMTR control model (server-side ConsistType policy). Legacy handle is mapped onto the
-			// unified ControlState; the consist's controller shapes the actual longitudinal force.
-			final ControlState mmtrControl = MmtrSupport.controlFromLegacyPowerLevel(powerLevel, mmtrConsistType.getPowerNotches(), mmtrConsistType.getBrakeNotches());
+			// MMTR explicit control model: drive from the separated ControlState sent by the input
+			// layer (throttle notch 0..N, brake notch, axes). No legacy single-handle mapping.
+			final ControlState mmtrControl = mmtrActiveControl == null ? new ControlState() : mmtrActiveControl;
 			final DriveOutput mmtrOutput = mmtrDriveController.compute(mmtrControl, mmtrConsistType, MmtrSupport.internalSpeedToSi(speed), millisElapsed);
 			double mmtrSpeed = speed + MmtrSupport.siAccelerationToInternal(mmtrOutput.getAccelerationMetersPerSecondSquared()) * millisElapsed;
 			if (mmtrOutput.getAccelerationMetersPerSecondSquared() >= 0) {
-				final double mmtrUpperBound = speedTarget >= 0 ? Math.min(speedTarget, mmtrConsistType.getMaxSpeedMetersPerSecond() / 1000.0) : Double.MAX_VALUE;
+				final double mmtrUpperBound = mmtrConsistType.getMaxSpeedMetersPerSecond() / 1000.0;
 				mmtrSpeed = Math.min(mmtrSpeed, mmtrUpperBound);
-			} else if (powerLevel < 0 || mmtrOutput.isBrakeLamp()) {
-				// Engine-driven braking (negative handle or brake lamp): keep the positive speedTarget
-				// (e.g. manual max speed after overspeed kick-in); only stop when the target is zero.
-				final double mmtrLowerBound = speedTarget > 0 ? speedTarget : 0;
-				mmtrSpeed = Math.max(mmtrSpeed, mmtrLowerBound);
 			} else {
-				// Controller-managed gentle pull-back above a notch target: allow natural deceleration.
 				mmtrSpeed = Math.max(mmtrSpeed, 0);
 			}
+			// Keep the legacy HUD in sync: show throttle positive, brake negative, coast at zero.
+			vehicleExtraData.setPowerLevel(mmtrControl.getThrottleNotch() > 0 ? mmtrControl.getThrottleNotch()
+				: mmtrControl.getBrakeNotch() > 0 ? -mmtrControl.getBrakeNotch() : 0);
 			if (speed != mmtrSpeed || Math.abs(mmtrOutput.getAccelerationMetersPerSecondSquared()) > 0.001) {
-				System.out.println("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " power=" + powerLevel + " speed=" + speed + " target=" + speedTarget + " outAcc=" + mmtrOutput.getAccelerationMetersPerSecondSquared() + " cyl=" + mmtrOutput.getBrakeCylinderPressure() + " emg=" + mmtrOutput.isEmergencyBrake());
+				System.out.println("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " speed=" + speed + " outAcc=" + mmtrOutput.getAccelerationMetersPerSecondSquared() + " cyl=" + mmtrOutput.getBrakeCylinderPressure() + " emg=" + mmtrOutput.isEmergencyBrake());
 			}
 			speed = mmtrSpeed;
 		} else {

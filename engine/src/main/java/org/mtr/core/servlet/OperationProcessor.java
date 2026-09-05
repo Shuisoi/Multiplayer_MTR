@@ -55,6 +55,10 @@ public final class OperationProcessor {
 	 */
 	public static final String BLOCK_RAILS = "block_rails";
 	/**
+	 * MMTR: explicit separated throttle/brake control for one vehicle.
+	 */
+	public static final String MMTR_DRIVE = "mmtr_drive";
+	/**
 	 * Press a hall-call button on a lift.
 	 */
 	public static final String PRESS_LIFT = "press_lift";
@@ -136,6 +140,10 @@ public final class OperationProcessor {
 			case UPDATE_RIDING_ENTITIES -> new UpdateVehicleRidingEntities(jsonReader).update(simulator);
 			case BLOCK_RAILS -> {
 				new BlockRails(jsonReader).blockRails(simulator);
+				yield null;
+			}
+			case MMTR_DRIVE -> {
+				new org.mtr.core.operation.MmtrDriveControl(jsonReader).apply(simulator);
 				yield null;
 			}
 			case PRESS_LIFT -> {
