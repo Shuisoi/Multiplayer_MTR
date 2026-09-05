@@ -17,6 +17,7 @@ public final class ConsistType {
 	private final int powerNotches;
 	private final int brakeNotches;
 	private final double maxSpeedKmh;
+	private final double manualMaxSpeedKmh;
 	private final double tractionAccelerationMps2; // full-notch standstill acceleration
 	private final double serviceBrakeDecelerationMps2;
 	private final double emergencyDecelerationMps2;
@@ -33,13 +34,14 @@ public final class ConsistType {
 		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
 		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
 		double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
-		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond) {
+		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh) {
 		this.id = id;
 		this.name = name;
 		this.controlMode = controlMode;
 		this.powerNotches = Math.max(1, powerNotches);
 		this.brakeNotches = Math.max(1, brakeNotches);
 		this.maxSpeedKmh = Math.max(1, maxSpeedKmh);
+		this.manualMaxSpeedKmh = manualMaxSpeedKmh > 0 ? manualMaxSpeedKmh : this.maxSpeedKmh;
 		this.tractionAccelerationMps2 = tractionAccelerationMps2;
 		this.serviceBrakeDecelerationMps2 = serviceBrakeDecelerationMps2;
 		this.emergencyDecelerationMps2 = emergencyDecelerationMps2;
@@ -60,6 +62,7 @@ public final class ConsistType {
 	public int getBrakeNotches() { return brakeNotches; }
 	public double getMaxSpeedKmh() { return maxSpeedKmh; }
 	public double getMaxSpeedMetersPerSecond() { return maxSpeedKmh / 3.6; }
+	public double getManualMaxSpeedMetersPerSecond() { return manualMaxSpeedKmh / 3.6; }
 	public double getTractionAccelerationMps2() { return tractionAccelerationMps2; }
 	public double getServiceBrakeDecelerationMps2() { return serviceBrakeDecelerationMps2; }
 	public double getEmergencyDecelerationMps2() { return emergencyDecelerationMps2; }
@@ -97,7 +100,8 @@ public final class ConsistType {
 			getDouble(json, "airPipeChargeRatePerSecond", 0.1),
 			getDouble(json, "airPipeDischargeRatePerSecond", 0.4),
 			getDouble(json, "airBrakeApplyRatePerSecond", 0.15),
-			getDouble(json, "airBrakeReleaseRatePerSecond", 0.1)
+			getDouble(json, "airBrakeReleaseRatePerSecond", 0.1),
+			getDouble(json, "manualMaxSpeedKmh", 0)
 		);
 	}
 

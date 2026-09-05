@@ -24,8 +24,9 @@ public final class NotchedDriveController implements DriveController {
 
 		if (throttle > 0) {
 			final double ratio = (double) throttle / type.getPowerNotches();
-			// physical traction: constant effort up to breakpoint, constant-power taper beyond,
-			// minus running resistance
+			// Physical traction: constant effort up to breakpoint, constant-power taper beyond,
+			// minus running resistance. Speed is NOT held artificially; equilibrium comes from
+			// traction vs resistance (realistic).
 			final double accel = MmtrPhysics.tractionAcceleration(type, ratio, speedMetersPerSecond);
 			return new DriveOutput(accel, false, false, 1, 0);
 		}

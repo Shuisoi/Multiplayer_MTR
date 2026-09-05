@@ -59,6 +59,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private @Nullable ConsistType mmtrConsistType;
 	private @Nullable DriveController mmtrDriveController;
+	/**
+	 * MMTR: explicit control override. Only engaged by the future input layer that sends a real
+	 * ControlState (keyboard/HID). Until then manual driving follows the legacy single handle so
+	 * the game stays fully playable (equivalent to having no consist-type policy).
+	 */
+	private boolean mmtrManualOverride;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -405,6 +411,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+
+	/** Enables/disables the MMTR explicit control path (used by the future input layer). */
+	public void setMmtrManualOverride(boolean enabled) { mmtrManualOverride = enabled; }
+
 	/**
 	 * Lazily resolves the MMTR consist type + controller for this vehicle from the simulator's
 	 * server-side policy. Returns true when MMTR control is active (never for DEFAULT mode).
@@ -506,7 +516,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (speedTarget < 0) {
 			final double stoppingDistance = stoppingPoint - railProgress;
 			speed = stoppingDistance <= 0 ? Siding.ACCELERATION_DEFAULT : Math.max(speed - (0.5 * speed * speed / stoppingDistance) * millisElapsed, Siding.ACCELERATION_DEFAULT);
-		} else if (!isClientside && isCurrentlyManual() && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+		} else if (mmtrManualOverride && !isClientside && isCurrentlyManual() && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
 			// MMTR control model (server-side ConsistType policy). Legacy handle is mapped onto the
 			// unified ControlState; the consist's controller shapes the actual longitudinal force.
 			final ControlState mmtrControl = MmtrSupport.controlFromLegacyPowerLevel(powerLevel, mmtrConsistType.getPowerNotches(), mmtrConsistType.getBrakeNotches());
@@ -515,11 +525,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (mmtrOutput.getAccelerationMetersPerSecondSquared() >= 0) {
 				final double mmtrUpperBound = speedTarget >= 0 ? Math.min(speedTarget, mmtrConsistType.getMaxSpeedMetersPerSecond() / 1000.0) : Double.MAX_VALUE;
 				mmtrSpeed = Math.min(mmtrSpeed, mmtrUpperBound);
-			} else {
-				// Braking target: keep the positive speedTarget (e.g. manual max speed after overspeed
-				// kick-in) and only stop completely when the target really is zero.
+			} else if (powerLevel < 0 || mmtrOutput.isBrakeLamp()) {
+				// Engine-driven braking (negative handle or brake lamp): keep the positive speedTarget
+				// (e.g. manual max speed after overspeed kick-in); only stop when the target is zero.
 				final double mmtrLowerBound = speedTarget > 0 ? speedTarget : 0;
 				mmtrSpeed = Math.max(mmtrSpeed, mmtrLowerBound);
+			} else {
+				// Controller-managed gentle pull-back above a notch target: allow natural deceleration.
+				mmtrSpeed = Math.max(mmtrSpeed, 0);
+			}
+			if (speed != mmtrSpeed || Math.abs(mmtrOutput.getAccelerationMetersPerSecondSquared()) > 0.001) {
+				System.out.println("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " power=" + powerLevel + " speed=" + speed + " target=" + speedTarget + " outAcc=" + mmtrOutput.getAccelerationMetersPerSecondSquared() + " cyl=" + mmtrOutput.getBrakeCylinderPressure() + " emg=" + mmtrOutput.isEmergencyBrake());
 			}
 			speed = mmtrSpeed;
 		} else {

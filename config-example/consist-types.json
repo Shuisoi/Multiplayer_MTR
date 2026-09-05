@@ -7,6 +7,7 @@
       "powerNotches": 7,
       "brakeNotches": 8,
       "maxSpeedKmh": 120,
+      "manualMaxSpeedKmh": 60,
       "tractionAccelerationMps2": 0.6,
       "serviceBrakeDecelerationMps2": 0.9,
       "emergencyDecelerationMps2": 1.5
@@ -16,6 +17,7 @@
       "name": "Light rail (stepless, 无级)",
       "controlMode": "STEPLESS",
       "maxSpeedKmh": 80,
+      "manualMaxSpeedKmh": 60,
       "tractionAccelerationMps2": 0.7,
       "serviceBrakeDecelerationMps2": 1.0,
       "emergencyDecelerationMps2": 1.6
@@ -27,6 +29,7 @@
       "powerNotches": 8,
       "brakeNotches": 3,
       "maxSpeedKmh": 100,
+      "manualMaxSpeedKmh": 60,
       "tractionAccelerationMps2": 0.3,
       "serviceBrakeDecelerationMps2": 0.7,
       "emergencyDecelerationMps2": 1.2,
