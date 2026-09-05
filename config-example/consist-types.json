@@ -1,0 +1,39 @@
+{
+  "consistTypes": [
+    {
+      "id": "emu_8_notched",
+      "name": "8-car EMU (notched, 有级)",
+      "controlMode": "NOTCHED",
+      "powerNotches": 7,
+      "brakeNotches": 8,
+      "maxSpeedKmh": 120,
+      "tractionAccelerationMps2": 0.6,
+      "serviceBrakeDecelerationMps2": 0.9,
+      "emergencyDecelerationMps2": 1.5
+    },
+    {
+      "id": "lr_stepless",
+      "name": "Light rail (stepless, 无级)",
+      "controlMode": "STEPLESS",
+      "maxSpeedKmh": 80,
+      "tractionAccelerationMps2": 0.7,
+      "serviceBrakeDecelerationMps2": 1.0,
+      "emergencyDecelerationMps2": 1.6
+    },
+    {
+      "id": "freight_air",
+      "name": "Freight loco + air brake (降保升)",
+      "controlMode": "AIR_BRAKE",
+      "powerNotches": 8,
+      "brakeNotches": 3,
+      "maxSpeedKmh": 100,
+      "tractionAccelerationMps2": 0.3,
+      "serviceBrakeDecelerationMps2": 0.7,
+      "emergencyDecelerationMps2": 1.2,
+      "airPipeChargeRatePerSecond": 0.12,
+      "airPipeDischargeRatePerSecond": 0.5,
+      "airBrakeApplyRatePerSecond": 0.2,
+      "airBrakeReleaseRatePerSecond": 0.08
+    }
+  ]
+}
