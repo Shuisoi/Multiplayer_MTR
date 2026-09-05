@@ -70,3 +70,8 @@ public final class NetworkEngineBridge  implements EngineBridge { /* TCP/WebSock
 4. 断线重连测试：杀引擎→MC 不崩并提示→重启引擎→自动重连恢复。
 
 > 状态：设计草案 v0，待 M0(game 构建)收尾后按此实现 spike。
+
+## 附录：实证记录（2026-09 round2 spike）
+- standalone 端点清单与 /mmtr/api/bridge/* 原型（BridgeServlet，engine fork 已提交）；
+- ping/vehicles 200 OK；localhost 往返 ~15ms（20 次采样）。
+- 缺口清单（实现顺序）：op(C2S) 桥 → 车辆快照字段增强 → MC 侧 EngineBridge 双实现 → 端到端 → 带宽基准。

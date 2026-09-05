@@ -115,6 +115,7 @@ public class Main {
 			webserver.addServlet(new ServletHolder(new MainWebServlet(WebserverResources::get, "/")), "/");
 			webserver.addServlet(new ServletHolder(new SystemMapServlet(simulators)), "/mtr/api/map/*");
 			webserver.addServlet(new ServletHolder(new OBAServlet(simulators)), "/oba/api/where/*");
+			webserver.addServlet(new ServletHolder(new BridgeServlet(simulators)), "/mmtr/api/bridge/*");
 			if (additionalWebserverSetup != null) {
 				additionalWebserverSetup.accept(webserver);
 			}
