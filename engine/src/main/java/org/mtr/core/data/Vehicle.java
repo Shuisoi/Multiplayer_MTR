@@ -10,6 +10,11 @@ import it.unimi.dsi.fastutil.objects.*;
 import lombok.extern.log4j.Log4j2;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.generated.data.VehicleSchema;
+import org.mtr.core.mmtr.ConsistType;
+import org.mtr.core.mmtr.ControlState;
+import org.mtr.core.mmtr.DriveController;
+import org.mtr.core.mmtr.DriveOutput;
+import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.simulation.Simulator;
@@ -47,6 +52,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private long lastMovementMillis;
 
 	public final VehicleExtraData vehicleExtraData;
+
+	/**
+	 * MMTR: lazily resolved consist type + controller for vehicles driven with the MMTR control
+	 * model (server policy set on the {@link Simulator}). Null keeps the legacy power-handle path.
+	 */
+	private @Nullable ConsistType mmtrConsistType;
+	private @Nullable DriveController mmtrDriveController;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -393,6 +405,28 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * Lazily resolves the MMTR consist type + controller for this vehicle from the simulator's
+	 * server-side policy. Returns true when MMTR control is active (never for DEFAULT mode).
+	 */
+	private boolean tryInitMmtrController() {
+		if (mmtrDriveController != null) {
+			return true;
+		}
+		if (data instanceof Simulator simulator && simulator.mmtrConsistTypes != null && simulator.mmtrDefaultConsistTypeId != null) {
+			mmtrConsistType = simulator.mmtrConsistTypes.get(simulator.mmtrDefaultConsistTypeId);
+			if (mmtrConsistType != null) {
+				mmtrDriveController = switch (mmtrConsistType.getControlMode()) {
+					case NOTCHED -> new org.mtr.core.mmtr.NotchedDriveController();
+					case STEPLESS -> new org.mtr.core.mmtr.SteplessDriveController();
+					case AIR_BRAKE -> new org.mtr.core.mmtr.AirBrakeController();
+					default -> null;
+				};
+			}
+		}
+		return mmtrDriveController != null;
+	}
+
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
 		// Tracks the distance
 		final double stoppingPoint;
@@ -472,6 +506,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (speedTarget < 0) {
 			final double stoppingDistance = stoppingPoint - railProgress;
 			speed = stoppingDistance <= 0 ? Siding.ACCELERATION_DEFAULT : Math.max(speed - (0.5 * speed * speed / stoppingDistance) * millisElapsed, Siding.ACCELERATION_DEFAULT);
+		} else if (!isClientside && isCurrentlyManual() && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+			// MMTR control model (server-side ConsistType policy). Legacy handle is mapped onto the
+			// unified ControlState; the consist's controller shapes the actual longitudinal force.
+			final ControlState mmtrControl = MmtrSupport.controlFromLegacyPowerLevel(powerLevel, mmtrConsistType.getPowerNotches(), mmtrConsistType.getBrakeNotches());
+			final DriveOutput mmtrOutput = mmtrDriveController.compute(mmtrControl, mmtrConsistType, MmtrSupport.internalSpeedToSi(speed), millisElapsed);
+			double mmtrSpeed = speed + MmtrSupport.siAccelerationToInternal(mmtrOutput.getAccelerationMetersPerSecondSquared()) * millisElapsed;
+			if (mmtrOutput.getAccelerationMetersPerSecondSquared() >= 0) {
+				final double mmtrUpperBound = speedTarget >= 0 ? Math.min(speedTarget, mmtrConsistType.getMaxSpeedMetersPerSecond() / 1000.0) : Double.MAX_VALUE;
+				mmtrSpeed = Math.min(mmtrSpeed, mmtrUpperBound);
+			} else {
+				mmtrSpeed = Math.max(mmtrSpeed, 0);
+			}
+			speed = mmtrSpeed;
 		} else {
 			if (powerLevel > 0) {
 				speed = Math.min(speed + vehicleExtraData.getAcceleration() * powerLevel / POWER_LEVEL_RATIO * millisElapsed, speedTarget);

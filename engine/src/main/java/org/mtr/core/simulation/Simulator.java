@@ -7,6 +7,7 @@ import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.*;
+import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.directions.DirectionsFinder;
 import org.mtr.core.serializer.SerializedDataBase;
 import org.mtr.core.serializer.SerializedDataBaseWithId;
@@ -56,6 +57,13 @@ public class Simulator extends Data implements Utilities {
 	 * Connected dashboard / mod clients for this dimension.
 	 */
 	public final ObjectArraySet<Client> clients = new ObjectArraySet<>();
+	/**
+	 * MMTR: optional server-side ConsistType definitions and the default consist id used for
+	 * vehicles without an explicit type. Null/absent keeps the legacy driving behaviour.
+	 */
+	public ConsistTypeRegistry mmtrConsistTypes;
+	public String mmtrDefaultConsistTypeId;
+
 	/**
 	 * Stable dimension identifier (e.g. {@code "minecraft/overworld"}).
 	 */
