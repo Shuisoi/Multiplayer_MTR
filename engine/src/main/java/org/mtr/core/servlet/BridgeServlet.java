@@ -62,6 +62,30 @@ public class BridgeServlet extends ServletBase {
 				response.add("vehicles", vehicleArray);
 				sendResponse.accept(response);
 			}
+			case "bench" -> {
+				// DEV/BENCH ONLY: synthetic vehicle snapshot payload, same shape as the real
+				// "vehicles" list, to measure per-train payload cost without needing world data.
+				int count;
+				try { count = Math.max(0, Math.min(1000, Integer.parseInt(parameters.getOrDefault("count", "8")))); }
+				catch (NumberFormatException e) { count = 8; }
+				final JsonArray benchArray = new JsonArray();
+				for (int i = 0; i < count; i++) {
+					final JsonObject v = new JsonObject();
+					v.addProperty("moving", true);
+					v.addProperty("reversed", false);
+					v.addProperty("routeId", i);
+					v.addProperty("thisStation", i % 20);
+					v.addProperty("nextStation", (i + 1) % 20);
+					v.addProperty("powerLevel", 0);
+					v.addProperty("totalLength", 20.0);
+					benchArray.add(v);
+				}
+				final JsonObject response = new JsonObject();
+				response.addProperty("dimension", simulator.dimension);
+				response.addProperty("synthetic", true);
+				response.add("vehicles", benchArray);
+				sendResponse.accept(response);
+			}
 			default -> sendResponse.accept(null);
 		}
 	}

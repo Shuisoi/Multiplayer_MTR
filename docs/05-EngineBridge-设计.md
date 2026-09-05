@@ -80,3 +80,8 @@ public final class NetworkEngineBridge  implements EngineBridge { /* TCP/WebSock
 - engine BridgeServlet 增加 `echo`（双向相关校验）；端点清单见 notes/03。
 - game 新增 `org.mtr.mod.bridge`：EngineConfig/EngineBridge/NetworkEngineBridge（JDK HttpClient + relocated gson），fabric:compileJava 通过。
 - 跨进程实测 echo p50≈15.3ms / p90≈16ms / ~194B；带宽基线段记录 notes/04。
+
+## 附录3：round4 结果与收口
+- /mmtr/api/bridge/bench 合成负载端点；vehicles 负载曲线见 notes/04。
+- 类级 E2E（BridgeRunner + NetworkEngineBridge）：started/connected/echo/vehicles 全通。
+- 后续（新里程碑）：Init/InitClient 接入 external 模式开关、真实世界数据生成器、增量快照协议。
