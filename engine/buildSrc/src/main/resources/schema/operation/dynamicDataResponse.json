@@ -1,0 +1,61 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"clientId": {
+			"type": "string"
+		},
+		"vehiclesToUpdate": {
+			"type": "array",
+			"items": {
+				"$ref": "vehicleUpdate.json"
+			}
+		},
+		"vehiclesToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"liftsToUpdate": {
+			"type": "array",
+			"items": {
+				"$ref": "lift.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"liftsToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"passengersToUpdate": {
+			"type": "array",
+			"items": {
+				"$ref": "passenger.json"
+			}
+		},
+		"passengersToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"signalBlockUpdates": {
+			"type": "array",
+			"items": {
+				"$ref": "signalBlockUpdate.json"
+			}
+		}
+	},
+	"required": [
+		"clientId",
+		"dimension"
+	]
+}

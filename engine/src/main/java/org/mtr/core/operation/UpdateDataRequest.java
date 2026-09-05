@@ -1,0 +1,192 @@
+package org.mtr.core.operation;
+
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectSet;
+import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.*;
+import org.mtr.core.generated.operation.UpdateDataRequestSchema;
+import org.mtr.core.serializer.JsonReader;
+import org.mtr.core.serializer.ReaderBase;
+import org.mtr.core.serializer.SerializedDataBase;
+import org.mtr.core.tool.Utilities;
+
+public final class UpdateDataRequest extends UpdateDataRequestSchema {
+
+	private final Data data;
+
+	public UpdateDataRequest(Data data) {
+		this.data = data;
+	}
+
+	public UpdateDataRequest(ReaderBase readerBase, Data data) {
+		super(readerBase);
+		this.data = data;
+		updateData(readerBase);
+	}
+
+	@Override
+	protected Data stationsDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data platformsDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data sidingsDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data routesDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data depotsDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data liftsDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data homesDataParameter() {
+		return data;
+	}
+
+	@Override
+	protected Data landmarksDataParameter() {
+		return data;
+	}
+
+	public UpdateDataRequest addStation(Station station) {
+		stations.add(station);
+		return this;
+	}
+
+	public UpdateDataRequest addPlatform(Platform platform) {
+		platforms.add(platform);
+		return this;
+	}
+
+	public UpdateDataRequest addSiding(Siding siding) {
+		sidings.add(siding);
+		return this;
+	}
+
+	public UpdateDataRequest addRoute(Route route) {
+		routes.add(route);
+		return this;
+	}
+
+	public UpdateDataRequest addDepot(Depot depot) {
+		depots.add(depot);
+		return this;
+	}
+
+	public UpdateDataRequest addLift(Lift lift) {
+		lifts.add(lift);
+		return this;
+	}
+
+	public UpdateDataRequest addRail(Rail rail) {
+		rails.add(rail);
+		return this;
+	}
+
+	public UpdateDataRequest addSignalModification(SignalModification signalModification) {
+		signalModifications.add(signalModification);
+		return this;
+	}
+
+	public UpdateDataRequest addHome(Home home) {
+		homes.add(home);
+		return this;
+	}
+
+	public UpdateDataRequest addLandmark(Landmark landmark) {
+		landmarks.add(landmark);
+		return this;
+	}
+
+	public UpdateDataResponse update() {
+		final UpdateDataResponse updateDataResponse = new UpdateDataResponse(data);
+
+		stations.forEach(station -> update(station, true, data.stationIdMap.get(station.getId()), data.stations, updateDataResponse.getStations()));
+		platforms.forEach(platform -> update(platform, false, data.platformIdMap.get(platform.getId()), data.platforms, updateDataResponse.getPlatforms()));
+		sidings.forEach(siding -> update(siding, false, data.sidingIdMap.get(siding.getId()), data.sidings, updateDataResponse.getSidings()));
+		routes.forEach(route -> update(route, true, data.routeIdMap.get(route.getId()), data.routes, updateDataResponse.getRoutes()));
+		depots.forEach(depot -> update(depot, true, data.depotIdMap.get(depot.getId()), data.depots, updateDataResponse.getDepots()));
+		lifts.forEach(lift -> {
+			getAndRemoveMatchingLifts(data, lift);
+			update(lift, true, null, data.lifts, ObjectArrayList.of());
+		});
+		rails.forEach(rail -> {
+			final Rail existingRail = data.railIdMap.get(rail.getHexId());
+			final Rail railToUpdate = existingRail == null ? rail.getUpdatedRailTiltAnglesFromConnections(data) : rail;
+			update(railToUpdate, true, existingRail, data.rails, updateDataResponse.getRails());
+		});
+		signalModifications.forEach(signalModification -> signalModification.applyModificationToRail(data, updateDataResponse.getRails()));
+		homes.forEach(home -> update(home, true, data.homeIdMap.get(home.getId()), data.homes, updateDataResponse.getHomes()));
+		landmarks.forEach(landmark -> update(landmark, true, data.landmarkIdMap.get(landmark.getId()), data.landmarks, updateDataResponse.getLandmarks()));
+
+		final ObjectArrayList<Siding> sidingsToInit = new ObjectArrayList<>();
+		final ObjectArrayList<Rail> railsToUpdate = new ObjectArrayList<>();
+		updateDataResponse.getRails().forEach(rail -> rail.checkOrCreateSavedRailAndUpdateTiltAngles(data, updateDataResponse.getPlatforms(), sidingsToInit, railsToUpdate));
+		data.sync();
+		sidingsToInit.forEach(Siding::init);
+		updateDataResponse.getSidings().addAll(sidingsToInit);
+		updateDataResponse.getRails().addAll(railsToUpdate);
+
+		updateDataResponse.getStations().forEach(station -> station.savedRails.forEach(platform -> platform.routes.forEach(route -> SimplifiedRoute.addToList(updateDataResponse.getSimplifiedRoutes(), route))));
+		updateDataResponse.getPlatforms().forEach(platform -> platform.routes.forEach(route -> SimplifiedRoute.addToList(updateDataResponse.getSimplifiedRoutes(), route)));
+		updateDataResponse.getRoutes().forEach(route -> {
+			SimplifiedRoute.addToList(updateDataResponse.getSimplifiedRoutes(), route);
+			route.getRoutePlatforms().forEach(routePlatformData -> routePlatformData.platform.routes.forEach(platformRoute -> SimplifiedRoute.addToList(updateDataResponse.getSimplifiedRoutes(), platformRoute)));
+		});
+
+		return updateDataResponse;
+	}
+
+	public static ObjectArrayList<Lift> getAndRemoveMatchingLifts(Data data, Lift lift) {
+		final ObjectArrayList<Lift> liftsToModify = new ObjectArrayList<>();
+		data.lifts.removeIf(existingLift -> {
+			if (lift.overlappingFloors(existingLift)) {
+				liftsToModify.add(existingLift);
+				return true;
+			} else {
+				return false;
+			}
+		});
+		return liftsToModify;
+	}
+
+	private static <T extends SerializedDataBase> void update(T newData, boolean addNewData, @Nullable T existingData, ObjectSet<T> dataSet, ObjectArrayList<T> dataToUpdate) {
+		final boolean isRail = newData instanceof Rail;
+		final boolean isValid = !isRail || ((Rail) newData).isValid();
+
+		if (existingData == null) {
+			if (addNewData && isValid) {
+				dataSet.add(newData);
+				dataToUpdate.add(newData);
+			}
+		} else if (isValid) {
+			if (isRail) {
+				dataSet.remove(existingData);
+				if (existingData instanceof Rail) {
+					((Rail) newData).copySignalColors((Rail) existingData);
+				}
+				dataSet.add(newData);
+				dataToUpdate.add(newData);
+			} else {
+				existingData.updateData(new JsonReader(Utilities.getJsonObjectFromData(newData)));
+				dataToUpdate.add(existingData);
+			}
+		}
+	}
+}

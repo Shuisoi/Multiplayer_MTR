@@ -1,0 +1,27 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"railId": {
+			"type": "string"
+		},
+		"preBlockedSignalColors": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"currentlyBlockedSignalColors": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		}
+	},
+	"required": [
+		"railId"
+	]
+}

@@ -1,0 +1,70 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaExtends": "NameColorDataBase",
+	"extends": {
+		"$ref": "nameColorDataBase.json"
+	},
+	"properties": {
+		"height": {
+			"type": "number",
+			"minimum": 1
+		},
+		"width": {
+			"type": "number",
+			"minimum": 1
+		},
+		"depth": {
+			"type": "number",
+			"minimum": 1
+		},
+		"offsetX": {
+			"type": "number"
+		},
+		"offsetY": {
+			"type": "number"
+		},
+		"offsetZ": {
+			"type": "number"
+		},
+		"isDoubleSided": {
+			"type": "boolean"
+		},
+		"style": {
+			"type": "string"
+		},
+		"angle": {
+			"$ref": "Angle"
+		},
+		"railProgress": {
+			"type": "number",
+			"minimum": 0
+		},
+		"speed": {
+			"type": "number",
+			"minimum": 0
+		},
+		"stoppingCoolDown": {
+			"type": "integer",
+			"minimum": 0
+		},
+		"floors": {
+			"type": "array",
+			"items": {
+				"$ref": "liftFloor.json"
+			}
+		},
+		"instructions": {
+			"type": "array",
+			"items": {
+				"$ref": "liftInstruction.json"
+			}
+		},
+		"ridingEntities": {
+			"type": "array",
+			"items": {
+				"$ref": "vehicleRidingEntity.json"
+			}
+		}
+	}
+}

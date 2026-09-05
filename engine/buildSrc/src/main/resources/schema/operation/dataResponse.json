@@ -1,0 +1,123 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"stations": {
+			"type": "array",
+			"items": {
+				"$ref": "station.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"stationsToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"platforms": {
+			"type": "array",
+			"items": {
+				"$ref": "platform.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"platformsToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"sidings": {
+			"type": "array",
+			"items": {
+				"$ref": "siding.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"sidingsToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"simplifiedRoutes": {
+			"type": "array",
+			"items": {
+				"$ref": "simplifiedRoute.json"
+			}
+		},
+		"simplifiedRoutesToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"depots": {
+			"type": "array",
+			"items": {
+				"$ref": "depot.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"depotsToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"rails": {
+			"type": "array",
+			"items": {
+				"$ref": "rail.json"
+			}
+		},
+		"railsToKeep": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"homes": {
+			"type": "array",
+			"items": {
+				"$ref": "home.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"homesToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"landmarks": {
+			"type": "array",
+			"items": {
+				"$ref": "landmark.json",
+				"parameters": [
+					"Data"
+				]
+			}
+		},
+		"landmarksToKeep": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		}
+	}
+}

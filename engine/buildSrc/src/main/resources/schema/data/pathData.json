@@ -1,0 +1,51 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"savedRailBaseId": {
+			"type": "integer"
+		},
+		"dwellTime": {
+			"type": "integer",
+			"minimum": 1
+		},
+		"stopIndex": {
+			"type": "integer"
+		},
+		"startDistance": {
+			"type": "number"
+		},
+		"endDistance": {
+			"type": "number"
+		},
+		"startPosition": {
+			"$ref": "position.json"
+		},
+		"startAngle": {
+			"$ref": "Angle"
+		},
+		"endPosition": {
+			"$ref": "position.json"
+		},
+		"endAngle": {
+			"$ref": "Angle"
+		},
+		"speedLimit": {
+			"type": "integer"
+		}
+	},
+	"required": [
+		"savedRailBaseId",
+		"dwellTime",
+		"stopIndex",
+		"startDistance",
+		"endDistance",
+		"startPosition",
+		"startAngle",
+		"endPosition",
+		"endAngle"
+	]
+}

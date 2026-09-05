@@ -1,0 +1,103 @@
+package org.mtr.core.operation;
+
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectArraySet;
+import it.unimi.dsi.fastutil.objects.ObjectImmutableList;
+import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.Passenger;
+import org.mtr.core.data.Platform;
+import org.mtr.core.data.Route;
+import org.mtr.core.data.VehicleCar;
+import org.mtr.core.generated.operation.ArrivalResponseSchema;
+import org.mtr.core.serializer.ReaderBase;
+import org.mtr.core.tool.Utilities;
+
+import java.util.function.Consumer;
+
+public final class ArrivalResponse extends ArrivalResponseSchema implements Comparable<ArrivalResponse> {
+
+	public ArrivalResponse(String destination, long arrival, long departure, long deviation, boolean realtime, long departureIndex, int stopIndex, Route route, Platform platform) {
+		super(destination, arrival, departure, deviation, realtime, departureIndex, stopIndex == route.getRoutePlatforms().size() - 1, route.getId(), route.getName(), route.getRouteNumber(), route.getColor(), route.getCircularState(), platform.getId(), platform.getName());
+	}
+
+	public ArrivalResponse(ReaderBase readerBase) {
+		super(readerBase);
+		updateData(readerBase);
+	}
+
+	public String getDestination() {
+		return destination;
+	}
+
+	public long getArrival() {
+		return arrival;
+	}
+
+	public long getDeparture() {
+		return departure;
+	}
+
+	public long getDeviation() {
+		return deviation;
+	}
+
+	public boolean getRealtime() {
+		return realtime;
+	}
+
+	public long getDepartureIndex() {
+		return departureIndex;
+	}
+
+	public boolean getIsTerminating() {
+		return isTerminating;
+	}
+
+	public long getRouteId() {
+		return routeId;
+	}
+
+	public String getRouteName() {
+		return routeName;
+	}
+
+	public String getRouteNumber() {
+		return routeNumber;
+	}
+
+	public int getRouteColor() {
+		return (int) (routeColor & 0xFFFFFF);
+	}
+
+	public Route.CircularState getCircularState() {
+		return circularState;
+	}
+
+	public long getPlatformId() {
+		return platformId;
+	}
+
+	public String getPlatformName() {
+		return platformName;
+	}
+
+	public int getCarCount() {
+		return cars.size();
+	}
+
+	public void iterateCarDetails(Consumer<CarDetails> consumer) {
+		cars.forEach(consumer);
+	}
+
+	public void setCarDetails(ObjectArrayList<VehicleCar> vehicleCars, @Nullable ObjectImmutableList<ObjectArraySet<Passenger>> passengers) {
+		for (int i = 0; i < vehicleCars.size(); i++) {
+			final VehicleCar vehicleCar = vehicleCars.get(i);
+			cars.add(new CarDetails(vehicleCar.getVehicleId(), vehicleCar.getCapacity(), passengers == null ? 0 : passengers.get(i).size()));
+		}
+	}
+
+	@Override
+	public int compareTo(ArrivalResponse arrivalResponse) {
+		return Utilities.compare(arrival, arrivalResponse.arrival, () -> Utilities.compare(departureIndex, arrivalResponse.departureIndex, () -> Utilities.compare(platformName, arrivalResponse.platformName, () -> Utilities.compare(routeNumber, arrivalResponse.routeNumber, () -> Utilities.compare(destination, arrivalResponse.destination, () -> 0)))));
+	}
+}

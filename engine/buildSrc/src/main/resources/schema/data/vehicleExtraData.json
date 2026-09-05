@@ -1,0 +1,205 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"depotId": {
+			"type": "integer"
+		},
+		"sidingId": {
+			"type": "integer"
+		},
+		"previousRouteId": {
+			"type": "integer"
+		},
+		"previousPlatformId": {
+			"type": "integer"
+		},
+		"previousStationId": {
+			"type": "integer"
+		},
+		"previousRouteColor": {
+			"type": "integer"
+		},
+		"previousRouteName": {
+			"type": "string"
+		},
+		"previousRouteNumber": {
+			"type": "string"
+		},
+		"previousRouteType": {
+			"$ref": "RouteType"
+		},
+		"previousRouteCircularState": {
+			"$ref": "Route.CircularState"
+		},
+		"previousStationName": {
+			"type": "string"
+		},
+		"previousRouteDestination": {
+			"type": "string"
+		},
+		"thisRouteId": {
+			"type": "integer"
+		},
+		"thisPlatformId": {
+			"type": "integer"
+		},
+		"thisStationId": {
+			"type": "integer"
+		},
+		"thisRouteColor": {
+			"type": "integer"
+		},
+		"thisRouteName": {
+			"type": "string"
+		},
+		"thisRouteNumber": {
+			"type": "string"
+		},
+		"thisRouteType": {
+			"$ref": "RouteType"
+		},
+		"thisRouteCircularState": {
+			"$ref": "Route.CircularState"
+		},
+		"thisStationName": {
+			"type": "string"
+		},
+		"thisRouteDestination": {
+			"type": "string"
+		},
+		"nextRouteId": {
+			"type": "integer"
+		},
+		"nextPlatformId": {
+			"type": "integer"
+		},
+		"nextStationId": {
+			"type": "integer"
+		},
+		"nextRouteColor": {
+			"type": "integer"
+		},
+		"nextRouteName": {
+			"type": "string"
+		},
+		"nextRouteNumber": {
+			"type": "string"
+		},
+		"nextRouteType": {
+			"$ref": "RouteType"
+		},
+		"nextRouteCircularState": {
+			"$ref": "Route.CircularState"
+		},
+		"nextStationName": {
+			"type": "string"
+		},
+		"nextRouteDestination": {
+			"type": "string"
+		},
+		"isTerminating": {
+			"type": "boolean"
+		},
+		"interchangeColorsForStationNameList": {
+			"type": "array",
+			"items": {
+				"$ref": "interchangeColorsForStationName.json"
+			}
+		},
+		"stoppingPoint": {
+			"type": "number"
+		},
+		"powerLevel": {
+			"type": "integer"
+		},
+		"speedTarget": {
+			"type": "number"
+		},
+		"doorTarget": {
+			"type": "boolean"
+		},
+		"isCurrentlyManual": {
+			"type": "boolean"
+		},
+		"railLength": {
+			"type": "number",
+			"minimum": 0
+		},
+		"totalVehicleLength": {
+			"type": "number",
+			"minimum": 0
+		},
+		"repeatIndex1": {
+			"type": "integer",
+			"minimum": 0
+		},
+		"repeatIndex2": {
+			"type": "integer",
+			"minimum": 0
+		},
+		"acceleration": {
+			"type": "number",
+			"minimum": 0
+		},
+		"deceleration": {
+			"type": "number",
+			"minimum": 0
+		},
+		"isManualAllowed": {
+			"type": "boolean"
+		},
+		"maxManualSpeed": {
+			"type": "number",
+			"minimum": 0
+		},
+		"manualToAutomaticTime": {
+			"type": "integer",
+			"minimum": 0
+		},
+		"totalDistance": {
+			"type": "number",
+			"minimum": 0
+		},
+		"defaultPosition": {
+			"type": "number",
+			"minimum": 0
+		},
+		"vehicleCars": {
+			"type": "array",
+			"items": {
+				"$ref": "vehicleCar.json"
+			}
+		},
+		"path": {
+			"type": "array",
+			"items": {
+				"$ref": "pathData.json"
+			}
+		},
+		"ridingEntities": {
+			"type": "array",
+			"items": {
+				"$ref": "vehicleRidingEntity.json"
+			}
+		}
+	},
+	"required": [
+		"depotId",
+		"sidingId",
+		"railLength",
+		"totalVehicleLength",
+		"repeatIndex1",
+		"repeatIndex2",
+		"acceleration",
+		"deceleration",
+		"isManualAllowed",
+		"maxManualSpeed",
+		"manualToAutomaticTime",
+		"totalDistance",
+		"defaultPosition"
+	]
+}

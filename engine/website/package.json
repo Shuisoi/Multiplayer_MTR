@@ -1,0 +1,44 @@
+{
+	"name": "website",
+	"version": "0.0.0",
+	"scripts": {
+		"ng": "ng",
+		"start": "ng serve --host 0.0.0.0",
+		"build": "ng lint && ng build --base-href a",
+		"watch": "ng lint && ng build --watch --configuration development",
+		"test": "ng test",
+		"lint": "ng lint",
+		"update-all": "npm i baseline-browser-mapping@latest -D --force && npx npm-check-updates -u && npm install --force"
+	},
+	"private": true,
+	"dependencies": {
+		"@angular-eslint/builder": "^22.0.0",
+		"@angular/animations": "^22.0.0",
+		"@angular/common": "^22.0.0",
+		"@angular/compiler": "^22.0.0",
+		"@angular/core": "^22.0.0",
+		"@angular/forms": "^22.0.0",
+		"@angular/platform-browser": "^22.0.0",
+		"@angular/router": "^22.0.0",
+		"@iconify-icons/fluent": "^1.2.38",
+		"@iconify-icons/mdi": "^1.2.48",
+		"@jsverse/transloco": "^8.3.0",
+		"@primeuix/themes": "^2.0.3",
+		"iconify-icon": "^3.0.2",
+		"primeng": "^21.1.9",
+		"rxjs": "~7.8.2",
+		"three": "^0.184.0",
+		"tslib": "^2.8.1"
+	},
+	"devDependencies": {
+		"@angular/build": "^22.0.0",
+		"@angular/cli": "^22.0.0",
+		"@angular/compiler-cli": "^22.0.0",
+		"@eslint/js": "^10.0.1",
+		"@types/three": "^0.184.1",
+		"angular-eslint": "22.0.0",
+		"baseline-browser-mapping": "^2.10.34",
+		"eslint": "^10.4.1",
+		"typescript-eslint": "8.60.1"
+	}
+}

@@ -1,0 +1,16 @@
+MMTR (Multiplayer MTR) — Notice of Derivation
+===================================================
+
+MMTR is a derivative project built upon:
+- Minecraft Transit Railway (MTR) 4.0.5 for Minecraft 1.20.4
+  https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway (MIT)
+- Transport Simulation Core (TSC) @ ce3a509082 (baseline bundled with MTR 4.0.5)
+  https://github.com/Minecraft-Transit-Railway/Transport-Simulation-Core (MIT)
+- Minecraft-Mappings / Minecraft-Mod-API-Tools (MIT)
+
+All upstream copyright and MIT license notices are preserved in the
+corresponding subfolders (see engine/LICENSE, game/LICENSE and their source headers).
+This project: mod id "mmtr"; resource namespace "mtr" and Java packages "org.mtr.*"
+are intentionally retained for asset compatibility (see docs/03-MMTR-架构决策与里程碑.md).
+Gameplay scope of the derivative: task-driven dispatch, train-set based traction/braking,
+freight, coupling/uncoupling, and UI; all original MTR content/logic is retained.

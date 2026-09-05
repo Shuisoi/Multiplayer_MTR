@@ -1,0 +1,41 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"connections": {
+			"type": "array",
+			"items": {
+				"$ref": "directionsConnection.json"
+			}
+		},
+		"totalRefreshGraphTime": {
+			"type": "integer"
+		},
+		"totalRefreshArrivalsTime": {
+			"type": "integer"
+		},
+		"totalPathFindingTime": {
+			"type": "integer"
+		},
+		"longestRefreshGraphTime": {
+			"type": "integer"
+		},
+		"longestRefreshArrivalsTime": {
+			"type": "integer"
+		},
+		"longestPathFindingTime": {
+			"type": "integer"
+		}
+	},
+	"required": [
+		"totalRefreshGraphTime",
+		"totalRefreshArrivalsTime",
+		"totalPathFindingTime",
+		"longestRefreshGraphTime",
+		"longestRefreshArrivalsTime",
+		"longestPathFindingTime"
+	]
+}

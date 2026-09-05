@@ -1,0 +1,48 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"vehicleId": {
+			"type": "string"
+		},
+		"length": {
+			"type": "number",
+			"minimum": 0
+		},
+		"width": {
+			"type": "number",
+			"minimum": 0
+		},
+		"capacity": {
+			"type": "integer",
+			"minimum": 1
+		},
+		"bogie1Position": {
+			"type": "number"
+		},
+		"bogie2Position": {
+			"type": "number"
+		},
+		"couplingPadding1": {
+			"type": "number",
+			"minimum": 0
+		},
+		"couplingPadding2": {
+			"type": "number",
+			"minimum": 0
+		}
+	},
+	"required": [
+		"vehicleId",
+		"length",
+		"width",
+		"capacity",
+		"bogie1Position",
+		"bogie2Position",
+		"couplingPadding1",
+		"couplingPadding2"
+	]
+}

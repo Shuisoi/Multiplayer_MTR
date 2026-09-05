@@ -1,0 +1,309 @@
+package org.mtr.core.tool;
+
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import it.unimi.dsi.fastutil.objects.ObjectLongImmutablePair;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.Position;
+import org.mtr.core.serializer.JsonWriter;
+import org.mtr.core.serializer.SerializedDataBase;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
+
+/**
+ * Grab-bag of stateless helpers reused across the simulator: clamping, interpolation, range
+ * tests, hex-string formatting, executor-shutdown plumbing and so on.
+ *
+ * <p>Declared as an {@code interface} so domain classes can {@code implements Utilities} and
+ * pick up the time-unit constants ({@link #MILLIS_PER_SECOND}, {@link #MILLIS_PER_DAY}, …) as
+ * inherited fields without polluting their own API. All methods are {@code static} — there is
+ * no state and no instance to construct.</p>
+ */
+public interface Utilities {
+
+	Logger LOGGER = LogManager.getLogger(Utilities.class);
+
+	/**
+	 * Hours in a day; lifted from a literal because it shows up in tick / departure maths.
+	 */
+	int HOURS_PER_DAY = 24;
+	/**
+	 * Milliseconds in one second.
+	 */
+	int MILLIS_PER_SECOND = 1000;
+	/**
+	 * Milliseconds in one minute.
+	 */
+	int MILLIS_PER_MINUTE = 60 * MILLIS_PER_SECOND;
+	/**
+	 * Milliseconds in one hour.
+	 */
+	int MILLIS_PER_HOUR = 60 * MILLIS_PER_MINUTE;
+	/**
+	 * Milliseconds in one (real) day.
+	 */
+	int MILLIS_PER_DAY = HOURS_PER_DAY * MILLIS_PER_HOUR;
+
+	static boolean isBetween(double value, double value1, double value2) {
+		return isBetween(value, value1, value2, 0);
+	}
+
+	static boolean isBetween(double value, double value1, double value2, double padding) {
+		return value >= Math.min(value1, value2) - padding && value <= Math.max(value1, value2) + padding;
+	}
+
+	static boolean isBetween(Position position, Position position1, Position position2, double padding) {
+		return isBetween(position, position1.getX(), position1.getY(), position1.getZ(), position2.getX(), position2.getY(), position2.getZ(), padding);
+	}
+
+	static boolean isBetween(Position position, Vector position1, Vector position2, double padding) {
+		return isBetween(position, position1.x(), position1.y(), position1.z(), position2.x(), position2.y(), position2.z(), padding);
+	}
+
+	static boolean isBetween(Position position, double x1, double y1, double z1, double x2, double y2, double z2, double padding) {
+		return Utilities.isBetween(position.getX(), x1, x2, padding) &&
+			Utilities.isBetween(position.getY(), y1, y2, padding) &&
+			Utilities.isBetween(position.getZ(), z1, z2, padding);
+	}
+
+	static boolean isIntersecting(double value1, double value2, double value3, double value4) {
+		return isBetween(value3, value1, value2) || isBetween(value4, value1, value2) || isBetween(value1, value3, value4) || isBetween(value2, value3, value4);
+	}
+
+	static double round(double value, int decimalPlaces) {
+		int factor = 1;
+		for (int i = 0; i < decimalPlaces; i++) {
+			factor *= 10;
+		}
+		return (double) Math.round(value * factor) / factor;
+	}
+
+	static double getAverage(double valueA, double valueB) {
+		return (valueA + valueB) / 2;
+	}
+
+	static double getValueFromPercentage(double percentage, double value1, double value2) {
+		final double newPercentage = clampSafe(percentage, 0, 1);
+		return value1 * (1 - newPercentage) + value2 * newPercentage;
+	}
+
+	static String numberToPaddedHexString(long value) {
+		return numberToPaddedHexString(value, Long.SIZE / 4);
+	}
+
+	static String numberToPaddedHexString(long value, int length) {
+		return String.format("%" + length + "s", Long.toHexString(value)).replace(' ', '0').toUpperCase(Locale.ENGLISH);
+	}
+
+	static String concat(Object... objects) {
+		final StringBuilder stringBuilder = new StringBuilder();
+		for (final Object object : objects) {
+			stringBuilder.append(object);
+		}
+		return stringBuilder.toString();
+	}
+
+	static String formatName(String text) {
+		return text.split("\\|\\|")[0].replace("|", " ");
+	}
+
+	static JsonObject parseJson(String data) {
+		try {
+			return JsonParser.parseString(data).getAsJsonObject();
+		} catch (Exception e) {
+			// Empty object is the documented "couldn't parse" return. Logged at debug because the
+			// caller frequently feeds untrusted input (servlet bodies, on-disk legacy files) and a
+			// hard failure would be wrong; logged at all so silent corruption is debuggable. (§3.14)
+			LOGGER.debug("parseJson fell back to empty object for input of length {}", data.length(), e);
+			return new JsonObject();
+		}
+	}
+
+	static String prettyPrint(String string) {
+		return prettyPrint(parseJson(string));
+	}
+
+	static String prettyPrint(JsonElement jsonElement) {
+		return new GsonBuilder().setPrettyPrinting().create().toJson(jsonElement);
+	}
+
+	static double kilometersPerHourToMetersPerMillisecond(double speedKilometersPerHour) {
+		return speedKilometersPerHour / (MILLIS_PER_HOUR / MILLIS_PER_SECOND);
+	}
+
+	@Nullable
+	static <T, U extends List<T>> T getElement(U collection, int index) {
+		return getElement(collection, index, null);
+	}
+
+	@Nullable
+	static <T, U extends List<T>> T getElement(@Nullable U collection, int index, @Nullable T defaultValue) {
+		final T result;
+		if (collection == null || index >= collection.size() || index < -collection.size()) {
+			result = null;
+		} else {
+			result = collection.get((index < 0 ? collection.size() : 0) + index);
+		}
+		return result == null ? defaultValue : result;
+	}
+
+	static <T, U extends List<T>> void setElement(@Nullable U collection, int index, T value) {
+		if (collection != null && index < collection.size() && index >= -collection.size()) {
+			collection.set((index < 0 ? collection.size() : 0) + index, value);
+		}
+	}
+
+	@Nullable
+	static <T, U extends List<T>> T removeElement(@Nullable U collection, int index) {
+		if (collection == null || index >= collection.size() || index < -collection.size()) {
+			return null;
+		} else {
+			return collection.remove((index < 0 ? collection.size() : 0) + index);
+		}
+	}
+
+	static <T extends ConditionalList> int getIndexFromConditionalList(List<T> list, double value) {
+		if (list.isEmpty()) {
+			return -1;
+		} else {
+			final int listSize = list.size();
+			int index = listSize / 2;
+			int lowIndex = -1;
+			int highIndex = listSize;
+
+			while (true) {
+				if (list.get(index).matchesCondition(value)) {
+					lowIndex = index;
+				} else {
+					highIndex = index;
+				}
+
+				if (lowIndex + 1 == highIndex) {
+					return lowIndex < 0 ? -1 : lowIndex;
+				}
+
+				index = clampSafe((lowIndex + highIndex) / 2, 0, listSize - 1);
+			}
+		}
+	}
+
+	static <T extends SerializedDataBase> JsonObject getJsonObjectFromData(T data) {
+		final JsonObject jsonObject = new JsonObject();
+		data.serializeData(new JsonWriter(jsonObject));
+		return jsonObject;
+	}
+
+	static int clampSafe(int value, int min, int max) {
+		return Math.min(Math.max(value, min), max);
+	}
+
+	static long clampSafe(long value, long min, long max) {
+		return Math.min(Math.max(value, min), max);
+	}
+
+	static float clampSafe(float value, float min, float max) {
+		return Math.min(Math.max(value, min), max);
+	}
+
+	static double clampSafe(double value, double min, double max) {
+		return Math.min(Math.max(value, min), max);
+	}
+
+	static long circularClamp(long value, long min, long max, long totalDegrees) {
+		long result = value;
+		while (result < min) {
+			result += totalDegrees;
+		}
+		while (result > max) {
+			result -= totalDegrees;
+		}
+		return result;
+	}
+
+	static double circularClamp(double value, double min, double max, double totalDegrees) {
+		double result = value;
+		while (result < min) {
+			result += totalDegrees;
+		}
+		while (result > max) {
+			result -= totalDegrees;
+		}
+		return result;
+	}
+
+	static long circularDifference(long value1, long value2, long totalDegrees) {
+		final long halfTotalDegrees = totalDegrees / 2;
+		return value1 - circularClamp(value2, value1 - halfTotalDegrees, value1 + halfTotalDegrees, totalDegrees);
+	}
+
+	static double circularDifference(double value1, double value2, double totalDegrees) {
+		final double halfTotalDegrees = totalDegrees / 2;
+		return value1 - circularClamp(value2, value1 - halfTotalDegrees, value1 + halfTotalDegrees, totalDegrees);
+	}
+
+	static int compare(long value1, long value2, IntSupplier ifZero) {
+		final int result = Long.compare(value1, value2);
+		return result == 0 ? ifZero.getAsInt() : result;
+	}
+
+	static int compare(String value1, String value2, IntSupplier ifZero) {
+		try {
+			return compare(Long.parseLong(value1), Long.parseLong(value2), ifZero);
+		} catch (Exception e) {
+			// Numeric comparison was attempted as a fast path; fall back to lexicographic on
+			// non-numeric input. Logged at debug per CODE_STYLES §3.14.
+			LOGGER.debug("Numeric compare of \"{}\" / \"{}\" failed; falling back to string compare", value1, value2, e);
+			final int result = value1.compareTo(value2);
+			return result == 0 ? ifZero.getAsInt() : result;
+		}
+	}
+
+	static <T> boolean differentItems(Collection<T> collection1, Collection<T> collection2) {
+		return !collection1.containsAll(collection2) || !collection2.containsAll(collection1);
+	}
+
+	@Nullable
+	static <T> T loopUntilTimeout(Supplier<T> action, long timeoutMillis) {
+		final long startMillis = System.currentTimeMillis();
+		while (System.currentTimeMillis() - startMillis < timeoutMillis) {
+			final T result = action.get();
+			if (result != null) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	static long measureDuration(Runnable action) {
+		final long startMillis = System.currentTimeMillis();
+		action.run();
+		return System.currentTimeMillis() - startMillis;
+	}
+
+	static <T> ObjectLongImmutablePair<T> measureDuration(Supplier<T> action) {
+		final long startMillis = System.currentTimeMillis();
+		return new ObjectLongImmutablePair<>(action.get(), System.currentTimeMillis() - startMillis);
+	}
+
+	static void awaitTermination(ExecutorService executorService) {
+		try {
+			while (!executorService.awaitTermination(5, TimeUnit.MINUTES)) {
+				LOGGER.warn("Termination failed, retrying...");
+			}
+		} catch (InterruptedException e) {
+			// Restore the interrupt flag (CODE_STYLES §3.14) so callers can react.
+			Thread.currentThread().interrupt();
+			LOGGER.error("Interrupted while awaiting executor termination", e);
+		}
+	}
+}

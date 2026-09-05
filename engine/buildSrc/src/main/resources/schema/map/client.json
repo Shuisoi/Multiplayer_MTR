@@ -1,0 +1,43 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"id": {
+			"type": "string"
+		},
+		"name": {
+			"type": "string"
+		},
+		"x": {
+			"type": "integer"
+		},
+		"z": {
+			"type": "integer"
+		},
+		"stationId": {
+			"type": "string"
+		},
+		"routeId": {
+			"type": "string"
+		},
+		"routeStationId1": {
+			"type": "string"
+		},
+		"routeStationId2": {
+			"type": "string"
+		}
+	},
+	"required": [
+		"id",
+		"name",
+		"x",
+		"z",
+		"stationId",
+		"routeId",
+		"routeStationId1",
+		"routeStationId2"
+	]
+}

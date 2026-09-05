@@ -1,0 +1,37 @@
+{
+	"schemaVersion": 1,
+	"id": "mmtr",
+	"version": "@version@",
+	"name": "MMTR (Multiplayer MTR)",
+	"description": "Multiplayer MTR: a task-driven passenger/freight railway server mod, derived from Minecraft Transit Railway (MIT).",
+	"authors": ["MMTR project (derived from Minecraft Transit Railway by Jonathan Ho)"],
+	"contact": {
+		"homepage": "https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway",
+		"sources": "https://github.com/jonafanho/Minecraft-Transit-Railway"
+	},
+	"license": "MIT",
+	"icon": "icon.png",
+	"accessWidener": "mtr.accesswidener",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"org.mtr.init.MTR"
+		],
+		"client": [
+			"org.mtr.init.MTRClient"
+		],
+		"modmenu": [
+			"org.mtr.init.ModMenuConfig"
+		],
+		"jade": [
+			"org.mtr.init.JadeConfig"
+		]
+	},
+	"mixins": [
+		"mtr.mixins.json"
+	],
+	"depends": {
+		"fabric": "*",
+		"minecraft": "@minecraft@"
+	}
+}

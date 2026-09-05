@@ -1,0 +1,88 @@
+name: Build
+on:
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  build:
+    name: Build Java
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+      - name: Use lowercase project name for publish
+        run: |
+          echo 'rootProject.name = "transport-simulation-core"' > settings.gradle.kts
+          echo 'rootProject.name = "transport-simulation-core-build-tools"' > buildSrc/settings.gradle.kts
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@main
+      - name: Setup JDK 21
+        uses: actions/setup-java@main
+        with:
+          java-version: 21
+          distribution: 'temurin'
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+      - name: Update Gradle
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+        run: ./gradlew wrapper --gradle-version latest --no-daemon
+      - name: Generate version
+        run: ./gradlew generateVersion --no-daemon
+      - name: Generate schema classes
+        run: ./gradlew generateSchemaClasses --no-daemon
+      - name: Setup Node
+        uses: actions/setup-node@main
+        with:
+          node-version: 24
+      - name: Install Node packages
+        run: npm ci --prefix website --force
+      - name: Update packages
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+        run: npm run update-all --prefix website
+      - name: Build Angular
+        run: npm run build --prefix website
+      - name: Setup webserver
+        run: ./gradlew setupWebserver --no-daemon
+      - name: Build JAR
+        run: ./gradlew build --no-daemon
+      - name: Publish main project to GitHub Packages
+        if: github.event_name == 'push'
+        run: ./gradlew publish --no-daemon
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Publish JSON schema generator to GitHub Packages
+        if: github.event_name == 'push'
+        run: cd buildSrc && ../gradlew publish --no-daemon
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Capture main build artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: Main
+          path: build/libs/
+      - name: Capture JSON schema generator build artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: JSON Schema Generator
+          path: buildSrc/build/libs/
+      - name: Commit changes
+        uses: iarekylew00t/verified-bot-commit@main
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+        continue-on-error: true
+        with:
+          message: Update Gradle and Angular
+          files: |
+            gradle/**
+            gradlew
+            gradlew.bat
+            website/package.json
+            website/package-lock.json
+          max-retries: 5

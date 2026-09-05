@@ -1,0 +1,35 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"id": {
+			"type": "string"
+		},
+		"x": {
+			"type": "integer"
+		},
+		"y": {
+			"type": "integer"
+		},
+		"z": {
+			"type": "integer"
+		},
+		"name": {
+			"type": "string"
+		},
+		"dwellTime": {
+			"type": "integer"
+		}
+	},
+	"required": [
+		"id",
+		"x",
+		"y",
+		"z",
+		"name",
+		"dwellTime"
+	]
+}

@@ -1,0 +1,58 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"javaImplements": [
+		"SerializedDataBase"
+	],
+	"properties": {
+		"id": {
+			"type": "string"
+		},
+		"name": {
+			"type": "string"
+		},
+		"color": {
+			"type": "integer"
+		},
+		"number": {
+			"type": "string"
+		},
+		"type": {
+			"type": "string"
+		},
+		"circularState": {
+			"$ref": "org.mtr.core.data.Route.CircularState",
+			"typeScriptEnum": "NONE|CLOCKWISE|ANTICLOCKWISE"
+		},
+		"hidden": {
+			"type": "boolean"
+		},
+		"stations": {
+			"type": "array",
+			"items": {
+				"$ref": "routeStation.json"
+			}
+		},
+		"durations": {
+			"type": "array",
+			"items": {
+				"type": "integer"
+			}
+		},
+		"depots": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		}
+	},
+	"required": [
+		"id",
+		"name",
+		"color",
+		"number",
+		"type",
+		"circularState",
+		"hidden"
+	]
+}
