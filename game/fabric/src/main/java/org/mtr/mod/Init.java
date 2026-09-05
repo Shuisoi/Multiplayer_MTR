@@ -337,6 +337,9 @@ public final class Init implements Utilities {
 		try {
 			final HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
 			connection.setUseCaches(false);
+			// MMTR: Wikimedia and other APIs reject default Java User-Agent (HTTP 403).
+			connection.setRequestProperty("User-Agent", "MMTR/4.0.5 (Minecraft Transit Railway fork; https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway)");
+			connection.setRequestProperty("Accept", "application/json");
 
 			for (int i = 0; i < requestProperties.length / 2; i++) {
 				connection.setRequestProperty(requestProperties[2 * i], requestProperties[2 * i + 1]);
@@ -345,10 +348,10 @@ public final class Init implements Utilities {
 			try (final InputStream inputStream = connection.getInputStream()) {
 				callback.accept(inputStream);
 			} catch (Exception e) {
-				Init.LOGGER.error("", e);
+				Init.LOGGER.warn("HTTP request failed for {}: {}", url, e.getMessage());
 			}
 		} catch (Exception e) {
-			Init.LOGGER.error("", e);
+			Init.LOGGER.warn("HTTP request failed for {}: {}", url, e.getMessage());
 		}
 	}
 
