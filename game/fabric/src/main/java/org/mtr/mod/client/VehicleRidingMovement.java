@@ -14,6 +14,7 @@ import org.mtr.mod.KeyBindings;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.item.ItemDepotDriverKey;
 import org.mtr.mod.item.ItemDriverKey;
+import org.mtr.mod.packet.PacketDriveControl;
 import org.mtr.mod.packet.PacketUpdateVehicleRidingEntities;
 import org.mtr.mod.render.PositionAndRotation;
 import org.mtr.mod.render.RenderVehicleHelper;
@@ -51,6 +52,14 @@ public class VehicleRidingMovement {
 	private static int pressingAtoTicks = 0;
 	private static int doorOverrideTicks;
 
+	// MMTR separated control state (client authority on the notch positions)
+	private static final int MAX_MMTR_THROTTLE_NOTCH = 7;
+	private static final int MAX_MMTR_BRAKE_NOTCH = 8;
+	private static int mmtrThrottleNotch;
+	private static int mmtrBrakeNotch;
+	private static int mmtrReverser;
+	private static boolean prevThrottleUp, prevThrottleDown, prevBrakeApply, prevBrakeRelease, prevReverserUp, prevReverserDown;
+
 	public static final int SEND_UPDATE_FREQUENCY = 1000;
 	private static final float VEHICLE_WALKING_SPEED_MULTIPLIER = 0.005F;
 	private static final int RIDING_COOLDOWN = 5;
@@ -81,6 +90,30 @@ public class VehicleRidingMovement {
 		pressingBrakeTicks = isHoldingDriverKeyNew && driverKey.canDrive && KeyBindings.TRAIN_BRAKE.isPressed() ? pressingBrakeTicks + 1 : 0;
 		pressingDoorsTicks = isHoldingDriverKeyNew && driverKey.canOpenDoors && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingDoorsTicks + 1 : 0;
 		pressingAtoTicks = isHoldingDriverKeyNew && driverKey.canDrive && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingAtoTicks + 1 : 0;
+
+		// MMTR separated throttle/brake controls (rising-edge per press)
+		if (isHoldingDriverKeyNew && driverKey.canDrive && ridingVehicleId != 0) {
+			boolean changed = false;
+			final boolean throttleUp = KeyBindings.TRAIN_ACCELERATE.isPressed();
+			if (throttleUp && !prevThrottleUp && mmtrThrottleNotch < MAX_MMTR_THROTTLE_NOTCH) { mmtrThrottleNotch++; changed = true; }
+			final boolean throttleDown = KeyBindings.TRAIN_BRAKE.isPressed();
+			if (throttleDown && !prevThrottleDown && mmtrThrottleNotch > 0) { mmtrThrottleNotch--; changed = true; }
+			final boolean brakeApply = KeyBindings.MMTR_BRAKE_APPLY.isPressed();
+			if (brakeApply && !prevBrakeApply && mmtrBrakeNotch < MAX_MMTR_BRAKE_NOTCH) { mmtrBrakeNotch++; changed = true; }
+			final boolean brakeRelease = KeyBindings.MMTR_BRAKE_RELEASE.isPressed();
+			if (brakeRelease && !prevBrakeRelease && mmtrBrakeNotch > 0) { mmtrBrakeNotch--; changed = true; }
+			final boolean reverserUp = KeyBindings.MMTR_REVERSER_UP.isPressed();
+			if (reverserUp && !prevReverserUp && mmtrReverser < 1) { mmtrReverser++; changed = true; }
+			final boolean reverserDown = KeyBindings.MMTR_REVERSER_DOWN.isPressed();
+			if (reverserDown && !prevReverserDown && mmtrReverser > -1) { mmtrReverser--; changed = true; }
+			prevThrottleUp = throttleUp; prevThrottleDown = throttleDown; prevBrakeApply = brakeApply;
+			prevBrakeRelease = brakeRelease; prevReverserUp = reverserUp; prevReverserDown = reverserDown;
+			if (changed) {
+				InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDriveControl(ridingVehicleId, mmtrThrottleNotch, mmtrBrakeNotch, mmtrReverser, false));
+			}
+		} else {
+			prevThrottleUp = prevThrottleDown = prevBrakeApply = prevBrakeRelease = prevReverserUp = prevReverserDown = false;
+		}
 
 		if (sendPositionUpdateTime > 0 && sendPositionUpdateTime <= System.currentTimeMillis() || isHoldingDriverKeyNew != isHoldingDriverKey || pressingAccelerateTicks == 1 || pressingBrakeTicks == 1 || pressingDoorsTicks == 1 || pressingAtoTicks == 1 || doorOverrideTicks == 1) {
 			isHoldingDriverKey = isHoldingDriverKeyNew;

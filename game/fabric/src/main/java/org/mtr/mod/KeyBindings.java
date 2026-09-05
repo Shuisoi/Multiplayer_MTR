@@ -10,7 +10,12 @@ public final class KeyBindings {
 		LIFT_MENU = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_LIFT_MENU.key, GLFW.GLFW_KEY_Z, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		TRAIN_ACCELERATE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_ACCELERATE.key, GLFW.GLFW_KEY_UP, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		TRAIN_BRAKE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_BRAKE.key, GLFW.GLFW_KEY_DOWN, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		TRAIN_TOGGLE_DOORS = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_TOGGLE_DOORS.key, GLFW.GLFW_KEY_LEFT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		TRAIN_TOGGLE_DOORS = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_TOGGLE_DOORS.key, GLFW.GLFW_KEY_R, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		// MMTR separated controls (raw keys until translations are added)
+		MMTR_REVERSER_UP = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser_up", GLFW.GLFW_KEY_LEFT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_REVERSER_DOWN = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser_down", GLFW.GLFW_KEY_RIGHT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_BRAKE_APPLY = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake_apply", GLFW.GLFW_KEY_SEMICOLON, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_BRAKE_RELEASE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake_release", GLFW.GLFW_KEY_APOSTROPHE, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_1_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_1_NEGATIVE.key, GLFW.GLFW_KEY_KP_4, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_2_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_2_NEGATIVE.key, GLFW.GLFW_KEY_KP_5, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_3_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_3_NEGATIVE.key, GLFW.GLFW_KEY_KP_6, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
@@ -25,6 +30,10 @@ public final class KeyBindings {
 	public static final KeyBinding TRAIN_ACCELERATE;
 	public static final KeyBinding TRAIN_BRAKE;
 	public static final KeyBinding TRAIN_TOGGLE_DOORS;
+	public static final KeyBinding MMTR_REVERSER_UP;
+	public static final KeyBinding MMTR_REVERSER_DOWN;
+	public static final KeyBinding MMTR_BRAKE_APPLY;
+	public static final KeyBinding MMTR_BRAKE_RELEASE;
 	public static final KeyBinding DEBUG_1_NEGATIVE;
 	public static final KeyBinding DEBUG_2_NEGATIVE;
 	public static final KeyBinding DEBUG_3_NEGATIVE;

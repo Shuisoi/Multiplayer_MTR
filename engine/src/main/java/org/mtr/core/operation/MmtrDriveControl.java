@@ -53,10 +53,20 @@ public final class MmtrDriveControl implements SerializedDataBase {
 			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setReverser(reverser)
 			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency);
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
-			if (vehicle.getId() == vehicleId) {
+			if (vehicle.getId() == vehicleId && hasDriver(vehicle)) {
 				vehicle.applyMmtrControl(state);
 			}
 		}));
+	}
+
+	private static boolean hasDriver(Vehicle vehicle) {
+		final boolean[] driverPresent = {false};
+		vehicle.vehicleExtraData.iterateRidingEntities(ridingEntity -> {
+			if (ridingEntity.isDriver()) {
+				driverPresent[0] = true;
+			}
+		});
+		return driverPresent[0];
 	}
 
 	@Override

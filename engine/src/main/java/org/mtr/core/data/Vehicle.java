@@ -322,7 +322,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		sidingDepartureTime = -1;
 		vehicleExtraData.closeDoors();
 
-		if (!isClientside && isCurrentlyManual() && vehicleExtraData.getPowerLevel() > 0) {
+		if (!isClientside && isCurrentlyManual() && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower())) {
 			startUp(-1, data.getCurrentMillis());
 		}
 	}
@@ -349,7 +349,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				final boolean isOpposite = currentPathData != null && nextPathData != null && currentPathData.isOppositeRail(nextPathData);
 				final double nextStartDistance = nextPathData == null ? 0 : nextPathData.getStartDistance() + (isOpposite ? vehicleExtraData.getTotalVehicleLength() : 0);
 
-				if (vehicleExtraData.getPowerLevel() > 0 && railBlockedDistance(currentIndex, nextStartDistance, 0, vehiclePositions, true, false) < 0) {
+				if ((vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, nextStartDistance, 0, vehiclePositions, true, false) < 0) {
 					if (doorCooldown == 0) {
 						railProgress = nextStartDistance;
 						if (isOpposite) {
@@ -360,7 +360,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 			} else {
 				// Stopped anywhere else
-				if (vehicleExtraData.getPowerLevel() > 0 && railBlockedDistance(currentIndex, railProgress, 0, vehiclePositions, true, false) < 0) {
+				if ((vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, railProgress, 0, vehiclePositions, true, false) < 0) {
 					startUp(departureIndex, sidingDepartureTime);
 				}
 			}
@@ -423,6 +423,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public void applyMmtrControl(ControlState controlState) {
 		mmtrActiveControl = controlState == null ? null : controlState.copy();
 		mmtrManualOverride = controlState != null;
+	}
+
+	/** True when explicit MMTR control requests traction (used to allow departing from a stop). */
+	public boolean isMmtrRequestingPower() {
+		return mmtrManualOverride && mmtrActiveControl != null && mmtrActiveControl.getThrottleNotch() > 0;
 	}
 
 	/**
