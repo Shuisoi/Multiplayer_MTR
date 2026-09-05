@@ -1,5 +1,7 @@
 package org.mtr.mod.servlet;
 
+import org.mtr.mod.Init;
+
 
 import org.mtr.core.Main;
 import org.mtr.libraries.okhttp3.*;
@@ -28,7 +30,7 @@ public final class RequestHelper {
 			@Override
 			public void onFailure(Call call, IOException e) {
 				if (!(e instanceof InterruptedIOException)) {
-					Main.LOGGER.error(call.request().url(), e);
+					Init.LOGGER.error(call.request().url(), e);
 				}
 			}
 
@@ -40,7 +42,7 @@ public final class RequestHelper {
 					}
 				} catch (IOException e) {
 					if (!(e instanceof InterruptedIOException)) {
-						Main.LOGGER.error(call.request().url(), e);
+						Init.LOGGER.error(call.request().url(), e);
 					}
 				}
 			}

@@ -1,4 +1,5 @@
 package org.mtr.mod.screen;
+import org.mtr.mod.MathUtils;
 
 import org.mtr.core.data.Rail;
 import org.mtr.core.operation.UpdateDataRequest;
@@ -149,7 +150,7 @@ public class RailModifierScreen extends MTRScreenBase implements IGui {
 
 	private void update(double newRadius, boolean sendPacket) {
 		buttonShape.setMessage2((shape == Rail.Shape.QUADRATIC ? TranslationProvider.GUI_MTR_RAIL_SHAPE_QUADRATIC : TranslationProvider.GUI_MTR_RAIL_SHAPE_TWO_RADII).getText());
-		radius = Utilities.clamp(Utilities.round(newRadius, 2), 0, maxRadius);
+		radius = MathUtils.clamp(Utilities.round(newRadius, 2), 0, maxRadius);
 		textFieldRadius.setX2((shape == Rail.Shape.QUADRATIC ? width : xStart + SQUARE_SIZE * 6) + TEXT_FIELD_PADDING / 2);
 		buttonMinus2.setVisibleMapped(shape != Rail.Shape.QUADRATIC);
 		buttonMinus1.setVisibleMapped(shape != Rail.Shape.QUADRATIC);

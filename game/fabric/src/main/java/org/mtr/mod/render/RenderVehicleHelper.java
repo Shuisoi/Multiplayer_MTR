@@ -1,4 +1,5 @@
 package org.mtr.mod.render;
+import org.mtr.mod.MathUtils;
 
 import org.mtr.core.tool.Utilities;
 import org.mtr.mapping.holder.*;
@@ -62,7 +63,7 @@ public class RenderVehicleHelper {
 		if (playerX > doorway.getMinXMapped() - HALF_PLAYER_WIDTH && playerX < doorway.getMaxXMapped() + HALF_PLAYER_WIDTH && Utilities.isBetween(playerY, doorway.getMinYMapped(), doorway.getMaxYMapped()) && playerZ > doorway.getMinZMapped() - HALF_PLAYER_WIDTH && playerZ < doorway.getMaxZMapped() + HALF_PLAYER_WIDTH) {
 			final double halfWidth = (doorway.getMaxZMapped() - doorway.getMinZMapped()) / 2;
 			final double distance = Math.min(playerZ - HALF_PLAYER_WIDTH - doorway.getMinZMapped(), doorway.getMaxZMapped() - HALF_PLAYER_WIDTH - playerZ);
-			return Utilities.clamp((halfWidth - distance) / halfWidth, 0, 1);
+			return MathUtils.clamp((halfWidth - distance) / halfWidth, 0, 1);
 		} else {
 			return 0;
 		}

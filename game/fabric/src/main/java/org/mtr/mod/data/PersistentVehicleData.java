@@ -1,4 +1,5 @@
 package org.mtr.mod.data;
+import org.mtr.mod.MathUtils;
 
 import org.mtr.core.data.TransportMode;
 import org.mtr.core.data.Vehicle;
@@ -78,7 +79,7 @@ public final class PersistentVehicleData {
 
 	public void tick(double railProgress, long millisElapsed, VehicleExtraData vehicleExtraData) {
 		oldDoorValue = doorValue;
-		doorValue = Utilities.clamp(doorValue + (double) (millisElapsed * getAdjustedDoorMultiplier(vehicleExtraData)) / Vehicle.DOOR_MOVE_TIME, 0, 1);
+		doorValue = MathUtils.clamp(doorValue + (double) (millisElapsed * getAdjustedDoorMultiplier(vehicleExtraData)) / Vehicle.DOOR_MOVE_TIME, 0, 1);
 		if (checkCanOpenDoors()) {
 			doorCooldown--;
 		} else {

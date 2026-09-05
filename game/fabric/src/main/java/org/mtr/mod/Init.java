@@ -201,7 +201,7 @@ public final class Init implements Utilities {
 							SerializedDataBase.class
 					);
 				} else {
-					Main.LOGGER.error("Transport Simulation Core not responding; stopping Minecraft server!");
+					LOGGER.error("Transport Simulation Core not responding; stopping Minecraft server!");
 					minecraftServer.stop(false);
 					canSendWorldTimeUpdate = true; // In singleplayer, this gives the player opportunity to re-enter world.
 				}

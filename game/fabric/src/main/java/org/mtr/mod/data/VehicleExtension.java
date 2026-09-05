@@ -206,11 +206,11 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		}
 
 		// Check for sensors
-		final Vector headPosition = getHeadPosition();
+		final Vector headPosition = getHeadPositionAndTiltAngle().position();
 		for (int xOffset = -1; xOffset <= 1; xOffset++) {
 			for (int yOffset = -1; yOffset <= 1; yOffset++) {
 				for (int zOffset = -1; zOffset <= 1; zOffset++) {
-					final BlockPos offsetBlockPos = Init.newBlockPos(headPosition.x + xOffset, headPosition.y + yOffset, headPosition.z + zOffset);
+					final BlockPos offsetBlockPos = Init.newBlockPos(headPosition.x() + xOffset, headPosition.y() + yOffset, headPosition.z() + zOffset);
 					final BlockState blockState = clientWorld.getBlockState(offsetBlockPos);
 					final Block block = blockState.getBlock();
 					if (BlockTrainSensorBase.matchesFilter(new World(clientWorld.data), offsetBlockPos, thisRouteId, speed)) {
@@ -294,20 +294,20 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		}
 	}
 
-	public ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<ObjectObjectImmutablePair<Vector, Vector>>>> getSmoothedVehicleCarsAndPositions(long millisElapsed) {
+	public ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> getSmoothedVehicleCarsAndPositions(long millisElapsed) {
 		final double oldRailProgress = railProgress;
 		railProgress = persistentVehicleData.getSmoothedRailProgress(railProgress, persistentVehicleData.getDoorValue() > 0 ? 0 : millisElapsed * (speed == 0 ? Integer.MAX_VALUE : speed / 10));
-		final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<ObjectObjectImmutablePair<Vector, Vector>>>> vehicleCarsAndPositions = getVehicleCarsAndPositions();
+		final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> vehicleCarsAndPositions = getVehicleCarsAndPositions();
 		railProgress = oldRailProgress;
 		return vehicleCarsAndPositions;
 	}
 
 	public void playMotorSound(VehicleResource vehicleResource, int carNumber, Vector bogiePosition) {
-		persistentVehicleData.playMotorSound(vehicleResource, carNumber, Init.newBlockPos(bogiePosition.x, bogiePosition.y, bogiePosition.z), (float) speed, (float) (speed - oldSpeed), (float) vehicleExtraData.getAcceleration(), getIsOnRoute());
+		persistentVehicleData.playMotorSound(vehicleResource, carNumber, Init.newBlockPos(bogiePosition.x(), bogiePosition.y(), bogiePosition.z()), (float) speed, (float) (speed - oldSpeed), (float) vehicleExtraData.getAcceleration(), getIsOnRoute());
 	}
 
 	public void playDoorSound(VehicleResource vehicleResource, int carNumber, Vector vehiclePosition) {
-		persistentVehicleData.playDoorSound(vehicleResource, carNumber, Init.newBlockPos(vehiclePosition.x, vehiclePosition.y, vehiclePosition.z));
+		persistentVehicleData.playDoorSound(vehicleResource, carNumber, Init.newBlockPos(vehiclePosition.x(), vehiclePosition.y(), vehiclePosition.z()));
 	}
 
 	public int getSpeedLimitKilometersPerHour() {

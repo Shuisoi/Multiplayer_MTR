@@ -1,4 +1,5 @@
 package org.mtr.mod.block;
+import org.mtr.mod.MathUtils;
 
 import org.mtr.core.data.Vehicle;
 import org.mtr.core.tool.Utilities;
@@ -180,7 +181,7 @@ public abstract class BlockPSDAPGDoorBase extends BlockPSDAPGBase implements Blo
 		public void setDoorValue(double vehicleDoorValue) {
 			final BlockEntityBase blockEntityBase = getBottomBlockEntity(getWorld2(), getPos2());
 			if (blockEntityBase != null) {
-				blockEntityBase.doorValue = Utilities.clamp(vehicleDoorValue, 0, 1);
+				blockEntityBase.doorValue = MathUtils.clamp(vehicleDoorValue, 0, 1);
 				blockEntityBase.doorTarget = 1;
 			}
 		}

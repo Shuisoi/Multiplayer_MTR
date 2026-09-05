@@ -1,4 +1,5 @@
 package org.mtr.mod.client;
+import org.mtr.mod.MathUtils;
 
 import org.mtr.core.tool.Utilities;
 import org.mtr.mapping.holder.Box;
@@ -49,14 +50,14 @@ public class GangwayMovementPositions {
 	}
 
 	public double getPercentageX(double x) {
-		return (Utilities.clamp(x, xMinClamped, xMaxClamped) - xMinClamped) / (xMaxClamped - xMinClamped);
+		return (MathUtils.clamp(x, xMinClamped, xMaxClamped) - xMinClamped) / (xMaxClamped - xMinClamped);
 	}
 
 	public double getPercentageZ(double z) {
 		if (getMax) {
-			return Utilities.clamp(z - this.z, 0, 1);
+			return MathUtils.clamp(z - this.z, 0, 1);
 		} else {
-			return Utilities.clamp(z - this.z, -1, 0) + 1;
+			return MathUtils.clamp(z - this.z, -1, 0) + 1;
 		}
 	}
 

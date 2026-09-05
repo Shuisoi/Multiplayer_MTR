@@ -1,4 +1,5 @@
 package org.mtr.mod.client;
+import org.mtr.mod.MathUtils;
 
 import org.apache.commons.lang3.StringUtils;
 import org.mtr.core.tool.Utilities;
@@ -190,7 +191,7 @@ public class VehicleRidingMovement {
 						ridingPositionCache = null;
 					} else {
 						// Gangway positioning logic
-						ridingVehicleX = Utilities.clamp(ridingVehicleX + movementX, 0, 1);
+						ridingVehicleX = MathUtils.clamp(ridingVehicleX + movementX, 0, 1);
 						ridingVehicleZ += movementZ;
 						final Vector3d position1Min = previousCarGangwayMovementPositions.getMinWorldPosition();
 						final Vector3d position1Max = previousCarGangwayMovementPositions.getMaxWorldPosition();
@@ -361,9 +362,9 @@ public class VehicleRidingMovement {
 			if (floorOrDoorway.rightBoolean()) {
 				// If the intersecting or closest floor or doorway is a floor, then force the player to be in bounds
 				offsets.add(new Vector3d(
-						Utilities.clamp(x, floorOrDoorway.left().getMinXMapped(), floorOrDoorway.left().getMaxXMapped()) - x,
+						MathUtils.clamp(x, floorOrDoorway.left().getMinXMapped(), floorOrDoorway.left().getMaxXMapped()) - x,
 						floorOrDoorway.left().getMaxYMapped(),
-						Utilities.clamp(z, floorOrDoorway.left().getMinZMapped(), floorOrDoorway.left().getMaxZMapped()) - z
+						MathUtils.clamp(z, floorOrDoorway.left().getMinZMapped(), floorOrDoorway.left().getMaxZMapped()) - z
 				));
 			} else if (RenderVehicleHelper.boxContains(floorOrDoorway.left(), x, ridingVehicleY, z)) {
 				// If the intersecting or closest floor or doorway is a doorway, then don't force the player to be in bounds

@@ -63,7 +63,7 @@ public class RenderVehicles implements IGui {
 					.map(vehicleCarAndPosition -> {
 						final ObjectArrayList<PositionAndRotation> bogiePositions = vehicleCarAndPosition.right()
 								.stream()
-								.map(bogiePositionPair -> new PositionAndRotation(bogiePositionPair.left(), bogiePositionPair.right(), true))
+								.map(bogiePosition -> new PositionAndRotation(bogiePosition.positionAndTiltAngle1().position(), bogiePosition.positionAndTiltAngle2().position(), true))
 								.collect(Collectors.toCollection(ObjectArrayList::new));
 						return new ObjectObjectImmutablePair<>(vehicleCarAndPosition.left(), new ObjectObjectImmutablePair<>(bogiePositions, new PositionAndRotation(bogiePositions, vehicleCarAndPosition.left(), vehicle.getTransportMode().hasPitchAscending || vehicle.getTransportMode().hasPitchDescending)));
 					})
