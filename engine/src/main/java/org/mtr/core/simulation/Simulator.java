@@ -145,10 +145,13 @@ public class Simulator extends Data implements Utilities {
 		fileLoaderHomes = fileLoaderHolderAndDuration.left().fileLoaderHomes;
 		fileLoaderLandmarks = fileLoaderHolderAndDuration.left().fileLoaderLandmarks;
 		log.info("Data loading complete for {} in {} second(s)", dimension, (float) fileLoaderHolderAndDuration.rightLong() / MILLIS_PER_SECOND);
+		System.out.println("[MMTR-DBG] loaded stations=" + stations.size() + " platforms=" + platforms.size() + " rails=" + rails.size()
+			+ " sidings=" + sidings.size() + " depots=" + depots.size() + " routes=" + routes.size() + " lifts=" + lifts.size() + " for " + dimension);
 
 		// MMTR: optional server-side consist-type policy at <root>/<dimension>/mmtr-consist-types.json
 		final Path mmtrConfigPath = savePath.resolve("mmtr-consist-types.json");
 		log.info("MMTR: dimension={}, savePath={}, consist config path={}", dimension, savePath, mmtrConfigPath);
+		System.out.println("[MMTR-DBG] dimension=" + dimension + " savePath=" + savePath + " config=" + mmtrConfigPath);
 		try {
 			if (java.nio.file.Files.exists(mmtrConfigPath)) {
 				mmtrConsistTypes = ConsistTypeRegistry.fromFile(mmtrConfigPath);

@@ -516,7 +516,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				final double mmtrUpperBound = speedTarget >= 0 ? Math.min(speedTarget, mmtrConsistType.getMaxSpeedMetersPerSecond() / 1000.0) : Double.MAX_VALUE;
 				mmtrSpeed = Math.min(mmtrSpeed, mmtrUpperBound);
 			} else {
-				mmtrSpeed = Math.max(mmtrSpeed, 0);
+				// Braking target: keep the positive speedTarget (e.g. manual max speed after overspeed
+				// kick-in) and only stop completely when the target really is zero.
+				final double mmtrLowerBound = speedTarget > 0 ? speedTarget : 0;
+				mmtrSpeed = Math.max(mmtrSpeed, mmtrLowerBound);
 			}
 			speed = mmtrSpeed;
 		} else {
