@@ -148,6 +148,7 @@ public class Simulator extends Data implements Utilities {
 
 		// MMTR: optional server-side consist-type policy at <root>/<dimension>/mmtr-consist-types.json
 		final Path mmtrConfigPath = savePath.resolve("mmtr-consist-types.json");
+		log.info("MMTR: dimension={}, savePath={}, consist config path={}", dimension, savePath, mmtrConfigPath);
 		try {
 			if (java.nio.file.Files.exists(mmtrConfigPath)) {
 				mmtrConsistTypes = ConsistTypeRegistry.fromFile(mmtrConfigPath);
@@ -156,6 +157,8 @@ public class Simulator extends Data implements Utilities {
 					mmtrDefaultConsistTypeId = mmtrConsistTypes.all().keySet().iterator().next();
 				}
 				log.info("MMTR consist-type policy loaded for {} (default={})", dimension, mmtrDefaultConsistTypeId);
+			} else {
+				log.info("MMTR: no consist-type policy at {} -> legacy driving behaviour", mmtrConfigPath);
 			}
 		} catch (Exception e) {
 			log.warn("Failed to load MMTR consist-type policy for {}: {}", dimension, e.getMessage());
