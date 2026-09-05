@@ -36,6 +36,118 @@
 		"sidingDepartureTime": {
 			"type": "integer",
 			"default": -1
+		},
+		"mmtrActive": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrMode": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrDriver": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrThrottleNotch": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrBrakeNotch": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrReverser": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrThrottleAxis": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrBrakeAxis": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrEmergency": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrProtection": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrPowerNotches": {
+			"type": "integer",
+			"default": 7
+		},
+		"mmtrBrakeNotches": {
+			"type": "integer",
+			"default": 8
+		},
+		"mmtrMaxSpeedKmh": {
+			"type": "number",
+			"default": 120
+		},
+		"mmtrManualMaxSpeedKmh": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrTractionAccelerationMps2": {
+			"type": "number",
+			"default": 0.5
+		},
+		"mmtrServiceBrakeDecelerationMps2": {
+			"type": "number",
+			"default": 0.8
+		},
+		"mmtrEmergencyDecelerationMps2": {
+			"type": "number",
+			"default": 1.5
+		},
+		"mmtrTractionBreakpointKmh": {
+			"type": "number",
+			"default": 120
+		},
+		"mmtrResistanceA": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrResistanceB": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrResistanceC": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrAirPipeChargeRatePerSecond": {
+			"type": "number",
+			"default": 0.1
+		},
+		"mmtrAirPipeDischargeRatePerSecond": {
+			"type": "number",
+			"default": 0.4
+		},
+		"mmtrAirBrakeApplyRatePerSecond": {
+			"type": "number",
+			"default": 0.15
+		},
+		"mmtrAirBrakeReleaseRatePerSecond": {
+			"type": "number",
+			"default": 0.1
+		},
+		"mmtrPipePressure": {
+			"type": "number",
+			"default": 1
+		},
+		"mmtrBrakeCylinderPressure": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrMassRatio": {
+			"type": "number",
+			"default": 1
 		}
 	}
 }

@@ -1,5 +1,6 @@
 package org.mtr.core.operation;
 
+import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Vehicle;
 import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.serializer.JsonReader;
@@ -8,10 +9,15 @@ import org.mtr.core.serializer.SerializedDataBase;
 import org.mtr.core.serializer.WriterBase;
 import org.mtr.core.simulation.Simulator;
 
+import java.util.UUID;
+
 /**
  * MMTR explicit drive command: a driver sends separated throttle/brake notches (plus optional
  * HID axes and reverser) straight to one vehicle. This is the replacement for the legacy
  * single-handle mapping and is only applied when the vehicle has explicit control enabled.
+ *
+ * <p>Carries the sender's identity ({@code driverUuid}); the engine only honours commands from
+ * the player currently occupying a cab driver seat of that vehicle (occupation lock).</p>
  */
 public final class MmtrDriveControl implements SerializedDataBase {
 
@@ -22,8 +28,13 @@ public final class MmtrDriveControl implements SerializedDataBase {
 	private double throttleAxis;
 	private double brakeAxis;
 	private boolean emergency;
+	private @Nullable UUID driverUuid;
 
 	public MmtrDriveControl(long vehicleId, ControlState state) {
+		this(vehicleId, state, null);
+	}
+
+	public MmtrDriveControl(long vehicleId, ControlState state, @Nullable UUID driverUuid) {
 		this.vehicleId = vehicleId;
 		this.throttleNotch = state.getThrottleNotch();
 		this.brakeNotch = state.getBrakeNotch();
@@ -31,6 +42,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		this.throttleAxis = state.getThrottleAxis();
 		this.brakeAxis = state.getBrakeAxis();
 		this.emergency = state.isEmergency();
+		this.driverUuid = driverUuid;
 	}
 
 	public MmtrDriveControl(ReaderBase readerBase) {
@@ -46,6 +58,8 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		throttleAxis = readerBase.getDouble("throttleAxis", 0);
 		brakeAxis = readerBase.getDouble("brakeAxis", 0);
 		emergency = readerBase.getBoolean("emergency", false);
+		final String driverUuidString = readerBase.getString("driverUuid", "");
+		driverUuid = driverUuidString.isEmpty() ? null : UUID.fromString(driverUuidString);
 	}
 
 	public void apply(Simulator simulator) {
@@ -53,20 +67,10 @@ public final class MmtrDriveControl implements SerializedDataBase {
 			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setReverser(reverser)
 			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency);
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
-			if (vehicle.getId() == vehicleId && hasDriver(vehicle)) {
-				vehicle.applyMmtrControl(state);
+			if (vehicle.getId() == vehicleId && vehicle.canTakeMmtrControl(driverUuid)) {
+				vehicle.applyMmtrControl(state, driverUuid);
 			}
 		}));
-	}
-
-	private static boolean hasDriver(Vehicle vehicle) {
-		final boolean[] driverPresent = {false};
-		vehicle.vehicleExtraData.iterateRidingEntities(ridingEntity -> {
-			if (ridingEntity.isDriver()) {
-				driverPresent[0] = true;
-			}
-		});
-		return driverPresent[0];
 	}
 
 	@Override
@@ -78,5 +82,6 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		writerBase.writeDouble("throttleAxis", throttleAxis);
 		writerBase.writeDouble("brakeAxis", brakeAxis);
 		writerBase.writeBoolean("emergency", emergency);
+		writerBase.writeString("driverUuid", driverUuid == null ? "" : driverUuid.toString());
 	}
 }

@@ -48,6 +48,49 @@ public final class ConsistDynamics {
 		return (startSpeed + endSpeed) / 2.0 * (Math.max(1, dtMillis) / 1000.0);
 	}
 
+	/** Result of a sub-stepped integration: final speed and total distance covered. */
+	public static final class SpeedDistance {
+		public final double speedMetersPerSecond;
+		public final double distanceMeters;
+
+		public SpeedDistance(double speedMetersPerSecond, double distanceMeters) {
+			this.speedMetersPerSecond = speedMetersPerSecond;
+			this.distanceMeters = distanceMeters;
+		}
+	}
+
+	/**
+	 * Produces the controller output for one integration sub-step.
+	 */
+	@FunctionalInterface
+	public interface OutputProvider {
+		DriveOutput compute(double speedMetersPerSecond, long dtMillis);
+	}
+
+	/**
+	 * Advances speed over {@code dtMillis} using fixed sub-steps of at most
+	 * {@code subStepMillis}. Stateful controllers (e.g. air-brake pipe/cylinder) are integrated
+	 * at the fine granularity, which keeps stiff dynamics stable and identical on the server and
+	 * on mirrored clients regardless of the outer tick/frame length. The remaining (non-divisible)
+	 * tail is consumed as its own shorter sub-step so the total simulated time is exact.
+	 *
+	 * @return final speed and the trapezoidal distance covered
+	 */
+	public static SpeedDistance advance(double speedMetersPerSecond, ConsistType type, long dtMillis, long subStepMillis, OutputProvider output) {
+		final long subStep = Math.max(1, subStepMillis);
+		double speed = speedMetersPerSecond;
+		double distance = 0;
+		long remaining = Math.max(0, dtMillis);
+		while (remaining > 0) {
+			final long stepMillis = Math.min(subStep, remaining);
+			remaining -= stepMillis;
+			final double startSpeed = speed;
+			speed = step(speed, output.compute(speed, stepMillis), type, stepMillis);
+			distance += distanceTravelled(startSpeed, speed, stepMillis);
+		}
+		return new SpeedDistance(speed, distance);
+	}
+
 	/**
 	 * Linear resistance (simplified Davis substitute) subtracted from acceleration.
 	 * @param speedMetersPerSecond current signed speed (magnitude used)

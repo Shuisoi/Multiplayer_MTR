@@ -10,10 +10,13 @@ import it.unimi.dsi.fastutil.objects.*;
 import lombok.extern.log4j.Log4j2;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.generated.data.VehicleSchema;
+import org.mtr.core.mmtr.ConsistDynamics;
 import org.mtr.core.mmtr.ConsistType;
 import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.DriveController;
 import org.mtr.core.mmtr.DriveOutput;
+import org.mtr.core.mmtr.MmtrDriveAccess;
+import org.mtr.core.mmtr.MmtrProtection;
 import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
@@ -66,6 +69,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private boolean mmtrManualOverride;
 	private @Nullable ControlState mmtrActiveControl;
+	/**
+	 * MMTR: uuid of the driver currently holding the explicit override (occupation lock).
+	 * Set/cleared together with {@link #mmtrManualOverride}; kept {@code null} on the legacy
+	 * no-identity path so that path keeps its old behaviour.
+	 */
+	private @Nullable UUID mmtrDriverUuid;
+	/**
+	 * MMTR (server): remaining hold time (ms) after an overrun/SPAD protection emergency stop,
+	 * before control is released again (SCR-style lock). Mirrored clients just follow the
+	 * synced {@code mmtrProtection} flag and do not count down locally.
+	 */
+	private long mmtrProtectionLockRemaining;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -81,6 +96,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * Vehicles that do not move for this long while on-route are treated as jammed.
 	 */
 	private static final long JAM_THRESHOLD = 5 * MILLIS_PER_MINUTE;
+	/**
+	 * MMTR: hold time (ms) after an overrun/SPAD protection emergency stop before the driver can
+	 * take control again (SCR/TPWS-style lock).
+	 */
+	private static final long MMTR_PROTECTION_LOCK_MS = 10_000;
+	/**
+	 * MMTR: fixed integration sub-step for the longitudinal model. Server ticks and client frames
+	 * split their elapsed time into these fine steps so stiff dynamics (air brake, coupler slack
+	 * later) stay stable and the client mirror integrates identically.
+	 */
+	private static final long MMTR_INTEGRATION_SUB_STEP_MS = 10;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -135,6 +161,23 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	public void simulate(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, @Nullable Long2ObjectOpenHashMap<LongObjectImmutablePair<Vehicle>> vehicleTimesAlongRoute) {
+		// MMTR: release the explicit override as soon as its driver no longer rides as a cab
+		// driver (occupation lock), so a stale ControlState never keeps a consist moving and a
+		// new driver can take over.
+		if (!isClientside && MmtrDriveAccess.shouldAutoRelease(mmtrManualOverride, mmtrDriverUuid, mmtrDriverUuid != null && hasMmtrDriverRiding(mmtrDriverUuid))) {
+			releaseMmtrManualOverride();
+		}
+
+		// MMTR (server): protection lock countdown after an overrun/SPAD emergency stop.
+		if (!isClientside && mmtrProtection && speed <= 0) {
+			mmtrProtectionLockRemaining -= millisElapsed;
+			if (mmtrProtectionLockRemaining <= 0) {
+				mmtrProtection = false;
+				mmtrProtectionLockRemaining = 0;
+				System.out.println("[MMTR-DRV] protection lock cleared");
+			}
+		}
+
 		final int currentIndex;
 		final BooleanBooleanImmutablePair containsDriverAndDoorOverride = vehicleExtraData.containsDriverAndDoorOverride();
 		manualCooldown = vehicleExtraData.getIsManualAllowed() && containsDriverAndDoorOverride.leftBoolean() ? vehicleExtraData.getManualToAutomaticTime() : Math.max(0, manualCooldown - millisElapsed);
@@ -322,7 +365,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		sidingDepartureTime = -1;
 		vehicleExtraData.closeDoors();
 
-		if (!isClientside && isCurrentlyManual() && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower())) {
+		if (!isClientside && isCurrentlyManual() && !mmtrProtection && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower())) {
 			startUp(-1, data.getCurrentMillis());
 		}
 	}
@@ -349,7 +392,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				final boolean isOpposite = currentPathData != null && nextPathData != null && currentPathData.isOppositeRail(nextPathData);
 				final double nextStartDistance = nextPathData == null ? 0 : nextPathData.getStartDistance() + (isOpposite ? vehicleExtraData.getTotalVehicleLength() : 0);
 
-				if ((vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, nextStartDistance, 0, vehiclePositions, true, false) < 0) {
+				if (!mmtrProtection && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, nextStartDistance, 0, vehiclePositions, true, false) < 0) {
 					if (doorCooldown == 0) {
 						railProgress = nextStartDistance;
 						if (isOpposite) {
@@ -360,7 +403,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 			} else {
 				// Stopped anywhere else
-				if ((vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, railProgress, 0, vehiclePositions, true, false) < 0) {
+				if (!mmtrProtection && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, railProgress, 0, vehiclePositions, true, false) < 0) {
 					startUp(departureIndex, sidingDepartureTime);
 				}
 			}
@@ -418,11 +461,92 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 	/**
 	 * Applies an explicit separated ControlState from the MMTR input layer (throttle/brake/
-	 * reverser/axes). Enables the explicit control path for this vehicle.
+	 * reverser/axes), without a driver identity (legacy no-identity path for tests/tools).
 	 */
 	public void applyMmtrControl(ControlState controlState) {
-		mmtrActiveControl = controlState == null ? null : controlState.copy();
-		mmtrManualOverride = controlState != null;
+		applyMmtrControl(controlState, null);
+	}
+
+	/**
+	 * Applies an explicit separated ControlState from the MMTR input layer on behalf of
+	 * {@code driverUuid}. Enables the explicit control path and records the driver occupation
+	 * lock. Passing {@code null} control releases the override.
+	 */
+	public void applyMmtrControl(@Nullable ControlState controlState, @Nullable UUID driverUuid) {
+		if (controlState == null) {
+			releaseMmtrManualOverride();
+			return;
+		}
+		final boolean wasOverride = mmtrManualOverride;
+		mmtrActiveControl = controlState.copy();
+		mmtrDriverUuid = driverUuid;
+		mmtrManualOverride = true;
+		if (!wasOverride && driverUuid != null) {
+			System.out.println("[MMTR-DRV] driver=" + driverUuid + " engaged override T" + controlState.getThrottleNotch() + " B" + controlState.getBrakeNotch() + " R" + controlState.getReverser());
+		}
+	}
+
+	/** Releases the MMTR explicit override (occupation lock) and neutralises the legacy HUD power. */
+	public void releaseMmtrManualOverride() {
+		if (!mmtrManualOverride && !mmtrActive) {
+			return;
+		}
+		final UUID releasedDriver = mmtrDriverUuid;
+		mmtrActiveControl = null;
+		mmtrManualOverride = false;
+		mmtrDriverUuid = null;
+		mmtrActive = false;
+		mmtrMode = "";
+		mmtrDriver = "";
+		vehicleExtraData.setPowerLevel(0);
+		if (releasedDriver != null) {
+			System.out.println("[MMTR-DRV] driver=" + releasedDriver + " released override (auto)");
+		}
+	}
+
+	/** @return the uuid currently holding the MMTR explicit override, or {@code null} */
+	@Nullable
+	public UUID getMmtrDriverUuid() {
+		return mmtrDriverUuid;
+	}
+
+	public boolean isMmtrManualOverride() {
+		return mmtrManualOverride;
+	}
+
+	/** @return whether this vehicle currently holds an explicit MMTR manual override (server). */
+	public boolean isMmtrOverrideActive() {
+		return mmtrManualOverride;
+	}
+
+	/**
+	 * Server-authoritative driver check: may {@code uuid} take/keep MMTR control right now?
+	 * A {@code null} uuid keeps the legacy semantic of "some cab driver is present" so older
+	 * no-identity callers (tests/tools) keep working.
+	 */
+	public boolean canTakeMmtrControl(@Nullable UUID uuid) {
+		if (uuid == null) {
+			final boolean[] anyDriverRiding = {false};
+			vehicleExtraData.iterateRidingEntities(vehicleRidingEntity -> {
+				if (vehicleRidingEntity.isDriver()) {
+					anyDriverRiding[0] = true;
+				}
+			});
+			return anyDriverRiding[0];
+		}
+		final boolean senderIsRidingDriver = hasMmtrDriverRiding(uuid);
+		final boolean holderStillRiding = mmtrDriverUuid == null || hasMmtrDriverRiding(mmtrDriverUuid);
+		return MmtrDriveAccess.canControl(senderIsRidingDriver, mmtrManualOverride, mmtrDriverUuid, uuid, holderStillRiding);
+	}
+
+	private boolean hasMmtrDriverRiding(UUID uuid) {
+		final boolean[] found = {false};
+		vehicleExtraData.iterateRidingEntities(vehicleRidingEntity -> {
+			if (vehicleRidingEntity.isDriver() && vehicleRidingEntity.uuid.equals(uuid)) {
+				found[0] = true;
+			}
+		});
+		return found[0];
 	}
 
 	/** True when explicit MMTR control requests traction (used to allow departing from a stop). */
@@ -431,26 +555,137 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * Lazily resolves the MMTR consist type + controller for this vehicle from the simulator's
-	 * server-side policy. Returns true when MMTR control is active (never for DEFAULT mode).
+	 * Lazily resolves the MMTR consist type + controller.
+	 * <ul>
+	 *   <li>Server: from the simulator's server-side policy (ConsistTypeRegistry).</li>
+	 *   <li>Client: rebuilt from the mmtr parameters mirrored in the latest vehicle snapshot, so
+	 *       every client simulates exactly the same longitudinal physics as the server
+	 *       (identical model, authoritative ControlState, seeded air-brake state).</li>
+	 * </ul>
+	 * Returns true when MMTR control is active (never for DEFAULT mode).
 	 */
 	private boolean tryInitMmtrController() {
 		if (mmtrDriveController != null) {
 			return true;
 		}
-		if (data instanceof Simulator simulator && simulator.mmtrConsistTypes != null && simulator.mmtrDefaultConsistTypeId != null) {
-			mmtrConsistType = simulator.mmtrConsistTypes.get(simulator.mmtrDefaultConsistTypeId);
-			if (mmtrConsistType != null) {
-				mmtrDriveController = switch (mmtrConsistType.getControlMode()) {
-					case NOTCHED -> new org.mtr.core.mmtr.NotchedDriveController();
-					case STEPLESS -> new org.mtr.core.mmtr.SteplessDriveController();
-					case AIR_BRAKE -> new org.mtr.core.mmtr.AirBrakeController();
-					default -> null;
-				};
+		if (!isClientside) {
+			if (data instanceof Simulator simulator && simulator.mmtrConsistTypes != null && simulator.mmtrDefaultConsistTypeId != null) {
+				mmtrConsistType = simulator.mmtrConsistTypes.get(simulator.mmtrDefaultConsistTypeId);
+			}
+		} else {
+			mmtrConsistType = createMirrorConsistTypeFromSync();
+		}
+		if (mmtrConsistType != null) {
+			mmtrDriveController = switch (mmtrConsistType.getControlMode()) {
+				case NOTCHED -> new org.mtr.core.mmtr.NotchedDriveController();
+				case STEPLESS -> new org.mtr.core.mmtr.SteplessDriveController();
+				case AIR_BRAKE -> new org.mtr.core.mmtr.AirBrakeController();
+				default -> null;
+			};
+			if (isClientside && mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeController airBrakeController) {
+				// Seed the fresh mirror controller with the authoritative air state from the snapshot.
+				airBrakeController.setState(mmtrPipePressure, mmtrBrakeCylinderPressure);
 			}
 		}
 		return mmtrDriveController != null;
 	}
+
+	/** Client-side: rebuild the ConsistType mirrored in the latest vehicle snapshot. */
+	private @Nullable ConsistType createMirrorConsistTypeFromSync() {
+		if (mmtrMode == null || mmtrMode.isEmpty()) {
+			return null;
+		}
+		final ConsistType.ControlMode mode;
+		try {
+			mode = ConsistType.ControlMode.valueOf(mmtrMode);
+		} catch (IllegalArgumentException e) {
+			return null;
+		}
+		if (mode == ConsistType.ControlMode.DEFAULT) {
+			return null;
+		}
+		return new ConsistType(
+			"mirror", "", mode,
+			(int) mmtrPowerNotches, (int) mmtrBrakeNotches,
+			mmtrMaxSpeedKmh, mmtrTractionAccelerationMps2, mmtrServiceBrakeDecelerationMps2,
+			mmtrEmergencyDecelerationMps2, mmtrTractionBreakpointKmh, mmtrResistanceA, mmtrResistanceB, mmtrResistanceC,
+			mmtrAirPipeChargeRatePerSecond, mmtrAirPipeDischargeRatePerSecond,
+			mmtrAirBrakeApplyRatePerSecond, mmtrAirBrakeReleaseRatePerSecond, mmtrManualMaxSpeedKmh,
+			mmtrMassRatio
+		);
+	}
+
+	/** Client-side: rebuild the authoritative ControlState from the mirrored snapshot fields. */
+	private ControlState createMirrorControlStateFromSync() {
+		return new ControlState()
+			.setThrottleNotch((int) mmtrThrottleNotch).setBrakeNotch((int) mmtrBrakeNotch).setReverser((int) mmtrReverser)
+			.setThrottleAxis(mmtrThrottleAxis).setBrakeAxis(mmtrBrakeAxis).setEmergency(mmtrEmergency);
+	}
+
+	/**
+	 * Server-side: writes the current MMTR drive state + consist parameters into the synced
+	 * vehicle fields so clients can mirror the physics and show the authoritative state.
+	 */
+	private void updateMmtrSyncFields() {
+		mmtrActive = mmtrManualOverride && mmtrConsistType != null;
+		mmtrMode = mmtrConsistType == null ? "" : mmtrConsistType.getControlMode().name();
+		mmtrDriver = mmtrDriverUuid == null ? "" : mmtrDriverUuid.toString();
+		if (mmtrActiveControl != null) {
+			mmtrThrottleNotch = mmtrActiveControl.getThrottleNotch();
+			mmtrBrakeNotch = mmtrActiveControl.getBrakeNotch();
+			mmtrReverser = mmtrActiveControl.getReverser();
+			mmtrThrottleAxis = mmtrActiveControl.getThrottleAxis();
+			mmtrBrakeAxis = mmtrActiveControl.getBrakeAxis();
+			mmtrEmergency = mmtrActiveControl.isEmergency();
+		}
+		if (mmtrConsistType != null) {
+			mmtrPowerNotches = mmtrConsistType.getPowerNotches();
+			mmtrBrakeNotches = mmtrConsistType.getBrakeNotches();
+			mmtrMaxSpeedKmh = mmtrConsistType.getMaxSpeedKmh();
+			mmtrManualMaxSpeedKmh = mmtrConsistType.getManualMaxSpeedMetersPerSecond() * 3.6;
+			mmtrTractionAccelerationMps2 = mmtrConsistType.getTractionAccelerationMps2();
+			mmtrServiceBrakeDecelerationMps2 = mmtrConsistType.getServiceBrakeDecelerationMps2();
+			mmtrEmergencyDecelerationMps2 = mmtrConsistType.getEmergencyDecelerationMps2();
+			mmtrTractionBreakpointKmh = mmtrConsistType.getTractionBreakpointKmh();
+			mmtrResistanceA = mmtrConsistType.getResistanceA();
+			mmtrResistanceB = mmtrConsistType.getResistanceB();
+			mmtrResistanceC = mmtrConsistType.getResistanceC();
+			mmtrAirPipeChargeRatePerSecond = mmtrConsistType.getAirPipeChargeRatePerSecond();
+			mmtrAirPipeDischargeRatePerSecond = mmtrConsistType.getAirPipeDischargeRatePerSecond();
+			mmtrAirBrakeApplyRatePerSecond = mmtrConsistType.getAirBrakeApplyRatePerSecond();
+			mmtrAirBrakeReleaseRatePerSecond = mmtrConsistType.getAirBrakeReleaseRatePerSecond();
+			mmtrMassRatio = mmtrConsistType.getMassRatio();
+		}
+		if (mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeController airBrakeController) {
+			mmtrPipePressure = airBrakeController.getPipePressure();
+			mmtrBrakeCylinderPressure = airBrakeController.getBrakeCylinderPressure();
+		}
+	}
+
+	/** Server-side: (re)evaluate overrun/SPAD protection ahead of the {@code stoppingPoint}. */
+	private boolean evaluateMmtrProtection(double stoppingPoint) {
+		if (mmtrProtection) {
+			return true;
+		}
+		// Same emergency envelope as the legacy path (Siding.MAX_ACCELERATION * 2, m/ms^2).
+		if (MmtrProtection.requiresProtection(speed, stoppingPoint - railProgress, Siding.MAX_ACCELERATION * 2)) {
+			mmtrProtection = true;
+			mmtrProtectionLockRemaining = MmtrProtection.LOCK_MILLIS;
+			System.out.println("[MMTR-DRV] overrun protection engaged (past stopping point or cannot stop in time)");
+			return true;
+		}
+		return false;
+	}
+
+	/** Public getters for the client HUD / mirror overlay (values from the last snapshot). */
+	public boolean isMmtrActiveFromSync() { return mmtrActive; }
+	public String getMmtrModeFromSync() { return mmtrMode == null ? "" : mmtrMode; }
+	public String getMmtrDriverFromSync() { return mmtrDriver == null ? "" : mmtrDriver; }
+	public int getMmtrThrottleFromSync() { return (int) mmtrThrottleNotch; }
+	public int getMmtrBrakeFromSync() { return (int) mmtrBrakeNotch; }
+	public int getMmtrReverserFromSync() { return (int) mmtrReverser; }
+	public boolean isMmtrProtectionFromSync() { return mmtrProtection; }
+	public boolean isMmtrEmergencyFromSync() { return mmtrEmergency; }
 
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
 		// Tracks the distance
@@ -527,27 +762,53 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			vehicleExtraData.setPowerLevel(powerLevel);
 		}
 
+		// Distance covered inside the MMTR sub-stepped integration (set when the mmtr branch runs).
+		double mmtrDistanceTravelled = -1;
+
 		// Set speed
 		if (speedTarget < 0) {
 			final double stoppingDistance = stoppingPoint - railProgress;
 			speed = stoppingDistance <= 0 ? Siding.ACCELERATION_DEFAULT : Math.max(speed - (0.5 * speed * speed / stoppingDistance) * millisElapsed, Siding.ACCELERATION_DEFAULT);
-		} else if (mmtrManualOverride && !isClientside && isCurrentlyManual() && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+		} else if (tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null && (!isClientside ? mmtrManualOverride && isCurrentlyManual() : mmtrActive)) {
 			// MMTR explicit control model: drive from the separated ControlState sent by the input
 			// layer (throttle notch 0..N, brake notch, axes). No legacy single-handle mapping.
-			final ControlState mmtrControl = mmtrActiveControl == null ? new ControlState() : mmtrActiveControl;
-			final DriveOutput mmtrOutput = mmtrDriveController.compute(mmtrControl, mmtrConsistType, MmtrSupport.internalSpeedToSi(speed), millisElapsed);
-			double mmtrSpeed = speed + MmtrSupport.siAccelerationToInternal(mmtrOutput.getAccelerationMetersPerSecondSquared()) * millisElapsed;
-			if (mmtrOutput.getAccelerationMetersPerSecondSquared() >= 0) {
-				final double mmtrUpperBound = mmtrConsistType.getMaxSpeedMetersPerSecond() / 1000.0;
-				mmtrSpeed = Math.min(mmtrSpeed, mmtrUpperBound);
+			// Mirrored client-side too (same controller, same authoritative ControlState + seeded
+			// air-brake state from the snapshot) so every client simulates identical physics.
+			final boolean mmtrProtectionNow;
+			final ControlState mmtrControl;
+			if (!isClientside) {
+				mmtrProtectionNow = evaluateMmtrProtection(stoppingPoint);
+				mmtrControl = mmtrActiveControl == null ? new ControlState() : mmtrActiveControl;
 			} else {
-				mmtrSpeed = Math.max(mmtrSpeed, 0);
+				mmtrProtectionNow = mmtrProtection;
+				mmtrControl = createMirrorControlStateFromSync();
 			}
-			// Keep the legacy HUD in sync: show throttle positive, brake negative, coast at zero.
-			vehicleExtraData.setPowerLevel(mmtrControl.getThrottleNotch() > 0 ? mmtrControl.getThrottleNotch()
-				: mmtrControl.getBrakeNotch() > 0 ? -mmtrControl.getBrakeNotch() : 0);
-			if (speed != mmtrSpeed || Math.abs(mmtrOutput.getAccelerationMetersPerSecondSquared()) > 0.001) {
-				System.out.println("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " speed=" + speed + " outAcc=" + mmtrOutput.getAccelerationMetersPerSecondSquared() + " cyl=" + mmtrOutput.getBrakeCylinderPressure() + " emg=" + mmtrOutput.isEmergencyBrake());
+			// Fixed sub-step integration shared verbatim by the server and mirrored clients, so
+			// the physics stay identical (and stiff dynamics stable) regardless of dt. During
+			// overrun/SPAD protection the provider always requests emergency braking.
+			final boolean mmtrProtectionActive = mmtrProtectionNow;
+			final ConsistType mmtrType = mmtrConsistType;
+			final ControlState mmtrState = mmtrControl;
+			final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
+			final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) ->
+				mmtrProtectionActive && siSpeed > 0
+					? new DriveOutput(-mmtrType.getEmergencyDecelerationMps2(), true, true, 0, 1)
+					: mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis));
+			final double mmtrSpeed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
+			mmtrDistanceTravelled = mmtrResult.distanceMeters;
+			if (!isClientside) {
+				// Keep the legacy HUD in sync: show throttle positive, brake negative, coast at zero
+				// (emergency during protection). Also refresh the mirrored snapshot fields.
+				if (mmtrProtectionNow) {
+					vehicleExtraData.setPowerLevel(-MAX_POWER_LEVEL - 1);
+				} else {
+					vehicleExtraData.setPowerLevel(mmtrControl.getThrottleNotch() > 0 ? mmtrControl.getThrottleNotch()
+						: mmtrControl.getBrakeNotch() > 0 ? -mmtrControl.getBrakeNotch() : 0);
+				}
+				updateMmtrSyncFields();
+				if (speed != mmtrSpeed || mmtrDistanceTravelled > 0) {
+					System.out.println("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " speed=" + speed + "->" + mmtrSpeed + " dist=" + mmtrResult.distanceMeters + " prot=" + mmtrProtectionNow);
+				}
 			}
 			speed = mmtrSpeed;
 		} else {
@@ -560,8 +821,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 
-		// Set rail progress
-		railProgress += speed * millisElapsed;
+		// Set rail progress (mmtr branch carries its own sub-stepped trapezoidal distance)
+		railProgress += mmtrDistanceTravelled >= 0 ? mmtrDistanceTravelled : speed * millisElapsed;
 		if (railProgress >= stoppingPoint) {
 			railProgress = stoppingPoint;
 			speed = 0;
@@ -678,6 +939,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (siding != null) {
 			if (siding.area != null && data instanceof final Simulator simulator) {
 				final boolean needsUpdate = vehicleExtraData.checkForUpdate();
+				// MMTR: clients now mirror the same mmtr physics from the snapshot fields, so the
+				// stock dirty-driven sync cadence (needsUpdate on state/power changes) is accurate
+				// enough — no per-tick authoritative push hack required anymore.
 				// TODO for continuous movement, maybe only send the path once rather than sending the entire path for each vehicle
 				final int pathUpdateIndex = transportMode.continuousMovement ? 0 : Math.max(0, index + 1);
 				simulator.clients.forEach(client -> {

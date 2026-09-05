@@ -18,3 +18,8 @@ run/
 mmtr-engine-run/classes/
 # synced modern engine jar (source lives in engine/; recreate via scripts/sync-engine.ps1)
 game/libs/Transport-Simulation-Core-0.0.1.jar
+
+# engine website build artifacts (Angular toolchain output)
+engine/website/.angular/
+engine/website/dist/
+engine/website/node_modules/

@@ -5,6 +5,7 @@ import org.mtr.core.data.VehicleExtraData;
 import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.doubles.DoubleDoubleImmutablePair;
 import org.mtr.libraries.it.unimi.dsi.fastutil.doubles.DoubleObjectImmutablePair;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.Window;
 import org.mtr.mapping.mapper.GraphicsHolder;
@@ -23,6 +24,7 @@ public final class DrivingGuiRenderer {
 
 	private static final int EDGE_PADDING = 16;
 	private static final int PADDING = 4;
+	private static final int DEBUG_SEGMENT_SPACING = 3;
 	private static final int TOOL_SIZE = 96;
 	private static final int PLATFORM_BAR_SIZE = 6;
 	private static final int SMALL_LINE_SPACING = 6;
@@ -235,6 +237,8 @@ public final class DrivingGuiRenderer {
 				graphicsHolder.drawText(text, -textWidth, -IGui.TEXT_HEIGHT / 2, IGui.ARGB_WHITE, true, GraphicsHolder.getDefaultLight());
 				graphicsHolder.pop();
 			}
+
+			drawMmtrDebugOverlay(graphicsHolder, guiDrawing, vehicle, vehicleExtraData);
 		}
 
 		vehicle = null;
@@ -246,5 +250,107 @@ public final class DrivingGuiRenderer {
 
 	private static void drawCenteredText(GraphicsHolder graphicsHolder, String text, int color) {
 		graphicsHolder.drawText(text, -GraphicsHolder.getTextWidth(text) / 2, -IGui.TEXT_HEIGHT / 2, color, false, GraphicsHolder.getDefaultLight());
+	}
+
+	/**
+	 * MMTR debug overlay, drawn while driving. Compares the last server-authoritative speed
+	 * (from the most recent vehicle snapshot) against the locally rendered speed, and shows
+	 * the separated notch/reverser state sent by the client plus the server-mirrored power level.
+	 */
+	private static void drawMmtrDebugOverlay(GraphicsHolder graphicsHolder, GuiDrawing guiDrawing, VehicleExtension vehicle, VehicleExtraData vehicleExtraData) {
+		final int titleColor = 0xFFFFFF66;
+		final int labelColor = 0xFFB0B0B0;
+		final int dimColor = 0xFF808080;
+		final int cyanColor = 0xFF55FFFF;
+		final int greenColor = 0xFF55FF55;
+		final int redColor = 0xFFFF5555;
+
+		final double serverSpeed = vehicle.getServerSpeedKilometersPerHour();
+		final double renderedSpeed = vehicle.getSpeed() * 3600;
+		final boolean hasServerSpeed = Double.isFinite(serverSpeed);
+		final double speedDifference = renderedSpeed - serverSpeed;
+		final int diffColor = !hasServerSpeed ? dimColor : Math.abs(speedDifference) < 1 ? greenColor : redColor;
+
+		final int throttleNotch = VehicleRidingMovement.getMmtrThrottleNotch();
+		final int brakeNotch = VehicleRidingMovement.getMmtrBrakeNotch();
+		final int reverser = VehicleRidingMovement.getMmtrReverser();
+		final int powerLevel = vehicleExtraData.getPowerLevel();
+
+		final String pwrText;
+		final int pwrColor;
+		if (powerLevel < -Vehicle.MAX_POWER_LEVEL) {
+			pwrText = "E";
+			pwrColor = redColor;
+		} else if (powerLevel < 0) {
+			pwrText = "B" + -powerLevel;
+			pwrColor = ORANGE_COLOR;
+		} else if (powerLevel > 0) {
+			pwrText = "P" + powerLevel;
+			pwrColor = BLUE_COLOR;
+		} else {
+			pwrText = "N";
+			pwrColor = IGui.ARGB_WHITE;
+		}
+
+		// Server-authoritative MMTR state (from the latest snapshot) for the occupation/echo rows.
+		final int authThrottle = vehicle.getMmtrThrottleFromSync();
+		final int authBrake = vehicle.getMmtrBrakeFromSync();
+		final int authReverser = vehicle.getMmtrReverserFromSync();
+		final boolean protection = vehicle.isMmtrProtectionFromSync();
+		final String engineDriver = vehicle.getMmtrDriverFromSync();
+		final String localUuid = MinecraftClient.getInstance().getPlayerMapped() == null ? "" : MinecraftClient.getInstance().getPlayerMapped().getUuid().toString();
+		final boolean iAmDriver = !engineDriver.isEmpty() && engineDriver.equals(localUuid);
+		final boolean localTrying = throttleNotch > 0 || brakeNotch > 0 || reverser != 0;
+		final boolean notInControl = localTrying && !iAmDriver && !engineDriver.isEmpty();
+
+		final ObjectArrayList<MmtrDebugText> titleRow = new ObjectArrayList<>();
+		titleRow.add(new MmtrDebugText("MMTR " + (protection ? "PROTECT " : "") + (vehicleExtraData.getIsCurrentlyManual() ? "MANUAL" : "ATO"), protection ? redColor : titleColor));
+
+		final MmtrDebugText[][] rows = {
+				titleRow.toArray(new MmtrDebugText[0]),
+				{new MmtrDebugText("SRV  ", labelColor), new MmtrDebugText(hasServerSpeed ? Utilities.round(serverSpeed, 1) + " km/h" : "-- km/h", cyanColor)},
+				{new MmtrDebugText("RND  ", labelColor), new MmtrDebugText(Utilities.round(renderedSpeed, 1) + " km/h", IGui.ARGB_WHITE)},
+				{new MmtrDebugText("DIFF ", labelColor), new MmtrDebugText(hasServerSpeed ? String.format("%+.1f km/h", speedDifference) : "", diffColor)},
+				{new MmtrDebugText("CTRL ", labelColor), new MmtrDebugText("P" + authThrottle, authThrottle > 0 ? BLUE_COLOR : dimColor), new MmtrDebugText(" B" + authBrake, authBrake > 0 ? ORANGE_COLOR : dimColor), new MmtrDebugText(" R" + (authReverser > 0 ? "F" : authReverser < 0 ? "R" : "N"), IGui.ARGB_WHITE)},
+				{new MmtrDebugText("OCC  ", labelColor), new MmtrDebugText(engineDriver.isEmpty() ? "NONE" : iAmDriver ? "YOU" : "OTHER", engineDriver.isEmpty() ? dimColor : iAmDriver ? greenColor : ORANGE_COLOR), new MmtrDebugText(notInControl ? " NO-CTRL" : "", redColor)},
+				{new MmtrDebugText("NOTCH", labelColor), new MmtrDebugText(" P" + throttleNotch, throttleNotch > 0 ? BLUE_COLOR : dimColor), new MmtrDebugText(" B" + brakeNotch, brakeNotch > 0 ? ORANGE_COLOR : dimColor), new MmtrDebugText(" R" + (reverser > 0 ? "F" : reverser < 0 ? "R" : "N"), IGui.ARGB_WHITE)},
+				{new MmtrDebugText("PWR  ", labelColor), new MmtrDebugText(pwrText, pwrColor)}
+		};
+
+		int maxRowWidth = 0;
+		for (final MmtrDebugText[] row : rows) {
+			int rowWidth = 0;
+			for (final MmtrDebugText segment : row) {
+				rowWidth += GraphicsHolder.getTextWidth(segment.text) + DEBUG_SEGMENT_SPACING;
+			}
+			maxRowWidth = Math.max(maxRowWidth, rowWidth);
+		}
+
+		final int textLeft = EDGE_PADDING / 2;
+		final int textTop = EDGE_PADDING / 2;
+		guiDrawing.beginDrawingRectangle();
+		guiDrawing.drawRectangle(textLeft - PADDING, textTop - PADDING / 2, textLeft + maxRowWidth + PADDING, textTop + rows.length * IGui.LINE_HEIGHT + PADDING / 2, 0x99000000);
+		guiDrawing.finishDrawingRectangle();
+
+		int yCursor = textTop;
+		for (final MmtrDebugText[] row : rows) {
+			int xCursor = textLeft;
+			for (final MmtrDebugText segment : row) {
+				graphicsHolder.drawText(segment.text, xCursor, yCursor, segment.color, true, GraphicsHolder.getDefaultLight());
+				xCursor += GraphicsHolder.getTextWidth(segment.text) + DEBUG_SEGMENT_SPACING;
+			}
+			yCursor += IGui.LINE_HEIGHT;
+		}
+	}
+
+	private static final class MmtrDebugText {
+
+		private final String text;
+		private final int color;
+
+		private MmtrDebugText(String text, int color) {
+			this.text = text;
+			this.color = color;
+		}
 	}
 }

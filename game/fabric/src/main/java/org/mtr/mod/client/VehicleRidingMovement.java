@@ -59,6 +59,8 @@ public class VehicleRidingMovement {
 	private static int mmtrBrakeNotch;
 	private static int mmtrReverser;
 	private static boolean prevThrottleUp, prevThrottleDown, prevBrakeApply, prevBrakeRelease, prevReverserUp, prevReverserDown;
+	/** True once the engine has been told this client occupies a cab driver seat this ride. */
+	private static boolean mmtrDriverSynced;
 
 	public static final int SEND_UPDATE_FREQUENCY = 1000;
 	private static final float VEHICLE_WALKING_SPEED_MULTIPLIER = 0.005F;
@@ -78,6 +80,7 @@ public class VehicleRidingMovement {
 			ridingDepotId = 0;
 			ridingSidingId = 0;
 			ridingVehicleId = 0;
+			mmtrDriverSynced = false;
 		}
 
 		if (ridingPositionCache != null) {
@@ -109,6 +112,13 @@ public class VehicleRidingMovement {
 			prevThrottleUp = throttleUp; prevThrottleDown = throttleDown; prevBrakeApply = brakeApply;
 			prevBrakeRelease = brakeRelease; prevReverserUp = reverserUp; prevReverserDown = reverserDown;
 			if (changed) {
+				// Make sure the engine has registered this client as a cab driver before sending
+				// control, otherwise the occupation-lock check would reject the first command.
+				if (!mmtrDriverSynced) {
+					isHoldingDriverKey = isHoldingDriverKeyNew;
+					sendUpdate(false);
+					mmtrDriverSynced = true;
+				}
 				InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDriveControl(ridingVehicleId, mmtrThrottleNotch, mmtrBrakeNotch, mmtrReverser, false));
 			}
 		} else {
@@ -162,6 +172,7 @@ public class VehicleRidingMovement {
 					ridingPositionCache = null;
 					ridingYawDifference = null;
 					previousVehicleYaw = yaw;
+					mmtrDriverSynced = false;
 					if (ridingVehicleId == 0) {
 						sendUpdate(false);
 					}
@@ -320,6 +331,18 @@ public class VehicleRidingMovement {
 
 	public static boolean isRiding(long vehicleId) {
 		return vehicleId == ridingVehicleId;
+	}
+
+	public static int getMmtrThrottleNotch() {
+		return mmtrThrottleNotch;
+	}
+
+	public static int getMmtrBrakeNotch() {
+		return mmtrBrakeNotch;
+	}
+
+	public static int getMmtrReverser() {
+		return mmtrReverser;
 	}
 
 	public static void overrideDoors() {

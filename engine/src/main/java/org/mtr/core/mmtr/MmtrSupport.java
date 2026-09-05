@@ -22,6 +22,11 @@ public final class MmtrSupport {
 		return metersPerMillisecond * 1000.0;
 	}
 
+	/** SI speed (m/s) -> engine internal (m/ms). */
+	public static double siSpeedToInternal(double metersPerSecond) {
+		return metersPerSecond * 0.001;
+	}
+
 	/**
 	 * Maps the legacy combined power handle onto the unified {@link ControlState}.
 	 * The handle ranges from -8 (emergency) ... -1 (service brake) 0 (coast) 1..7 (power).

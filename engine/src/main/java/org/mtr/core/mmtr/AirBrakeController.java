@@ -46,6 +46,12 @@ public final class AirBrakeController implements DriveController {
 	public double getPipePressure() { return pipePressure; }
 	public double getBrakeCylinderPressure() { return brakeCylinderPressure; }
 
+	/** Seeds the air-brake state (used when mirroring the server's controller on a client). */
+	public void setState(double pipePressure, double brakeCylinderPressure) {
+		this.pipePressure = Math.max(0, Math.min(1, pipePressure));
+		this.brakeCylinderPressure = Math.max(0, Math.min(1, brakeCylinderPressure));
+	}
+
 	@Override
 	public void reset() {
 		pipePressure = 1.0;

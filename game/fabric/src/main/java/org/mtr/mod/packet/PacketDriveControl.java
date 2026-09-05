@@ -51,6 +51,8 @@ public final class PacketDriveControl extends PacketHandler {
 	public void runServer(MinecraftServer minecraftServer, ServerPlayerEntity serverPlayerEntity) {
 		final ControlState state = new ControlState()
 			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setReverser(reverser).setEmergency(emergency);
-		Init.sendMessageC2S(OperationProcessor.MMTR_DRIVE, minecraftServer, null, new MmtrDriveControl(vehicleId, state), null, null);
+		// The engine only honours control from the player currently occupying a cab driver seat
+		// of this consist (occupation lock), so attach the sender's identity.
+		Init.sendMessageC2S(OperationProcessor.MMTR_DRIVE, minecraftServer, null, new MmtrDriveControl(vehicleId, state, serverPlayerEntity == null ? null : serverPlayerEntity.getUuid()), null, null);
 	}
 }

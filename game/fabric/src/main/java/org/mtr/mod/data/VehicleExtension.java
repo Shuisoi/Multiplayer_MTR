@@ -36,6 +36,8 @@ public class VehicleExtension extends Vehicle implements Utilities {
 
 	private double oldSpeed;
 	private int speedLimitKilometersPerHour;
+	/** Last server-authoritative speed (km/h) from the most recent vehicle snapshot. */
+	private double serverSpeedKilometersPerHour;
 	@Nullable
 	private DoubleObjectImmutablePair<DoubleDoubleImmutablePair> platformStoppingDetails;
 
@@ -43,6 +45,7 @@ public class VehicleExtension extends Vehicle implements Utilities {
 
 	public VehicleExtension(VehicleUpdate vehicleUpdate, Data data) {
 		super(vehicleUpdate.getVehicleExtraData(), null, new JsonReader(Utilities.getJsonObjectFromData(vehicleUpdate.getVehicle())), data);
+		serverSpeedKilometersPerHour = getSpeed() * 3600;
 		final PersistentVehicleData tempPersistentVehicleData = MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.get(getId());
 		if (tempPersistentVehicleData == null) {
 			persistentVehicleData = new PersistentVehicleData(vehicleExtraData.immutableVehicleCars, getTransportMode());
@@ -57,7 +60,12 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		if (jsonObject != null) {
 			updateData(new JsonReader(jsonObject.getAsJsonObject("vehicle")));
 			vehicleExtraData.updateData(new JsonReader(jsonObject.getAsJsonObject("data")));
+			serverSpeedKilometersPerHour = getSpeed() * 3600;
 		}
+	}
+
+	public double getServerSpeedKilometersPerHour() {
+		return serverSpeedKilometersPerHour;
 	}
 
 	public void simulate(long millisElapsed) {

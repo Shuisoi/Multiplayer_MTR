@@ -29,12 +29,30 @@ public final class ConsistType {
 	private final double airPipeDischargeRatePerSecond; // full-service drop rate 0..1/s
 	private final double airBrakeApplyRatePerSecond;    // brake-cylinder build 0..1/s
 	private final double airBrakeReleaseRatePerSecond;  // brake-cylinder release 0..1/s
+	/**
+	 * Relative mass of the unit (1.0 = nominal). Used when several units are coupled into one
+	 * {@link MmtrComposition}: tractive effort / brake force are spread over the total mass, and
+	 * running resistance is weighted by each unit's mass. A single unit keeps mass 1.0 so the
+	 * legacy/plain behaviour is unchanged.
+	 */
+	private final double massRatio;
 
+	/** Backwards-compatible constructor (mass ratio = 1.0). */
 	public ConsistType(String id, String name, ControlMode controlMode, int powerNotches, int brakeNotches,
 		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
 		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
 		double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
 		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh) {
+		this(id, name, controlMode, powerNotches, brakeNotches, maxSpeedKmh, tractionAccelerationMps2, serviceBrakeDecelerationMps2,
+			emergencyDecelerationMps2, tractionBreakpointKmh, resistanceA, resistanceB, resistanceC, airPipeChargeRatePerSecond,
+			airPipeDischargeRatePerSecond, airBrakeApplyRatePerSecond, airBrakeReleaseRatePerSecond, manualMaxSpeedKmh, 1.0);
+	}
+
+	public ConsistType(String id, String name, ControlMode controlMode, int powerNotches, int brakeNotches,
+		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
+		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
+		double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
+		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh, double massRatio) {
 		this.id = id;
 		this.name = name;
 		this.controlMode = controlMode;
@@ -53,6 +71,7 @@ public final class ConsistType {
 		this.airPipeDischargeRatePerSecond = airPipeDischargeRatePerSecond;
 		this.airBrakeApplyRatePerSecond = airBrakeApplyRatePerSecond;
 		this.airBrakeReleaseRatePerSecond = airBrakeReleaseRatePerSecond;
+		this.massRatio = massRatio > 0 ? massRatio : 1.0;
 	}
 
 	public String getId() { return id; }
@@ -66,6 +85,7 @@ public final class ConsistType {
 	public double getTractionAccelerationMps2() { return tractionAccelerationMps2; }
 	public double getServiceBrakeDecelerationMps2() { return serviceBrakeDecelerationMps2; }
 	public double getEmergencyDecelerationMps2() { return emergencyDecelerationMps2; }
+	public double getMassRatio() { return massRatio; }
 	public double getTractionBreakpointKmh() { return tractionBreakpointKmh; }
 	public double getResistanceA() { return resistanceA; }
 	public double getResistanceB() { return resistanceB; }
@@ -101,7 +121,8 @@ public final class ConsistType {
 			getDouble(json, "airPipeDischargeRatePerSecond", 0.4),
 			getDouble(json, "airBrakeApplyRatePerSecond", 0.15),
 			getDouble(json, "airBrakeReleaseRatePerSecond", 0.1),
-			getDouble(json, "manualMaxSpeedKmh", 0)
+			getDouble(json, "manualMaxSpeedKmh", 0),
+			getDouble(json, "massRatio", 1)
 		);
 	}
 

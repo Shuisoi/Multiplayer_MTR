@@ -65,6 +65,21 @@ public class Simulator extends Data implements Utilities {
 	public String mmtrDefaultConsistTypeId;
 
 	/**
+	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
+	 * live vehicle/riding/driver counts, active mmtr overrides, protection states and jammed
+	 * routes, so an operator (or an external process) can detect stuck trains early.
+	 */
+	private static final int MMTR_WATCHDOG_INTERVAL_TICKS = 100;
+	private int watchdogTickCounter;
+	private long watchdogLastCheckAt;
+	private int watchdogVehicles;
+	private int watchdogRiders;
+	private int watchdogDrivers;
+	private int watchdogMmtrOverrides;
+	private int watchdogProtections;
+	private int watchdogJammedRoutes;
+
+	/**
 	 * Stable dimension identifier (e.g. {@code "minecraft/overworld"}).
 	 */
 	public final String dimension;
@@ -517,10 +532,64 @@ public class Simulator extends Data implements Utilities {
 
 			// Process messages
 			messageQueueC2S.process(queueObject -> queueObject.runCallback(OperationProcessor.process(queueObject.key, queueObject.data, this)));
+
+			// MMTR health watchdog (every ~5 seconds at 20 TPS)
+			if (++watchdogTickCounter >= MMTR_WATCHDOG_INTERVAL_TICKS) {
+				watchdogTickCounter = 0;
+				watchdogHealthCheck();
+			}
 		} catch (Throwable e) {
 			log.fatal("", e);
 		}
 	}
+
+	/**
+	 * MMTR health watchdog: recounts the live simulation state and logs a one-line summary.
+	 * Called automatically every {@value #MMTR_WATCHDOG_INTERVAL_TICKS} ticks and callable on
+	 * demand (e.g. from an external watchdog process or tests).
+	 */
+	public void watchdogHealthCheck() {
+		final int[] vehicles = {0};
+		final int[] riders = {0};
+		final int[] drivers = {0};
+		final int[] overrides = {0};
+		final int[] protections = {0};
+		sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
+			vehicles[0]++;
+			if (vehicle.isMmtrOverrideActive()) {
+				overrides[0]++;
+			}
+			if (vehicle.isMmtrProtectionFromSync()) {
+				protections[0]++;
+			}
+			vehicle.vehicleExtraData.iterateRidingEntities(vehicleRidingEntity -> {
+				if (vehicleRidingEntity.isOnVehicle()) {
+					riders[0]++;
+					if (vehicleRidingEntity.isDriver()) {
+						drivers[0]++;
+					}
+				}
+			});
+		}));
+		watchdogLastCheckAt = getCurrentMillis();
+		watchdogVehicles = vehicles[0];
+		watchdogRiders = riders[0];
+		watchdogDrivers = drivers[0];
+		watchdogMmtrOverrides = overrides[0];
+		watchdogProtections = protections[0];
+		watchdogJammedRoutes = jammedRouteIds.size();
+		System.out.println("[MMTR-HLTH] t=" + getCurrentMillis()
+			+ " vehicles=" + watchdogVehicles + " riders=" + watchdogRiders + " drivers=" + watchdogDrivers
+			+ " mmtrOverrides=" + watchdogMmtrOverrides + " protections=" + watchdogProtections + " jammedRoutes=" + watchdogJammedRoutes);
+	}
+
+	public long getWatchdogLastCheckAt() { return watchdogLastCheckAt; }
+	public int getWatchdogVehicles() { return watchdogVehicles; }
+	public int getWatchdogRiders() { return watchdogRiders; }
+	public int getWatchdogDrivers() { return watchdogDrivers; }
+	public int getWatchdogMmtrOverrides() { return watchdogMmtrOverrides; }
+	public int getWatchdogProtections() { return watchdogProtections; }
+	public int getWatchdogJammedRoutes() { return watchdogJammedRoutes; }
 
 	private void save(boolean useReducedHash) {
 		// Save all data
