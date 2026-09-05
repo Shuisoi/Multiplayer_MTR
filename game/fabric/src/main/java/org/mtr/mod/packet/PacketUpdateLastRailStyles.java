@@ -70,7 +70,7 @@ public final class PacketUpdateLastRailStyles extends PacketHandler {
 		public boolean canApplyStylesToRail(UUID uuid, Rail rail, boolean modifyRail) {
 			final ObjectArrayList<String> lastStyles = cache.getOrDefault(uuid, getDefaultStyles()).get(rail.getTransportMode());
 			final ObjectImmutableList<String> railStyles = rail.getStyles();
-			if (Utilities.sameItems(lastStyles, railStyles)) {
+			if (lastStyles.equals(railStyles)) {
 				return false;
 			} else {
 				if (modifyRail) {

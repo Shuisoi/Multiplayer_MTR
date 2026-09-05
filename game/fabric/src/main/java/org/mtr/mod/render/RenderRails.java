@@ -319,7 +319,12 @@ public class RenderRails implements IGui {
 		final Vector3d cameraPosition = camera.getPos();
 		final int renderDistance = MinecraftClientHelper.getRenderDistance() * 16;
 
-		rail.railMath.render((x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
+		rail.railMath.render((cx1, cy1, cz1, cx2, cy2, cz2, cx3, cy3, cz3, cx4, cy4, cz4, tiltAngle) -> {
+			// MMTR port: map the modern 13-arg corner+height callback back onto the legacy 10-arg layout.
+			final double x1 = cx1, y1 = cy1, z1 = cz1;
+			final double x2 = cx2, y2 = cy3, z2 = cz2;
+			final double x3 = cx3, z3 = cz3;
+			final double x4 = cx4, z4 = cz4;
 			final BlockPos blockPos = Init.newBlockPos(x1, y1 + LIGHT_REFERENCE_OFFSET, z1);
 			final double distanceToCamera = new Vector3d(x1, 0, z1).distanceTo(new Vector3d(cameraPosition.getXMapped(), 0, cameraPosition.getZMapped())); // Minecraft does not have vertical render distance, no need to compare the Y-axis.
 			if (distanceToCamera <= renderDistance) {

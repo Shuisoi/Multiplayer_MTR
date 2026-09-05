@@ -32,7 +32,7 @@ public class BlockTrainAnnouncer extends BlockTrainSensorBase {
 		QUEUE.forEach((time, tasks) -> {
 			if (time <= currentMillis) {
 				tasks.forEach(Runnable::run);
-				itemsToRemove.add(time.longValue());
+				itemsToRemove.add(time);
 			}
 		});
 		itemsToRemove.forEach(QUEUE::remove);

@@ -124,6 +124,29 @@ public final class Rail extends RailSchema {
 		);
 	}
 
+
+	// ---- MMTR compatibility overloads (match the pre-tilt engine API used by MTR 4.0.5 game code) ----
+
+	public static Rail newPlatformRail(Position position1, Angle angle1, Position position2, Angle angle2, Shape shape, double verticalRadius, ObjectArrayList<String> styles, TransportMode transportMode) {
+		return newPlatformRail(position1, angle1, position2, angle2, shape, verticalRadius, 0L, 0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0, styles, transportMode);
+	}
+
+	public static Rail newSidingRail(Position position1, Angle angle1, Position position2, Angle angle2, Shape shape, double verticalRadius, ObjectArrayList<String> styles, TransportMode transportMode) {
+		return newSidingRail(position1, angle1, position2, angle2, shape, verticalRadius, 0L, 0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0, styles, transportMode);
+	}
+
+	public static Rail newTurnBackRail(Position position1, Angle angle1, Position position2, Angle angle2, Shape shape, double verticalRadius, ObjectArrayList<String> styles, TransportMode transportMode) {
+		return newTurnBackRail(position1, angle1, position2, angle2, shape, verticalRadius, 0L, 0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0, styles, transportMode);
+	}
+
+	public static Rail newRail(Position position1, Angle angle1, Position position2, Angle angle2, Shape shape, double verticalRadius, ObjectArrayList<String> styles, long speedLimit1, long speedLimit2, boolean isPlatform, boolean isSiding, boolean canAccelerate, boolean canConnectRemotely, boolean canHaveSignal, TransportMode transportMode) {
+		return newRail(position1, angle1, position2, angle2, shape, verticalRadius, 0L, 0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0, styles, speedLimit1, speedLimit2, isPlatform, isSiding, canAccelerate, canConnectRemotely, canHaveSignal, transportMode);
+	}
+
+	public static Rail copy(Rail rail, Shape newShape, double newVerticalRadius) {
+		return copy(rail, newShape, newVerticalRadius, 0L, 0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0);
+	}
+
 	private Rail(
 		Position position1, Angle angle1,
 		Position position2, Angle angle2,
