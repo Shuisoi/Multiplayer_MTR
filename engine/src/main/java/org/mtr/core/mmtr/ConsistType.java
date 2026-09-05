@@ -20,6 +20,10 @@ public final class ConsistType {
 	private final double tractionAccelerationMps2; // full-notch standstill acceleration
 	private final double serviceBrakeDecelerationMps2;
 	private final double emergencyDecelerationMps2;
+	private final double tractionBreakpointKmh;
+	private final double resistanceA;
+	private final double resistanceB;
+	private final double resistanceC;
 	private final double airPipeChargeRatePerSecond;   // 0..1 per second toward charged
 	private final double airPipeDischargeRatePerSecond; // full-service drop rate 0..1/s
 	private final double airBrakeApplyRatePerSecond;    // brake-cylinder build 0..1/s
@@ -27,7 +31,8 @@ public final class ConsistType {
 
 	public ConsistType(String id, String name, ControlMode controlMode, int powerNotches, int brakeNotches,
 		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
-		double emergencyDecelerationMps2, double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
+		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
+		double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
 		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond) {
 		this.id = id;
 		this.name = name;
@@ -38,6 +43,10 @@ public final class ConsistType {
 		this.tractionAccelerationMps2 = tractionAccelerationMps2;
 		this.serviceBrakeDecelerationMps2 = serviceBrakeDecelerationMps2;
 		this.emergencyDecelerationMps2 = emergencyDecelerationMps2;
+		this.tractionBreakpointKmh = tractionBreakpointKmh;
+		this.resistanceA = resistanceA;
+		this.resistanceB = resistanceB;
+		this.resistanceC = resistanceC;
 		this.airPipeChargeRatePerSecond = airPipeChargeRatePerSecond;
 		this.airPipeDischargeRatePerSecond = airPipeDischargeRatePerSecond;
 		this.airBrakeApplyRatePerSecond = airBrakeApplyRatePerSecond;
@@ -54,6 +63,10 @@ public final class ConsistType {
 	public double getTractionAccelerationMps2() { return tractionAccelerationMps2; }
 	public double getServiceBrakeDecelerationMps2() { return serviceBrakeDecelerationMps2; }
 	public double getEmergencyDecelerationMps2() { return emergencyDecelerationMps2; }
+	public double getTractionBreakpointKmh() { return tractionBreakpointKmh; }
+	public double getResistanceA() { return resistanceA; }
+	public double getResistanceB() { return resistanceB; }
+	public double getResistanceC() { return resistanceC; }
 	public double getAirPipeChargeRatePerSecond() { return airPipeChargeRatePerSecond; }
 	public double getAirPipeDischargeRatePerSecond() { return airPipeDischargeRatePerSecond; }
 	public double getAirBrakeApplyRatePerSecond() { return airBrakeApplyRatePerSecond; }
@@ -77,12 +90,18 @@ public final class ConsistType {
 			getDouble(json, "tractionAccelerationMps2", 0.5),
 			getDouble(json, "serviceBrakeDecelerationMps2", 0.8),
 			getDouble(json, "emergencyDecelerationMps2", 1.5),
+			getDouble(json, "tractionBreakpointKmh", maxSpeedDefaultKmh(json)),
+			getDouble(json, "resistanceA", 0),
+			getDouble(json, "resistanceB", 0),
+			getDouble(json, "resistanceC", 0),
 			getDouble(json, "airPipeChargeRatePerSecond", 0.1),
 			getDouble(json, "airPipeDischargeRatePerSecond", 0.4),
 			getDouble(json, "airBrakeApplyRatePerSecond", 0.15),
 			getDouble(json, "airBrakeReleaseRatePerSecond", 0.1)
 		);
 	}
+
+	private static double maxSpeedDefaultKmh(JsonObject json) { return getDouble(json, "maxSpeedKmh", 120); }
 
 	private static String getString(JsonObject json, String key, String fallback) {
 		final JsonElement element = json.get(key);
