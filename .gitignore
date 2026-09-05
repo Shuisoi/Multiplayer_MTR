@@ -14,3 +14,5 @@ Thumbs.db
 run/
 # temp
 *.log
+# scratch runner build output
+mmtr-engine-run/classes/
