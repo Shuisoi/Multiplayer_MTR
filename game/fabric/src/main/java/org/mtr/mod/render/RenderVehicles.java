@@ -93,13 +93,13 @@ public class RenderVehicles implements IGui {
 				cullingTasks.add(occlusionCullingInstance -> {
 					final double longestDimension = vehicle.persistentVehicleData.longestDimensions[carNumber];
 					final boolean shouldRender = occlusionCullingInstance.isAABBVisible(new Vec3d(
-							vehicleCarDetails.right().right().position.x - longestDimension,
-							vehicleCarDetails.right().right().position.y - 8,
-							vehicleCarDetails.right().right().position.z - longestDimension
+							vehicleCarDetails.right().right().position.x() - longestDimension,
+							vehicleCarDetails.right().right().position.y() - 8,
+							vehicleCarDetails.right().right().position.z() - longestDimension
 					), new Vec3d(
-							vehicleCarDetails.right().right().position.x + longestDimension,
-							vehicleCarDetails.right().right().position.y + 8,
-							vehicleCarDetails.right().right().position.z + longestDimension
+							vehicleCarDetails.right().right().position.x() + longestDimension,
+							vehicleCarDetails.right().right().position.y() + 8,
+							vehicleCarDetails.right().right().position.z() + longestDimension
 					), camera);
 					return () -> vehicle.persistentVehicleData.rayTracing[carNumber] = shouldRender;
 				});
@@ -371,17 +371,17 @@ public class RenderVehicles implements IGui {
 		} else if (offsetRotation == null) {
 			// Offset rendering
 			return new PositionAndRotation(new Vector(-offsetVector.getXMapped(), -offsetVector.getYMapped(), -offsetVector.getZMapped()).rotateX(ridingCarPositionAndRotation.pitch).rotateY(ridingCarPositionAndRotation.yaw).add(
-					cameraShakeOffset.getXMapped() + renderingPositionAndRotation.position.x - ridingCarPositionAndRotation.position.x,
-					cameraShakeOffset.getYMapped() + renderingPositionAndRotation.position.y - ridingCarPositionAndRotation.position.y,
-					cameraShakeOffset.getZMapped() + renderingPositionAndRotation.position.z - ridingCarPositionAndRotation.position.z
+					cameraShakeOffset.getXMapped() + renderingPositionAndRotation.position.x() - ridingCarPositionAndRotation.position.x(),
+					cameraShakeOffset.getYMapped() + renderingPositionAndRotation.position.y() - ridingCarPositionAndRotation.position.y(),
+					cameraShakeOffset.getZMapped() + renderingPositionAndRotation.position.z() - ridingCarPositionAndRotation.position.z()
 			), renderingPositionAndRotation.yaw, renderingPositionAndRotation.pitch);
 		} else {
 			// Offset rendering with rotation
 			final double ridingRotation = offsetRotation - ridingCarPositionAndRotation.yaw - Math.toRadians(MinecraftClient.getInstance().getGameRendererMapped().getCamera().getYaw());
 			return new PositionAndRotation(new Vector(-offsetVector.getXMapped(), -offsetVector.getYMapped(), -offsetVector.getZMapped()).rotateX(ridingCarPositionAndRotation.pitch).rotateY(ridingCarPositionAndRotation.yaw).add(
-					renderingPositionAndRotation.position.x - ridingCarPositionAndRotation.position.x,
-					renderingPositionAndRotation.position.y - ridingCarPositionAndRotation.position.y,
-					renderingPositionAndRotation.position.z - ridingCarPositionAndRotation.position.z
+					renderingPositionAndRotation.position.x() - ridingCarPositionAndRotation.position.x(),
+					renderingPositionAndRotation.position.y() - ridingCarPositionAndRotation.position.y(),
+					renderingPositionAndRotation.position.z() - ridingCarPositionAndRotation.position.z()
 			).rotateY(ridingRotation).add(
 					cameraShakeOffset.getXMapped(),
 					cameraShakeOffset.getYMapped(),
@@ -402,10 +402,10 @@ public class RenderVehicles implements IGui {
 		final StoredMatrixTransformations storedMatrixTransformations;
 
 		if (useOffset) {
-			storedMatrixTransformations = new StoredMatrixTransformations(renderingPositionAndRotation.position.x, renderingPositionAndRotation.position.y, renderingPositionAndRotation.position.z);
+			storedMatrixTransformations = new StoredMatrixTransformations(renderingPositionAndRotation.position.x(), renderingPositionAndRotation.position.y(), renderingPositionAndRotation.position.z());
 		} else {
 			storedMatrixTransformations = new StoredMatrixTransformations();
-			storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(renderingPositionAndRotation.position.x, renderingPositionAndRotation.position.y, renderingPositionAndRotation.position.z));
+			storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(renderingPositionAndRotation.position.x(), renderingPositionAndRotation.position.y(), renderingPositionAndRotation.position.z()));
 		}
 
 		storedMatrixTransformations.add(graphicsHolder -> {
@@ -524,7 +524,7 @@ public class RenderVehicles implements IGui {
 			final Vector position7 = previousConnectionPositions.position3;
 			final Vector position8 = previousConnectionPositions.position4;
 
-			final BlockPos blockPosConnection = Init.newBlockPos(position1.x, position1.y + 1, position1.z);
+			final BlockPos blockPosConnection = Init.newBlockPos(position1.x(), position1.y() + 1, position1.z());
 			final int lightConnection = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPosConnection), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPosConnection));
 			final Vector3d zeroVector = Vector3d.getZeroMapped();
 
@@ -577,10 +577,10 @@ public class RenderVehicles implements IGui {
 	private static void drawTexture(GraphicsHolder graphicsHolder, Vector position1, Vector position2, Vector position3, Vector position4, Vector3d offset, int light) {
 		IDrawing.drawTexture(
 				graphicsHolder,
-				position1.x, position1.y, position1.z,
-				position2.x, position2.y, position2.z,
-				position3.x, position3.y, position3.z,
-				position4.x, position4.y, position4.z,
+				position1.x(), position1.y(), position1.z(),
+				position2.x(), position2.y(), position2.z(),
+				position3.x(), position3.y(), position3.z(),
+				position4.x(), position4.y(), position4.z(),
 				offset, 0, 0, 1, 1, Direction.UP, ARGB_WHITE, light
 		);
 	}

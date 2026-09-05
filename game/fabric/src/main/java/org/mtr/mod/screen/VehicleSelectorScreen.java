@@ -100,7 +100,7 @@ public class VehicleSelectorScreen extends DashboardListSelectorScreen implement
 		selectedIds.forEach(selectedId -> allData.stream().filter(data -> data.id == selectedId).findFirst().ifPresent(data -> {
 			if (data instanceof VehicleForList) {
 				final VehicleResource vehicleResource = ((VehicleForList) data).vehicleResource;
-				tempList.add(new VehicleCar(vehicleResource.getId(), vehicleResource.getLength(), vehicleResource.getWidth(), vehicleResource.getBogie1Position(), vehicleResource.getBogie2Position(), vehicleResource.getCouplingPadding1(), vehicleResource.getCouplingPadding2()));
+				tempList.add(new VehicleCar(vehicleResource.getId(), vehicleResource.getLength(), vehicleResource.getWidth(), 0L, vehicleResource.getBogie1Position(), vehicleResource.getBogie2Position(), vehicleResource.getCouplingPadding1(), vehicleResource.getCouplingPadding2()));
 			}
 		}));
 		siding.setVehicleCars(tempList);

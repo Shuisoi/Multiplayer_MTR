@@ -70,12 +70,12 @@ public class RenderLifts implements IGui {
 							final ObjectArrayList<Vector> trackPositions = ItemLiftRefresher.findPath(new World(clientWorld.data), position1, position2);
 							for (int i = 1; i < trackPositions.size(); i++) {
 								graphicsHolder.drawLineInWorld(
-										(float) (trackPositions.get(i - 1).x - offset.getXMapped() + 0.5),
-										(float) (trackPositions.get(i - 1).y - offset.getYMapped() + 0.5),
-										(float) (trackPositions.get(i - 1).z - offset.getZMapped() + 0.5),
-										(float) (trackPositions.get(i).x - offset.getXMapped() + 0.5),
-										(float) (trackPositions.get(i).y - offset.getYMapped() + 0.5),
-										(float) (trackPositions.get(i).z - offset.getZMapped() + 0.5),
+										(float) (trackPositions.get(i - 1).x() - offset.getXMapped() + 0.5),
+										(float) (trackPositions.get(i - 1).y() - offset.getYMapped() + 0.5),
+										(float) (trackPositions.get(i - 1).z() - offset.getZMapped() + 0.5),
+										(float) (trackPositions.get(i).x() - offset.getXMapped() + 0.5),
+										(float) (trackPositions.get(i).y() - offset.getYMapped() + 0.5),
+										(float) (trackPositions.get(i).z() - offset.getZMapped() + 0.5),
 										ARGB_WHITE
 								);
 							}
@@ -91,13 +91,13 @@ public class RenderLifts implements IGui {
 			cullingTasks.add(occlusionCullingInstance -> {
 				final double longestDimension = Math.max(lift.getHeight(), Math.max(lift.getWidth(), lift.getDepth()));
 				final boolean shouldRender = occlusionCullingInstance.isAABBVisible(new Vec3d(
-						absolutePositionAndRotation.position.x - longestDimension,
-						absolutePositionAndRotation.position.y - longestDimension,
-						absolutePositionAndRotation.position.z - longestDimension
+						absolutePositionAndRotation.position.x() - longestDimension,
+						absolutePositionAndRotation.position.y() - longestDimension,
+						absolutePositionAndRotation.position.z() - longestDimension
 				), new Vec3d(
-						absolutePositionAndRotation.position.x + longestDimension,
-						absolutePositionAndRotation.position.y + longestDimension,
-						absolutePositionAndRotation.position.z + longestDimension
+						absolutePositionAndRotation.position.x() + longestDimension,
+						absolutePositionAndRotation.position.y() + longestDimension,
+						absolutePositionAndRotation.position.z() + longestDimension
 				), camera);
 				return () -> liftWrapper.shouldRender = shouldRender;
 			});
@@ -257,9 +257,9 @@ public class RenderLifts implements IGui {
 	private static PositionAndRotation getLiftPositionAndRotation(ClientWorld clientWorld, Lift lift) {
 		final Vector position = lift.getPosition((floorPosition1, floorPosition2) -> ItemLiftRefresher.findPath(new World(clientWorld.data), floorPosition1, floorPosition2));
 		return new PositionAndRotation(new Vector(
-				position.x + lift.getOffsetX(),
-				position.y + lift.getOffsetY(),
-				position.z + lift.getOffsetZ()
+				position.x() + lift.getOffsetX(),
+				position.y() + lift.getOffsetY(),
+				position.z() + lift.getOffsetZ()
 		), -Math.PI / 2 - lift.getAngle().angleRadians, 0);
 	}
 }
