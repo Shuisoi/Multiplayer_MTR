@@ -2,7 +2,7 @@ package org.mtr.mod.servlet;
 
 import org.mtr.core.operation.PlayerPresentResponse;
 import org.mtr.core.operation.UpdateDataResponse;
-import org.mtr.core.operation.VehicleLiftResponse;
+import org.mtr.core.operation.DynamicDataResponse;
 import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.core.servlet.QueueObject;
 import org.mtr.mapping.holder.PlayerEntity;
@@ -17,12 +17,12 @@ public final class MinecraftOperationProcessor {
 	public static void process(QueueObject queueObject, ServerWorld serverWorld, String dimension) {
 		switch (queueObject.key) {
 			case OperationProcessor.VEHICLES_LIFTS:
-				if (queueObject.data instanceof VehicleLiftResponse) {
-					final PlayerEntity playerEntity = serverWorld.getPlayerByUuid(((VehicleLiftResponse) queueObject.data).uuid);
+				if (queueObject.data instanceof DynamicDataResponse) {
+					final PlayerEntity playerEntity = serverWorld.getPlayerByUuid(((DynamicDataResponse) queueObject.data).uuid);
 					if (playerEntity == null) {
 						queueObject.runCallback(new PlayerPresentResponse(""));
 					} else {
-						Init.REGISTRY.sendPacketToClient(ServerPlayerEntity.cast(playerEntity), new PacketUpdateVehiclesLifts((VehicleLiftResponse) queueObject.data));
+						Init.REGISTRY.sendPacketToClient(ServerPlayerEntity.cast(playerEntity), new PacketUpdateVehiclesLifts((DynamicDataResponse) queueObject.data));
 						queueObject.runCallback(new PlayerPresentResponse(dimension));
 					}
 				}

@@ -16,3 +16,5 @@ run/
 *.log
 # scratch runner build output
 mmtr-engine-run/classes/
+# synced modern engine jar (source lives in engine/; recreate via scripts/sync-engine.ps1)
+game/libs/Transport-Simulation-Core-0.0.1.jar

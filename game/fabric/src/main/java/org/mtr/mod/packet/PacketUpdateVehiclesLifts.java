@@ -2,7 +2,7 @@ package org.mtr.mod.packet;
 
 import org.mtr.core.data.NameColorDataBase;
 import org.mtr.core.data.PathData;
-import org.mtr.core.operation.VehicleLiftResponse;
+import org.mtr.core.operation.DynamicDataResponse;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.serializer.SerializedDataBase;
@@ -31,7 +31,7 @@ public final class PacketUpdateVehiclesLifts extends PacketRequestResponseBase {
 		super(packetBufferReceiver);
 	}
 
-	public PacketUpdateVehiclesLifts(VehicleLiftResponse vehicleLiftResponse) {
+	public PacketUpdateVehiclesLifts(DynamicDataResponse vehicleLiftResponse) {
 		super(Utilities.getJsonObjectFromData(vehicleLiftResponse).toString());
 	}
 
@@ -42,7 +42,7 @@ public final class PacketUpdateVehiclesLifts extends PacketRequestResponseBase {
 	@Override
 	protected void runClientInbound(JsonReader jsonReader) {
 		final MinecraftClientData minecraftClientData = MinecraftClientData.getInstance();
-		final VehicleLiftResponse vehicleLiftResponse = new VehicleLiftResponse(jsonReader, minecraftClientData);
+		final DynamicDataResponse vehicleLiftResponse = new DynamicDataResponse(jsonReader, minecraftClientData);
 		final boolean hasUpdate1 = updateVehiclesOrLifts(minecraftClientData.vehicles, vehicleLiftResponse::iterateVehiclesToKeep, vehicleLiftResponse::iterateVehiclesToUpdate, VehicleExtension::dispose, vehicleUpdate -> vehicleUpdate.getVehicle().getId(), vehicleUpdate -> new VehicleExtension(vehicleUpdate, minecraftClientData));
 		final boolean hasUpdate2 = updateVehiclesOrLifts(minecraftClientData.lifts, vehicleLiftResponse::iterateLiftsToKeep, vehicleLiftResponse::iterateLiftsToUpdate, (removedLift) -> {
 		}, NameColorDataBase::getId, lift -> lift);

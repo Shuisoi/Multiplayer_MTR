@@ -146,6 +146,21 @@ public class Simulator extends Data implements Utilities {
 		fileLoaderLandmarks = fileLoaderHolderAndDuration.left().fileLoaderLandmarks;
 		log.info("Data loading complete for {} in {} second(s)", dimension, (float) fileLoaderHolderAndDuration.rightLong() / MILLIS_PER_SECOND);
 
+		// MMTR: optional server-side consist-type policy at <root>/<dimension>/mmtr-consist-types.json
+		final Path mmtrConfigPath = savePath.resolve("mmtr-consist-types.json");
+		try {
+			if (java.nio.file.Files.exists(mmtrConfigPath)) {
+				mmtrConsistTypes = ConsistTypeRegistry.fromFile(mmtrConfigPath);
+				mmtrDefaultConsistTypeId = mmtrConsistTypes.getDefaultId();
+				if (mmtrDefaultConsistTypeId == null && !mmtrConsistTypes.all().isEmpty()) {
+					mmtrDefaultConsistTypeId = mmtrConsistTypes.all().keySet().iterator().next();
+				}
+				log.info("MMTR consist-type policy loaded for {} (default={})", dimension, mmtrDefaultConsistTypeId);
+			}
+		} catch (Exception e) {
+			log.warn("Failed to load MMTR consist-type policy for {}: {}", dimension, e.getMessage());
+		}
+
 		// Initialize cache
 		sync();
 		depots.forEach(Depot::init);
