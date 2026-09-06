@@ -295,6 +295,20 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * MMTR deterministic stepping: advance the simulation by exactly millisElapsed simulation
+	 * milliseconds, independent of the host wall clock. tick() chases the wall clock, so in fast
+	 * headless loops most ticks advance 0 ms and physics freezes; this seam is the deterministic
+	 * entry point used by tests and future headless task servers. Internally it slices into
+	 * one-second steps, matching the engine's own catch-up cadence.
+	 */
+	public void step(long millisElapsed) {
+		while (millisElapsed > 0) {
+			final long slice = Math.min(millisElapsed, MILLIS_PER_SECOND);
+			tick(slice);
+			millisElapsed -= slice;
+		}
+	}
+	/**
 	 * @param gameMillis       the number of real-time milliseconds since midnight of the in-game time
 	 * @param gameMillisPerDay the total number of real-time milliseconds of one in-game day
 	 * @param isTimeMoving     whether the daylight cycle is on
