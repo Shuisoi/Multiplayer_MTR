@@ -130,10 +130,33 @@ export class MmtrJobEditorComponent implements OnChanges {
 
 
 	/** COUPLE target picker: every other consist job whose stock could be coupled (daily respawn keeps ids stable). */
+
+	/** Engine semantics surfaced to the author: COUPLE must precede the source job's spawn; UNCOUPLE is a yard-final cut. */
+	protected stepHint(step: MmtrJobStep): string {
+		if (step.type === "COUPLE") {
+			const targetJobId = (step.targetJobId ?? "").trim();
+			if (!targetJobId) {
+				return "连挂对象是另一条作业单：其挂车会在本作业单刷车时并入同一编组（引用按 jobId，每日重启后仍有效）。";
+			}
+			const target = this.mmtrJobsService.jobs().find(job => job.jobId === targetJobId);
+			const startMs = textToMillis(this.startTime) ?? 0;
+			if (!target) {
+				return "目标作业单不存在——请先选择有效的作业单。";
+			}
+			if (target.startTimeOfDayMs <= startMs) {
+				return "注意：引擎要求 COUPLE 先于目标作业单刷车——请把本作业单发车时刻设得早于目标作业单，否则运行时会因排序失败。";
+			}
+			return "✓ 目标作业单晚于本作业单发车：刷车时自动并入其车列，源作业单标记为已并编。";
+		}
+		if (step.type === "UNCOUPLE") {
+			return "车场最终切分：停场时按 targetIndex 切开；切分后本作业单不再出库（尾部车列写回股道留场，供后续作业单/次日使用）。";
+		}
+		return "";
+	}
 	protected coupleTargetOptions() {
 		return this.mmtrJobsService.jobs()
 			.filter(job => job.jobId !== this.jobId)
-			.map(job => ({id: job.jobId, label: `${job.jobId}（${job.cars?.length ?? 0} 节）`}));
+			.map(job => ({id: job.jobId, label: `${job.jobId} · 发车 ${timeToText(job.startTimeOfDayMs)} · ${job.cars?.length ?? 0} 节`}));
 	}
 	/** Datasheet entries shown in the target id autocomplete (platforms first, then sidings). */
 	protected targetSuggestions(): string[] {

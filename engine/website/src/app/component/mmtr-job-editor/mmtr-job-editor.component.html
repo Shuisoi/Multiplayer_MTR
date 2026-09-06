@@ -125,6 +125,9 @@
 						<input class="mmtr-input" type="text" [(ngModel)]="step.note" placeholder="可选"/>
 					</label>
 				</div>
+				@if (stepHint(step)) {
+					<div class="mmtr-hint">{{ stepHint(step) }}</div>
+				}
 			</div>
 		}
 		<datalist id="mmtr-step-targets">
