@@ -819,5 +819,4 @@ public final class MmtrJobSchedulerTests {
 		assertEquals(5, sim.mmtrJobScheduler.stepIndexOf("L-E2E"), "full macro steps all completed from the registry file");
 		assertEquals(MmtrJobScheduler.JobState.DONE, sim.mmtrJobScheduler.stateOf("T-E2E"), "trailer stock job must be parked (source consumed)");
 	}
-
 }

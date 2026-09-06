@@ -203,3 +203,9 @@
 - 校验逻辑沿用（保存仍会在引擎侧拒绝错误排序）。website lint+build 绿（editor scss 预算警告为既有）。
 - 说明：repeatDaily 的"每日重启→全部车辆重生→registry 重载重跑"在进程重启语义下天然成立（构造即
   自动加载 mmtr-jobs.json 并挂调度器）；进程内跨日循环与跨车场任务点移动属 M2 路由范围，留待后续。
+## 进度（round19）：运行手册 + 重启循环探针结论
+- 新增 docs/作业编排-运行手册.md：概念/数据位置/编排约束（COUPLE 先于源刷车、UNCOUPLE 车场最终切分、
+  退库语义、跨车场边界）/跑通完整宏/真机 MC+Fabric 联调步骤/已知边界与自动化回归清单。
+- 探针结论：Simulator 默认不自动落盘世界（同根重建 rails=0），进程内"日重启"e2e 不可直接构建，
+  repeatDaily 依赖进程重启语义（构造即自动加载 mmtr-jobs.json 重跑）或显式存档接口（后续）。
+- 引擎全量（cleanTest）207 tests / 0 fail / 0 skip。
