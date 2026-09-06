@@ -71,6 +71,27 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("ok", simulator.deleteMmtrJob(jobId));
 					yield result;
 				}
+				case "mmtr-job-states" -> {
+					final com.google.gson.JsonArray states = new com.google.gson.JsonArray();
+					final org.mtr.core.mmtr.job.MmtrJobScheduler scheduler = simulator.mmtrJobScheduler;
+					for (final org.mtr.core.mmtr.job.MmtrConsistJob job : simulator.getMmtrJobRegistry().jobs) {
+						final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+						out.addProperty("jobId", job.jobId);
+						out.addProperty("startTimeOfDayMs", job.startTimeOfDayMs);
+						final org.mtr.core.mmtr.job.MmtrJobScheduler.JobState state = scheduler == null ? null : scheduler.stateOf(job.jobId);
+						out.addProperty("state", state == null ? "PENDING" : state.name());
+						out.addProperty("step", scheduler == null ? -1 : scheduler.stepIndexOf(job.jobId));
+						out.addProperty("totalSteps", job.steps.size());
+						final String failure = scheduler == null ? null : scheduler.failureOf(job.jobId);
+						if (failure != null) {
+							out.addProperty("failure", failure);
+						}
+						states.add(out);
+					}
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.add("states", states);
+					yield result;
+				}
 				default -> null;
 			});
 		}

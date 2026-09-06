@@ -97,6 +97,15 @@ public final class MmtrJobRegistryTests {
 		assertTrue(deleteResult[0].get("ok").getAsBoolean());
 		assertEquals(1, sim.getMmtrJobRegistry().jobs.size());
 		assertEquals("J-B", sim.getMmtrJobRegistry().jobs.get(0).jobId);
+
+		// Status feed
+		final JsonObject[] statesResult = {null};
+		servlet.getContent("mmtr-job-states", "", new Object2ObjectAVLTreeMap<>(), new JsonReader(new JsonObject()), sim, json -> statesResult[0] = json);
+		assertNotNull(statesResult[0]);
+		assertEquals(1, statesResult[0].getAsJsonArray("states").size());
+		assertEquals("J-B", statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("jobId").getAsString());
+		assertEquals("PENDING", statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("state").getAsString());
+		assertEquals(1, statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("totalSteps").getAsInt());
 	}
 
 	private static void deleteIfExists(Path path) {

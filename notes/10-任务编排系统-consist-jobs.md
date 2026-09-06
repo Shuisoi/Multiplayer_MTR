@@ -75,3 +75,7 @@
 - SystemMapServlet CRUD：GET mmtr-jobs（列表）、POST mmtr-jobs-upsert（单条作业单）、POST mmtr-jobs-delete（{jobId}）。
 - MmtrJobRegistryTests：文件 round-trip（含 2^53+ id）+ 端点增删改查。
 - engine 全量 196 tests / 0 fail / 0 error。
+
+## 进度（round5）：作业单状态 feed
+- SystemMapServlet POST/GET mmtr-job-states：{states:[{jobId,startTimeOfDayMs,state,step,totalSteps,failure?}]}，
+  供 web 面板轮询显示作业单运行状态/进度/失败原因。MmtrJobRegistryTests 覆盖。
