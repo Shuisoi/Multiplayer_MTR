@@ -1,0 +1,87 @@
+.mmtr-ops {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	padding: 0.75rem;
+	overflow-y: auto;
+}
+
+.mmtr-section-title {
+	font-weight: 600;
+	font-size: 0.9rem;
+	opacity: 0.8;
+	margin: 0.25rem 0;
+}
+
+.mmtr-empty {
+	opacity: 0.6;
+	font-size: 0.85rem;
+	padding: 0.25rem 0;
+}
+
+.mmtr-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.35rem 0;
+	border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.mmtr-row-main {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	min-width: 0;
+}
+
+.mmtr-name {
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.mmtr-sub {
+	font-size: 0.8rem;
+	opacity: 0.75;
+}
+
+.mmtr-muted {
+	opacity: 0.6;
+}
+
+.mmtr-badges {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 0.2rem;
+}
+
+.mmtr-badge {
+	font-size: 0.7rem;
+	padding: 0.1rem 0.45rem;
+	border-radius: 0.6rem;
+	background: rgba(128, 128, 128, 0.25);
+	white-space: nowrap;
+}
+
+.mmtr-badge.on-route {
+	background: rgba(46, 160, 67, 0.35);
+}
+
+.mmtr-badge.parked {
+	background: rgba(88, 166, 255, 0.3);
+}
+
+.mmtr-badge.mission {
+	background: rgba(219, 171, 9, 0.35);
+}
+
+.mmtr-badge.failed {
+	background: rgba(218, 54, 51, 0.4);
+}
+
+.mmtr-badge.manual {
+	background: rgba(148, 91, 200, 0.35);
+}

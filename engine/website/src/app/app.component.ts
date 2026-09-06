@@ -12,6 +12,7 @@ import {ButtonModule} from "primeng/button";
 import {TooltipModule} from "primeng/tooltip";
 import {ClientService} from "./service/client.service";
 import {ClientPanelComponent} from "./component/client-panel/client-panel.component";
+import {MmtrOpsPanelComponent} from "./component/mmtr-ops-panel/mmtr-ops-panel.component";
 import {TranslocoDirective} from "@jsverse/transloco";
 
 @Component({
@@ -28,6 +29,7 @@ import {TranslocoDirective} from "@jsverse/transloco";
 		DirectionsComponent,
 		MainPanelComponent,
 		RoutePanelComponent,
+		MmtrOpsPanelComponent,
 	],
 	templateUrl: "./app.component.html",
 	styleUrl: "./app.component.scss",
@@ -118,5 +120,14 @@ export class AppComponent {
 
 	onCloseRoute() {
 		this.routeKeyService.clear();
+	}
+
+	onOpenMmtr(sideMain: DrawerComponent, sideMmtr: DrawerComponent) {
+		sideMain.close();
+		sideMmtr.open();
+		this.onCloseStation();
+		this.onCloseClient();
+		this.onCloseDirections();
+		this.onCloseRoute();
 	}
 }
