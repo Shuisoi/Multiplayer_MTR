@@ -152,6 +152,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return speed != 0;
 	}
 
+	/** Current speed in engine internal units (m/ms). */
+	public double getSpeed() {
+		return speed;
+	}
+
+	/** Current distance along the path (m) measured at the vehicle's head. */
+	public double getRailProgress() {
+		return railProgress;
+	}
+
 	public boolean getIsOnRoute() {
 		return railProgress > vehicleExtraData.getDefaultPosition();
 	}
