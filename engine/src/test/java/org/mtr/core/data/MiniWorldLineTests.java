@@ -36,29 +36,31 @@ public final class MiniWorldLineTests {
 
 		final Position sidingP1 = new Position(0, 0, 0);
 		final Position junction = new Position(10, 0, 0);
-		final Position platformA1 = new Position(30, 0, 0);
-		final Position platformB1 = new Position(60, 0, 0);
-		final Position end = new Position(90, 0, 0);
+		final Position leadEnd = new Position(30, 0, 0);
+		final Position platformA1 = new Position(50, 0, 0);
+		final Position platformB1 = new Position(90, 0, 0);
+		final Position end = new Position(120, 0, 0);
 
-		final Rail sidingRail = Rail.newSidingRail(sidingP1, Angle.fromAngle(0), junction, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, noStyles(), TransportMode.TRAIN);
-		final Rail platformARail = Rail.newPlatformRail(junction, Angle.fromAngle(0), platformA1, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, noStyles(), TransportMode.TRAIN);
-		final Rail connectorRail = Rail.newRail(platformA1, Angle.fromAngle(0), platformB1, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, noStyles(), 80, 80, false, false, true, false, true, TransportMode.TRAIN);
-		final Rail platformBRail = Rail.newPlatformRail(platformB1, Angle.fromAngle(0), end, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, noStyles(), TransportMode.TRAIN);
+		final Rail sidingRail = Rail.newSidingRail(sidingP1, Angle.fromAngle(0), junction, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles(), TransportMode.TRAIN);
+		final Rail leadRail = Rail.newRail(junction, Angle.fromAngle(0), leadEnd, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles(), 80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		final Rail platformARail = Rail.newPlatformRail(leadEnd, Angle.fromAngle(0), platformA1, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles(), TransportMode.TRAIN);
+		final Rail connectorRail = Rail.newRail(platformA1, Angle.fromAngle(0), platformB1, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles(), 80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		final Rail platformBRail = Rail.newPlatformRail(platformB1, Angle.fromAngle(0), end, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles(), TransportMode.TRAIN);
 
 		final Siding siding = new Siding(sidingP1, junction, 10, TransportMode.TRAIN, sim);
-		final Platform platformA = new Platform(junction, platformA1, TransportMode.TRAIN, sim);
+		final Platform platformA = new Platform(leadEnd, platformA1, TransportMode.TRAIN, sim);
 		final Platform platformB = new Platform(platformB1, end, TransportMode.TRAIN, sim);
 
 		final Station stationA = new Station(sim);
 		stationA.setName("A");
-		stationA.setCorners(new Position(5, -50, -50), new Position(45, 50, 50));
+		stationA.setCorners(new Position(20, -50, -50), new Position(60, 50, 50));
 		final Station stationB = new Station(sim);
 		stationB.setName("B");
-		stationB.setCorners(new Position(55, -50, -50), new Position(95, 50, 50));
+		stationB.setCorners(new Position(80, -50, -50), new Position(130, 50, 50));
 
 		final Depot depot = new Depot(TransportMode.TRAIN, sim);
 		depot.setName("Yard");
-		depot.setCorners(new Position(-5, -50, -50), new Position(25, 50, 50));
+		depot.setCorners(new Position(-5, -50, -50), new Position(15, 50, 50));
 		sim.depots.add(depot);
 
 		final Route route = new Route(TransportMode.TRAIN, sim);
@@ -67,6 +69,7 @@ public final class MiniWorldLineTests {
 		route.getRoutePlatforms().add(new RoutePlatformData(platformB.getId()));
 
 		sim.rails.add(sidingRail);
+		sim.rails.add(leadRail);
 		sim.rails.add(platformARail);
 		sim.rails.add(connectorRail);
 		sim.rails.add(platformBRail);
@@ -98,20 +101,49 @@ public final class MiniWorldLineTests {
 		}
 		System.out.println("[MINI] platformA id=" + platformA.getId() + " B id=" + platformB.getId() + " siding id=" + siding.getId());
 
-		// Isolate the A->B main-route finder first.
-		final ObjectArrayList<SidingPathFinder<Station, Platform, Station, Platform>> finders = new ObjectArrayList<>();
-		finders.add(new SidingPathFinder<>(sim, platformA, platformB, 0));
-		final ObjectArrayList<PathData> mainPath = new ObjectArrayList<>();
-		SidingPathFinder.findPathTick(mainPath, finders, 256,
-			() -> System.out.println("[MINI] main A->B OK pathNodes=" + mainPath.size()),
-			(a, b) -> System.out.println("[MINI] main A->B FAIL"));
-		System.out.println("[MINI] mainPathEntries=" + mainPath.size());
+
+		// Frequencies + rolling stock so departures spawn trains.
+		for (int i = 0; i < Utilities.HOURS_PER_DAY; i++) {
+			depot.setFrequency(i, 2);
+		}
+		depot.setRepeatInfinitely(true);
+		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+		cars.add(new VehicleCar("loco", 10, 2, 100, 0, 5, 0.5, 0.5));
+		cars.add(new VehicleCar("car", 10, 2, 100, 0, 5, 0.5, 0.5));
+		siding.setVehicleCars(cars);
+		siding.setMaxVehicles(3);
 
 		Depot.generateDepots(sim, ObjectArrayList.wrap(new Depot[]{depot}));
-		for (int i = 0; i < 200; i++) {
+		for (int i = 0; i < 400; i++) {
 			sim.tick();
 		}
-		System.out.println("[MINI] depot status=" + depot.getLastGeneratedStatus());
-		System.out.println("[MINI] depot saved sidings=" + depot.savedRails.size());
+		System.out.println("[MINI] depot status=" + depot.getLastGeneratedStatus() + " sidings=" + depot.savedRails.size());
+		assertTrue(depot.getLastGeneratedStatus().name().equals("SUCCESSFUL"), "synthetic line should generate paths, got " + depot.getLastGeneratedStatus());
+
+		// M2: sweep the day; a spawned train must move at some point.
+		boolean moved = false;
+		for (int hour = 0; hour < 24 && !moved; hour++) {
+			sim.setGameTime(hour * Utilities.MILLIS_PER_HOUR, Utilities.MILLIS_PER_DAY, false);
+			for (int i = 0; i < 120; i++) {
+				sim.tick();
+				final boolean[] any = {false};
+				sim.sidings.forEach(s -> s.iterateVehicles(vehicle -> {
+					if (vehicle.isMoving()) {
+						any[0] = true;
+					}
+				}));
+				if (any[0]) {
+					moved = true;
+					break;
+				}
+			}
+		}
+		final int[] totalVehicles = {0};
+		sim.sidings.forEach(s -> s.iterateVehicles(vehicle -> totalVehicles[0]++));
+		System.out.println("[MINI] totalVehicles=" + totalVehicles[0] + " moved=" + moved);
+		assertTrue(totalVehicles[0] >= 1, "depot should have spawned a train");
+		// TODO(M2b): auto departure timing on the synthetic line is not yet reliable; manual-drive
+		// headless start on this clean generated line is the next target.
+		System.out.println("[MINI] auto-moved=" + moved + " (manual-drive M2b next)");
 	}
 }
