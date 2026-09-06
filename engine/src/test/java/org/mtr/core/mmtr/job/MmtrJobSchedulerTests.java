@@ -826,6 +826,11 @@ public final class MmtrJobSchedulerTests {
 		final Simulator sim = AUTO_SIM[0];
 		assertTrue(org.mtr.core.mmtr.job.MmtrMotionRouter.canReachSiding(sim, ids[0], ids[0]), "same siding is trivially reachable");
 		assertTrue(!org.mtr.core.mmtr.job.MmtrMotionRouter.canReachSiding(sim, ids[0], -123456789L), "unknown siding is unreachable");
+		final org.mtr.core.mmtr.job.MmtrMotionRouter.MmtrMotionPlan same = org.mtr.core.mmtr.job.MmtrMotionRouter.buildLegPlan(sim, ids[0], ids[0]);
+		assertTrue(same.legs.size() > 0, "leg plan for the own siding must contain legs");
+		assertTrue(same.totalLength() > 0, "leg plan total length must be positive");
+		final org.mtr.core.mmtr.job.MmtrMotionRouter.MmtrMotionPlan bad = org.mtr.core.mmtr.job.MmtrMotionRouter.buildLegPlan(sim, ids[0], -123456789L);
+		assertTrue(bad.legs.isEmpty(), "unreachable target yields an empty plan");
 	}
 
 	/** M2-Core: decoupled motion snapshot reports (segment, offset) independent of any baked route. */
