@@ -363,4 +363,28 @@ public final class MmtrJobSchedulerTests {
 		assertEquals(2, scheduler.stepIndexOf("J-spawn"));
 	}
 
+
+	@Test
+	public void jobsModeSuppressesLegacyAutoDispatch() {
+		final long[] ids = buildAutoWorld(true);
+		final Simulator sim = AUTO_SIM[0];
+		sim.mmtrJobsMode = true;
+		final long[] parkedVehicle = {0};
+		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (!v.getIsOnRoute()) { parkedVehicle[0] = v.getId(); } }));
+		org.junit.jupiter.api.Assumptions.assumeTrue(parkedVehicle[0] != 0, "need a parked auto vehicle");
+		// A legacy departure is scheduled ~1s out; in job mode it must NOT auto-dispatch.
+		sim.sidings.forEach(s -> {
+			if (s.getId() == ids[0]) {
+				s.startGeneratingDepartures();
+				s.addDeparture(sim.getCurrentMillis() + 1000);
+			}
+		});
+		for (int second = 0; second < 5; second++) {
+			sim.step(1000);
+		}
+		final boolean[] stillParked = {false};
+		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (v.getId() == parkedVehicle[0] && !v.getIsOnRoute()) { stillParked[0] = true; } }));
+		assertTrue(stillParked[0], "depot departure must not auto-dispatch while mmtrJobsMode is on");
+	}
+
 }

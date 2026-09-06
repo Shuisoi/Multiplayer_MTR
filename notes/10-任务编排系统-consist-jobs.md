@@ -84,3 +84,9 @@
 - MmtrJobsService 轮询 mmtr-jobs + mmtr-job-states；MMTR 任务面板新增“作业单 / Consist Jobs”区：
   每条 jobId/发车时刻/步数/当前状态(PENDING/RUNNING/DONE/FAILED 着色)/步骤进度/失败原因。npm build 绿。
 - 编辑器（步骤/时刻编辑 + upsert/delete 写回）为下一刀（数据接口已备）。
+
+## 进度（round9）：mmtrJobsMode 开关（①收口第一刀）
+- Simulator.mmtrJobsMode（默认 false，迁移期保留原 MTR 时刻表；开启后 Siding.matchDeparture 返回 -1，
+  旧 depot 频率/时刻表不再自动发车；车辆只由 MmtrJobScheduler 显式 startUp 启动）。
+- MmtrJobSchedulerTests.jobsModeSuppressesLegacyAutoDispatch：job 模式下有 departure 也停在股道不动。
+- engine 全量 197 tests / 0 fail / 0 error。

@@ -74,6 +74,12 @@ public class Simulator extends Data implements Utilities {
 	 * ticks each simulation tick after vehicle simulation.
 	 */
 	public org.mtr.core.mmtr.job.MmtrJobScheduler mmtrJobScheduler;
+	/**
+	 * MMTR job mode: when true the legacy depot frequency/departure auto-dispatch is disabled -
+	 * vehicles only run what MmtrJobScheduler starts (the web diagrams). Default false keeps the
+	 * original MTR timetable behaviour until migration is complete.
+	 */
+	public boolean mmtrJobsMode;
 	public org.mtr.core.mmtr.job.MmtrJobRegistry mmtrJobRegistry = new org.mtr.core.mmtr.job.MmtrJobRegistry();
 	private java.nio.file.Path mmtrJobsPath;
 

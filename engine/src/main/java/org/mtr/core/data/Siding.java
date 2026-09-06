@@ -638,6 +638,11 @@ public final class Siding extends SidingSchema implements Utilities {
 	}
 
 	private int matchDeparture() {
+		if (data instanceof final Simulator simulator && simulator.mmtrJobsMode) {
+			// MMTR job mode: depot schedules no longer auto-dispatch vehicles; only the
+			// MmtrJobScheduler starts services (explicit startUp at the job's spawn time).
+			return -1;
+		}
 		final long repeatInterval = getRepeatInterval(0);
 		final long offset = departures.isEmpty() || repeatInterval == 0 ? 0 : (data.getCurrentMillis() - departures.getLong(0)) / repeatInterval * repeatInterval;
 
