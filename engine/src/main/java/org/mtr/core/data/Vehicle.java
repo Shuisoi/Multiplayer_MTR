@@ -95,6 +95,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * players/AI only execute or read it. Null when the consist is idle/unscheduled.
 	 */
 	private @Nullable MmtrMission mmtrMission;
+	/**
+	 * MMTR (server): when the current mission entered AT_TARGET; used to complete after a dwell.
+	 */
+	private long mmtrMissionTargetArrivedMillis;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -121,6 +125,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * later) stay stable and the client mirror integrates identically.
 	 */
 	private static final long MMTR_INTEGRATION_SUB_STEP_MS = 10;
+	/**
+	 * MMTR: how long a mission stays AT_TARGET (dwell for passengers) before completing.
+	 */
+	private static final long MMTR_MISSION_DWELL_MILLIS = 5000;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -219,6 +227,78 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return mmtrMission;
 	}
 
+	/**
+	 * MMTR (server): drive this train headlessly for an AUTOPILOT mission on a manual-allowed
+	 * consist, mirroring exactly what a real driver does (doors closed, manual engaged, full
+	 * throttle). Refreshing manual cooldown each tick keeps the autopilot engaged.
+	 */
+	public void engageMissionAutopilot() {
+		if (isClientside || !vehicleExtraData.getIsManualAllowed()) {
+			return;
+		}
+		vehicleExtraData.closeDoors();
+		engageManualAutopilot(vehicleExtraData.getManualToAutomaticTime());
+		vehicleExtraData.setPowerLevel(MAX_POWER_LEVEL);
+	}
+
+	/**
+	 * MMTR (server): advance the active mission state machine from observed train state.
+	 * Missions are attached to the train; the executor (AUTOPILOT / PLAYER / AI) only reads or
+	 * drives, so the lifecycle advances whether a driver is present or not.
+	 */
+	public void mmtrMissionTick() {
+		if (isClientside || mmtrMission == null) {
+			return;
+		}
+		final MmtrMission mission = mmtrMission;
+		switch (mission.getState()) {
+			case ASSIGNED:
+				// The consist started moving (left the depot / began its run) => dispatched.
+				if (isMoving()) {
+					mission.dispatch();
+				}
+				break;
+			case DISPATCHED:
+				if (isStoppedAtMissionTarget()) {
+					mission.atTarget();
+					mmtrMissionTargetArrivedMillis = data.getCurrentMillis();
+					// An AUTOPILOT mission drives headlessly: release the throttle on arrival so the
+					// consist settles at the target (platform dwell or depot terminal) instead of
+					// re-departing on the repeating depot path.
+					if (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed()) {
+						vehicleExtraData.setPowerLevel(0);
+					}
+				}
+				break;
+			case AT_TARGET:
+				// Complete after a dwell at the target while stationary (passengers board/alight).
+				if (!isMoving() && data.getCurrentMillis() - mmtrMissionTargetArrivedMillis >= MMTR_MISSION_DWELL_MILLIS) {
+					mission.complete();
+				}
+				break;
+			default:
+				break;
+		}
+	}
+
+	/**
+	 * Whether the train is stationary at its mission target: either stopped on the platform whose
+	 * id equals the target (PASSENGER service) or stopped at the end of the route (target 0 =
+	 * terminal / freight destination).
+	 */
+	private boolean isStoppedAtMissionTarget() {
+		final long targetSidingId = mmtrMission == null ? 0 : mmtrMission.getTargetSidingId();
+		if (isMoving() || !getIsOnRoute()) {
+			return false;
+		}
+		if (targetSidingId == 0) {
+			// Terminal / freight run: the consist either stopped at the far end of the path or
+			// has been wrapped back into its depot slot after finishing the run.
+			return railProgress >= vehicleExtraData.getTotalDistance() - 1 || closeToDepot();
+		}
+		return vehicleExtraData.getThisPlatformId() == targetSidingId;
+	}
+
 	public boolean getIsOnRoute() {
 		return railProgress > vehicleExtraData.getDefaultPosition();
 	}
@@ -312,6 +392,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 			// Update the manual state for the client
 			vehicleExtraData.setIsCurrentlyManual(isCurrentlyManual());
+
+			// MMTR: keep the mission alive. An AUTOPILOT mission on a manual-allowed consist is
+			// driven headlessly (refresh the manual seam so it never times out), then the mission
+			// state machine advances from observed train state (moved / at target / dwell done).
+			if (mmtrMission != null && !mmtrMission.isTerminal() && mmtrMission.getState() != MmtrMission.State.AT_TARGET && mmtrMission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed()) {
+				engageMissionAutopilot();
+			}
+			mmtrMissionTick();
 		}
 	}
 
