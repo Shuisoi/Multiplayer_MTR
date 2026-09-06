@@ -162,6 +162,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return railProgress;
 	}
 
+	/** Debug/test read access: remaining time until the vehicle falls back out of manual mode. */
+	public long getManualCooldownMillis() {
+		return manualCooldown;
+	}
+
+	/** Debug/test read access: door animation/cooldown time left. */
+	public long getDoorCooldownMillis() {
+		return doorCooldown;
+	}
+
+	/** Whether the vehicle is currently driven manually (server-side semantics). */
+	public boolean isCurrentlyManual() {
+		if (isClientside) {
+			log.warn("Vehicle#isCurrentlyManual should only be called on the server side!");
+		}
+		return !atoOverride && manualCooldown > 0;
+	}
+
 	public boolean getIsOnRoute() {
 		return railProgress > vehicleExtraData.getDefaultPosition();
 	}
@@ -920,12 +938,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return stoppingPointByStoppingIndex;
 	}
 
-	private boolean isCurrentlyManual() {
-		if (isClientside) {
-			log.warn("Vehicle#isCurrentlyManual should only be called on the server side!");
-		}
-		return !atoOverride && manualCooldown > 0;
-	}
+	// public isCurrentlyManual() defined above; kept private once no longer used? remove entirely
+
 
 	private void setNextStoppingIndex() {
 		nextStoppingIndexAto = vehicleExtraData.immutablePath.size() - 1;
