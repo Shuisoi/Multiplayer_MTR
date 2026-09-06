@@ -16,6 +16,7 @@ import {ThemeService} from "../../service/theme.service";
 import {MapSelectionService} from "../../service/map-selection.service";
 import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {ClientsService} from "../../service/clients.service";
+import {MmtrTrainsService} from "../../service/mmtr-trains.service";
 import {TooltipModule} from "primeng/tooltip";
 import {NgOptimizedImage} from "@angular/common";
 import {TranslocoDirective} from "@jsverse/transloco";
@@ -52,6 +53,7 @@ export class MapComponent implements AfterViewInit {
 	private readonly mapDataService = inject(MapDataService);
 	private readonly mapSelectionService = inject(MapSelectionService);
 	private readonly clientsService = inject(ClientsService);
+	private readonly mmtrTrainsService = inject(MmtrTrainsService);
 	private readonly themeService = inject(ThemeService);
 
 	readonly stationClicked = output<string>();
@@ -61,6 +63,8 @@ export class MapComponent implements AfterViewInit {
 	private readonly statsRef = viewChild.required<ElementRef<HTMLDivElement>>("stats");
 	readonly clientGroupsOnRoute = signal<ClientGroupOnRoute[]>([]);
 	readonly textLabels = signal<TextLabel[]>([]);
+	/** MMTR: live mission-driven train markers (task belongs to the train; the marker shows it). */
+	readonly trainMarkers = signal<TrainMarker[]>([]);
 	readonly clientImageSize = CLIENT_IMAGE_SIZE;
 	readonly loading = this.mapDataService.mapLoading;
 
@@ -613,8 +617,27 @@ export class MapComponent implements AfterViewInit {
 			});
 		});
 
+		const newTrainMarkers: TrainMarker[] = [];
+		this.mmtrTrainsService.trains().forEach(train => {
+			if (train.headX === undefined || train.headZ === undefined || !train.onRoute) {
+				return;
+			}
+			const canvasX = (train.headX - this.camera.position.x) * this.camera.zoom;
+			const canvasY = (train.headZ + this.camera.position.y) * this.camera.zoom;
+			if (Math.abs(canvasX) > halfCanvasWidth || Math.abs(canvasY) > halfCanvasHeight) {
+				return;
+			}
+			newTrainMarkers.push({
+				vehicleId: train.vehicleId,
+				label: train.routeNumber || train.routeName || train.sidingName,
+				missionState: train.mission?.state ?? "",
+				x: canvasX + halfCanvasWidth,
+				y: canvasY + halfCanvasHeight,
+			});
+		});
 		this.textLabels.set(newTextLabels);
 		this.clientGroupsOnRoute.set(newClientGroupsOnRoute);
+		this.trainMarkers.set(newTrainMarkers);
 		this.changeDetectorRef.detectChanges();
 	}
 
@@ -679,11 +702,30 @@ export class MapComponent implements AfterViewInit {
 
 		return {closestPoint: {x: closestX, y: closestY}, distance: Math.hypot(pointX - closestX, pointY - closestY)};
 	}
+
+	/** MMTR marker colour by mission state (empty = no active task). */
+	readonly missionColor = (state: string): string => {
+		switch (state) {
+			case "ASSIGNED": return "#f6c343";
+			case "DISPATCHED": return "#4fb0ff";
+			case "AT_TARGET": return "#3ddc84";
+			case "FAILED": return "#ff6d6d";
+			default: return "#9aa0a6";
+		}
+	};
 }
 
 interface ClientGroupOnRoute {
 	readonly clients: { id: string; name: string }[];
 	readonly clientImagePadding: number;
+	readonly x: number;
+	readonly y: number;
+}
+
+interface TrainMarker {
+	readonly vehicleId: number;
+	readonly label: string;
+	readonly missionState: string;
 	readonly x: number;
 	readonly y: number;
 }
