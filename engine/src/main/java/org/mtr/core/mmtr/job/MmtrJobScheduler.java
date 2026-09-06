@@ -162,14 +162,8 @@ public final class MmtrJobScheduler {
 			instance.state = JobState.DONE;
 			return;
 		}
-		if (instance.mode == Mode.MANUAL) {
-			runManualStep(instance, simulator);
-			instance.state = JobState.RUNNING;
-		} else {
-			if (!startAutoService(instance, simulator)) {
-				return; // startAutoService failed the instance already
-			}
-			instance.state = JobState.RUNNING;
+		if (!startOutbound(instance, simulator)) {
+			return;
 		}
 	}
 
@@ -339,20 +333,101 @@ public final class MmtrJobScheduler {
 	}
 
 	private void running(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
+		// Yard / parked phases run while the consist stands on its own siding: yard ops (UNCOUPLE),
+		// return-to-yard MOVE_TO completion ("退库") and (re)departures after a return. Platform
+		// movement in between is advanced by the mode-specific logic at the bottom.
+		while (instance.stepIndex < instance.job.steps.size()) {
+			final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
+			if (dayTime > instance.deadlineOf(step)) {
+				fail(instance, "step " + step.stepId + " missed deadline (due " + step.dueTimeOfDayMs + ")");
+				return;
+			}
+			final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+			if (vehicle == null) {
+				fail(instance, "consist vanished mid-job");
+				return;
+			}
+			final boolean parkedOnYard = vehicleParkedOnYard(instance, vehicle, simulator);
+			if (step.type == MmtrJobStep.StepType.UNCOUPLE) {
+				if (!parkedOnYard) {
+					fail(instance, "UNCOUPLE must run while parked on the yard siding (step " + step.stepId + ")");
+					return;
+				}
+				if (!executeUncouple(instance, simulator)) {
+					return;
+				}
+				instance.awaitingStart = true;
+				continue;
+			}
+			if (step.type == MmtrJobStep.StepType.COUPLE) {
+				fail(instance, "COUPLE runs only as the first step of a make-up job (step " + step.stepId + ")");
+				return;
+			}
+			if (!parkedOnYard) {
+				break; // en route: platform movement is advanced below
+			}
+			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId == instance.job.sidingId) {
+				// 退库: the consist has returned to its own yard siding - the return step completes.
+				System.out.println("[MMTR-JOB] MOVE_TO done back at yard siding " + step.targetId);
+				instance.stepIndex++;
+				instance.awaitingStart = true;
+				continue;
+			}
+			// Parked with a movement step next: first departure or re-departure after a return.
+			if (step.type == MmtrJobStep.StepType.MOVE_TO || step.type == MmtrJobStep.StepType.SERVE) {
+				if (instance.awaitingStart || !instance.started) {
+					instance.awaitingStart = false;
+					if (!startOutbound(instance, simulator)) {
+						return;
+					}
+				}
+			}
+			break;
+		}
 		if (instance.stepIndex >= instance.job.steps.size()) {
 			instance.state = JobState.DONE;
 			return;
 		}
-		final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
-		if (dayTime > instance.deadlineOf(step)) {
-			fail(instance, "step " + step.stepId + " missed deadline (due " + step.dueTimeOfDayMs + ")");
-			return;
-		}
+		// Step progress on the current leg: mission end (MANUAL, incl. while parked back at the yard)
+		// or platform arrivals / dwell departures (AUTO, only while en route).
 		if (instance.mode == Mode.MANUAL) {
 			advanceManual(instance, simulator);
 		} else {
-			advanceAuto(instance, simulator);
+			final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+			if (vehicle != null && !vehicleParkedOnYard(instance, vehicle, simulator)) {
+				advanceAuto(instance, simulator);
+			}
 		}
+	}
+
+	/** Whether the given vehicle currently stands parked on this job's own yard siding. */
+	private static boolean vehicleParkedOnYard(JobInstance instance, Vehicle vehicle, Simulator simulator) {
+		if (vehicle.getIsOnRoute()) {
+			return false;
+		}
+		final Siding yard = findSiding(simulator, instance.job.sidingId);
+		return yard != null && yard.getVehicleById(vehicle.getId()) != null;
+	}
+
+	/**
+	 * Start the current (parked) consist on its outbound service/mission once. Sets the instance
+	 * state to RUNNING; leaves it FAILED when the mode-specific start failed.
+	 */
+	private boolean startOutbound(JobInstance instance, Simulator simulator) {
+		instance.started = true;
+		instance.awaitingStart = false;
+		if (instance.mode == Mode.MANUAL) {
+			runManualStep(instance, simulator);
+		} else {
+			if (!startAutoService(instance, simulator)) {
+				return false;
+			}
+		}
+		if (instance.state == JobState.FAILED) {
+			return false;
+		}
+		instance.state = JobState.RUNNING;
+		return true;
 	}
 
 	// --- MANUAL mode: single headless mission per job (round-1 semantics) ---
@@ -510,6 +585,10 @@ public final class MmtrJobScheduler {
 		boolean carsPlaced;
 		/** The formation this job currently operates (spec list): spawn stock, merged make-up or post-cut head. */
 		final ObjectArrayList<MmtrCarSpec> fleetCars = new ObjectArrayList<>();
+		/** Whether the consist has departed at least once (distinguishes an initial park from a return). */
+		boolean started;
+		/** True when a parked consist may need a (re)departure (after a return or a yard op). */
+		boolean awaitingStart = true;
 		/** This job's stock was merged into another job's consist (no longer stands alone). */
 		boolean consumed;
 		/** Whether the consist was last seen stopped at the current step's target platform (AUTO SERVE). */

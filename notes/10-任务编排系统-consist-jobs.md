@@ -157,3 +157,15 @@
 - 测试 jobUncouplesTrailersAtYardThenRunsServiceAlone：挂车2节 -> make-up 3节 -> UNCOUPLE(idx0) 切出
   2 节 -> 机车单车跑完 2 站 DONE（步骤=4），切出挂车以 2 节停场重现在车场；make-up/切分/失败分类既有
   测试保持绿。全量 cleanTest 绿。
+## 进度（round15-B）：MOVE_TO 退库(回本场股道) + 回场后再出库/摘挂
+- 实测确认：AUTO 服务跑完会自动返回本车场股道停场（onRoute=false/closeToDepot=true/depIdx=-1 常驻）。
+- MmtrJobScheduler 增加"车场/停场阶段"统一处理（running 内 while）：
+  * MOVE_TO 目标 == 本 job 股道 -> "退库"完成（回到车场即置完成）；
+  * 停场遇到 UNCOUPLE -> 执行车场切分（head 重建留场作业、tail 模板留作下批车底源）；
+  * 回库/切分后若还有运行步骤 -> awaitingStart 标记触发二次出库（startOutbound：MANUAL 挂 mission /
+    AUTO addDeparture+startUp），同一编组可"出库->跑图->回库->再出库/摘挂"多程；
+  * 中途（未停场）遇到 COUPLE/UNCOUPLE 给出明确失败原因。
+- startOutbound 收敛 pending 与回场重启路径；instance.started/awaitingStart 区分初次发车与回场待发。
+- 测试：jobReturnsToYardWhenStepTargetsItsOwnSiding（MOVE_TO A -> SERVE A -> 退库，DONE 且最终停回本场）；
+  fullMacroCoupleServiceReturnAndUncoupleAtYard（挂车 make-up 3节 -> 跑图 -> 回库 -> UNCOUPLE 切出挂车，
+  5 步全 DONE，模板回到 2 节挂车源）。既有 MANUAL/AUTO/make-up/uncouple 全部保持绿；全量 cleanTest 绿。
