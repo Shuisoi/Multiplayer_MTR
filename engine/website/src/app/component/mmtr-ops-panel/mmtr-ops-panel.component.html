@@ -1,53 +1,88 @@
-<div class="mmtr-ops">
-	@if (dispatchFeedback()) {
-		<div class="mmtr-feedback">{{ dispatchFeedback() }}</div>
-	}
-	<div class="mmtr-section-title">列车任务 / Trains & Missions</div>
-	@if (loading()) {
-		<p-progressSpinner styleClass="w-3rem h-3rem"/>
-	} @else if (trains().length === 0) {
-		<div class="mmtr-empty">当前没有列车 / no active trains</div>
-	} @else {
-		@for (train of trains(); track train.vehicleId) {
-			<div class="mmtr-row">
-				<div class="mmtr-row-main">
-					<div class="mmtr-name">{{ train.sidingName }}<span class="mmtr-muted"> · {{ train.routeNumber || "无线路" }}</span></div>
-					<div class="mmtr-sub">{{ missionLabel(train) }}</div>
-				</div>
-				<div class="mmtr-actions">
-					@if (canDispatch(train)) {
-						<button type="button" class="mmtr-dispatch-btn" (click)="dispatch(train)">派车</button>
-					}
-				</div>
-				<div class="mmtr-badges">
-					<span class="mmtr-badge" [class.on-route]="train.onRoute" [class.parked]="!train.onRoute">{{ statusLabel(train) }}</span>
-					@if (train.mission && !train.mission!.failureReason) {
-						<span class="mmtr-badge mission">{{ allActive().includes(train) ? "任务中" : "已结束" }}</span>
-					} @else if (train.mission?.failureReason) {
-						<span class="mmtr-badge failed">{{ train.mission!.failureReason }}</span>
-					}
-				</div>
-			</div>
+@if (editingJob() !== undefined) {
+	<app-mmtr-job-editor [job]="editingJob()!" (closed)="closeJobEditor()"/>
+} @else {
+	<div class="mmtr-ops">
+		@if (dispatchFeedback()) {
+			<div class="mmtr-feedback">{{ dispatchFeedback() }}</div>
 		}
-	}
-	<p-divider/>
-	<div class="mmtr-section-title">股道占用 / Siding Occupancy</div>
-	@if (sidings().length === 0) {
-		<div class="mmtr-empty">没有股道 / no sidings</div>
-	} @else {
-		@for (siding of sidings(); track siding.sidingId) {
-			<div class="mmtr-row mmtr-siding-row">
-				<div class="mmtr-row-main">
-					<div class="mmtr-name">{{ siding.sidingName }}<span class="mmtr-muted"> · {{ siding.depotName }}</span></div>
+		<div class="mmtr-section-title">列车任务 / Trains & Missions</div>
+		@if (loading()) {
+			<p-progressSpinner styleClass="w-3rem h-3rem"/>
+		} @else if (trains().length === 0) {
+			<div class="mmtr-empty">当前没有列车 / no active trains</div>
+		} @else {
+			@for (train of trains(); track train.vehicleId) {
+				<div class="mmtr-row">
+					<div class="mmtr-row-main">
+						<div class="mmtr-name">{{ train.sidingName }}<span class="mmtr-muted"> · {{ train.routeNumber || "无线路" }}</span></div>
+						<div class="mmtr-sub">{{ missionLabel(train) }}</div>
+					</div>
+					<div class="mmtr-actions">
+						@if (canDispatch(train)) {
+							<button type="button" class="mmtr-dispatch-btn" (click)="dispatch(train)">派车</button>
+						}
+					</div>
+					<div class="mmtr-badges">
+						<span class="mmtr-badge" [class.on-route]="train.onRoute" [class.parked]="!train.onRoute">{{ statusLabel(train) }}</span>
+						@if (train.mission && !train.mission!.failureReason) {
+							<span class="mmtr-badge mission">{{ allActive().includes(train) ? "任务中" : "已结束" }}</span>
+						} @else if (train.mission?.failureReason) {
+							<span class="mmtr-badge failed">{{ train.mission!.failureReason }}</span>
+						}
+					</div>
 				</div>
-				<div class="mmtr-badges">
-					<span class="mmtr-badge">{{ siding.vehiclesParked }}/{{ siding.vehiclesTotal }} 库内</span>
-					@if (siding.manual) {
-						<span class="mmtr-badge manual">手动</span>
-					}
-				</div>
-			</div>
+			}
 		}
-		<div class="mmtr-empty">信号/道岔层：预留（自动道岔/信号按任务求值将在此显示）</div>
-	}
-</div>
+		<p-divider/>
+		<div class="mmtr-section-head">
+			<div class="mmtr-section-title">作业单 / Consist Jobs</div>
+			<button type="button" class="mmtr-dispatch-btn" (click)="openNewJob()">+ 新建作业单</button>
+		</div>
+		@if (jobsFeedback()) {
+			<div class="mmtr-feedback">{{ jobsFeedback() }}</div>
+		}
+		@if (jobsLoading()) {
+			<p-progressSpinner styleClass="w-3rem h-3rem"/>
+		} @else if (jobs().length === 0) {
+			<div class="mmtr-empty">暂无作业单 —— 点「+ 新建作业单」创建车底一天的作业编排</div>
+		} @else {
+			@for (job of jobs(); track job.jobId) {
+				<div class="mmtr-row mmtr-job-row">
+					<div class="mmtr-row-main">
+						<div class="mmtr-name">{{ job.jobId }}<span class="mmtr-muted"> · {{ jobSub(job) }}</span></div>
+						<div class="mmtr-sub">{{ jobProgress(stateOf(job.jobId)) || "等待发车" }}</div>
+						@if (stateOf(job.jobId)?.failure) {
+							<div class="mmtr-sub failed-text">{{ stateOf(job.jobId)!.failure }}</div>
+						}
+					</div>
+					<div class="mmtr-actions">
+						<button type="button" class="mmtr-dispatch-btn" (click)="openEditJob(job)">编辑</button>
+					</div>
+					<div class="mmtr-badges">
+						<span class="mmtr-badge" [class]="jobStateClass(stateOf(job.jobId)?.state)">{{ jobStatusText(stateOf(job.jobId)?.state) || "—" }}</span>
+					</div>
+				</div>
+			}
+		}
+		<p-divider/>
+		<div class="mmtr-section-title">股道占用 / Siding Occupancy</div>
+		@if (sidings().length === 0) {
+			<div class="mmtr-empty">没有股道 / no sidings</div>
+		} @else {
+			@for (siding of sidings(); track siding.sidingId) {
+				<div class="mmtr-row mmtr-siding-row">
+					<div class="mmtr-row-main">
+						<div class="mmtr-name">{{ siding.sidingName }}<span class="mmtr-muted"> · {{ siding.depotName }}</span></div>
+					</div>
+					<div class="mmtr-badges">
+						<span class="mmtr-badge">{{ siding.vehiclesParked }}/{{ siding.vehiclesTotal }} 库内</span>
+						@if (siding.manual) {
+							<span class="mmtr-badge manual">手动</span>
+						}
+					</div>
+				</div>
+			}
+			<div class="mmtr-empty">信号/道岔层：预留（自动道岔/信号按任务求值将在此显示）</div>
+		}
+	</div>
+}

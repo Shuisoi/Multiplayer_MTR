@@ -90,3 +90,18 @@
   旧 depot 频率/时刻表不再自动发车；车辆只由 MmtrJobScheduler 显式 startUp 启动）。
 - MmtrJobSchedulerTests.jobsModeSuppressesLegacyAutoDispatch：job 模式下有 departure 也停在股道不动。
 - engine 全量 197 tests / 0 fail / 0 error。
+## 进度（round10）：web 作业单编辑器（列表补全 + 新建/编辑 + 写回）
+- SystemMapServlet 新增 GET mmtr-job-references：世界 depots/sidings/platforms（十进制 id 串 + 名称/
+  depotName/stationName + manual）作编辑器 picker 数据；MmtrJobRegistryTests 覆盖（数组非空断言）。
+- MmtrJobsService 升级为完整数据平面：job 全量类型（MmtrConsistJob/cars/steps）、references 轮询、
+  upsert(job)/delete(jobId) 写回 + writeFeedback；补全 round6 未渲染的“作业单 / Consist Jobs”列表区
+  （jobId/发车时刻/每日/车数·步数/股道名 + PENDING-RUNNING-DONE-FAILED 徽章 + 步骤进度 + failure 红字）。
+- 编辑器（面板内替换式，app-mmtr-job-editor）：新建/编辑 job——刷车股道(p-select 由 references 填充，
+  选中自动带出 depotId)/发车时刻 HH:MM/每日重复/编组车辆规格（vehicleId·长宽·定员·转向架·连挂余量，增删复制）
+  + 步骤有序列表（类型 MOVE_TO/SERVE/COUPLE/UNCOUPLE、目标 id（datalist 提示站台/股道）、截止 HH:MM、
+  备注、↑↓ 排序、删除）。保存校验：jobId 留空自动生成且唯一、股道必选、编组非空且 vehicleId 齐全、
+  每步截止 HH:MM 合法、UNCOUPLE 需 targetIndex、非 UNCOUPLE 需目标 id → mmtr-jobs-upsert 写回；
+  删除走 mmtr-jobs-delete（按钮两次点击确认）。保存/删除后立即 refresh 回列表。
+- 说明：COUPLE/UNCOUPLE 步骤可编辑保存，引擎执行器（coupling executor）接入仍在后续轮次。
+- engine 全量（cleanTest）197 tests / 0 fail / 0 error；website ng lint + build 绿（exit 0，
+  编辑器 scss 有 >2kB 预算警告，非阻断）。

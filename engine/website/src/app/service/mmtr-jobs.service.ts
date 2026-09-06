@@ -3,11 +3,44 @@ import {DestroyRef, inject, Injectable, signal} from "@angular/core";
 import {DimensionService} from "./dimension.service";
 import {LIVE_REFRESH_INTERVAL_MILLIS} from "../utility/refresh.constants";
 
-export interface MmtrJobSummary {
-	jobId: string;
-	startTimeOfDayMs: number;
-	steps: { stepId?: string, type?: string }[];
+/** One step of a consist job. Ids travel as decimal strings (64-bit ids must not lose precision in JS). */
+export interface MmtrJobStep {
+	stepId?: string;
+	type: "MOVE_TO" | "SERVE" | "COUPLE" | "UNCOUPLE";
+	/** In-game target object id: platform/siding (MOVE_TO/SERVE), a consist to couple to (COUPLE). */
+	targetId?: string;
+	/** UNCOUPLE only: car index to cut after. */
+	targetIndex?: number;
+	/** Latest allowed completion time, milliseconds after in-game midnight. */
+	dueTimeOfDayMs: number;
+	note?: string;
 }
+
+/** One car of the job's rolling stock; mirrors the engine MmtrCarSpec (stable, editor-authored). */
+export interface MmtrCarSpec {
+	vehicleId: string;
+	length: number;
+	width: number;
+	capacity: number;
+	bogie1Position: number;
+	bogie2Position: number;
+	couplingPadding1: number;
+	couplingPadding2: number;
+}
+
+/** A consist job (车底作业单): one consist for one day, spawned on sidingId at startTimeOfDayMs. */
+export interface MmtrConsistJob {
+	jobId: string;
+	depotId: string;
+	sidingId: string;
+	startTimeOfDayMs: number;
+	repeatDaily: boolean;
+	cars: MmtrCarSpec[];
+	steps: MmtrJobStep[];
+}
+
+/** Backwards-compatible short alias used by older call sites. */
+export type MmtrJobSummary = MmtrConsistJob;
 
 export interface MmtrJobStateSummary {
 	jobId: string;
@@ -18,15 +51,47 @@ export interface MmtrJobStateSummary {
 	failure?: string;
 }
 
+/** In-game objects the editor pickers reference (decimal id + display names). */
+export interface MmtrDepotRef {
+	id: string;
+	name: string;
+}
+
+export interface MmtrSidingRef {
+	id: string;
+	name: string;
+	depotId: string;
+	depotName: string;
+	manual?: boolean;
+}
+
+export interface MmtrPlatformRef {
+	id: string;
+	name: string;
+	stationName: string;
+}
+
+export interface MmtrJobReferences {
+	depots: MmtrDepotRef[];
+	sidings: MmtrSidingRef[];
+	platforms: MmtrPlatformRef[];
+}
+
+const EMPTY_REFERENCES: MmtrJobReferences = {depots: [], sidings: [], platforms: []};
+
 /**
- * Web editor data for consist jobs (diagrams). Reads the engine's mmtr-jobs document plus the
- * live executor states; write endpoints (upsert/delete) are ready for the full editor UI.
+ * Web data plane for consist jobs (车底作业单): reads the engine's mmtr-jobs document plus the
+ * live executor states and the in-game depot/siding/platform references; writes jobs back through
+ * the mmtr-jobs-upsert / mmtr-jobs-delete endpoints (the job editor UI).
  */
 @Injectable({providedIn: "root"})
 export class MmtrJobsService {
-	public readonly jobs = signal<MmtrJobSummary[]>([]);
+	public readonly jobs = signal<MmtrConsistJob[]>([]);
 	public readonly states = signal<MmtrJobStateSummary[]>([]);
+	public readonly references = signal<MmtrJobReferences>(EMPTY_REFERENCES);
 	public readonly loading = signal(true);
+	public readonly writeFeedback = signal("");
+	private feedbackTimer = 0;
 
 	private readonly httpClient = inject(HttpClient);
 	private readonly dimensionService = inject(DimensionService);
@@ -35,7 +100,10 @@ export class MmtrJobsService {
 
 	constructor() {
 		this.poll();
-		this.destroyRef.onDestroy(() => clearTimeout(this.timeoutId));
+		this.destroyRef.onDestroy(() => {
+			clearTimeout(this.timeoutId);
+			clearTimeout(this.feedbackTimer);
+		});
 	}
 
 	private mapUrl(endpoint: string) {
@@ -43,11 +111,12 @@ export class MmtrJobsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{ data: { jobs: MmtrJobSummary[] } }>(this.mapUrl("mmtr-jobs")).subscribe({
+		this.httpClient.get<{ data: { jobs: MmtrConsistJob[] } }>(this.mapUrl("mmtr-jobs")).subscribe({
 			next: response => {
 				this.jobs.set(response.data?.jobs ?? []);
 				this.loading.set(false);
 				this.fetchStates();
+				this.fetchReferences();
 			},
 			error: error => {
 				console.error("mmtr-jobs feed failed", error);
@@ -70,8 +139,56 @@ export class MmtrJobsService {
 		});
 	}
 
+	private fetchReferences() {
+		this.httpClient.get<{ data: MmtrJobReferences }>(this.mapUrl("mmtr-job-references")).subscribe({
+			next: response => {
+				this.references.set(response.data ?? EMPTY_REFERENCES);
+			},
+			error: error => {
+				console.error("mmtr-job-references failed", error);
+			},
+		});
+	}
+
 	private schedule() {
 		clearTimeout(this.timeoutId);
 		this.timeoutId = setTimeout(() => this.poll(), LIVE_REFRESH_INTERVAL_MILLIS) as unknown as number;
+	}
+
+	/** Force an immediate re-poll (after a write) so the list reflects the change quickly. */
+	public refresh() {
+		clearTimeout(this.timeoutId);
+		this.poll();
+	}
+
+	/** Persist a job (create or full replace by jobId). Returns true when the engine accepted it. */
+	public upsert(job: MmtrConsistJob) {
+		const url = this.mapUrl("mmtr-jobs-upsert");
+		return this.httpClient.post<{ data: { ok: boolean } }>(url, job);
+	}
+
+	/** Remove a job by id. Returns true when the engine removed it. */
+	public delete(jobId: string) {
+		const url = this.mapUrl("mmtr-jobs-delete");
+		return this.httpClient.post<{ data: { ok: boolean } }>(url, {jobId});
+	}
+
+	public setFeedback(text: string) {
+		this.writeFeedback.set(text);
+		clearTimeout(this.feedbackTimer);
+		this.feedbackTimer = setTimeout(() => this.writeFeedback.set(""), 5000) as unknown as number;
+	}
+
+	/** A blank job for the "new job" editor (no cars/steps; jobId auto-generated on save). */
+	public emptyJob(): MmtrConsistJob {
+		return {
+			jobId: "",
+			depotId: "0",
+			sidingId: "0",
+			startTimeOfDayMs: 7 * 3_600_000,
+			repeatDaily: true,
+			cars: [],
+			steps: [],
+		};
 	}
 }

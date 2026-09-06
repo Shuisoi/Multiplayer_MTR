@@ -1,8 +1,16 @@
-import {ChangeDetectionStrategy, Component, CUSTOM_ELEMENTS_SCHEMA, inject} from "@angular/core";
+import {ChangeDetectionStrategy, Component, CUSTOM_ELEMENTS_SCHEMA, inject, signal} from "@angular/core";
 import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {DividerModule} from "primeng/divider";
 import {MmtrTrainsService, MmtrTrainState} from "../../service/mmtr-trains.service";
-import {MmtrJobsService, MmtrJobStateSummary} from "../../service/mmtr-jobs.service";
+import {MmtrConsistJob, MmtrJobStateSummary, MmtrJobsService} from "../../service/mmtr-jobs.service";
+import {MmtrJobEditorComponent} from "../mmtr-job-editor/mmtr-job-editor.component";
+
+const JOB_STATE_TEXT: Record<string, string> = {
+	PENDING: "等待发车",
+	RUNNING: "运行中",
+	DONE: "已完成",
+	FAILED: "已失败",
+};
 
 @Component({
 	selector: "app-mmtr-ops-panel",
@@ -10,6 +18,7 @@ import {MmtrJobsService, MmtrJobStateSummary} from "../../service/mmtr-jobs.serv
 	imports: [
 		ProgressSpinnerModule,
 		DividerModule,
+		MmtrJobEditorComponent,
 	],
 	templateUrl: "./mmtr-ops-panel.component.html",
 	styleUrl: "./mmtr-ops-panel.component.scss",
@@ -23,9 +32,15 @@ export class MmtrOpsPanelComponent {
 	protected readonly sidings = this.mmtrTrainsService.sidings;
 	protected readonly loading = this.mmtrTrainsService.loading;
 	protected readonly dispatchFeedback = this.mmtrTrainsService.dispatchFeedback;
+
 	protected readonly jobs = this.mmtrJobsService.jobs;
 	protected readonly jobStates = this.mmtrJobsService.states;
+	protected readonly jobReferences = this.mmtrJobsService.references;
 	protected readonly jobsLoading = this.mmtrJobsService.loading;
+	protected readonly jobsFeedback = this.mmtrJobsService.writeFeedback;
+
+	/** undefined = list view; otherwise the job being edited in the inline editor. */
+	protected readonly editingJob = signal<MmtrConsistJob | undefined>(undefined);
 
 	protected readonly allActive = () => this.trains().filter(train => !train.mission || !["COMPLETE", "FAILED", "CANCELED"].includes(train.mission!.state));
 
@@ -55,8 +70,22 @@ export class MmtrOpsPanelComponent {
 		return !train.onRoute && train.isManualAllowed;
 	}
 
+	// ---- Consist jobs (作业单) ----
+
 	protected stateOf(jobId: string): MmtrJobStateSummary | undefined {
 		return this.jobStates().find(state => state.jobId === jobId);
+	}
+
+	protected openNewJob() {
+		this.editingJob.set(this.mmtrJobsService.emptyJob());
+	}
+
+	protected openEditJob(job: MmtrConsistJob) {
+		this.editingJob.set(job);
+	}
+
+	protected closeJobEditor() {
+		this.editingJob.set(undefined);
 	}
 
 	protected timeOfDay(ms: number): string {
@@ -66,6 +95,26 @@ export class MmtrOpsPanelComponent {
 		return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 	}
 
+	protected jobStatusText(state?: string): string {
+		return state === undefined ? "" : (JOB_STATE_TEXT[state] ?? state);
+	}
+
+	protected jobProgress(state?: MmtrJobStateSummary): string {
+		if (!state || state.totalSteps <= 0) {
+			return "等待发车";
+		}
+		if (state.state === "RUNNING" && state.step >= 0) {
+			return `步骤 ${state.step + 1}/${state.totalSteps}`;
+		}
+		if (state.state === "DONE") {
+			return `${state.totalSteps} 步 · 全部完成`;
+		}
+		if (state.state === "FAILED") {
+			return `${state.totalSteps} 步 · 已失败`;
+		}
+		return `${state.totalSteps} 步 · 等待发车`;
+	}
+
 	protected jobStateClass(state?: string): string {
 		switch (state) {
 			case "RUNNING": return "on-route";
@@ -73,5 +122,20 @@ export class MmtrOpsPanelComponent {
 			case "FAILED": return "failed";
 			default: return "";
 		}
+	}
+
+	protected jobSub(job: MmtrConsistJob): string {
+		const parts = [`发车 ${this.timeOfDay(job.startTimeOfDayMs)}`];
+		if (job.repeatDaily) {
+			parts.push("每日");
+		}
+		parts.push(`${job.cars?.length ?? 0} 节车 · ${job.steps?.length ?? 0} 步`);
+		const siding = this.jobReferences().sidings.find(ref => ref.id === job.sidingId);
+		if (siding) {
+			parts.push(`${siding.depotName} · ${siding.name}`);
+		} else if (job.sidingId && job.sidingId !== "0") {
+			parts.push(`股道 ${job.sidingId}`);
+		}
+		return parts.join(" · ");
 	}
 }

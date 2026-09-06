@@ -118,3 +118,15 @@
 .failed-text {
 	color: #ff6d6d;
 }
+
+.mmtr-section-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	margin: 0.25rem 0;
+}
+
+.mmtr-section-head .mmtr-section-title {
+	margin: 0;
+}

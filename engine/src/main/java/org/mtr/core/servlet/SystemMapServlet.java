@@ -58,6 +58,7 @@ public final class SystemMapServlet extends ServletBase {
 					yield result;
 				}
 				case "mmtr-jobs" -> Utilities.getJsonObjectFromData(simulator.getMmtrJobRegistry());
+				case "mmtr-job-references" -> getMmtrJobReferences(simulator);
 				case "mmtr-jobs-upsert" -> {
 					final org.mtr.core.mmtr.job.MmtrConsistJob job = new org.mtr.core.mmtr.job.MmtrConsistJob(jsonReader);
 					simulator.upsertMmtrJob(job);
@@ -204,6 +205,40 @@ public final class SystemMapServlet extends ServletBase {
 		// Reserved for the automatic signal / point layer (future infrastructure reaction layer).
 		root.add("signals", new com.google.gson.JsonArray());
 		root.add("points", new com.google.gson.JsonArray());
+		return root;
+	}
+
+	/** Job-editor pickers: in-game depots / sidings / platforms (decimal id strings + display names). */
+	private static JsonObject getMmtrJobReferences(Simulator simulator) {
+		final com.google.gson.JsonArray depots = new com.google.gson.JsonArray();
+		simulator.depots.forEach(depot -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", String.valueOf(depot.getId()));
+			out.addProperty("name", depot.getName());
+			depots.add(out);
+		});
+		final com.google.gson.JsonArray sidings = new com.google.gson.JsonArray();
+		simulator.sidings.forEach(siding -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", String.valueOf(siding.getId()));
+			out.addProperty("name", siding.getName());
+			out.addProperty("depotId", String.valueOf(siding.area == null ? 0 : siding.area.getId()));
+			out.addProperty("depotName", siding.area == null ? "" : siding.area.getName());
+			out.addProperty("manual", siding.getIsManual());
+			sidings.add(out);
+		});
+		final com.google.gson.JsonArray platforms = new com.google.gson.JsonArray();
+		simulator.platforms.forEach(platform -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", String.valueOf(platform.getId()));
+			out.addProperty("name", platform.getName());
+			out.addProperty("stationName", platform.area == null ? "" : platform.area.getName());
+			platforms.add(out);
+		});
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("depots", depots);
+		root.add("sidings", sidings);
+		root.add("platforms", platforms);
 		return root;
 	}
 }
