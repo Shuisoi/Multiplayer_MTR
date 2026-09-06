@@ -404,6 +404,21 @@ public final class Siding extends SidingSchema implements Utilities {
 		return rebuilt;
 	}
 
+	/**
+	 * MMTR yard reset: remove every parked (not-on-route) vehicle from this siding. Used before a
+	 * daily respawn / when re-authoring web jobs so leftover stock never blocks a fresh spawn or a
+	 * make-up (the engine keeps at most one parked vehicle per siding).
+	 */
+	public void clearParkedVehicles() {
+		final ObjectArraySet<Vehicle> toRemove = new ObjectArraySet<>();
+		vehicleIdMap.values().forEach(vehicle -> {
+			if (!vehicle.getIsOnRoute()) {
+				toRemove.add(vehicle);
+			}
+		});
+		toRemove.forEach(vehicle -> vehicleIdMap.remove(vehicle.getId()));
+	}
+
 	public void startGeneratingDepartures() {
 		departures.clear();
 		tempReturnTimes.clear();

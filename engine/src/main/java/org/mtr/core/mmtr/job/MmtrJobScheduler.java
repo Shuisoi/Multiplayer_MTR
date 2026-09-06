@@ -82,6 +82,10 @@ public final class MmtrJobScheduler {
 	private static final long SPAWN_GRACE_MILLIS = 30_000;
 
 	private void pending(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
+		if (instance.consumed) {
+			instance.state = JobState.DONE; // source stock was merged into another job's make-up
+			return;
+		}
 		if (dayTime < instance.job.startTimeOfDayMs) {
 			return;
 		}
@@ -90,7 +94,7 @@ public final class MmtrJobScheduler {
 		// the merged formation replaces the target's parked consist via the yard surgery primitive.
 		final boolean startsWithCouple = instance.stepIndex == 0 && !instance.job.steps.isEmpty()
 			&& instance.job.steps.get(0).type == MmtrJobStep.StepType.COUPLE;
-		if (startsWithCouple) {
+		if (startsWithCouple && !instance.mergedPlaced) {
 			switch (tryCoupleStart(instance, dayTime, simulator)) {
 				case WAIT:
 				case FAILED:
@@ -108,16 +112,21 @@ public final class MmtrJobScheduler {
 			// The engine creates the parked vehicle on its next siding tick; until then we stay
 			// pending (a 30s grace protects against a siding that can never spawn).
 			if (!instance.carsPlaced) {
-				if (instance.job.cars.isEmpty()) {
-					fail(instance, "job defines no rolling stock");
-					return;
+				if (instance.mergedPlaced) {
+					// The merged template was already installed by the make-up; just wait for the engine spawn.
+					instance.carsPlaced = true;
+				} else {
+					if (instance.job.cars.isEmpty()) {
+						fail(instance, "job defines no rolling stock");
+						return;
+					}
+					if (!placeCars(simulator, instance)) {
+						fail(instance, "could not place job rolling stock on siding");
+						return;
+					}
+					instance.carsPlaced = true;
+					System.out.println("[MMTR-JOB] placed " + instance.job.cars.size() + " car(s) from job " + instance.job.jobId);
 				}
-				if (!placeCars(simulator, instance.job)) {
-					fail(instance, "could not place job rolling stock on siding");
-					return;
-				}
-				instance.carsPlaced = true;
-				System.out.println("[MMTR-JOB] placed " + instance.job.cars.size() + " car(s) from job " + instance.job.jobId);
 			}
 			if (dayTime > instance.job.startTimeOfDayMs + SPAWN_GRACE_MILLIS) {
 				fail(instance, "stock never spawned on siding");
@@ -135,7 +144,7 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		if (instance.fleetCars.isEmpty()) {
-			instance.fleetCars.addAll(instance.job.cars);
+			instance.fleetCars.addAll(instance.spawnCars.isEmpty() ? instance.job.cars : instance.spawnCars);
 		}
 		// Yard ops run while the consist is still parked on its own siding and before any mission /
 		// ATO departure: UNCOUPLE cuts trailing cars off (head keeps the job, tail stays in the yard
@@ -202,38 +211,23 @@ public final class MmtrJobScheduler {
 			fail(instance, "coupling target job '" + targetJobId + "' stock was already coupled into another job");
 			return CoupleOutcome.FAILED;
 		}
-		if (target.vehicleId == 0 || target.state == JobState.FAILED) {
-			// Target has not spawned (yet): wait for it up to this step's deadline.
-			if (dayTime > instance.deadlineOf(first)) {
-				fail(instance, "coupling target job '" + targetJobId + "' never spawned before due " + first.dueTimeOfDayMs);
-				return CoupleOutcome.FAILED;
-			}
-			return CoupleOutcome.WAIT;
-		}
-		final Siding yard = findSiding(simulator, instance.job.sidingId);
-		final Vehicle tail = yard == null ? null : yard.getVehicleById(target.vehicleId);
-		if (yard == null || tail == null || tail.getIsOnRoute()) {
-			if (dayTime > instance.deadlineOf(first)) {
-				fail(instance, "coupling target stock is not parked on the yard siding before due " + first.dueTimeOfDayMs);
-				return CoupleOutcome.FAILED;
-			}
-			return CoupleOutcome.WAIT;
-		}
-		instance.fleetCars.clear();
-		instance.fleetCars.addAll(instance.job.cars);
-		instance.fleetCars.addAll(target.job.cars);
-		final ObjectArrayList<org.mtr.core.data.VehicleCar> merged = toVehicleCars(instance.fleetCars);
-		final Vehicle rebuilt = yard.rebuildParkedConsist(merged);
-		if (rebuilt == null) {
-			fail(instance, "coupled formation does not fit the yard siding (cars=" + merged.size() + ")");
+		if (target.vehicleId != 0) {
+			// The engine keeps at most one parked vehicle per siding: make-up must happen BEFORE the
+			// source job spawns its stock, so the merged formation is engine-spawned once (single
+			// spawn keeps the full service path). A COUPLE against already-standing stock is a
+			// scheduling-order error.
+			fail(instance, "coupling target job '" + targetJobId + "' stock is already standing on the yard - schedule the COUPLE before that job's spawn time");
 			return CoupleOutcome.FAILED;
 		}
+		// Compose the source job's cars into this job's own spawn template (this job's cars first).
+		instance.spawnCars.clear();
+		instance.spawnCars.addAll(instance.job.cars);
+		instance.spawnCars.addAll(target.job.cars);
+		instance.mergedPlaced = true;
 		target.consumed = true;
 		target.state = JobState.DONE;
-		instance.vehicleId = rebuilt.getId();
-		instance.startAbs = anchor + instance.job.startTimeOfDayMs;
-		instance.stepIndex = 1; // the COUPLE step completed with the merge
-		System.out.println("[MMTR-JOB] coupled " + targetJobId + " stock onto " + instance.job.jobId + " -> vehicle " + rebuilt.getId() + " cars=" + merged.size());
+		instance.stepIndex = 1; // the COUPLE step completed with the make-up composition
+		System.out.println("[MMTR-JOB] make-up: coupled " + targetJobId + " stock into " + instance.job.jobId + " spawn template cars=" + instance.spawnCars.size());
 		return instance.stepIndex >= instance.job.steps.size() ? CoupleOutcome.DONE : CoupleOutcome.MERGED;
 	}
 
@@ -301,6 +295,15 @@ public final class MmtrJobScheduler {
 		final ObjectArrayList<MmtrCarSpec> tail = new ObjectArrayList<>(instance.fleetCars.size() - cut - 1);
 		for (int i = 0; i < instance.fleetCars.size(); i++) {
 			(i <= cut ? head : tail).add(instance.fleetCars.get(i));
+		}
+		// Only a yard-final cut is supported: the head is re-created by manual surgery (yard stock) and
+		// cannot run further outbound legs yet (those need an engine-spawned formation, see COUPLE).
+		for (int i = instance.stepIndex + 1; i < instance.job.steps.size(); i++) {
+			final MmtrJobStep later = instance.job.steps.get(i);
+			if (later.type == MmtrJobStep.StepType.MOVE_TO || later.type == MmtrJobStep.StepType.SERVE) {
+				fail(instance, "UNCOUPLE followed by an outbound step is not supported yet (step " + step.stepId + ")");
+				return false;
+			}
 		}
 		final ObjectArrayList<org.mtr.core.data.VehicleCar> headCars = toVehicleCars(head);
 		final ObjectArrayList<org.mtr.core.data.VehicleCar> tailCars = toVehicleCars(tail);
@@ -533,14 +536,15 @@ public final class MmtrJobScheduler {
 		instance.failureReason = reason;
 	}
 
-	/** Place the job's rolling stock template on the siding so the engine spawns a parked consist. */
-	private static boolean placeCars(Simulator simulator, MmtrConsistJob job) {
-		final Siding siding = findSiding(simulator, job.sidingId);
+	/** Place the job's (possibly make-up composed) rolling-stock template so the engine spawns it. */
+	private static boolean placeCars(Simulator simulator, JobInstance instance) {
+		final Siding siding = findSiding(simulator, instance.job.sidingId);
 		if (siding == null) {
 			return false;
 		}
+		final ObjectArrayList<MmtrCarSpec> spawn = instance.spawnCars.isEmpty() ? instance.job.cars : instance.spawnCars;
 		final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = new ObjectArrayList<>();
-		for (final MmtrCarSpec spec : job.cars) {
+		for (final MmtrCarSpec spec : spawn) {
 			cars.add(toVehicleCar(spec));
 		}
 		siding.setVehicleCars(cars);
@@ -583,6 +587,10 @@ public final class MmtrJobScheduler {
 		@Nullable String failureReason;
 		long startAbs;
 		boolean carsPlaced;
+		/** True once the COUPLE make-up has composed the source stock into this job's spawn template. */
+		boolean mergedPlaced;
+		/** Effective spawn car list after a make-up composition (empty = plain job.cars). */
+		final ObjectArrayList<MmtrCarSpec> spawnCars = new ObjectArrayList<>();
 		/** The formation this job currently operates (spec list): spawn stock, merged make-up or post-cut head. */
 		final ObjectArrayList<MmtrCarSpec> fleetCars = new ObjectArrayList<>();
 		/** Whether the consist has departed at least once (distinguishes an initial park from a return). */

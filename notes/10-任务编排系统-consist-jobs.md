@@ -169,3 +169,18 @@
 - 测试：jobReturnsToYardWhenStepTargetsItsOwnSiding（MOVE_TO A -> SERVE A -> 退库，DONE 且最终停回本场）；
   fullMacroCoupleServiceReturnAndUncoupleAtYard（挂车 make-up 3节 -> 跑图 -> 回库 -> UNCOUPLE 切出挂车，
   5 步全 DONE，模板回到 2 节挂车源）。既有 MANUAL/AUTO/make-up/uncouple 全部保持绿；全量 cleanTest 绿。
+## 进度（round16）：编组手术运营路径改用"引擎单次自生" + 文件自加载 e2e（关键修正）
+- 实测发现：手工 rebuildParkedConsist 重建的车（VehicleExtraData.create）其运行 path 退化为仅股道段，
+  启动后只到股道尽头便停（totalDistance≈股道长），无法出正线；引擎自生（Siding 361 路径）的车正常。
+- 修正 COUPLE 语义为"刷车模板组合（spawn-time make-up）"：COUPLE 第一步在本 job 尚未刷车前，把目标
+  作业单车列并入本 job 的 spawnCars，placeCars 一次放置合并模板 → 引擎单次自生合并编组 → 认领后照常
+  AUTO 服务/回库/摘挂。目标车列作业单标记 consumed（不再刷车）；若 COUPLE 时目标车已停场（引擎单停场
+  限制）→ 明确排序错误原因（COUPLE 须早于源车刷车时刻）。
+- UNCOUPLE 限定"车场最终切分"：切分后无后续出库步骤（后续出库需编组再生的引擎路径，尚待接入）；
+  尾部车列写回股道模板留场。
+- 新增 Siding.clearParkedVehicles（清场/日重置）；测试世界目录参数化，连挂/宏/e2e 测试各自独目录+
+  preset 车+清场 → 消除 assumption 跳过（此前大量"假绿"源于共享目录 assumption skip）。
+- 文件自加载 e2e（registryFileDrivesFullMacroEndToEnd）：web 写回的 mmtr-jobs.json → Simulator 构造
+  自动载入并挂调度器 → 整条宏（make-up 3 节 → 跑站 → 回库 → 摘挂 2 节）真实跑完 DONE；另验证
+  ctor 自加载路径。全部 12 个 MmtrJobSchedulerTests 真实执行（含 make-up/final-cut/full-macro/
+  return-yard/file-e2e），全量 cleanTest 绿。
