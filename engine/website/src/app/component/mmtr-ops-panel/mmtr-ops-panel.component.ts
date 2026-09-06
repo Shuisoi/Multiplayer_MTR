@@ -20,6 +20,7 @@ export class MmtrOpsPanelComponent {
 	protected readonly trains = this.mmtrTrainsService.trains;
 	protected readonly sidings = this.mmtrTrainsService.sidings;
 	protected readonly loading = this.mmtrTrainsService.loading;
+	protected readonly dispatchFeedback = this.mmtrTrainsService.dispatchFeedback;
 
 	protected readonly allActive = () => this.trains().filter(train => !train.mission || !["COMPLETE", "FAILED", "CANCELED"].includes(train.mission!.state));
 

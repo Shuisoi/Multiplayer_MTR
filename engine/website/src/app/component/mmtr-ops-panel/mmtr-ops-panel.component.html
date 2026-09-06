@@ -1,4 +1,7 @@
 <div class="mmtr-ops">
+	@if (dispatchFeedback()) {
+		<div class="mmtr-feedback">{{ dispatchFeedback() }}</div>
+	}
 	<div class="mmtr-section-title">列车任务 / Trains & Missions</div>
 	@if (loading()) {
 		<p-progressSpinner styleClass="w-3rem h-3rem"/>

@@ -118,8 +118,8 @@ public final class SystemMapServlet extends ServletBase {
 					parkedCount[0]++;
 				}
 				final com.google.gson.JsonObject train = new com.google.gson.JsonObject();
-				train.addProperty("vehicleId", vehicle.getId());
-				train.addProperty("sidingId", siding.getId());
+				train.addProperty("vehicleId", String.valueOf(vehicle.getId()));
+				train.addProperty("sidingId", String.valueOf(siding.getId()));
 				train.addProperty("sidingName", siding.getName());
 				train.addProperty("depotName", siding.getDepotName());
 				train.addProperty("routeName", vehicle.vehicleExtraData.getThisRouteName());
@@ -143,8 +143,8 @@ public final class SystemMapServlet extends ServletBase {
 					missionJson.addProperty("kind", mission.getKind().name());
 					missionJson.addProperty("state", mission.getState().name());
 					missionJson.addProperty("executor", mission.getExecutor().name());
-					missionJson.addProperty("startSidingId", mission.getStartSidingId());
-					missionJson.addProperty("targetSidingId", mission.getTargetSidingId());
+					missionJson.addProperty("startSidingId", String.valueOf(mission.getStartSidingId()));
+					missionJson.addProperty("targetSidingId", String.valueOf(mission.getTargetSidingId()));
 					missionJson.addProperty("assignedMillis", mission.getAssignedMillis());
 					if (mission.getFailureReason() != null) {
 						missionJson.addProperty("failureReason", mission.getFailureReason());
@@ -154,7 +154,7 @@ public final class SystemMapServlet extends ServletBase {
 				trains.add(train);
 			});
 			final com.google.gson.JsonObject sidingJson = new com.google.gson.JsonObject();
-			sidingJson.addProperty("sidingId", siding.getId());
+			sidingJson.addProperty("sidingId", String.valueOf(siding.getId()));
 			sidingJson.addProperty("sidingName", siding.getName());
 			sidingJson.addProperty("depotName", siding.getDepotName());
 			sidingJson.addProperty("manual", siding.getIsManual());

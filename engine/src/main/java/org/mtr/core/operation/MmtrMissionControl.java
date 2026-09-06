@@ -30,9 +30,11 @@ public final class MmtrMissionControl implements SerializedDataBase {
 
 	@Override
 	public void updateData(ReaderBase readerBase) {
-		vehicleId = readerBase.getLong("vehicleId", 0);
+		// Ids travel as strings on the web wire (64-bit longs exceed JS safe integers); the
+		// in-process op still sends numbers. Accept both.
+		vehicleId = parseId(readerBase, "vehicleId");
 		kind = readerBase.getString("kind", "PASSENGER");
-		targetSidingId = readerBase.getLong("targetSidingId", 0);
+		targetSidingId = parseId(readerBase, "targetSidingId");
 		executor = readerBase.getString("executor", "AUTOPILOT");
 		executorPlayerUuid = readerBase.getString("executorPlayerUuid", "");
 		startNow = readerBase.getBoolean("startNow", true);
@@ -79,11 +81,23 @@ public final class MmtrMissionControl implements SerializedDataBase {
 		return dispatched[0];
 	}
 
+	private static long parseId(ReaderBase readerBase, String key) {
+		final String raw = readerBase.getString(key, "");
+		if (!raw.isEmpty()) {
+			try {
+				return Long.parseLong(raw.trim());
+			} catch (NumberFormatException ignored) {
+				// Fall through to the numeric read below.
+			}
+		}
+		return readerBase.getLong(key, 0);
+	}
+
 	@Override
 	public void serializeData(WriterBase writerBase) {
-		writerBase.writeLong("vehicleId", vehicleId);
+		writerBase.writeString("vehicleId", String.valueOf(vehicleId));
 		writerBase.writeString("kind", kind);
-		writerBase.writeLong("targetSidingId", targetSidingId);
+		writerBase.writeString("targetSidingId", String.valueOf(targetSidingId));
 		writerBase.writeString("executor", executor);
 		writerBase.writeString("executorPlayerUuid", executorPlayerUuid == null ? "" : executorPlayerUuid);
 		writerBase.writeBoolean("startNow", startNow);

@@ -7,15 +7,15 @@ export interface MmtrMissionState {
 	kind: string;
 	state: string;
 	executor: string;
-	startSidingId: number;
-	targetSidingId: number;
+	startSidingId: string;
+	targetSidingId: string;
 	assignedMillis: number;
 	failureReason?: string;
 }
 
 export interface MmtrTrainState {
-	vehicleId: number;
-	sidingId: number;
+	vehicleId: string;
+	sidingId: string;
 	sidingName: string;
 	depotName: string;
 	routeName: string;
@@ -36,7 +36,7 @@ export interface MmtrTrainState {
 export interface MmtrSignalState { id: string; }
 
 export interface MmtrSidingState {
-	sidingId: number;
+	sidingId: string;
 	sidingName: string;
 	depotName: string;
 	manual: boolean;
@@ -55,6 +55,8 @@ export class MmtrTrainsService {
 	public readonly sidings = signal<MmtrSidingState[]>([]);
 	public readonly loading = signal(true);
 	public readonly lastUpdated = signal(0);
+	public readonly dispatchFeedback = signal("");
+	private feedbackTimer = 0;
 
 	private readonly httpClient = inject(HttpClient);
 	private readonly dimensionService = inject(DimensionService);
@@ -95,12 +97,28 @@ export class MmtrTrainsService {
 	 * Dispatch entry: assign a mission to a parked train and start it headlessly (AUTOPILOT).
 	 * Fire-and-forget; the next poll reflects the updated train state.
 	 */
-	public dispatch(vehicleId: number, kind = "MANEUVER") {
+	public dispatch(vehicleId: string, kind = "MANEUVER") {
 		const url = `${document.location.origin}${document.location.pathname}mtr/api/map/mmtr-dispatch?dimension=${this.dimensionService.getDimensionIndex()}`;
 		this.httpClient.post<{ data: { ok: boolean } }>(url, {vehicleId, kind, startNow: true}).subscribe({
-			next: () => this.refresh(),
-			error: error => console.error("mmtr dispatch failed", error),
+			next: response => {
+				if (response.data?.ok) {
+					this.setFeedback("✓ 已派车，列车将自动发车");
+					this.refresh();
+				} else {
+					this.setFeedback("✗ 派车失败：找不到该车或已有活动任务");
+				}
+			},
+			error: error => {
+				console.error("mmtr dispatch failed", error);
+				this.setFeedback("✗ 派车请求失败：" + (error.status ?? "网络错误"));
+			},
 		});
+	}
+
+	private setFeedback(text: string) {
+		this.dispatchFeedback.set(text);
+		clearTimeout(this.feedbackTimer);
+		this.feedbackTimer = setTimeout(() => this.dispatchFeedback.set(""), 4000) as unknown as number;
 	}
 
 	/** Force an immediate feed refresh (after a dispatch or mission change). */

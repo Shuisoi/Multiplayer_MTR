@@ -723,7 +723,7 @@ interface ClientGroupOnRoute {
 }
 
 interface TrainMarker {
-	readonly vehicleId: number;
+	readonly vehicleId: string;
 	readonly label: string;
 	readonly missionState: string;
 	readonly x: number;

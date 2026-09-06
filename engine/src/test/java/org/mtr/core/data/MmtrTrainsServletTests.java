@@ -97,7 +97,7 @@ public final class MmtrTrainsServletTests {
 		simulators.add(sim);
 		final SystemMapServlet servlet = new SystemMapServlet(new ObjectImmutableList<>(simulators));
 		final JsonObject dispatchPayload = new JsonObject();
-		dispatchPayload.addProperty("vehicleId", parked[0].getId());
+		dispatchPayload.addProperty("vehicleId", String.valueOf(parked[0].getId()));
 		dispatchPayload.addProperty("kind", "FREIGHT");
 		dispatchPayload.addProperty("targetSidingId", platformA.getId());
 		dispatchPayload.addProperty("startNow", false);
@@ -118,7 +118,7 @@ public final class MmtrTrainsServletTests {
 		assertTrue(root.has("signals") && root.has("points"), "feed must reserve signal/point fields for the infrastructure layer");
 		assertTrue(root.getAsJsonArray("signals").isEmpty() && root.getAsJsonArray("points").isEmpty(), "reserved layers start empty");
 		final JsonObject train = root.getAsJsonArray("trains").get(0).getAsJsonObject();
-		assertEquals(parked[0].getId(), train.get("vehicleId").getAsLong(), "feed train must match the spawned vehicle");
+		assertEquals(parked[0].getId(), Long.parseLong(train.get("vehicleId").getAsString()), "feed train must match the spawned vehicle");
 		assertTrue(train.has("sidingName") && train.has("depotName"), "train must expose siding/depot names");
 		assertTrue(train.has("speedKmh") && train.has("railProgressM") && train.has("onRoute"), "train must expose motion fields");
 		assertTrue(train.has("mission"), "assigned mission must be visible in the feed");
@@ -126,7 +126,7 @@ public final class MmtrTrainsServletTests {
 		assertEquals("FREIGHT", missionJson.get("kind").getAsString());
 		assertEquals("ASSIGNED", missionJson.get("state").getAsString());
 		assertEquals("AUTOPILOT", missionJson.get("executor").getAsString());
-		assertEquals(platformA.getId(), missionJson.get("targetSidingId").getAsLong());
+		assertEquals(platformA.getId(), Long.parseLong(missionJson.get("targetSidingId").getAsString()));
 
 		final JsonObject sidingOut = root.getAsJsonArray("sidings").get(0).getAsJsonObject();
 		assertEquals(siding.getName(), sidingOut.get("sidingName").getAsString());
