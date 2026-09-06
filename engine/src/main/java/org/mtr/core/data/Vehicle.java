@@ -17,6 +17,7 @@ import org.mtr.core.mmtr.DriveController;
 import org.mtr.core.mmtr.DriveOutput;
 import org.mtr.core.mmtr.MmtrComposition;
 import org.mtr.core.mmtr.MmtrDriveAccess;
+import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.MmtrProtection;
 import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.path.SidingPathFinder;
@@ -89,6 +90,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * synced {@code mmtrProtection} flag and do not count down locally.
 	 */
 	private long mmtrProtectionLockRemaining;
+	/**
+	 * MMTR: the task/mission currently assigned to this train (consist). Owned by the train —
+	 * players/AI only execute or read it. Null when the consist is idle/unscheduled.
+	 */
+	private @Nullable MmtrMission mmtrMission;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -191,6 +197,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		atoOverride = false;
 		manualCooldown = Math.max(0, manualToAutomaticMillis);
+	}
+
+	/**
+	 * MMTR: assign a task/mission to this train. Only one mission is active at a time;
+	 * assigning over an existing active mission fails (callers should cancel first).
+	 */
+	public boolean setMmtrMission(@Nullable MmtrMission mission) {
+		if (mission == null) {
+			mmtrMission = null;
+			return true;
+		}
+		if (mmtrMission != null && !mmtrMission.isTerminal()) {
+			return false;
+		}
+		mmtrMission = mission;
+		return true;
+	}
+
+	public @Nullable MmtrMission getMmtrMission() {
+		return mmtrMission;
 	}
 
 	public boolean getIsOnRoute() {
