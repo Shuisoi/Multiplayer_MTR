@@ -180,6 +180,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return !atoOverride && manualCooldown > 0;
 	}
 
+	/**
+	 * Server-side autopilot / headless seam: engages the manual control path without a riding
+	 * player, so a mission's AUTOPILOT executor can drive the consist directly (manual sidings).
+	 * No-op on clientside or when the vehicle does not allow manual driving.
+	 */
+	public void engageManualAutopilot(long manualToAutomaticMillis) {
+		if (isClientside || !vehicleExtraData.getIsManualAllowed()) {
+			return;
+		}
+		atoOverride = false;
+		manualCooldown = Math.max(0, manualToAutomaticMillis);
+	}
+
 	public boolean getIsOnRoute() {
 		return railProgress > vehicleExtraData.getDefaultPosition();
 	}
