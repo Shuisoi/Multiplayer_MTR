@@ -64,6 +64,66 @@ public final class MmtrJobScheduler {
 	}
 
 	/** Current car count of the job's consist (spec list), falling back to the authored job cars. */
+	/** Operator control: pause freezes the job; resume continues it (human-in-the-loop). */
+	public boolean pause(String jobId) {
+		final JobInstance instance = ensureInstance(jobId);
+		if (instance == null) {
+			return false;
+		}
+		instance.paused = true;
+		return true;
+	}
+
+	public boolean resume(String jobId) {
+		final JobInstance instance = ensureInstance(jobId);
+		if (instance == null) {
+			return false;
+		}
+		instance.paused = false;
+		return true;
+	}
+
+	/** Human takeover: the AI stops auto-starting outbound legs until released back to autopilot. */
+	public boolean humanTakeover(String jobId) {
+		final JobInstance instance = ensureInstance(jobId);
+		if (instance == null) {
+			return false;
+		}
+		instance.humanHold = true;
+		return true;
+	}
+
+	public boolean isPaused(String jobId) {
+		final JobInstance instance = ensureInstance(jobId);
+		return instance != null && instance.paused;
+	}
+
+	public boolean isHumanHeld(String jobId) {
+		final JobInstance instance = ensureInstance(jobId);
+		return instance != null && instance.humanHold;
+	}
+
+	public boolean releaseToAutopilot(String jobId) {
+		final JobInstance instance = ensureInstance(jobId);
+		if (instance == null) {
+			return false;
+		}
+		instance.humanHold = false;
+		return true;
+	}
+
+	@Nullable
+	private JobInstance ensureInstance(String jobId) {
+		boolean known = false;
+		for (final MmtrConsistJob job : jobs) {
+			if (job.jobId.equals(jobId)) {
+				known = true;
+				break;
+			}
+		}
+		return known ? instances.computeIfAbsent(jobId, key -> new JobInstance(jobOf(jobId))) : null;
+	}
+
 	public int carsOf(String jobId) {
 		final JobInstance instance = instances.get(jobId);
 		if (instance != null && !instance.fleetCars.isEmpty()) {
@@ -85,6 +145,9 @@ public final class MmtrJobScheduler {
 		final long dayTime = (currentMillis - anchor) % Utilities.MILLIS_PER_DAY;
 		for (final MmtrConsistJob job : jobs) {
 			final JobInstance instance = instances.computeIfAbsent(job.jobId, key -> new JobInstance(job));
+			if (instance.paused) {
+				continue; // operator pause: freeze advancement (no spawning, no deadlines)
+			}
 			switch (instance.state) {
 				case PENDING -> pending(instance, currentMillis, dayTime, simulator);
 				case RUNNING -> running(instance, currentMillis, dayTime, simulator);
@@ -505,6 +568,9 @@ public final class MmtrJobScheduler {
 	 * state to RUNNING; leaves it FAILED when the mode-specific start failed.
 	 */
 	private boolean startOutbound(JobInstance instance, Simulator simulator) {
+		if (instance.humanHold) {
+			return true; // human is in the loop: stay parked, do not auto-start
+		}
 		instance.started = true;
 		instance.awaitingStart = false;
 		if (instance.mode == Mode.MANUAL) {
@@ -685,6 +751,8 @@ public final class MmtrJobScheduler {
 		boolean started;
 		/** True when a parked consist may need a (re)departure (after a return or a yard op). */
 		boolean awaitingStart = true;
+		boolean paused;
+		boolean humanHold;
 		long relocatingTo;
 		long curSidingId;
 		long relocateWaitStartMillis;

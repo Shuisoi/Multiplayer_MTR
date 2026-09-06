@@ -846,4 +846,44 @@ public final class MmtrJobSchedulerTests {
 		assertTrue(snap[0].cars >= 1, "formation size reported");
 	}
 
+	/** Operator pause freezes a job (no spawn, no deadlines) until resumed; resume lets it run. */
+	@Test
+	public void operatorPauseFreezesJobUntilResumed() {
+		final long[] ids = buildAutoWorldIn("mmtr-pause", true);
+		final Simulator sim = AUTO_SIM[0];
+		sim.mmtrJobsMode = true;
+		sim.sidings.forEach(s -> { if (s.getId() == ids[0]) { s.clearParkedVehicles(); } });
+
+		final MmtrConsistJob job = new MmtrConsistJob();
+		job.jobId = "J-PAUSE";
+		job.depotId = 1;
+		job.sidingId = ids[0];
+		job.startTimeOfDayMs = 1_000;
+		job.repeatDaily = false;
+		final MmtrCarSpec loco = new MmtrCarSpec();
+		loco.vehicleId = "loco"; loco.length = 10; loco.width = 2; loco.capacity = 100;
+		loco.bogie1Position = 0; loco.bogie2Position = 5; loco.couplingPadding1 = 0.5; loco.couplingPadding2 = 0.5;
+		job.cars.add(loco);
+		final MmtrJobStep move = new MmtrJobStep();
+		move.stepId = "move"; move.type = MmtrJobStep.StepType.MOVE_TO; move.targetId = ids[1]; move.dueTimeOfDayMs = 90_000;
+		job.steps.add(move);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(job);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+		assertTrue(scheduler.pause("J-PAUSE"), "pause accepted");
+		for (int second = 0; second < 5; second++) { sim.step(1000); }
+		assertEquals(MmtrJobScheduler.JobState.PENDING, scheduler.stateOf("J-PAUSE"), "paused job must not start or fail while frozen");
+		assertNull(scheduler.failureOf("J-PAUSE"));
+		assertTrue(scheduler.resume("J-PAUSE"), "resume accepted");
+		boolean sawRun = false;
+		for (int second = 0; second < 500 && scheduler.stateOf("J-PAUSE") != MmtrJobScheduler.JobState.DONE && scheduler.stateOf("J-PAUSE") != MmtrJobScheduler.JobState.FAILED; second++) {
+			sim.step(1000);
+			if (scheduler.stateOf("J-PAUSE") == MmtrJobScheduler.JobState.RUNNING) { sawRun = true; }
+		}
+		assertTrue(sawRun, "resumed job must run");
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("J-PAUSE"), "fail=" + scheduler.failureOf("J-PAUSE"));
+	}
+
 }

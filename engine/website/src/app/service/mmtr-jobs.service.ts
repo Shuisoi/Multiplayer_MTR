@@ -50,6 +50,8 @@ export interface MmtrJobStateSummary {
 	state: string;
 	step: number;
 	totalSteps: number;
+	paused?: boolean;
+	human?: boolean;
 	/** Current real car count of the consist (make-up grows it, uncouple shrinks it). */
 	cars?: number;
 	failure?: string;
@@ -176,6 +178,12 @@ export class MmtrJobsService {
 	public upsert(job: MmtrConsistJob) {
 		const url = this.mapUrl("mmtr-jobs-upsert");
 		return this.httpClient.post<{ data: { ok: boolean } }>(url, job);
+	}
+
+	/** Operator control: pause/resume the job, or human takeover / release back to autopilot. */
+	public jobOp(jobId: string, op: "pause" | "resume" | "human" | "release") {
+		const url = this.mapUrl("mmtr-job-op");
+		return this.httpClient.post<{ data: { ok: boolean } }>(url, {jobId, op});
 	}
 
 	/** Remove a job by id. Returns true when the engine removed it. */

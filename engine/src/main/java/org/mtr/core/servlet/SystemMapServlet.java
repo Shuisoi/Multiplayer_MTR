@@ -59,6 +59,26 @@ public final class SystemMapServlet extends ServletBase {
 				}
 				case "mmtr-jobs" -> Utilities.getJsonObjectFromData(simulator.getMmtrJobRegistry());
 				case "mmtr-job-references" -> getMmtrJobReferences(simulator);
+				case "mmtr-job-op" -> {
+					final String jobId = jsonReader.getString("jobId", "");
+					final String op = jsonReader.getString("op", "");
+					final org.mtr.core.mmtr.job.MmtrJobScheduler scheduler = simulator.mmtrJobScheduler;
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					final boolean ok;
+					if (scheduler == null) {
+						ok = false;
+					} else {
+						ok = switch (op) {
+							case "pause" -> scheduler.pause(jobId);
+							case "resume" -> scheduler.resume(jobId);
+							case "human" -> scheduler.humanTakeover(jobId);
+							case "release" -> scheduler.releaseToAutopilot(jobId);
+							default -> false;
+						};
+					}
+					result.addProperty("ok", ok);
+					yield result;
+				}
 				case "mmtr-motion" -> getMmtrMotion(simulator);
 				case "mmtr-jobs-upsert" -> {
 					final org.mtr.core.mmtr.job.MmtrConsistJob job = new org.mtr.core.mmtr.job.MmtrConsistJob(jsonReader);
@@ -85,6 +105,8 @@ public final class SystemMapServlet extends ServletBase {
 						out.addProperty("step", scheduler == null ? -1 : scheduler.stepIndexOf(job.jobId));
 						out.addProperty("totalSteps", job.steps.size());
 						out.addProperty("cars", scheduler == null ? job.cars.size() : scheduler.carsOf(job.jobId));
+						out.addProperty("paused", scheduler != null && scheduler.isPaused(job.jobId));
+						out.addProperty("human", scheduler != null && scheduler.isHumanHeld(job.jobId));
 						final String failure = scheduler == null ? null : scheduler.failureOf(job.jobId);
 						if (failure != null) {
 							out.addProperty("failure", failure);

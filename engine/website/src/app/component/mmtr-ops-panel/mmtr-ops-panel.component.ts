@@ -84,6 +84,20 @@ export class MmtrOpsPanelComponent {
 		this.editingJob.set(job);
 	}
 
+	protected jobOp(job: MmtrConsistJob, op: "pause" | "resume" | "human" | "release") {
+		this.mmtrJobsService.jobOp(job.jobId, op).subscribe({
+			next: response => {
+				const label = op === "pause" ? "已暂停" : op === "resume" ? "已继续" : op === "human" ? "已切人工（AI 让位）" : "已交还 AI";
+				this.mmtrJobsService.setFeedback(response.data?.ok ? `${label}：${job.jobId}` : `操作失败：${job.jobId}`);
+				this.mmtrJobsService.refresh();
+			},
+			error: error => {
+				console.error("mmtr job op failed", error);
+				this.mmtrJobsService.setFeedback("操作请求失败：" + (error.status ?? "网络错误"));
+			},
+		});
+	}
+
 	protected closeJobEditor() {
 		this.editingJob.set(undefined);
 	}

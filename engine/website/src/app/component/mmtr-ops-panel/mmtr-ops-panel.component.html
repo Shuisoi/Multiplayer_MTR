@@ -57,6 +57,8 @@
 					</div>
 					<div class="mmtr-actions">
 						<button type="button" class="mmtr-dispatch-btn" (click)="openEditJob(job)">编辑</button>
+						<button type="button" class="mmtr-dispatch-btn" (click)="jobOp(job, stateOf(job.jobId)?.paused ? 'resume' : 'pause')">{{ stateOf(job.jobId)?.paused ? "继续" : "暂停" }}</button>
+						<button type="button" class="mmtr-dispatch-btn" (click)="jobOp(job, stateOf(job.jobId)?.human ? 'release' : 'human')">{{ stateOf(job.jobId)?.human ? "交还AI" : "人工接管" }}</button>
 					</div>
 					<div class="mmtr-badges">
 						<span class="mmtr-badge" [class]="jobStateClass(stateOf(job.jobId)?.state)">{{ jobStatusText(stateOf(job.jobId)?.state) || "—" }}</span>
