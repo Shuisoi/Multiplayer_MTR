@@ -568,8 +568,11 @@ public final class MmtrJobScheduler {
 	 * state to RUNNING; leaves it FAILED when the mode-specific start failed.
 	 */
 	private boolean startOutbound(JobInstance instance, Simulator simulator) {
-		if (instance.humanHold) {
-			return true; // human is in the loop: stay parked, do not auto-start
+		final Vehicle current = findVehicle(simulator, instance.vehicleId);
+		if (instance.humanHold || current != null && current.isCurrentlyManual()) {
+			// A human is at the controls (operator hold or an in-cab driver): the AI yields - it
+			// never auto-starts, and step completion keeps following position/door events.
+			return true;
 		}
 		instance.started = true;
 		instance.awaitingStart = false;
