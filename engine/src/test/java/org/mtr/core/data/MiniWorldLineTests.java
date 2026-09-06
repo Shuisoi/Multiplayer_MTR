@@ -3,6 +3,8 @@ package org.mtr.core.data;
 import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
+import org.mtr.core.data.PathData;
+import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Angle;
@@ -89,12 +91,27 @@ public final class MiniWorldLineTests {
 		assertTrue(sim.platforms.contains(platformA) && sim.platforms.contains(platformB), "platforms retained");
 		assertFalse(route.getRoutePlatforms().isEmpty(), "route keeps platforms");
 
+		// Connectivity diagnostics at each shared node.
+		for (final Position pos : new Position[]{new Position(0,0,0), new Position(10,0,0), new Position(30,0,0), new Position(60,0,0), new Position(90,0,0)}) {
+			final var neighbors = sim.positionsToRail.get(pos);
+			System.out.println("[MINI] node " + pos + " rails=" + (neighbors == null ? -1 : neighbors.size()));
+		}
+		System.out.println("[MINI] platformA id=" + platformA.getId() + " B id=" + platformB.getId() + " siding id=" + siding.getId());
+
+		// Isolate the A->B main-route finder first.
+		final ObjectArrayList<SidingPathFinder<Station, Platform, Station, Platform>> finders = new ObjectArrayList<>();
+		finders.add(new SidingPathFinder<>(sim, platformA, platformB, 0));
+		final ObjectArrayList<PathData> mainPath = new ObjectArrayList<>();
+		SidingPathFinder.findPathTick(mainPath, finders, 256,
+			() -> System.out.println("[MINI] main A->B OK pathNodes=" + mainPath.size()),
+			(a, b) -> System.out.println("[MINI] main A->B FAIL"));
+		System.out.println("[MINI] mainPathEntries=" + mainPath.size());
+
 		Depot.generateDepots(sim, ObjectArrayList.wrap(new Depot[]{depot}));
 		for (int i = 0; i < 200; i++) {
 			sim.tick();
 		}
 		System.out.println("[MINI] depot status=" + depot.getLastGeneratedStatus());
 		System.out.println("[MINI] depot saved sidings=" + depot.savedRails.size());
-		System.out.println("[MINI] route platforms=" + route.getRoutePlatforms().size());
 	}
 }
