@@ -68,3 +68,10 @@
 - MmtrJobSchedulerTests.jobSpawnsItsOwnConsistFromJobCarsThenRunsService（auto 世界无预设车，job.cars=1 节，
   MOVE_TO A -> MOVE_TO B）DONE step=2，证明“某时某股道刷出某车”真正可用。
 - engine 全量 194 tests / 0 fail / 0 error。
+
+## 进度（round4）：jobs 配置存盘 + Simulator 存储 + CRUD 端点
+- MmtrJobRegistry：{jobs:[...]} 存 <root>/<dimension>/mmtr-jobs.json（64 位 id 字符串化）；put/remove/fromFile/save（自动建目录）。
+- Simulator：构造时若 mmtr-jobs.json 存在则加载并挂 MmtrJobScheduler；upsertMmtrJob/deleteMmtrJob 存盘并重建调度器。
+- SystemMapServlet CRUD：GET mmtr-jobs（列表）、POST mmtr-jobs-upsert（单条作业单）、POST mmtr-jobs-delete（{jobId}）。
+- MmtrJobRegistryTests：文件 round-trip（含 2^53+ id）+ 端点增删改查。
+- engine 全量 196 tests / 0 fail / 0 error。

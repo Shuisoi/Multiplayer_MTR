@@ -57,6 +57,20 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("ok", ok);
 					yield result;
 				}
+				case "mmtr-jobs" -> Utilities.getJsonObjectFromData(simulator.getMmtrJobRegistry());
+				case "mmtr-jobs-upsert" -> {
+					final org.mtr.core.mmtr.job.MmtrConsistJob job = new org.mtr.core.mmtr.job.MmtrConsistJob(jsonReader);
+					simulator.upsertMmtrJob(job);
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", true);
+					yield result;
+				}
+				case "mmtr-jobs-delete" -> {
+					final String jobId = jsonReader.getString("jobId", "");
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", simulator.deleteMmtrJob(jobId));
+					yield result;
+				}
 				default -> null;
 			});
 		}

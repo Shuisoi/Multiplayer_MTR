@@ -74,6 +74,8 @@ public class Simulator extends Data implements Utilities {
 	 * ticks each simulation tick after vehicle simulation.
 	 */
 	public org.mtr.core.mmtr.job.MmtrJobScheduler mmtrJobScheduler;
+	public org.mtr.core.mmtr.job.MmtrJobRegistry mmtrJobRegistry = new org.mtr.core.mmtr.job.MmtrJobRegistry();
+	private java.nio.file.Path mmtrJobsPath;
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -193,6 +195,20 @@ public class Simulator extends Data implements Utilities {
 			log.warn("Failed to load MMTR consist-type policy for {}: {}", dimension, e.getMessage());
 		}
 
+		// MMTR: web-authored consist jobs (replaces the depot timetable for mmtr-managed stock).
+		mmtrJobsPath = savePath.resolve("mmtr-jobs.json");
+		try {
+			if (java.nio.file.Files.exists(mmtrJobsPath)) {
+				mmtrJobRegistry = org.mtr.core.mmtr.job.MmtrJobRegistry.fromFile(mmtrJobsPath);
+				if (!mmtrJobRegistry.jobs.isEmpty()) {
+					mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
+					log.info("MMTR: loaded {} consist job(s) for {}", mmtrJobRegistry.jobs.size(), dimension);
+				}
+			}
+		} catch (Exception e) {
+			log.warn("Failed to load MMTR consist jobs for {}: {}", dimension, e.getMessage());
+		}
+
 		// Initialize cache
 		sync();
 		depots.forEach(Depot::init);
@@ -251,6 +267,37 @@ public class Simulator extends Data implements Utilities {
 	/**
 	 * Schedule a full save on the next tick. Returns immediately.
 	 */
+	/**
+	 * MMTR: upsert a consist job from the web editor; persists it and rebuilds the scheduler.
+	 */
+	public void upsertMmtrJob(org.mtr.core.mmtr.job.MmtrConsistJob job) {
+		mmtrJobRegistry.put(job);
+		persistMmtrJobs();
+	}
+
+	/**
+	 * MMTR: delete a consist job by id; persists and rebuilds the scheduler.
+	 * @return whether a job was removed
+	 */
+	public boolean deleteMmtrJob(String jobId) {
+		final boolean removed = mmtrJobRegistry.remove(jobId);
+		if (removed) {
+			persistMmtrJobs();
+		}
+		return removed;
+	}
+
+	public org.mtr.core.mmtr.job.MmtrJobRegistry getMmtrJobRegistry() {
+		return mmtrJobRegistry;
+	}
+
+	private void persistMmtrJobs() {
+		if (mmtrJobsPath != null) {
+			mmtrJobRegistry.save(mmtrJobsPath);
+		}
+		mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
+	}
+
 	public void save() {
 		autoSave = true;
 	}
