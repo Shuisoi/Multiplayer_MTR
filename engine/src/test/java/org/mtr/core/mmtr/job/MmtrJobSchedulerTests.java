@@ -163,4 +163,138 @@ public final class MmtrJobSchedulerTests {
 		assertEquals(MmtrJobScheduler.JobState.FAILED, scheduler.stateOf("J-single"));
 		assertTrue(scheduler.failureOf("J-single").contains("deadline"), scheduler.failureOf("J-single"));
 	}
+
+	/** Auto siding fixture: depot path generated, one parked auto vehicle (ATO-capable). */
+	private static long[] buildAutoWorld() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-mini-job-auto"), false);
+		final ObjectArrayList<String> noStyles = new ObjectArrayList<>();
+		final Position p0 = new Position(0, 0, 0);
+		final Position junction = new Position(10, 0, 0);
+		final Position leadEnd = new Position(30, 0, 0);
+		final Position platformA1 = new Position(50, 0, 0);
+		final Position platformB1 = new Position(90, 0, 0);
+		final Position end = new Position(120, 0, 0);
+
+		sim.rails.add(Rail.newSidingRail(p0, Angle.fromAngle(0), junction, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, TransportMode.TRAIN));
+		sim.rails.add(Rail.newRail(junction, Angle.fromAngle(0), leadEnd, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, 80, 80, false, false, true, false, true, TransportMode.TRAIN));
+		sim.rails.add(Rail.newPlatformRail(leadEnd, Angle.fromAngle(0), platformA1, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, TransportMode.TRAIN));
+		sim.rails.add(Rail.newRail(platformA1, Angle.fromAngle(0), platformB1, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, 80, 80, false, false, true, false, true, TransportMode.TRAIN));
+		sim.rails.add(Rail.newPlatformRail(platformB1, Angle.fromAngle(0), end, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, TransportMode.TRAIN));
+
+		final Siding siding = new Siding(p0, junction, 10, TransportMode.TRAIN, sim);
+		siding.setMaxVehicles(1); // auto siding, no frequency departures
+		final Platform platformA = new Platform(leadEnd, platformA1, TransportMode.TRAIN, sim);
+		final Platform platformB = new Platform(platformB1, end, TransportMode.TRAIN, sim);
+		final Station stationA = new Station(sim);
+		stationA.setName("A");
+		stationA.setCorners(new Position(20, -50, -50), new Position(60, 50, 50));
+		final Station stationB = new Station(sim);
+		stationB.setName("B");
+		stationB.setCorners(new Position(80, -50, -50), new Position(130, 50, 50));
+		final Depot depot = new Depot(TransportMode.TRAIN, sim);
+		depot.setName("Yard");
+		depot.setCorners(new Position(-5, -50, -50), new Position(15, 50, 50));
+		final Route route = new Route(TransportMode.TRAIN, sim);
+		route.setName("AB");
+		route.getRoutePlatforms().add(new RoutePlatformData(platformA.getId()));
+		route.getRoutePlatforms().add(new RoutePlatformData(platformB.getId()));
+		sim.sidings.add(siding);
+		sim.platforms.add(platformA);
+		sim.platforms.add(platformB);
+		sim.stations.add(stationA);
+		sim.stations.add(stationB);
+		sim.depots.add(depot);
+		sim.routes.add(route);
+		sim.sync();
+
+		final JsonObject depotJson = Utilities.getJsonObjectFromData(depot);
+		final com.google.gson.JsonArray routeIds = new com.google.gson.JsonArray();
+		routeIds.add(route.getId());
+		depotJson.add("routeIds", routeIds);
+		depot.updateData(new JsonReader(depotJson));
+		sim.sync();
+
+		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+		cars.add(new VehicleCar("loco", 10, 2, 100, 0, 5, 0.5, 0.5));
+		siding.setVehicleCars(cars);
+		Depot.generateDepots(sim, ObjectArrayList.wrap(new Depot[]{depot}));
+		for (int i = 0; i < 400; i++) {
+			sim.tick();
+		}
+		assertEquals("SUCCESSFUL", depot.getLastGeneratedStatus().name());
+		final boolean[] parked = {false};
+		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (!v.getIsOnRoute()) { parked[0] = true; } }));
+		assertTrue(parked[0], "auto siding must hold a parked vehicle after generation");
+		// keep simulator reachable for the stepping loop via a static holder
+		AUTO_SIM[0] = sim;
+		return new long[]{siding.getId(), platformA.getId(), platformB.getId()};
+	}
+
+	private static final Simulator[] AUTO_SIM = {null};
+
+	@Test
+	public void autoServiceRunsPlatformStepsWithDeadlines() {
+		final long[] ids = buildAutoWorld();
+		final Simulator sim = AUTO_SIM[0];
+
+		final MmtrConsistJob job = new MmtrConsistJob();
+		job.jobId = "J-auto";
+		job.depotId = 1;
+		job.sidingId = ids[0];
+		job.startTimeOfDayMs = 2_000;
+		job.repeatDaily = false;
+
+		final MmtrJobStep moveA = new MmtrJobStep();
+		moveA.stepId = "moveA";
+		moveA.type = MmtrJobStep.StepType.MOVE_TO;
+		moveA.targetId = ids[1];
+		moveA.dueTimeOfDayMs = 60_000;
+		job.steps.add(moveA);
+
+		final MmtrJobStep serveA = new MmtrJobStep();
+		serveA.stepId = "serveA";
+		serveA.type = MmtrJobStep.StepType.SERVE;
+		serveA.targetId = ids[1];
+		serveA.dueTimeOfDayMs = 90_000;
+		job.steps.add(serveA);
+
+		final MmtrJobStep moveB = new MmtrJobStep();
+		moveB.stepId = "moveB";
+		moveB.type = MmtrJobStep.StepType.MOVE_TO;
+		moveB.targetId = ids[2];
+		moveB.dueTimeOfDayMs = 180_000;
+		job.steps.add(moveB);
+
+		final MmtrConsistJob jobAuto = new MmtrConsistJob();
+		// serialized copy not needed; reuse fields directly
+		jobAuto.jobId = job.jobId;
+		jobAuto.depotId = job.depotId;
+		jobAuto.sidingId = job.sidingId;
+		jobAuto.startTimeOfDayMs = job.startTimeOfDayMs;
+		jobAuto.repeatDaily = job.repeatDaily;
+		jobAuto.steps.addAll(job.steps);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(jobAuto);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		boolean seenRun = false;
+		for (int second = 0; second < 400; second++) {
+			sim.step(1000);
+			final MmtrJobScheduler.JobState st = scheduler.stateOf("J-auto");
+			if (st == MmtrJobScheduler.JobState.RUNNING) {
+				seenRun = true;
+			}
+			if (second % 10 == 0 || st == MmtrJobScheduler.JobState.DONE || st == MmtrJobScheduler.JobState.FAILED) {
+				System.out.println("[JOBAUTO] t=" + second + " state=" + st + " step=" + scheduler.stepIndexOf("J-auto") + " fail=" + scheduler.failureOf("J-auto"));
+			}
+			if (st == MmtrJobScheduler.JobState.DONE || st == MmtrJobScheduler.JobState.FAILED) {
+				break;
+			}
+		}
+		assertTrue(seenRun, "auto service must start running");
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("J-auto"), "failure=" + scheduler.failureOf("J-auto"));
+		assertEquals(3, scheduler.stepIndexOf("J-auto"));
+	}
 }

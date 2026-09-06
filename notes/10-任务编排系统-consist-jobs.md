@@ -51,3 +51,13 @@
 - 说明：round1 步骤语义= MOVE_TO 到路径终点；SERVE/逐站停/COUPLE/UNCOUPLE 与平台级 ATO 停站
   由后续执行器轮次接入；刷车(编组由 job.cars 生成) 尚未做（当前用世界已有停场车）。
 - engine 全量：192 tests / 0 fail / 0 error。
+
+## 进度（round2）：执行器 AUTO 服务模式（真实逐站停靠/乘降）
+- 机理：车门/停站乘降只在引擎 AUTO 分支；MmtrJobScheduler 新增 AUTO 模式：刷车时刻到 ->
+  siding.startGeneratingDepartures + addDeparture(绝对时刻) 建立合法 departure 簿记 -> vehicle.startUp 显式发车
+  -> 引擎 ATO 沿生成交路逐站停靠（自动开关门/驻留），调度器按站台访问推进步骤：
+  MOVE_TO(target)=该站停稳；SERVE(target)=该站关门离站；超时/车消失/coupling未接 => FAILED。
+- MmtrJobSchedulerTests.autoServiceRunsPlatformStepsWithDeadlines（合成 auto 世界，确定性 step）：
+  MOVE_TO A -> SERVE A -> MOVE_TO B 全链 DONE(step=3, t≈28)，engine ATO 真实停靠两站。
+- MANUAL 模式（round1 终点跑法）与 MANUAL 测试保持绿。
+- engine 全量 193 tests / 0 fail / 0 error。
