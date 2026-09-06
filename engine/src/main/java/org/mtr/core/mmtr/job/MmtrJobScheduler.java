@@ -124,6 +124,55 @@ public final class MmtrJobScheduler {
 		return known ? instances.computeIfAbsent(jobId, key -> new JobInstance(jobOf(jobId))) : null;
 	}
 
+	/** Mark a siding touched by this instance so a loop reset can fully clean it. */
+	private static void markVisited(JobInstance instance, long sidingId) {
+		if (!instance.visitedSidings.contains(sidingId)) {
+			instance.visitedSidings.add(sidingId);
+		}
+	}
+
+	/** Loop automation: after DONE/FAILED, wait one period, fully clean every touched siding, then restart. */
+	private void loopAdvance(JobInstance instance, long currentMillis, Simulator simulator) {
+		final long period = instance.job.loopEveryMs > 0 ? Math.max(1_000, instance.job.loopEveryMs) : 60_000;
+		if (instance.nextCycleAtMs == 0) {
+			instance.nextCycleAtMs = currentMillis + period;
+			return;
+		}
+		if (currentMillis < instance.nextCycleAtMs) {
+			return;
+		}
+		markVisited(instance, instance.job.sidingId);
+		for (final Long sidingId : instance.visitedSidings) {
+			final Siding siding = findSiding(simulator, sidingId);
+			if (siding != null) {
+				siding.clearParkedVehicles();
+				siding.setVehicleCars(new ObjectArrayList<>());
+			}
+		}
+		instance.cyclesDone++;
+		instance.state = JobState.PENDING;
+		instance.stepIndex = 0;
+		instance.vehicleId = 0;
+		instance.curSidingId = 0;
+		instance.relocatingTo = 0;
+		instance.relocateWaitStartMillis = 0;
+		instance.carsPlaced = false;
+		instance.mergedPlaced = false;
+		instance.consumed = false;
+		instance.started = false;
+		instance.awaitingStart = true;
+		instance.spawnCars.clear();
+		instance.fleetCars.clear();
+		instance.nextCycleAtMs = 0;
+		instance.lastLoopResetAtMillis = currentMillis;
+		System.out.println("[MMTR-JOB] loop " + instance.job.jobId + " cycle " + instance.cyclesDone + " restarted");
+	}
+
+	public int cyclesOf(String jobId) {
+		final JobInstance instance = instances.get(jobId);
+		return instance == null ? 0 : instance.cyclesDone;
+	}
+
 	public int carsOf(String jobId) {
 		final JobInstance instance = instances.get(jobId);
 		if (instance != null && !instance.fleetCars.isEmpty()) {
@@ -152,6 +201,9 @@ public final class MmtrJobScheduler {
 				case PENDING -> pending(instance, currentMillis, dayTime, simulator);
 				case RUNNING -> running(instance, currentMillis, dayTime, simulator);
 				default -> {
+					if (instance.job.loop && !instance.paused && (instance.state == JobState.DONE || instance.state == JobState.FAILED)) {
+						loopAdvance(instance, currentMillis, simulator);
+					}
 				}
 			}
 		}
@@ -204,12 +256,16 @@ public final class MmtrJobScheduler {
 				final int placedCars = instance.spawnCars.isEmpty() ? instance.job.cars.size() : instance.spawnCars.size();
 				System.out.println("[MMTR-JOB] placed " + placedCars + " car(s) from job " + instance.job.jobId);
 			}
-			if (dayTime > instance.job.startTimeOfDayMs + SPAWN_GRACE_MILLIS) {
+			final boolean graceExpired = instance.lastLoopResetAtMillis > 0
+				? currentMillis - instance.lastLoopResetAtMillis > SPAWN_GRACE_MILLIS
+				: dayTime > instance.job.startTimeOfDayMs + SPAWN_GRACE_MILLIS;
+			if (graceExpired) {
 				fail(instance, "stock never spawned on siding");
 			}
 			return;
 		}
 		instance.vehicleId = vehicle.getId();
+		markVisited(instance, curSiding(instance));
 		instance.startAbs = anchor + instance.job.startTimeOfDayMs;
 		instance.mode = vehicle.vehicleExtraData.getIsManualAllowed() ? Mode.MANUAL : Mode.AUTO;
 		if (instance.job.steps.isEmpty()) {
@@ -229,7 +285,7 @@ public final class MmtrJobScheduler {
 		while (instance.stepIndex < instance.job.steps.size()) {
 			final MmtrJobStep yardStep = instance.job.steps.get((int) instance.stepIndex);
 			if (yardStep.type == MmtrJobStep.StepType.UNCOUPLE) {
-				if (dayTime > instance.deadlineOf(yardStep)) {
+				if (deadlineExpired(instance, yardStep, currentMillis, dayTime)) {
 					fail(instance, "step " + yardStep.stepId + " missed deadline (due " + yardStep.dueTimeOfDayMs + ")");
 					return;
 				}
@@ -366,6 +422,8 @@ public final class MmtrJobScheduler {
 		instance.fleetCars.addAll(fleet);
 		instance.vehicleId = rebuilt.getId();
 		instance.curSidingId = targetSidingId;
+		markVisited(instance, targetSidingId);
+		markVisited(instance, instance.job.sidingId);
 		instance.awaitingStart = true;
 		instance.stepIndex++;
 		instance.state = JobState.RUNNING;
@@ -515,6 +573,18 @@ public final class MmtrJobScheduler {
 		return cars;
 	}
 
+	/** Loop-aware deadline: within a loop cycle the due is relative to the cycle start. */
+	private boolean deadlineExpired(JobInstance instance, MmtrJobStep step, long currentMillis, long dayTime) {
+		if (instance.lastLoopResetAtMillis > 0) {
+			long relativeDue = step.dueTimeOfDayMs - instance.job.startTimeOfDayMs;
+			if (relativeDue <= 0) {
+				relativeDue = step.dueTimeOfDayMs;
+			}
+			return currentMillis - instance.lastLoopResetAtMillis > relativeDue;
+		}
+		return dayTime > instance.deadlineOf(step);
+	}
+
 	private void running(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
 		if (instance.relocatingTo != 0) {
 			// Terminal cross-side arrival: waiting for the engine to spawn the consist on the target siding.
@@ -522,6 +592,7 @@ public final class MmtrJobScheduler {
 			if (parked != null) {
 				instance.vehicleId = parked.getId();
 				instance.curSidingId = instance.relocatingTo;
+				markVisited(instance, instance.relocatingTo);
 				instance.awaitingStart = true;
 				instance.relocatingTo = 0;
 				System.out.println("[MMTR-JOB] relocated consist to siding " + instance.curSidingId + " and parked (vehicle " + parked.getId() + ")");
@@ -542,7 +613,7 @@ public final class MmtrJobScheduler {
 		// movement in between is advanced by the mode-specific logic at the bottom.
 		while (instance.stepIndex < instance.job.steps.size()) {
 			final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
-			if (dayTime > instance.deadlineOf(step)) {
+			if (deadlineExpired(instance, step, currentMillis, dayTime)) {
 				fail(instance, "step " + step.stepId + " missed deadline (due " + step.dueTimeOfDayMs + ")");
 				return;
 			}
@@ -823,6 +894,10 @@ public final class MmtrJobScheduler {
 		boolean humanHold;
 		long relocatingTo;
 		long curSidingId;
+		long nextCycleAtMs;
+		int cyclesDone;
+		long lastLoopResetAtMillis;
+		final ObjectArrayList<Long> visitedSidings = new ObjectArrayList<>();
 		long relocateWaitStartMillis;
 		/** This job's stock was merged into another job's consist (no longer stands alone). */
 		boolean consumed;

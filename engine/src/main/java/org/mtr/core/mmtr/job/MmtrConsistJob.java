@@ -26,6 +26,10 @@ public final class MmtrConsistJob implements SerializedDataBase {
 	public long startTimeOfDayMs;
 	/** Repeat the job every in-game day. */
 	public boolean repeatDaily = true;
+	/** Loop automation: restart this job loopEveryMs after it finishes (demo/drill cycles). */
+	public boolean loop;
+	/** Loop period in ms; &lt;=0 falls back to the scheduler default. */
+	public long loopEveryMs;
 	public final ObjectArrayList<MmtrCarSpec> cars = new ObjectArrayList<>();
 	public final ObjectArrayList<MmtrJobStep> steps = new ObjectArrayList<>();
 
@@ -44,6 +48,8 @@ public final class MmtrConsistJob implements SerializedDataBase {
 		sidingId = parseNumericId(readerBase, "sidingId");
 		startTimeOfDayMs = readerBase.getLong("startTimeOfDayMs", 0);
 		repeatDaily = readerBase.getBoolean("repeatDaily", true);
+		loop = readerBase.getBoolean("loop", false);
+		loopEveryMs = readerBase.getLong("loopEveryMs", 0);
 		readerBase.iterateReaderArray("cars", cars::clear, reader -> cars.add(new MmtrCarSpec(reader)));
 		readerBase.iterateReaderArray("steps", steps::clear, reader -> steps.add(new MmtrJobStep(reader)));
 	}
@@ -63,6 +69,12 @@ public final class MmtrConsistJob implements SerializedDataBase {
 		writerBase.writeString("sidingId", String.valueOf(sidingId));
 		writerBase.writeLong("startTimeOfDayMs", startTimeOfDayMs);
 		writerBase.writeBoolean("repeatDaily", repeatDaily);
+		if (loop) {
+			writerBase.writeBoolean("loop", true);
+			if (loopEveryMs > 0) {
+				writerBase.writeLong("loopEveryMs", loopEveryMs);
+			}
+		}
 		writerBase.writeDataset(cars, "cars");
 		writerBase.writeDataset(steps, "steps");
 	}

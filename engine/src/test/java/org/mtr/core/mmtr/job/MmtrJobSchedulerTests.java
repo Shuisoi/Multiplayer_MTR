@@ -886,4 +886,44 @@ public final class MmtrJobSchedulerTests {
 		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("J-PAUSE"), "fail=" + scheduler.failureOf("J-PAUSE"));
 	}
 
+	/** Loop automation: a DONE job restarts every loopEveryMs (parked yard drill cycles). */
+	@Test
+	public void loopJobRestartsAfterDone() {
+		final long[] ids = buildAutoWorldIn("mmtr-loop", true);
+		final Simulator sim = AUTO_SIM[0];
+		sim.mmtrJobsMode = true;
+		sim.sidings.forEach(s -> { if (s.getId() == ids[0]) { s.clearParkedVehicles(); s.setVehicleCars(new ObjectArrayList<>()); } });
+
+		final MmtrConsistJob job = new MmtrConsistJob();
+		job.jobId = "J-LOOP";
+		job.depotId = 1;
+		job.sidingId = ids[0];
+		job.startTimeOfDayMs = 1_000;
+		job.repeatDaily = false;
+		job.loop = true;
+		job.loopEveryMs = 5_000;
+		final MmtrCarSpec loco = new MmtrCarSpec();
+		loco.vehicleId = "loco"; loco.length = 10; loco.width = 2; loco.capacity = 100;
+		loco.bogie1Position = 0; loco.bogie2Position = 5; loco.couplingPadding1 = 0.5; loco.couplingPadding2 = 0.5;
+		job.cars.add(loco);
+		final MmtrJobStep stay = new MmtrJobStep();
+		stay.stepId = "yard"; stay.type = MmtrJobStep.StepType.MOVE_TO; stay.targetId = ids[0]; stay.dueTimeOfDayMs = 60_000;
+		job.steps.add(stay);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(job);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		for (int second = 0; second < 70; second++) {
+			sim.step(1000);
+			if (scheduler.stateOf("J-LOOP") == MmtrJobScheduler.JobState.FAILED) {
+				System.out.println("[LOOPFAIL] " + scheduler.failureOf("J-LOOP"));
+				break;
+			}
+		}
+		assertTrue(scheduler.cyclesOf("J-LOOP") >= 3, "loop job must complete several cycles (cycles=" + scheduler.cyclesOf("J-LOOP") + ")");
+		assertNull(scheduler.failureOf("J-LOOP"), "looping must never fail");
+	}
+
 }
