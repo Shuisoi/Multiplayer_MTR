@@ -642,6 +642,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final boolean wasOverride = mmtrManualOverride;
 		mmtrActiveControl = controlState.copy();
+		// Server-authoritative input guard: clamp whatever the client sent before storing/mirroring.
+		MmtrDriveAccess.sanitize(mmtrActiveControl);
 		mmtrDriverUuid = driverUuid;
 		mmtrManualOverride = true;
 		if (!wasOverride && driverUuid != null) {

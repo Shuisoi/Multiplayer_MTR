@@ -3,6 +3,7 @@ package org.mtr.core.mmtr;
 import org.jspecify.annotations.Nullable;
 
 import java.util.UUID;
+import org.mtr.core.mmtr.ControlState;
 
 /**
  * Server-authoritative rules for who may take explicit (MMTR) control of a consist.
@@ -17,6 +18,34 @@ public final class MmtrDriveAccess {
 	private MmtrDriveAccess() {
 	}
 
+
+	/**
+	 * Hard bounds for values arriving over the wire (a hostile/buggy client must not push the
+	 * physics past sane ranges). Controllers clamp again to their ConsistType notch counts;
+	 * this is the outer, type-independent guard.
+	 */
+	public static final int MAX_NOTCH = 16;
+
+	/**
+	 * Server-side sanitisation of an incoming ControlState (client -> server). Notches, reverser
+	 * and HID axes are clamped to valid ranges before they are stored or mirrored; emergency
+	 * remains a plain boolean.
+	 */
+	public static void sanitize(ControlState state) {
+		state.setThrottleNotch(clamp(state.getThrottleNotch(), 0, MAX_NOTCH));
+		state.setBrakeNotch(clamp(state.getBrakeNotch(), 0, MAX_NOTCH));
+		state.setReverser(clamp(state.getReverser(), -1, 1));
+		state.setThrottleAxis(clamp(state.getThrottleAxis(), -1, 1));
+		state.setBrakeAxis(clamp(state.getBrakeAxis(), -1, 1));
+	}
+
+	private static int clamp(int value, int min, int max) {
+		return Math.max(min, Math.min(value, max));
+	}
+
+	private static double clamp(double value, double min, double max) {
+		return Math.max(min, Math.min(value, max));
+	}
 	/**
 	 * @param senderIsRidingDriver    whether {@code sender} currently occupies a cab driver seat
 	 *                                of the consist
