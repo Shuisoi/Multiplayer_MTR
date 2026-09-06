@@ -50,6 +50,8 @@ export interface MmtrJobStateSummary {
 	state: string;
 	step: number;
 	totalSteps: number;
+	/** Current real car count of the consist (make-up grows it, uncouple shrinks it). */
+	cars?: number;
 	failure?: string;
 }
 

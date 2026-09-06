@@ -83,6 +83,7 @@ public final class SystemMapServlet extends ServletBase {
 						out.addProperty("state", state == null ? "PENDING" : state.name());
 						out.addProperty("step", scheduler == null ? -1 : scheduler.stepIndexOf(job.jobId));
 						out.addProperty("totalSteps", job.steps.size());
+						out.addProperty("cars", scheduler == null ? job.cars.size() : scheduler.carsOf(job.jobId));
 						final String failure = scheduler == null ? null : scheduler.failureOf(job.jobId);
 						if (failure != null) {
 							out.addProperty("failure", failure);

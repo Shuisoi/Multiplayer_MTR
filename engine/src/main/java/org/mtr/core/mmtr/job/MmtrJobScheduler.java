@@ -63,6 +63,20 @@ public final class MmtrJobScheduler {
 		return instance == null ? null : instance.failureReason;
 	}
 
+	/** Current car count of the job's consist (spec list), falling back to the authored job cars. */
+	public int carsOf(String jobId) {
+		final JobInstance instance = instances.get(jobId);
+		if (instance != null && !instance.fleetCars.isEmpty()) {
+			return instance.fleetCars.size();
+		}
+		for (final MmtrConsistJob job : jobs) {
+			if (job.jobId.equals(jobId)) {
+				return job.cars.size();
+			}
+		}
+		return -1;
+	}
+
 	public void tick(long currentMillis, Simulator simulator) {
 		if (anchor == Long.MIN_VALUE) {
 			anchor = currentMillis;

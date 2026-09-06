@@ -209,3 +209,8 @@
 - 探针结论：Simulator 默认不自动落盘世界（同根重建 rails=0），进程内"日重启"e2e 不可直接构建，
   repeatDaily 依赖进程重启语义（构造即自动加载 mmtr-jobs.json 重跑）或显式存档接口（后续）。
 - 引擎全量（cleanTest）207 tests / 0 fail / 0 skip。
+## 进度（round20）：状态 feed 增加实时编组车数
+- mmtr-job-states 每项新增 cars：调度器当前 fleetCars 大小（未开跑回退 job.cars；make-up 后变大、
+  UNCOUPLE 切分后变小），运营面板可实时看到"实际编组几节车"。
+- MmtrJobScheduler.carsOf(jobId)；MmtrJobStateSummary.cars；ops-panel 作业单行新增"cars 节车"徽章。
+- 测试：registry states 断言 cars 字段；engine 全量 207 tests / 0 fail / 0 skip；website lint+build 绿。

@@ -106,6 +106,7 @@ public final class MmtrJobRegistryTests {
 		assertEquals("J-B", statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("jobId").getAsString());
 		assertEquals("PENDING", statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("state").getAsString());
 		assertEquals(1, statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("totalSteps").getAsInt());
+		assertEquals(1, statesResult[0].getAsJsonArray("states").get(0).getAsJsonObject().get("cars").getAsInt(), "state feed reports the consist car count");
 		// Job-editor reference pickers (world pickers can be empty on an empty test world)
 		final JsonObject[] refsResult = {null};
 		servlet.getContent("mmtr-job-references", "", new Object2ObjectAVLTreeMap<>(), new JsonReader(new JsonObject()), sim, json -> refsResult[0] = json);

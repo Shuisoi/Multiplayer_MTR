@@ -60,6 +60,9 @@
 					</div>
 					<div class="mmtr-badges">
 						<span class="mmtr-badge" [class]="jobStateClass(stateOf(job.jobId)?.state)">{{ jobStatusText(stateOf(job.jobId)?.state) || "—" }}</span>
+						@if (stateOf(job.jobId)?.cars !== undefined) {
+							<span class="mmtr-badge parked">{{ stateOf(job.jobId)!.cars }} 节车</span>
+						}
 					</div>
 				</div>
 			}
