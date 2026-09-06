@@ -169,11 +169,11 @@ public final class MmtrJobSchedulerTests {
 		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-mini-job-auto"), false);
 		final ObjectArrayList<String> noStyles = new ObjectArrayList<>();
 		final Position p0 = new Position(0, 0, 0);
-		final Position junction = new Position(10, 0, 0);
-		final Position leadEnd = new Position(30, 0, 0);
-		final Position platformA1 = new Position(50, 0, 0);
-		final Position platformB1 = new Position(90, 0, 0);
-		final Position end = new Position(120, 0, 0);
+		final Position junction = new Position(33, 0, 0);
+		final Position leadEnd = new Position(40, 0, 0);
+		final Position platformA1 = new Position(60, 0, 0);
+		final Position platformB1 = new Position(100, 0, 0);
+		final Position end = new Position(130, 0, 0);
 
 		sim.rails.add(Rail.newSidingRail(p0, Angle.fromAngle(0), junction, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, TransportMode.TRAIN));
 		sim.rails.add(Rail.newRail(junction, Angle.fromAngle(0), leadEnd, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, 80, 80, false, false, true, false, true, TransportMode.TRAIN));
@@ -181,19 +181,19 @@ public final class MmtrJobSchedulerTests {
 		sim.rails.add(Rail.newRail(platformA1, Angle.fromAngle(0), platformB1, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, 80, 80, false, false, true, false, true, TransportMode.TRAIN));
 		sim.rails.add(Rail.newPlatformRail(platformB1, Angle.fromAngle(0), end, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, noStyles, TransportMode.TRAIN));
 
-		final Siding siding = new Siding(p0, junction, 10, TransportMode.TRAIN, sim);
+		final Siding siding = new Siding(p0, junction, 33, TransportMode.TRAIN, sim);
 		siding.setMaxVehicles(1); // auto siding, no frequency departures
 		final Platform platformA = new Platform(leadEnd, platformA1, TransportMode.TRAIN, sim);
 		final Platform platformB = new Platform(platformB1, end, TransportMode.TRAIN, sim);
 		final Station stationA = new Station(sim);
 		stationA.setName("A");
-		stationA.setCorners(new Position(20, -50, -50), new Position(60, 50, 50));
+		stationA.setCorners(new Position(20, -50, -50), new Position(70, 50, 50));
 		final Station stationB = new Station(sim);
 		stationB.setName("B");
-		stationB.setCorners(new Position(80, -50, -50), new Position(130, 50, 50));
+		stationB.setCorners(new Position(80, -50, -50), new Position(135, 50, 50));
 		final Depot depot = new Depot(TransportMode.TRAIN, sim);
 		depot.setName("Yard");
-		depot.setCorners(new Position(-5, -50, -50), new Position(15, 50, 50));
+		depot.setCorners(new Position(-5, -50, -50), new Position(40, 50, 50));
 		final Route route = new Route(TransportMode.TRAIN, sim);
 		route.setName("AB");
 		route.getRoutePlatforms().add(new RoutePlatformData(platformA.getId()));
@@ -385,6 +385,44 @@ public final class MmtrJobSchedulerTests {
 		final boolean[] stillParked = {false};
 		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (v.getId() == parkedVehicle[0] && !v.getIsOnRoute()) { stillParked[0] = true; } }));
 		assertTrue(stillParked[0], "depot departure must not auto-dispatch while mmtrJobsMode is on");
+	}
+
+	/** Yard surgery primitive: the single parked consist can be replaced by a formation rebuilt
+	 * from a merged car list (union / post-uncouple head) while staying parked and bookable. */
+	@Test
+	public void yardSurgeryRebuildsParkedConsistAsSingleFormation() {
+		final long[] ids = buildAutoWorld(true);
+		final Simulator sim = AUTO_SIM[0];
+		final long[] parkedId = {0};
+		final Siding[] yard = {null};
+		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (!v.getIsOnRoute()) { parkedId[0] = v.getId(); yard[0] = s; } }));
+		org.junit.jupiter.api.Assumptions.assumeTrue(parkedId[0] != 0, "need parked auto stock to rebuild");
+
+		final ObjectArrayList<VehicleCar> merged = new ObjectArrayList<>();
+		merged.add(new VehicleCar("loco", 10, 2, 100, 0, 5, 0.5, 0.5));
+		merged.add(new VehicleCar("flatcar", 10, 2, 0, 0, 5, 0.5, 0.5));
+		merged.add(new VehicleCar("flatcar", 10, 2, 0, 0, 5, 0.5, 0.5));
+
+		final Vehicle rebuilt = yard[0].rebuildParkedConsist(merged);
+		org.junit.jupiter.api.Assumptions.assumeTrue(rebuilt != null, "merged 3-car formation must fit the yard siding");
+
+		assertEquals(3, yard[0].getVehicleCars().size(), "siding template follows the rebuilt formation");
+		final boolean[] oldGone = {true};
+		final boolean[] rebuiltPresent = {false};
+		yard[0].iterateVehicles(v -> {
+			if (v.getId() == parkedId[0]) { oldGone[0] = false; }
+			if (v.getId() == rebuilt.getId()) { rebuiltPresent[0] = true; }
+		});
+		assertTrue(oldGone[0], "original parked vehicle is replaced");
+		assertTrue(rebuiltPresent[0], "rebuilt vehicle is registered on the yard siding");
+
+		// The rebuilt single parked consist must survive further ticks (single-vehicle invariant).
+		for (int second = 0; second < 3; second++) {
+			sim.step(1000);
+		}
+		final boolean[] stillThere = {false};
+		yard[0].iterateVehicles(v -> { if (v.getId() == rebuilt.getId() && !v.getIsOnRoute()) { stillThere[0] = true; } });
+		assertTrue(stillThere[0], "rebuilt consist stays parked after ticks");
 	}
 
 }

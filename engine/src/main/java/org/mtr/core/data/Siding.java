@@ -368,6 +368,42 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * MMTR yard surgery: replace the single parked (not-on-route) vehicle standing on this siding
+	 * with one rebuilt from {@code cars} - the foundation for a parked consist union (COUPLE) or a
+	 * post-cut head (UNCOUPLE). Yard-only: returns {@code null} and changes nothing when the siding
+	 * is busy (any vehicle on route), holds more than one parked vehicle, or the requested formation
+	 * does not fit the siding rail / transport-mode car cap. The siding's car template is updated to
+	 * the new formation so later spawning/booking sees the coupled consist.
+	 */
+	@Nullable
+	public Vehicle rebuildParkedConsist(ObjectArrayList<VehicleCar> cars) {
+		if (cars.isEmpty() || defaultPathData == null || area == null) {
+			return null;
+		}
+		if (cars.size() > transportMode.maxLength || Siding.getTotalVehicleLength(cars) > railLength + 1e-6) {
+			return null;
+		}
+		Vehicle parked = null;
+		for (final Vehicle vehicle : vehicleIdMap.values()) {
+			if (vehicle.getIsOnRoute()) {
+				return null; // yard must be idle for formation surgery
+			}
+			if (parked != null) {
+				return null; // more than one parked vehicle is not a rebuildable yard state
+			}
+			parked = vehicle;
+		}
+		if (parked == null) {
+			return null;
+		}
+		vehicleIdMap.remove(parked.getId());
+		setVehicleCars(cars); // keep the template consistent with the rebuilt formation
+		final Vehicle rebuilt = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, getIsManual(), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		vehicleIdMap.put(rebuilt.getId(), rebuilt);
+		return rebuilt;
+	}
+
 	public void startGeneratingDepartures() {
 		departures.clear();
 		tempReturnTimes.clear();

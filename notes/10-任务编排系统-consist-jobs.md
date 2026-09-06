@@ -122,3 +122,13 @@
   因此"机车连上挂车后整车拉走"必须先做 M2 编组手术：同股道停场 union 重建（合并车厢→移除原车→按合并
   模板重生成单车并沿用后续 ATO）或等效的双车停场窗口。该手术落地后 COUPLE/UNCOUPLE 步骤才有真实完成
   条件与推进测试；建议下轮直接进入该 spike。
+## 进度（round12-A1a）：停场编组重建原语（编组手术第一刀）
+- Siding.rebuildParkedConsist(cars)：把本股道上唯一停场（未上正线）编组替换为按给定车列重建的单车——
+  停场 union（COUPLE）与摘挂后头部（UNCOUPLE）的公共底子。守卫：空闲（无在途车）/恰一辆停场/
+  车数<=TransportMode.maxLength/总长<=股道 railLength/有 defaultPathData；成功后同步股道模板
+  （setVehicleCars），旧车注销、新车以合并车列重建并入册。
+- 测试（MmtrJobSchedulerTests.yardSurgeryRebuildsParkedConsistAsSingleFormation）：auto 世界股道
+  加长至 33m 容纳 3 节；停场 1 节→合并重建 3 节（loco+2 平板车）；断言旧车替换、新车入册、模板同步、
+  连续 tick 后仍是单辆停场（不破坏单停场不变量）。
+- 引擎全量（cleanTest）绿。说明：调度器把 COUPLE/UNCOUPLE 步骤接到该原语并解决"两列同到一条股道"
+  的到达/驻留语义 = 下一切片（A1b），随后做 B（MOVE_TO 股道目标移动）。
