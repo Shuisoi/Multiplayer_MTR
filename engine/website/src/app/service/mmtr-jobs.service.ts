@@ -7,8 +7,10 @@ import {LIVE_REFRESH_INTERVAL_MILLIS} from "../utility/refresh.constants";
 export interface MmtrJobStep {
 	stepId?: string;
 	type: "MOVE_TO" | "SERVE" | "COUPLE" | "UNCOUPLE";
-	/** In-game target object id: platform/siding (MOVE_TO/SERVE), a consist to couple to (COUPLE). */
+	/** In-game target object id: platform/siding (MOVE_TO/SERVE). */
 	targetId?: string;
+	/** COUPLE only: stable id of the other consist job whose spawned stock is coupled onto this one. */
+	targetJobId?: string;
 	/** UNCOUPLE only: car index to cut after. */
 	targetIndex?: number;
 	/** Latest allowed completion time, milliseconds after in-game midnight. */

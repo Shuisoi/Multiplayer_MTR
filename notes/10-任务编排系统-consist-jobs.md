@@ -105,3 +105,20 @@
 - 说明：COUPLE/UNCOUPLE 步骤可编辑保存，引擎执行器（coupling executor）接入仍在后续轮次。
 - engine 全量（cleanTest）197 tests / 0 fail / 0 error；website ng lint + build 绿（exit 0，
   编辑器 scss 有 >2kB 预算警告，非阻断）。
+## 进度（round11）：COUPLE 目标=作业单 jobId（建模/Web）+ 连挂执行器真实阻塞点定位
+- MmtrJobStep 新增 targetJobId（仅 COUPLE）：引用"另一条作业单"的稳定字符串 id —— 服务器每日重启/
+  全部车辆重生后引用依然有效（对应机车去 depot2 连挂 8 节挂车的货运宏观场景）；MOVE_TO/SERVE 仍用
+  numeric 64 位平台/股道 id；序列化 COUPLE 写 targetJobId、其余写 targetId；旧 web 编辑器写入的非数字
+  targetId 自动迁移到 targetJobId。MmtrConsistJob 数值 id 改走独立 parse helper。
+- web 编辑器：COUPLE 步骤改为"目标作业单"下拉（列出其它 jobId + 节数，排除自身）；保存校验目标存在且
+  非自身（原自由文本/占位已移除）。
+- 测试：registry 文件 round-trip 保留 targetJobId（含 numeric 目标并存）、legacy 非数字 targetId 回退；
+  engine job 包（Registry+RegistryTests+SchedulerTests）全绿；website lint+build 绿（exit 0）。
+- 执行器真连挂合并 = 未决阻塞（本轮到定位层面，next = 编组手术 spike）：
+  1) Siding.tick 对同股道停场车 >1 直接移除（trainsAtDepot>1→remove）——"两列同股道停稳再连挂"在
+     每 tick 循环下不成立；
+  2) Vehicle.vehicleExtraData final、车厢集在 create() 定型（车辆长度/乘客按车位置缓存）——无动态编组；
+  3) MmtrCoupleControl/MmtrCoupling 只做 guard+plan log，真 registry 手术注释明示 pending world executor。
+  因此"机车连上挂车后整车拉走"必须先做 M2 编组手术：同股道停场 union 重建（合并车厢→移除原车→按合并
+  模板重生成单车并沿用后续 ATO）或等效的双车停场窗口。该手术落地后 COUPLE/UNCOUPLE 步骤才有真实完成
+  条件与推进测试；建议下轮直接进入该 spike。

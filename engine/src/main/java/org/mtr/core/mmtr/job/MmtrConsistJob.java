@@ -36,12 +36,17 @@ public final class MmtrConsistJob implements SerializedDataBase {
 	@Override
 	public void updateData(ReaderBase readerBase) {
 		jobId = readerBase.getString("jobId", "");
-		depotId = MmtrJobStep.parseId(readerBase, "depotId");
-		sidingId = MmtrJobStep.parseId(readerBase, "sidingId");
+		depotId = parseNumericId(readerBase, "depotId");
+		sidingId = parseNumericId(readerBase, "sidingId");
 		startTimeOfDayMs = readerBase.getLong("startTimeOfDayMs", 0);
 		repeatDaily = readerBase.getBoolean("repeatDaily", true);
 		readerBase.iterateReaderArray("cars", cars::clear, reader -> cars.add(new MmtrCarSpec(reader)));
 		readerBase.iterateReaderArray("steps", steps::clear, reader -> steps.add(new MmtrJobStep(reader)));
+	}
+
+	private static long parseNumericId(ReaderBase readerBase, String key) {
+		final String raw = readerBase.getString(key, "").trim();
+		return raw.isEmpty() ? readerBase.getLong(key, 0) : MmtrJobStep.parseRaw(raw);
 	}
 
 	@Override

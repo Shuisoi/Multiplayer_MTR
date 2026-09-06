@@ -25,10 +25,16 @@ public final class MmtrJobStep implements SerializedDataBase {
 	public String stepId = "";
 	public StepType type = StepType.MOVE_TO;
 	/**
-	 * Reference to an in-game object: platform/siding id (MOVE_TO/SERVE/COUPLE) - world framing
-	 * (station boxes / depot) stays in-game exactly as today.
+	 * Reference to an in-game object id (numeric): platform/siding (MOVE_TO/SERVE) - world framing
+	 * (station boxes / depot) stays in-game exactly as today. Unused by COUPLE/UNCOUPLE.
 	 */
 	public long targetId;
+	/**
+	 * COUPLE only: stable id of the other consist job whose spawned stock is to be coupled onto
+	 * this consist. Job ids are strings (not 64-bit in-game ids) so they survive the daily server
+	 * restart / respawn cycle - each day both jobs respawn their stock and the reference stays valid.
+	 */
+	public String targetJobId = "";
 	/** For UNCOUPLE: car index to cut after. */
 	public int targetIndex = -1;
 	/** Latest allowed completion time, milliseconds after in-game midnight. */
@@ -51,7 +57,19 @@ public final class MmtrJobStep implements SerializedDataBase {
 		} catch (IllegalArgumentException e) {
 			type = StepType.MOVE_TO;
 		}
-		targetId = parseId(readerBase, "targetId");
+		// COUPLE references another job by its stable string id; MOVE_TO/SERVE reference a world
+		// platform/siding by its 64-bit numeric id. Accept a legacy non-numeric COUPLE value that
+		// older web editors may have written into "targetId" before the dedicated field existed.
+		final String rawTarget = readerBase.getString("targetId", "").trim();
+		if (type == StepType.COUPLE) {
+			targetJobId = readerBase.getString("targetJobId", "");
+			if (targetJobId.isEmpty() && !rawTarget.isEmpty() && !rawTarget.matches("-?\\d+")) {
+				targetJobId = rawTarget;
+			}
+			targetId = 0;
+		} else {
+			targetId = rawTarget.isEmpty() ? 0 : parseRaw(rawTarget);
+		}
 		targetIndex = readerBase.getInt("targetIndex", -1);
 		dueTimeOfDayMs = readerBase.getLong("dueTimeOfDayMs", 0);
 		final String noteString = readerBase.getString("note", "");
@@ -62,8 +80,13 @@ public final class MmtrJobStep implements SerializedDataBase {
 	public void serializeData(WriterBase writerBase) {
 		writerBase.writeString("stepId", stepId);
 		writerBase.writeString("type", type.name());
-		// Ids travel as strings so 64-bit in-game ids survive the web round trip.
-		writerBase.writeString("targetId", String.valueOf(targetId));
+		if (type == StepType.COUPLE) {
+			// COUPLE: stable jobId reference (web string, survives daily respawns).
+			writerBase.writeString("targetJobId", targetJobId);
+		} else {
+			// MOVE_TO/SERVE: ids travel as strings so 64-bit in-game ids survive the web round trip.
+			writerBase.writeString("targetId", String.valueOf(targetId));
+		}
 		writerBase.writeInt("targetIndex", targetIndex);
 		writerBase.writeLong("dueTimeOfDayMs", dueTimeOfDayMs);
 		if (note != null && !note.isEmpty()) {
@@ -71,15 +94,11 @@ public final class MmtrJobStep implements SerializedDataBase {
 		}
 	}
 
-	static long parseId(ReaderBase readerBase, String key) {
-		final String raw = readerBase.getString(key, "");
-		if (!raw.isEmpty()) {
-			try {
-				return Long.parseLong(raw.trim());
-			} catch (NumberFormatException ignored) {
-				// fall through to numeric read
-			}
+	static long parseRaw(String raw) {
+		try {
+			return Long.parseLong(raw.trim());
+		} catch (NumberFormatException ignored) {
+			return 0;
 		}
-		return readerBase.getLong(key, 0);
 	}
 }

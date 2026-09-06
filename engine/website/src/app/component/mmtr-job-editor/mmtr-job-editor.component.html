@@ -105,9 +105,14 @@
 							<span>摘开车厢位置 targetIndex（从 0 起）</span>
 							<input class="mmtr-input" type="number" step="1" min="0" [(ngModel)]="step.targetIndex"/>
 						</label>
+					} @else if (step.type === "COUPLE") {
+						<div class="mmtr-mini-field mmtr-grow">
+							<span>要连挂的作业单（每日重生后引用仍有效）</span>
+							<p-select inputId="mmtr-couple-target-{{ i }}" [options]="coupleTargetOptions()" optionLabel="label" optionValue="id" [(ngModel)]="step.targetJobId" [fluid]="true" placeholder="选择另一条作业单…"/>
+						</div>
 					} @else {
 						<label class="mmtr-mini-field mmtr-grow">
-							<span>{{ step.type === "COUPLE" ? "连挂编组 id / consist id" : "目标 id（站台/股道）" }}</span>
+							<span>目标 id（站台/股道）</span>
 							<input class="mmtr-input" type="text" [(ngModel)]="step.targetId" list="mmtr-step-targets" placeholder="输入 id 或从建议选择…"/>
 						</label>
 					}

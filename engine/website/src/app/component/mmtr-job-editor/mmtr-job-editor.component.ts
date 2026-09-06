@@ -128,6 +128,13 @@ export class MmtrJobEditorComponent implements OnChanges {
 		this.depotId = ref ? ref.depotId : "0";
 	}
 
+
+	/** COUPLE target picker: every other consist job whose stock could be coupled (daily respawn keeps ids stable). */
+	protected coupleTargetOptions() {
+		return this.mmtrJobsService.jobs()
+			.filter(job => job.jobId !== this.jobId)
+			.map(job => ({id: job.jobId, label: `${job.jobId}（${job.cars?.length ?? 0} 节）`}));
+	}
 	/** Datasheet entries shown in the target id autocomplete (platforms first, then sidings). */
 	protected targetSuggestions(): string[] {
 		const suggestions: string[] = [];
@@ -225,11 +232,19 @@ export class MmtrJobEditorComponent implements OnChanges {
 				return;
 			}
 			step.dueTimeOfDayMs = dueMillis;
-			if (step.type === "UNCOUPLE" && (step.targetIndex === undefined || step.targetIndex < 0)) {
-				this.error = `步骤 ${i + 1}（摘挂）需要指定摘开车厢位置 targetIndex（从 0 起）`;
-				return;
-			}
-			if (step.type !== "UNCOUPLE") {
+			if (step.type === "UNCOUPLE") {
+				if (step.targetIndex === undefined || step.targetIndex < 0) {
+					this.error = `步骤 ${i + 1}（摘挂）需要指定摘开车厢位置 targetIndex（从 0 起）`;
+					return;
+				}
+			} else if (step.type === "COUPLE") {
+				const targetJobId = (step.targetJobId ?? "").trim();
+				if (!targetJobId || targetJobId === jobId || !this.mmtrJobsService.jobs().some(job => job.jobId === targetJobId)) {
+					this.error = `步骤 ${i + 1}（连挂）需要选择另一条作业单（编组来源）`;
+					return;
+				}
+				step.targetJobId = targetJobId;
+			} else {
 				const targetId = this.parseTargetId(step.targetId ?? "");
 				if (!targetId || targetId === "0") {
 					this.error = `步骤 ${i + 1}（${this.typeLabels[step.type] ?? step.type}）缺少目标 id`;
@@ -254,16 +269,25 @@ export class MmtrJobEditorComponent implements OnChanges {
 				couplingPadding1: Number(car.couplingPadding1),
 				couplingPadding2: Number(car.couplingPadding2),
 			})),
-			steps: this.steps.map(step => ({
-				stepId: step.stepId,
-				type: step.type,
-				targetId: step.type === "UNCOUPLE" ? undefined : this.parseTargetId(step.targetId ?? ""),
-				targetIndex: step.type === "UNCOUPLE" ? step.targetIndex : undefined,
-				dueTimeOfDayMs: step.dueTimeOfDayMs,
-				...(step.note ? {note: step.note} : {}),
-			})),
-		};
-		this.mmtrJobsService.upsert(payload).subscribe({
+			steps: this.steps.map(step => {
+				const out: MmtrJobStep = {
+					stepId: step.stepId,
+					type: step.type,
+					dueTimeOfDayMs: step.dueTimeOfDayMs,
+				};
+				if (step.type === "UNCOUPLE") {
+					out.targetIndex = step.targetIndex;
+				} else if (step.type === "COUPLE") {
+					out.targetJobId = step.targetJobId;
+				} else {
+					out.targetId = this.parseTargetId(step.targetId ?? "");
+				}
+				if (step.note) {
+					out.note = step.note;
+				}
+				return out;
+			}),
+		};		this.mmtrJobsService.upsert(payload).subscribe({
 			next: response => {
 				this.mmtrJobsService.refresh();
 				this.mmtrJobsService.setFeedback(response.data?.ok ? `✓ 作业单 ${jobId} 已保存` : `✗ 保存 ${jobId} 失败`);

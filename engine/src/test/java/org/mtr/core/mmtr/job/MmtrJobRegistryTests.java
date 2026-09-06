@@ -116,6 +116,48 @@ public final class MmtrJobRegistryTests {
 		assertEquals(0, refsResult[0].getAsJsonArray("sidings").size());
 	}
 
+	@Test
+	public void coupleStepsReferenceTargetJobByStableId() {
+		// COUPLE targets another job by its string id (survives the daily respawn cycle), while
+		// MOVE_TO/SERVE keep numeric 64-bit in-game ids - both must survive the file round trip.
+		final MmtrConsistJob job = sampleJob("J-CPL");
+		final MmtrJobStep couple = new MmtrJobStep();
+		couple.stepId = "s2";
+		couple.type = MmtrJobStep.StepType.COUPLE;
+		couple.targetJobId = "FRT-D2-LOCOMOTIVE";
+		couple.dueTimeOfDayMs = 8L * 3_600_000;
+		job.steps.add(couple);
+
+		final Path dir = Paths.get("build/mmtr-couple-test");
+		final Path file = dir.resolve("mmtr-jobs.json");
+		deleteIfExists(file);
+		final MmtrJobRegistry registry = new MmtrJobRegistry();
+		registry.put(job);
+		registry.save(file);
+		final MmtrJobRegistry reloaded = MmtrJobRegistry.fromFile(file);
+		final MmtrJobStep move = reloaded.jobs.get(0).steps.get(0);
+		assertEquals(MmtrJobStep.StepType.MOVE_TO, move.type);
+		assertEquals(7L, move.targetId, "numeric world ids still round trip");
+		final MmtrJobStep back = reloaded.jobs.get(0).steps.get(1);
+		assertEquals(MmtrJobStep.StepType.COUPLE, back.type);
+		assertEquals("FRT-D2-LOCOMOTIVE", back.targetJobId, "COUPLE keeps the stable job-id reference");
+		assertEquals(0L, back.targetId, "COUPLE does not consume the numeric target slot");
+	}
+
+	@Test
+	public void coupleStepAcceptsLegacyNonNumericTargetId() {
+		// Older web editors wrote the COUPLE reference into "targetId" before the dedicated field
+		// existed - a non-numeric value must migrate into targetJobId instead of silently dropping.
+		final com.google.gson.JsonObject step = new com.google.gson.JsonObject();
+		step.addProperty("stepId", "legacy");
+		step.addProperty("type", "COUPLE");
+		step.addProperty("targetId", "TRAILER-YARD-1");
+		step.addProperty("dueTimeOfDayMs", 8L * 3_600_000);
+		final MmtrJobStep parsed = new MmtrJobStep(new org.mtr.core.serializer.JsonReader(step));
+		assertEquals("TRAILER-YARD-1", parsed.targetJobId);
+		assertEquals(0L, parsed.targetId);
+	}
+
 	private static void deleteIfExists(Path path) {
 		try {
 			java.nio.file.Files.deleteIfExists(path);
