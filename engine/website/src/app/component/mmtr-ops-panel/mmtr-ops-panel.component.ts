@@ -2,6 +2,7 @@ import {ChangeDetectionStrategy, Component, CUSTOM_ELEMENTS_SCHEMA, inject} from
 import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {DividerModule} from "primeng/divider";
 import {MmtrTrainsService, MmtrTrainState} from "../../service/mmtr-trains.service";
+import {MmtrJobsService, MmtrJobStateSummary} from "../../service/mmtr-jobs.service";
 
 @Component({
 	selector: "app-mmtr-ops-panel",
@@ -16,11 +17,15 @@ import {MmtrTrainsService, MmtrTrainState} from "../../service/mmtr-trains.servi
 })
 export class MmtrOpsPanelComponent {
 	private readonly mmtrTrainsService = inject(MmtrTrainsService);
+	private readonly mmtrJobsService = inject(MmtrJobsService);
 
 	protected readonly trains = this.mmtrTrainsService.trains;
 	protected readonly sidings = this.mmtrTrainsService.sidings;
 	protected readonly loading = this.mmtrTrainsService.loading;
 	protected readonly dispatchFeedback = this.mmtrTrainsService.dispatchFeedback;
+	protected readonly jobs = this.mmtrJobsService.jobs;
+	protected readonly jobStates = this.mmtrJobsService.states;
+	protected readonly jobsLoading = this.mmtrJobsService.loading;
 
 	protected readonly allActive = () => this.trains().filter(train => !train.mission || !["COMPLETE", "FAILED", "CANCELED"].includes(train.mission!.state));
 
@@ -48,5 +53,25 @@ export class MmtrOpsPanelComponent {
 
 	protected canDispatch(train: MmtrTrainState): boolean {
 		return !train.onRoute && train.isManualAllowed;
+	}
+
+	protected stateOf(jobId: string): MmtrJobStateSummary | undefined {
+		return this.jobStates().find(state => state.jobId === jobId);
+	}
+
+	protected timeOfDay(ms: number): string {
+		const totalMinutes = Math.floor(ms / 60_000);
+		const hh = Math.floor(totalMinutes / 60);
+		const mm = totalMinutes % 60;
+		return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+	}
+
+	protected jobStateClass(state?: string): string {
+		switch (state) {
+			case "RUNNING": return "on-route";
+			case "DONE": return "mission";
+			case "FAILED": return "failed";
+			default: return "";
+		}
 	}
 }

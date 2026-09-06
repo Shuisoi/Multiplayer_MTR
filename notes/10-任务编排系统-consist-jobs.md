@@ -79,3 +79,8 @@
 ## 进度（round5）：作业单状态 feed
 - SystemMapServlet POST/GET mmtr-job-states：{states:[{jobId,startTimeOfDayMs,state,step,totalSteps,failure?}]}，
   供 web 面板轮询显示作业单运行状态/进度/失败原因。MmtrJobRegistryTests 覆盖。
+
+## 进度（round6）：web 作业单列表（面板）
+- MmtrJobsService 轮询 mmtr-jobs + mmtr-job-states；MMTR 任务面板新增“作业单 / Consist Jobs”区：
+  每条 jobId/发车时刻/步数/当前状态(PENDING/RUNNING/DONE/FAILED 着色)/步骤进度/失败原因。npm build 绿。
+- 编辑器（步骤/时刻编辑 + upsert/delete 写回）为下一刀（数据接口已备）。
