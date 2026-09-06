@@ -76,6 +76,7 @@ public class Simulator extends Data implements Utilities {
 	public org.mtr.core.mmtr.job.MmtrJobScheduler mmtrJobScheduler;
 	/** Named consist templates (编组代码 -> 车列), loaded from <save>/mmtr-consist-templates.json. */
 	public org.mtr.core.mmtr.job.MmtrConsistTemplateRegistry mmtrConsistTemplates = new org.mtr.core.mmtr.job.MmtrConsistTemplateRegistry();
+	private boolean mmtrDepotPathsGenerated;
 	/**
 	 * MMTR job mode: when true the legacy depot frequency/departure auto-dispatch is disabled -
 	 * vehicles only run what MmtrJobScheduler starts (the web diagrams). Default false keeps the
@@ -334,6 +335,36 @@ public class Simulator extends Data implements Utilities {
 					}
 				}
 			}
+		}
+	}
+
+	/**
+	 * MMTR job mode: on first scheduler tick regenerate depot path caches that the loaded save may
+	 * not carry yet (freshly built sidings have no outbound/return legs until the depot graph is
+	 * generated). Spawning/route planning then works the same as in a fully generated world.
+	 */
+	public void ensureMmtrDepotPaths() {
+		if (mmtrDepotPathsGenerated) {
+			return;
+		}
+		mmtrDepotPathsGenerated = true;
+		if (!mmtrJobsMode || depots.isEmpty()) {
+			return;
+		}
+		boolean needsGeneration = false;
+		for (final Depot depot : depots) {
+			for (final Siding siding : depot.savedRails) {
+				if (!siding.hasPathToMainRoute() && !siding.hasReturnFromMainRoute()) {
+					needsGeneration = true;
+					break;
+				}
+			}
+			if (needsGeneration) {
+				break;
+			}
+		}
+		if (needsGeneration) {
+			Depot.generateDepots(this, new ObjectArrayList<>(depots));
 		}
 	}
 

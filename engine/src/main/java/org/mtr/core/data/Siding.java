@@ -419,6 +419,16 @@ public final class Siding extends SidingSchema implements Utilities {
 		toRemove.forEach(vehicle -> vehicleIdMap.remove(vehicle.getId()));
 	}
 
+	/** MMTR dynamic routing: whether this siding has a generated outbound leg to the main route. */
+	public boolean hasPathToMainRoute() {
+		return !pathSidingToMainRoute.isEmpty();
+	}
+
+	/** MMTR dynamic routing: whether this siding has a generated return leg from the main route. */
+	public boolean hasReturnFromMainRoute() {
+		return !pathMainRouteToSiding.isEmpty();
+	}
+
 	public void startGeneratingDepartures() {
 		departures.clear();
 		tempReturnTimes.clear();

@@ -78,6 +78,7 @@ public final class MmtrJobScheduler {
 	}
 
 	public void tick(long currentMillis, Simulator simulator) {
+		simulator.ensureMmtrDepotPaths();
 		if (anchor == Long.MIN_VALUE) {
 			anchor = currentMillis;
 		}
