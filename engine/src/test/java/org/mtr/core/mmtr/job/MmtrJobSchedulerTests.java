@@ -550,4 +550,97 @@ public final class MmtrJobSchedulerTests {
 		assertTrue(scheduler.failureOf("J-MISSING").contains("not loaded"), scheduler.failureOf("J-MISSING"));
 	}
 
+	/** Yard UNCOUPLE: after the make-up, the job cuts the trailers off at the yard; the head runs the
+	 * remaining service alone and the detached tail stays parked as the yard's next stock source. */
+	@Test
+	public void jobUncouplesTrailersAtYardThenRunsServiceAlone() {
+		final long[] ids = buildAutoWorld(false);
+		final Simulator sim = AUTO_SIM[0];
+		sim.mmtrJobsMode = true; // keep the detached tail parked (no legacy auto dispatch)
+
+		final MmtrConsistJob trailers = new MmtrConsistJob();
+		trailers.jobId = "TRAILERS2";
+		trailers.depotId = 1;
+		trailers.sidingId = ids[0];
+		trailers.startTimeOfDayMs = 1_000;
+		trailers.repeatDaily = false;
+		trailers.cars.add(car("flatcar", 10));
+		trailers.cars.add(car("flatcar", 10));
+
+		final MmtrConsistJob loco = new MmtrConsistJob();
+		loco.jobId = "LOCO2";
+		loco.depotId = 1;
+		loco.sidingId = ids[0];
+		loco.startTimeOfDayMs = 5_000;
+		loco.repeatDaily = false;
+		loco.cars.add(car("loco", 10));
+
+		final MmtrJobStep couple = new MmtrJobStep();
+		couple.stepId = "couple";
+		couple.type = MmtrJobStep.StepType.COUPLE;
+		couple.targetJobId = "TRAILERS2";
+		couple.dueTimeOfDayMs = 60_000;
+		loco.steps.add(couple);
+
+		final MmtrJobStep uncouple = new MmtrJobStep();
+		uncouple.stepId = "cut";
+		uncouple.type = MmtrJobStep.StepType.UNCOUPLE;
+		uncouple.targetIndex = 0; // head = the loco only; the two flatcars are cut off
+		uncouple.dueTimeOfDayMs = 90_000;
+		loco.steps.add(uncouple);
+
+		final MmtrJobStep moveA = new MmtrJobStep();
+		moveA.stepId = "moveA";
+		moveA.type = MmtrJobStep.StepType.MOVE_TO;
+		moveA.targetId = ids[1];
+		moveA.dueTimeOfDayMs = 150_000;
+		loco.steps.add(moveA);
+
+		final MmtrJobStep moveB = new MmtrJobStep();
+		moveB.stepId = "moveB";
+		moveB.type = MmtrJobStep.StepType.MOVE_TO;
+		moveB.targetId = ids[2];
+		moveB.dueTimeOfDayMs = 240_000;
+		loco.steps.add(moveB);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(trailers);
+		jobs.add(loco);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		final boolean[] sawCoupledThreeCars = {false};
+		boolean sawUncoupledHeadMoving = false;
+		for (int second = 0; second < 420; second++) {
+			sim.step(1000);
+			if (scheduler.stateOf("LOCO2") == MmtrJobScheduler.JobState.RUNNING && scheduler.stepIndexOf("LOCO2") >= 1 && !sawCoupledThreeCars[0]) {
+				sim.sidings.forEach(s -> { if (s.getId() == ids[0] && s.getVehicleCars().size() == 3) { sawCoupledThreeCars[0] = true; } });
+			}
+			// Once the uncouple ran (step index >= 2) the head must be moving alone on route.
+			if (scheduler.stateOf("LOCO2") == MmtrJobScheduler.JobState.RUNNING && scheduler.stepIndexOf("LOCO2") >= 3) {
+				sawUncoupledHeadMoving = true;
+			}
+			if (scheduler.stateOf("LOCO2") == MmtrJobScheduler.JobState.DONE) {
+				break;
+			}
+		}
+		assertTrue(sawCoupledThreeCars[0], "make-up must merge loco + 2 trailers first");
+		assertTrue(sawUncoupledHeadMoving, "head must keep running alone after the yard cut");
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("LOCO2"), "failure=" + scheduler.failureOf("LOCO2"));
+		assertEquals(4, scheduler.stepIndexOf("LOCO2"), "COUPLE + UNCOUPLE + two MOVE_TO steps completed");
+
+		// After the head left, the cut tail respawns from the template and stays parked in the yard.
+		for (int second = 0; second < 30; second++) {
+			sim.step(1000);
+		}
+		final boolean[] tailParked = {false};
+		sim.sidings.forEach(s -> s.iterateVehicles(v -> {
+			if (s.getId() == ids[0] && !v.getIsOnRoute() && v.getId() != 0) { tailParked[0] = true; }
+		}));
+		assertTrue(tailParked[0], "the cut trailers must be parked back on the yard siding");
+		final boolean[] tailTemplate = {false};
+		sim.sidings.forEach(s -> { if (s.getId() == ids[0] && s.getVehicleCars().size() == 2) { tailTemplate[0] = true; } });
+		assertTrue(tailTemplate[0], "the yard template is the two detached trailers");
+	}
+
 }

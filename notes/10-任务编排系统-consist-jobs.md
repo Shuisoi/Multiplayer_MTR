@@ -147,3 +147,13 @@
 - 说明：跨 depot / 机车开往 depot2 任务点股道（到达窗口）仍受 MTR 单停场不变量约束，属下一阶段 B
   （MOVE_TO 股道移动）+ 到达编组窗口；UNCOUPLE 摘挂的股道切分尾车停场窗口同属其后。本轮 make-up
   是同股道车场编排可用的真实合流路径。
+## 进度（round14-A1c）：UNCOUPLE 车场摘挂（尾部留场）接入调度器
+- MmtrJobScheduler 在发车前增加车场作业阶段：停场编组当前步为 UNCOUPLE 时执行切分 —— 按 targetIndex
+  把车厢切成 head（续跑本 job）与 tail；head 经 Siding.rebuildParkedConsist 重建继续，tail 写回
+  股道模板作为下一批"车底源"，等 head 离场后引擎按模板自动重生成停场挂车（保持引擎单停场不变量，
+  不引入双车停场窗口）。
+- job 维护 fleetCars（规格车列）：普通刷车=job.cars；make-up 合并=job.cars+目标.cars；切分后=head。
+  归属/已并编账本沿用；车场作业带截止检查；中途(非停场)遇到 COUPLE/UNCOUPLE 给出明确失败原因。
+- 测试 jobUncouplesTrailersAtYardThenRunsServiceAlone：挂车2节 -> make-up 3节 -> UNCOUPLE(idx0) 切出
+  2 节 -> 机车单车跑完 2 站 DONE（步骤=4），切出挂车以 2 节停场重现在车场；make-up/切分/失败分类既有
+  测试保持绿。全量 cleanTest 绿。

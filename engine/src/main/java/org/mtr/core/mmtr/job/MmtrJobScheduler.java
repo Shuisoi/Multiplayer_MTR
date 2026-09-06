@@ -134,6 +134,34 @@ public final class MmtrJobScheduler {
 			System.out.println("[MMTR-JOB] stock-only job " + instance.job.jobId + " parked on siding (available for coupling)");
 			return;
 		}
+		if (instance.fleetCars.isEmpty()) {
+			instance.fleetCars.addAll(instance.job.cars);
+		}
+		// Yard ops run while the consist is still parked on its own siding and before any mission /
+		// ATO departure: UNCOUPLE cuts trailing cars off (head keeps the job, tail stays in the yard
+		// as the next stock source). A second COUPLE here is not a supported formation (another job's
+		// stock cannot share this siding at the same time).
+		while (instance.stepIndex < instance.job.steps.size()) {
+			final MmtrJobStep yardStep = instance.job.steps.get((int) instance.stepIndex);
+			if (yardStep.type == MmtrJobStep.StepType.UNCOUPLE) {
+				if (dayTime > instance.deadlineOf(yardStep)) {
+					fail(instance, "step " + yardStep.stepId + " missed deadline (due " + yardStep.dueTimeOfDayMs + ")");
+					return;
+				}
+				if (!executeUncouple(instance, simulator)) {
+					return; // executeUncouple failed the instance already
+				}
+			} else if (yardStep.type == MmtrJobStep.StepType.COUPLE) {
+				fail(instance, "additional COUPLE at step " + yardStep.stepId + " is not supported (one make-up per job)");
+				return;
+			} else {
+				break;
+			}
+		}
+		if (instance.stepIndex >= instance.job.steps.size()) {
+			instance.state = JobState.DONE;
+			return;
+		}
 		if (instance.mode == Mode.MANUAL) {
 			runManualStep(instance, simulator);
 			instance.state = JobState.RUNNING;
@@ -197,13 +225,10 @@ public final class MmtrJobScheduler {
 			}
 			return CoupleOutcome.WAIT;
 		}
-		final ObjectArrayList<org.mtr.core.data.VehicleCar> merged = new ObjectArrayList<>();
-		for (final MmtrCarSpec spec : instance.job.cars) {
-			merged.add(toVehicleCar(spec));
-		}
-		for (final MmtrCarSpec spec : target.job.cars) {
-			merged.add(toVehicleCar(spec));
-		}
+		instance.fleetCars.clear();
+		instance.fleetCars.addAll(instance.job.cars);
+		instance.fleetCars.addAll(target.job.cars);
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> merged = toVehicleCars(instance.fleetCars);
 		final Vehicle rebuilt = yard.rebuildParkedConsist(merged);
 		if (rebuilt == null) {
 			fail(instance, "coupled formation does not fit the yard siding (cars=" + merged.size() + ")");
@@ -256,6 +281,63 @@ public final class MmtrJobScheduler {
 		return false;
 	}
 
+	/**
+	 * UNCOUPLE on the yard: split the parked consist after {@code targetIndex}. The head keeps the
+	 * job (rebuilt through the yard surgery); the cut tail becomes the siding's next stock source -
+	 * the engine respawns it as a parked vehicle once the head has cleared the siding, which keeps
+	 * the engine's single-parked-vehicle invariant intact.
+	 */
+	private boolean executeUncouple(JobInstance instance, Simulator simulator) {
+		final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
+		final int cut = step.targetIndex;
+		final Siding yard = findSiding(simulator, instance.job.sidingId);
+		final Vehicle current = findVehicle(simulator, instance.vehicleId);
+		if (yard == null || current == null || current.getIsOnRoute()) {
+			fail(instance, "uncouple requires the consist parked at its yard siding (step " + step.stepId + ")");
+			return false;
+		}
+		if (instance.fleetCars.isEmpty()) {
+			instance.fleetCars.addAll(instance.job.cars);
+		}
+		if (cut < 0 || cut >= instance.fleetCars.size() - 1) {
+			fail(instance, "uncouple cut index " + cut + " must leave at least one car on each side (" + instance.fleetCars.size() + " cars)");
+			return false;
+		}
+		final ObjectArrayList<MmtrCarSpec> head = new ObjectArrayList<>(cut + 1);
+		final ObjectArrayList<MmtrCarSpec> tail = new ObjectArrayList<>(instance.fleetCars.size() - cut - 1);
+		for (int i = 0; i < instance.fleetCars.size(); i++) {
+			(i <= cut ? head : tail).add(instance.fleetCars.get(i));
+		}
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> headCars = toVehicleCars(head);
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> tailCars = toVehicleCars(tail);
+		if (Siding.getTotalVehicleLength(tailCars) > yard.getRailLength()) {
+			fail(instance, "uncoupled tail does not fit the yard siding (step " + step.stepId + ")");
+			return false;
+		}
+		final Vehicle rebuiltHead = yard.rebuildParkedConsist(headCars);
+		if (rebuiltHead == null) {
+			fail(instance, "uncoupled head does not fit the yard siding (step " + step.stepId + ")");
+			return false;
+		}
+		// The tail is detached as the yard's next stock source: with the head parked the engine
+		// spawns nothing; once the head leaves, a fresh parked vehicle is generated from the template.
+		yard.setVehicleCars(tailCars);
+		instance.fleetCars.clear();
+		instance.fleetCars.addAll(head);
+		instance.vehicleId = rebuiltHead.getId();
+		instance.stepIndex++;
+		System.out.println("[MMTR-JOB] uncoupled " + tail.size() + " car(s) off " + instance.job.jobId + " -> head vehicle " + rebuiltHead.getId());
+		return true;
+	}
+
+	private static ObjectArrayList<org.mtr.core.data.VehicleCar> toVehicleCars(ObjectArrayList<MmtrCarSpec> specs) {
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = new ObjectArrayList<>(specs.size());
+		for (final MmtrCarSpec spec : specs) {
+			cars.add(toVehicleCar(spec));
+		}
+		return cars;
+	}
+
 	private void running(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
 		if (instance.stepIndex >= instance.job.steps.size()) {
 			instance.state = JobState.DONE;
@@ -280,6 +362,10 @@ public final class MmtrJobScheduler {
 		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
 		if (vehicle == null) {
 			fail(instance, "consist vanished before step " + step.stepId);
+			return;
+		}
+		if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
+			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding (step " + step.stepId + ")");
 			return;
 		}
 		final MmtrMission mission = new MmtrMission(vehicle.getId(), step.type == MmtrJobStep.StepType.SERVE ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER, instance.job.sidingId, 0, simulator.getCurrentMillis());
@@ -341,7 +427,7 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
-			fail(instance, "coupling steps not wired to the executor yet");
+			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding, not mid-route (step " + step.stepId + ")");
 			return;
 		}
 		final long platformNow = vehicle.vehicleExtraData.getThisPlatformId();
@@ -422,6 +508,8 @@ public final class MmtrJobScheduler {
 		@Nullable String failureReason;
 		long startAbs;
 		boolean carsPlaced;
+		/** The formation this job currently operates (spec list): spawn stock, merged make-up or post-cut head. */
+		final ObjectArrayList<MmtrCarSpec> fleetCars = new ObjectArrayList<>();
 		/** This job's stock was merged into another job's consist (no longer stands alone). */
 		boolean consumed;
 		/** Whether the consist was last seen stopped at the current step's target platform (AUTO SERVE). */
