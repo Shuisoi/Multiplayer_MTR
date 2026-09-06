@@ -9,6 +9,7 @@ import it.unimi.dsi.fastutil.objects.ObjectImmutableList;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.Main;
 import org.mtr.core.data.NameColorDataBase;
+import org.mtr.core.data.Vehicle;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.map.*;
 import org.mtr.core.operation.ArrivalsRequest;
@@ -131,6 +132,11 @@ public final class SystemMapServlet extends ServletBase {
 				train.addProperty("speedKmh", Math.round(vehicle.getSpeed() * 3600000.0) / 1000.0);
 				train.addProperty("railProgressM", Math.round(vehicle.getRailProgress() * 100.0) / 100.0);
 				train.addProperty("doorsOpen", vehicle.vehicleExtraData.getDoorMultiplier() > 0);
+				final Vehicle.PositionAndTiltAngle head = vehicle.getHeadPositionAndTiltAngle();
+				if (head != null) {
+					train.addProperty("headX", Math.round(head.position().x() * 100.0) / 100.0);
+					train.addProperty("headZ", Math.round(head.position().z() * 100.0) / 100.0);
+				}
 				final MmtrMission mission = vehicle.getMmtrMission();
 				if (mission != null) {
 					final com.google.gson.JsonObject missionJson = new com.google.gson.JsonObject();
@@ -160,6 +166,9 @@ public final class SystemMapServlet extends ServletBase {
 		root.addProperty("currentTime", currentMillis);
 		root.add("trains", trains);
 		root.add("sidings", sidings);
+		// Reserved for the automatic signal / point layer (future infrastructure reaction layer).
+		root.add("signals", new com.google.gson.JsonArray());
+		root.add("points", new com.google.gson.JsonArray());
 		return root;
 	}
 }

@@ -115,6 +115,8 @@ public final class MmtrTrainsServletTests {
 
 		final JsonObject root = result[0];
 		assertTrue(root.has("trains") && root.has("sidings"), "feed must carry trains and sidings");
+		assertTrue(root.has("signals") && root.has("points"), "feed must reserve signal/point fields for the infrastructure layer");
+		assertTrue(root.getAsJsonArray("signals").isEmpty() && root.getAsJsonArray("points").isEmpty(), "reserved layers start empty");
 		final JsonObject train = root.getAsJsonArray("trains").get(0).getAsJsonObject();
 		assertEquals(parked[0].getId(), train.get("vehicleId").getAsLong(), "feed train must match the spawned vehicle");
 		assertTrue(train.has("sidingName") && train.has("depotName"), "train must expose siding/depot names");

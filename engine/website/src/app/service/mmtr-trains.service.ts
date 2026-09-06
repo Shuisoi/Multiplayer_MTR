@@ -28,8 +28,12 @@ export interface MmtrTrainState {
 	speedKmh: number;
 	railProgressM: number;
 	doorsOpen: boolean;
+	headX?: number;
+	headZ?: number;
 	mission?: MmtrMissionState;
 }
+
+export interface MmtrSignalState { id: string; }
 
 export interface MmtrSidingState {
 	sidingId: number;
@@ -67,7 +71,7 @@ export class MmtrTrainsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{ data: { currentTime: number, trains: MmtrTrainState[], sidings: MmtrSidingState[] } }>(this.getUrl()).subscribe({
+		this.httpClient.get<{ data: { currentTime: number, trains: MmtrTrainState[], sidings: MmtrSidingState[], signals?: MmtrSignalState[], points?: MmtrSignalState[] } }>(this.getUrl()).subscribe({
 			next: response => {
 				this.trains.set(response.data.trains ?? []);
 				this.sidings.set(response.data.sidings ?? []);
