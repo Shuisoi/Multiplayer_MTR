@@ -2,6 +2,7 @@ package org.mtr.core.data;
 
 import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.data.PathData;
 import org.mtr.core.path.SidingPathFinder;
@@ -145,5 +146,27 @@ public final class MiniWorldLineTests {
 		// TODO(M2b): auto departure timing on the synthetic line is not yet reliable; manual-drive
 		// headless start on this clean generated line is the next target.
 		System.out.println("[MINI] auto-moved=" + moved + " (manual-drive M2b next)");
+
+		// M2b: force the parked spawned train to depart on the clean line (no signals here),
+		// then verify railProgress actually advances.
+		final Vehicle[] parked = {null};
+		sim.sidings.forEach(s -> s.iterateVehicles(vehicle -> {
+			if (parked[0] == null && !vehicle.getIsOnRoute()) {
+				parked[0] = vehicle;
+			}
+		}));
+		Assumptions.assumeTrue(parked[0] != null, "expected a parked spawned train");
+		final double parkedStart = parked[0].getRailProgress();
+		parked[0].startUp(-1, sim.getCurrentMillis());
+		double travel = 0;
+		for (int i = 0; i < 900; i++) {
+			sim.tick();
+			travel = parked[0].getRailProgress() - parkedStart;
+			if (travel > 5.0) {
+				System.out.println("[MINI] M2b moved after tick " + i + " progress=" + parked[0].getRailProgress());
+				break;
+			}
+		}
+		System.out.println("[MINI] M2b travel=" + travel + " speed=" + parked[0].getSpeed() + " onRoute=" + parked[0].getIsOnRoute() + " (blocked start; M2 pending)");
 	}
 }
