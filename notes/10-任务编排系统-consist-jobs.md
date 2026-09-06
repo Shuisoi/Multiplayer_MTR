@@ -184,3 +184,14 @@
   自动载入并挂调度器 → 整条宏（make-up 3 节 → 跑站 → 回库 → 摘挂 2 节）真实跑完 DONE；另验证
   ctor 自加载路径。全部 12 个 MmtrJobSchedulerTests 真实执行（含 make-up/final-cut/full-macro/
   return-yard/file-e2e），全量 cleanTest 绿。
+## 进度（round17）：真实 dev 世界冒烟（引擎直接加载 Minecraft 开发存档）
+- DevWorldJobSmokeTests：把真实存档 mmtr/game/fabric/run/saves/新的世界/mtr 直接载入引擎 Simulator，
+  用 web 风格作业单（真实 depot 名下股道 id + 真实站台 id）认领现存手动车底并驱车上线运行：
+  观测到 RUNNING（车辆在真实轨网移动、无失败）。启动接受型断言，避免活存档（动态车流/manual 车场）
+  导致不稳定；完整链路完成性由合成世界 + 文件自加载 e2e 保证。
+- 实际存档拓扑：1 depot(112330) / 名下 1 条 27m manual 股道 / 4 站台 / 单路线 3 站台；
+  另发现 3 条无 depot 的残轨股道（选股道须从 depot.savedRails 取）。manual 车场引擎不自生车
+  （需要玩家/时刻表），清场+自生仅适用于 auto 车场——已在合成世界覆盖。
+- 引擎全量（cleanTest）207 tests / 0 fail / 0 skip（含真实世界冒烟）。
+- 到达目标验收状态：A 连解挂执行器闭环 + B 退库/回场再作业均已在确定性合成世界与文件驱动 e2e 验证，
+  真实存档亦能接受 web 作业单并驱动实车；最终"在游戏内"由用户在实机运行 MC+Fabric 观察面板完成。
