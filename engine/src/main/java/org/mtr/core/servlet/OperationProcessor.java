@@ -59,6 +59,14 @@ public final class OperationProcessor {
 	 */
 	public static final String MMTR_DRIVE = "mmtr_drive";
 	/**
+	 * MMTR: couple the tail vehicle onto the head vehicle (both stopped on one manual siding).
+	 */
+	public static final String MMTR_COUPLE = "mmtr_couple";
+	/**
+	 * MMTR: cut the vehicle after the given car index (uncouple into two trains).
+	 */
+	public static final String MMTR_UNCOUPLE = "mmtr_uncouple";
+	/**
 	 * Press a hall-call button on a lift.
 	 */
 	public static final String PRESS_LIFT = "press_lift";
@@ -144,6 +152,14 @@ public final class OperationProcessor {
 			}
 			case MMTR_DRIVE -> {
 				new org.mtr.core.operation.MmtrDriveControl(jsonReader).apply(simulator);
+				yield null;
+			}
+			case MMTR_COUPLE -> {
+				new org.mtr.core.operation.MmtrCoupleControl(jsonReader).couple(simulator);
+				yield null;
+			}
+			case MMTR_UNCOUPLE -> {
+				new org.mtr.core.operation.MmtrCoupleControl(jsonReader).uncouple(simulator);
 				yield null;
 			}
 			case PRESS_LIFT -> {
