@@ -61,3 +61,10 @@
   MOVE_TO A -> SERVE A -> MOVE_TO B 全链 DONE(step=3, t≈28)，engine ATO 真实停靠两站。
 - MANUAL 模式（round1 终点跑法）与 MANUAL 测试保持绿。
 - engine 全量 193 tests / 0 fail / 0 error。
+
+## 进度（round3）：按 job.cars 定时刷车
+- MmtrJobScheduler.pending：到刷车时刻若股道无停场车 -> 把 job.cars（MmtrCarSpec->VehicleCar）set 到股道，
+  引擎下一 siding tick 生成停场编组 -> 自动进入 MANUAL/AUTO 执行；无编组模板或 30s 内未能生成 => FAILED。
+- MmtrJobSchedulerTests.jobSpawnsItsOwnConsistFromJobCarsThenRunsService（auto 世界无预设车，job.cars=1 节，
+  MOVE_TO A -> MOVE_TO B）DONE step=2，证明“某时某股道刷出某车”真正可用。
+- engine 全量 194 tests / 0 fail / 0 error。

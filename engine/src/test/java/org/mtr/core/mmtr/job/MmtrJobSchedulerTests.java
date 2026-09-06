@@ -165,7 +165,7 @@ public final class MmtrJobSchedulerTests {
 	}
 
 	/** Auto siding fixture: depot path generated, one parked auto vehicle (ATO-capable). */
-	private static long[] buildAutoWorld() {
+	private static long[] buildAutoWorld(boolean presetCars) {
 		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-mini-job-auto"), false);
 		final ObjectArrayList<String> noStyles = new ObjectArrayList<>();
 		final Position p0 = new Position(0, 0, 0);
@@ -224,7 +224,11 @@ public final class MmtrJobSchedulerTests {
 		assertEquals("SUCCESSFUL", depot.getLastGeneratedStatus().name());
 		final boolean[] parked = {false};
 		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (!v.getIsOnRoute()) { parked[0] = true; } }));
-		assertTrue(parked[0], "auto siding must hold a parked vehicle after generation");
+		if (presetCars) {
+			assertTrue(parked[0], "auto siding must hold a parked vehicle after generation");
+		} else {
+			org.junit.jupiter.api.Assumptions.assumeTrue(!parked[0], "no stock should be parked before the job spawns it");
+		}
 		// keep simulator reachable for the stepping loop via a static holder
 		AUTO_SIM[0] = sim;
 		return new long[]{siding.getId(), platformA.getId(), platformB.getId()};
@@ -234,7 +238,7 @@ public final class MmtrJobSchedulerTests {
 
 	@Test
 	public void autoServiceRunsPlatformStepsWithDeadlines() {
-		final long[] ids = buildAutoWorld();
+		final long[] ids = buildAutoWorld(true);
 		final Simulator sim = AUTO_SIM[0];
 
 		final MmtrConsistJob job = new MmtrConsistJob();
@@ -297,4 +301,66 @@ public final class MmtrJobSchedulerTests {
 		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("J-auto"), "failure=" + scheduler.failureOf("J-auto"));
 		assertEquals(3, scheduler.stepIndexOf("J-auto"));
 	}
+
+	@Test
+	public void jobSpawnsItsOwnConsistFromJobCarsThenRunsService() {
+		final long[] ids = buildAutoWorld(false); // no stock preset: the job must spawn it
+		final Simulator sim = AUTO_SIM[0];
+
+		final MmtrConsistJob job = new MmtrConsistJob();
+		job.jobId = "J-spawn";
+		job.depotId = 1;
+		job.sidingId = ids[0];
+		job.startTimeOfDayMs = 2_000;
+		job.repeatDaily = false;
+
+		final MmtrCarSpec car = new MmtrCarSpec();
+		car.vehicleId = "loco";
+		car.length = 10;
+		car.width = 2;
+		car.capacity = 100;
+		car.bogie1Position = 0;
+		car.bogie2Position = 5;
+		car.couplingPadding1 = 0.5;
+		car.couplingPadding2 = 0.5;
+		job.cars.add(car);
+
+		final MmtrJobStep moveA = new MmtrJobStep();
+		moveA.stepId = "moveA";
+		moveA.type = MmtrJobStep.StepType.MOVE_TO;
+		moveA.targetId = ids[1];
+		moveA.dueTimeOfDayMs = 60_000;
+		job.steps.add(moveA);
+
+		final MmtrJobStep moveB = new MmtrJobStep();
+		moveB.stepId = "moveB";
+		moveB.type = MmtrJobStep.StepType.MOVE_TO;
+		moveB.targetId = ids[2];
+		moveB.dueTimeOfDayMs = 180_000;
+		job.steps.add(moveB);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(job);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		boolean sawPlacedLog = false;
+		for (int second = 0; second < 400; second++) {
+			sim.step(1000);
+			final MmtrJobScheduler.JobState st = scheduler.stateOf("J-spawn");
+			if (st == MmtrJobScheduler.JobState.RUNNING || st == MmtrJobScheduler.JobState.DONE) {
+				sawPlacedLog = true;
+			}
+			if (second % 10 == 0 || st == MmtrJobScheduler.JobState.DONE || st == MmtrJobScheduler.JobState.FAILED) {
+				System.out.println("[JOBSPAWN] t=" + second + " state=" + st + " step=" + scheduler.stepIndexOf("J-spawn") + " fail=" + scheduler.failureOf("J-spawn"));
+			}
+			if (st == MmtrJobScheduler.JobState.DONE || st == MmtrJobScheduler.JobState.FAILED) {
+				break;
+			}
+		}
+		assertTrue(sawPlacedLog, "job must spawn its consist from job.cars");
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("J-spawn"), "failure=" + scheduler.failureOf("J-spawn"));
+		assertEquals(2, scheduler.stepIndexOf("J-spawn"));
+	}
+
 }

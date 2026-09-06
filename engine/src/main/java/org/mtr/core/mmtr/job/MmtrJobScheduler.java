@@ -79,13 +79,32 @@ public final class MmtrJobScheduler {
 		}
 	}
 
+	private static final long SPAWN_GRACE_MILLIS = 30_000;
+
 	private void pending(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
 		if (dayTime < instance.job.startTimeOfDayMs) {
 			return;
 		}
 		final Vehicle vehicle = findParkedVehicle(simulator, instance.job.sidingId);
 		if (vehicle == null) {
-			fail(instance, "no idle stock on siding at spawn time");
+			// Spawn the consist from the job's rolling-stock template the first time we are due.
+			// The engine creates the parked vehicle on its next siding tick; until then we stay
+			// pending (a 30s grace protects against a siding that can never spawn).
+			if (!instance.carsPlaced) {
+				if (instance.job.cars.isEmpty()) {
+					fail(instance, "job defines no rolling stock");
+					return;
+				}
+				if (!placeCars(simulator, instance.job)) {
+					fail(instance, "could not place job rolling stock on siding");
+					return;
+				}
+				instance.carsPlaced = true;
+				System.out.println("[MMTR-JOB] placed " + instance.job.cars.size() + " car(s) from job " + instance.job.jobId);
+			}
+			if (dayTime > instance.job.startTimeOfDayMs + SPAWN_GRACE_MILLIS) {
+				fail(instance, "stock never spawned on siding");
+			}
 			return;
 		}
 		instance.vehicleId = vehicle.getId();
@@ -218,6 +237,20 @@ public final class MmtrJobScheduler {
 		instance.failureReason = reason;
 	}
 
+	/** Place the job's rolling stock template on the siding so the engine spawns a parked consist. */
+	private static boolean placeCars(Simulator simulator, MmtrConsistJob job) {
+		final Siding siding = findSiding(simulator, job.sidingId);
+		if (siding == null) {
+			return false;
+		}
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = new ObjectArrayList<>();
+		for (final MmtrCarSpec spec : job.cars) {
+			cars.add(new org.mtr.core.data.VehicleCar(spec.vehicleId, spec.length, spec.width, spec.capacity, spec.bogie1Position, spec.bogie2Position, spec.couplingPadding1, spec.couplingPadding2));
+		}
+		siding.setVehicleCars(cars);
+		return true;
+	}
+
 	@Nullable
 	private static Vehicle findParkedVehicle(Simulator simulator, long sidingId) {
 		final Vehicle[] found = {null};
@@ -268,6 +301,7 @@ public final class MmtrJobScheduler {
 		long vehicleId;
 		@Nullable String failureReason;
 		long startAbs;
+		boolean carsPlaced;
 		/** Whether the consist was last seen stopped at the current step's target platform (AUTO SERVE). */
 		boolean wasAtTarget;
 
