@@ -214,3 +214,16 @@
   UNCOUPLE 切分后变小），运营面板可实时看到"实际编组几节车"。
 - MmtrJobScheduler.carsOf(jobId)；MmtrJobStateSummary.cars；ops-panel 作业单行新增"cars 节车"徽章。
 - 测试：registry states 断言 cars 字段；engine 全量 207 tests / 0 fail / 0 skip；website lint+build 绿。
+## 进度（round21）：验收对照矩阵（供收尾决策）
+| 目标条款 | 状态 | 证据 |
+| --- | --- | --- |
+| A COUPLE make-up 执行器 | ✅ | spawn-time 组合 + 引擎单次自生；MmtrJobSchedulerTests.jobCouplesEarlierTrailerStockThenRunsService / fullMacro / registryFile e2e；日志 "make-up: coupled … cars=3" |
+| A UNCOUPLE 摘挂（车场最终切分/留场） | ✅ | MmtrJobSchedulerTests.jobUncouplesTrailersAtYardAsFinalCut / fullMacro 末尾；日志 "uncoupled N car(s) off"；tail 模板留场 |
+| A 归属/consumed 账本 + 空步骤车底源 + 失败分类 | ✅ | scheduler consumed/claimedByOther/明确失败原因；couplingStepFailsWhenTargetJobIsNotLoaded |
+| B 退库/回场再作业 | ✅ | jobReturnsToYardWhenStepTargetsItsOwnSiding（MOVE_TO done back at yard）+ fullMacro |
+| B 任务点（跨车场）股道移动 | ⚠️ 未实现 | 引擎单 depot 进路模型限制（docs/03 M2 路由范围）；已给明确失败原因，编辑器无误导 |
+| dev/游戏验证：web 作业单驱动车流 | ✅ 实测 | 真实存档引擎 8899：upsert → RUNNING（车 155-250km/h onRoute）→ DONE；web /a/ HTTP200；DevWorldJobSmokeTests |
+| 连挂/摘挂拉走全链（引擎合成世界 + 文件驱动） | ✅ | registryFileDrivesFullMacroEndToEnd：make-up 3 节→跑站→回库→摘挂 2 节 DONE step=5 |
+| 真实存档内完整 DONE 宏（需 auto 车场） | ⚠️ 环境缺失 | 存档仅 manual 车场；manual 引擎不自生车（约束已文档化） |
+| 引擎回归 | ✅ | cleanTest 207 tests / 0 fail / 0 skip（多轮） |
+| web 构建 | ✅ | ng lint+build exit 0 |
