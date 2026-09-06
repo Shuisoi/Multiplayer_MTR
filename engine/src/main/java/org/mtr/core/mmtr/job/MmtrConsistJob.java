@@ -15,6 +15,9 @@ import org.mtr.core.serializer.WriterBase;
 public final class MmtrConsistJob implements SerializedDataBase {
 
 	public String jobId = "";
+	/** 编组代码 (named consist template id): when set and {@link #cars} is empty the scheduler
+	 * expands the cars from the server-side template registry - authoring = 车场/股道 + 车辆代码. */
+	public String consistId = "";
 	/** In-game depot id (world framing stays in game). */
 	public long depotId;
 	/** Siding inside the depot where the consist is spawned. */
@@ -36,6 +39,7 @@ public final class MmtrConsistJob implements SerializedDataBase {
 	@Override
 	public void updateData(ReaderBase readerBase) {
 		jobId = readerBase.getString("jobId", "");
+		consistId = readerBase.getString("consistId", "");
 		depotId = parseNumericId(readerBase, "depotId");
 		sidingId = parseNumericId(readerBase, "sidingId");
 		startTimeOfDayMs = readerBase.getLong("startTimeOfDayMs", 0);
@@ -52,6 +56,9 @@ public final class MmtrConsistJob implements SerializedDataBase {
 	@Override
 	public void serializeData(WriterBase writerBase) {
 		writerBase.writeString("jobId", jobId);
+		if (!consistId.isEmpty()) {
+			writerBase.writeString("consistId", consistId);
+		}
 		writerBase.writeString("depotId", String.valueOf(depotId));
 		writerBase.writeString("sidingId", String.valueOf(sidingId));
 		writerBase.writeLong("startTimeOfDayMs", startTimeOfDayMs);

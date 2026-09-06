@@ -27,6 +27,12 @@
 			编组 / Rolling stock
 			<button type="button" class="mmtr-mini-btn" (click)="addCar()">+ 加车</button>
 		</div>
+		@if (templateOptions().length > 0) {
+			<div class="mmtr-template-row">
+				<p-select inputId="mmtr-template" [options]="templateOptions()" optionLabel="label" optionValue="id" [(ngModel)]="selectedTemplateId" (ngModelChange)="applyTemplate($event)" [fluid]="true" placeholder="编组代码：从模板载入车列…"/>
+				<span class="mmtr-hint">选择服务端保存的编组模板后自动填充车辆（可再手工微调），保存时仍以具体车列写回。</span>
+			</div>
+		}
 		@if (cars.length === 0) {
 			<div class="mmtr-empty">未定义车辆 —— 作业单到点将无法刷车</div>
 		}

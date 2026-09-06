@@ -243,3 +243,14 @@
   * 真实存档（auto 27m 车场）宏：make-up 合并 loco+flatcar=2 节 -> 引擎自生 -> auto service started ->
     UNCOUPLE 摘 1 节留场 -> DONE step=2（同文件探针，运行后已删除探针）；
   * 引擎全量 207 tests / 0 fail / 0 error（4 个 skip 为既有 dev/共享目录状态门控）。
+## 进度（round24）：编组模板（车辆代码）—— 作业单只需 车场/股道 + 编组代码
+- 新增服务端"编组模板"注册表 <save>/mmtr-consist-templates.json：{templates:[{id,name,cars:[MmtrCarSpec]}]}
+  （MmtrConsistTemplate / MmtrConsistTemplateRegistry），车列一次维护、处处引用。
+- MmtrConsistJob 新增可选 consistId（车辆代码）：cars 为空且 consistId 命中模板时，Simulator 在
+  加载与 upsert/持久化时自动把模板车列展开为具体 cars（展开在保存前），刷车/COUPLE/UNCOUPLE 全链路
+  无需改动——作者侧由"每节手填规格"降为"选车场+选代码"。
+- mmtr-job-references 增加 templates（含 cars），web 编辑器"编组"区新增"编组代码：从模板载入"下拉，
+  选择即填充车辆列表（仍可手工微调，保存写回具体车列）。
+- 测试：模板注册表/展开/持久化/ references（MmtrJobRegistryTests.consistTemplateRegistryExpandsJobs…）；
+  引擎全量 208 tests / 0 fail / 0 error；website lint+build 绿。
+- 后续可加：模板 CRUD 端点与界面（当前以文件+ops 维护），编组模板与 COUPLE 目标下拉联动。

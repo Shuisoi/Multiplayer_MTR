@@ -92,6 +92,7 @@ export class MmtrJobEditorComponent implements OnChanges {
 	protected cars: MmtrCarSpec[] = [];
 	protected steps: MmtrJobStepEdit[] = [];
 	protected error = "";
+	protected selectedTemplateId = "";
 
 	protected readonly isNew = () => this.jobId === "";
 
@@ -130,6 +131,23 @@ export class MmtrJobEditorComponent implements OnChanges {
 
 
 	/** COUPLE target picker: every other consist job whose stock could be coupled (daily respawn keeps ids stable). */
+
+	/** 编组代码：服务端命名模板（车列一次维护、处处引用）。选择后填充到下方车辆列表（可再手工微调）。 */
+	protected templateOptions() {
+		return this.references().templates.map(template => ({
+			id: template.id,
+			label: `${template.id}${template.name ? " · " + template.name : ""}（${template.cars.length} 节）`,
+		}));
+	}
+
+	protected applyTemplate(templateId: string) {
+		const template = this.references().templates.find(t => t.id === templateId);
+		if (!template) {
+			return;
+		}
+		this.cars = template.cars.map(spec => ({...spec}));
+		this.selectedTemplateId = templateId;
+	}
 
 	/** Engine semantics surfaced to the author: COUPLE must precede the source job's spawn; UNCOUPLE is a yard-final cut. */
 	protected stepHint(step: MmtrJobStep): string {

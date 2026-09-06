@@ -236,10 +236,15 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("stationName", platform.area == null ? "" : platform.area.getName());
 			platforms.add(out);
 		});
+		final com.google.gson.JsonArray templates = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.job.MmtrConsistTemplate template : simulator.mmtrConsistTemplates.templates) {
+			templates.add(Utilities.getJsonObjectFromData(template));
+		}
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
 		root.add("depots", depots);
 		root.add("sidings", sidings);
 		root.add("platforms", platforms);
+		root.add("templates", templates);
 		return root;
 	}
 }

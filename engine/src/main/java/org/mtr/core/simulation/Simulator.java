@@ -74,6 +74,8 @@ public class Simulator extends Data implements Utilities {
 	 * ticks each simulation tick after vehicle simulation.
 	 */
 	public org.mtr.core.mmtr.job.MmtrJobScheduler mmtrJobScheduler;
+	/** Named consist templates (编组代码 -> 车列), loaded from <save>/mmtr-consist-templates.json. */
+	public org.mtr.core.mmtr.job.MmtrConsistTemplateRegistry mmtrConsistTemplates = new org.mtr.core.mmtr.job.MmtrConsistTemplateRegistry();
 	/**
 	 * MMTR job mode: when true the legacy depot frequency/departure auto-dispatch is disabled -
 	 * vehicles only run what MmtrJobScheduler starts (the web diagrams). Default false keeps the
@@ -206,13 +208,26 @@ public class Simulator extends Data implements Utilities {
 		try {
 			if (java.nio.file.Files.exists(mmtrJobsPath)) {
 				mmtrJobRegistry = org.mtr.core.mmtr.job.MmtrJobRegistry.fromFile(mmtrJobsPath);
-				if (!mmtrJobRegistry.jobs.isEmpty()) {
-					mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
-					log.info("MMTR: loaded {} consist job(s) for {}", mmtrJobRegistry.jobs.size(), dimension);
-				}
 			}
 		} catch (Exception e) {
 			log.warn("Failed to load MMTR consist jobs for {}: {}", dimension, e.getMessage());
+		}
+
+		// MMTR: named consist templates (编组代码) for job authoring.
+		final java.nio.file.Path mmtrTemplatePath = savePath.resolve("mmtr-consist-templates.json");
+		try {
+			if (java.nio.file.Files.exists(mmtrTemplatePath)) {
+				mmtrConsistTemplates = org.mtr.core.mmtr.job.MmtrConsistTemplateRegistry.fromFile(mmtrTemplatePath);
+				log.info("MMTR: loaded {} consist template(s) for {}", mmtrConsistTemplates.templates.size(), dimension);
+			}
+		} catch (Exception e) {
+			log.warn("Failed to load MMTR consist templates for {}: {}", dimension, e.getMessage());
+		}
+
+		if (!mmtrJobRegistry.jobs.isEmpty()) {
+			expandMmtrJobTemplates();
+			mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
+			log.info("MMTR: loaded {} consist job(s) for {}", mmtrJobRegistry.jobs.size(), dimension);
 		}
 
 		// Initialize cache
@@ -298,10 +313,28 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	private void persistMmtrJobs() {
+		expandMmtrJobTemplates();
 		if (mmtrJobsPath != null) {
 			mmtrJobRegistry.save(mmtrJobsPath);
 		}
 		mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
+	}
+
+	/**
+	 * Expand jobs that reference a named consist template (车辆代码) but carry no explicit cars.
+	 * Authoring then is just 车场/股道 + 编组代码; spawning still uses the concrete car list.
+	 */
+	private void expandMmtrJobTemplates() {
+		for (final org.mtr.core.mmtr.job.MmtrConsistJob job : mmtrJobRegistry.jobs) {
+			if (!job.consistId.isEmpty() && job.cars.isEmpty()) {
+				final org.mtr.core.mmtr.job.MmtrConsistTemplate template = mmtrConsistTemplates.get(job.consistId);
+				if (template != null) {
+					for (final org.mtr.core.mmtr.job.MmtrCarSpec spec : template.cars) {
+						job.cars.add(spec);
+					}
+				}
+			}
+		}
 	}
 
 	public void save() {

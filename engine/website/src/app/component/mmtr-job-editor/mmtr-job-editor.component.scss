@@ -225,3 +225,9 @@
 	border-radius: 0.35rem;
 	background: rgba(88, 166, 255, 0.1);
 }
+
+.mmtr-template-row {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+}

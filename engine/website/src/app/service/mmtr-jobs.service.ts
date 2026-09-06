@@ -75,13 +75,20 @@ export interface MmtrPlatformRef {
 	stationName: string;
 }
 
+export interface MmtrConsistTemplateRef {
+	id: string;
+	name?: string;
+	cars: MmtrCarSpec[];
+}
+
 export interface MmtrJobReferences {
 	depots: MmtrDepotRef[];
 	sidings: MmtrSidingRef[];
 	platforms: MmtrPlatformRef[];
+	templates: MmtrConsistTemplateRef[];
 }
 
-const EMPTY_REFERENCES: MmtrJobReferences = {depots: [], sidings: [], platforms: []};
+const EMPTY_REFERENCES: MmtrJobReferences = {depots: [], sidings: [], platforms: [], templates: []};
 
 /**
  * Web data plane for consist jobs (车底作业单): reads the engine's mmtr-jobs document plus the

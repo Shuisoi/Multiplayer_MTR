@@ -159,6 +159,56 @@ public final class MmtrJobRegistryTests {
 		assertEquals(0L, parsed.targetId);
 	}
 
+	@Test
+	public void consistTemplateRegistryExpandsJobsOnUpsertAndShowsInReferences() {
+		final String dir = "build/mmtr-tpl-test";
+		deleteIfExists(Paths.get(dir + "/test/mmtr-jobs.json"));
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get(dir), false);
+
+		// Server-side named templates (编组代码) - stand in for mmtr-consist-templates.json.
+		final MmtrConsistTemplate template = new MmtrConsistTemplate();
+		template.id = "T-8";
+		template.name = "8节挂车";
+		for (int i = 0; i < 8; i++) {
+			final MmtrCarSpec car = new MmtrCarSpec();
+			car.vehicleId = "flatcar";
+			car.length = 10;
+			car.width = 2;
+			car.capacity = 100;
+			car.bogie1Position = 0;
+			car.bogie2Position = 5;
+			car.couplingPadding1 = 0.5;
+			car.couplingPadding2 = 0.5;
+			template.cars.add(car);
+		}
+		sim.mmtrConsistTemplates.templates.add(template);
+
+		// Author with ONLY 车场/股道 + 编组代码 (no per-car specs).
+		final MmtrConsistJob job = sampleJob("J-TPL");
+		job.cars.clear();
+		job.consistId = "T-8";
+		sim.upsertMmtrJob(job);
+
+		assertEquals(8, sim.getMmtrJobRegistry().jobs.get(0).cars.size(), "job cars must expand from the named template");
+		assertNotNull(sim.mmtrJobScheduler, "scheduler rebuilds after template expansion");
+
+		// Persisted job keeps concrete cars (and the original 编组代码).
+		final MmtrJobRegistry reloaded = MmtrJobRegistry.fromFile(Paths.get(dir + "/test/mmtr-jobs.json"));
+		assertEquals(8, reloaded.jobs.get(0).cars.size());
+		assertEquals("T-8", reloaded.jobs.get(0).consistId);
+
+		// References endpoint exposes templates for the web editor picker.
+		final ObjectArrayList<Simulator> simulators = new ObjectArrayList<>();
+		simulators.add(sim);
+		final SystemMapServlet servlet = new SystemMapServlet(new ObjectImmutableList<>(simulators));
+		final JsonObject[] refs = {null};
+		servlet.getContent("mmtr-job-references", "", new Object2ObjectAVLTreeMap<>(), new JsonReader(new JsonObject()), sim, json -> refs[0] = json);
+		assertNotNull(refs[0]);
+		assertEquals(1, refs[0].getAsJsonArray("templates").size());
+		assertEquals("T-8", refs[0].getAsJsonArray("templates").get(0).getAsJsonObject().get("id").getAsString());
+		assertEquals(8, refs[0].getAsJsonArray("templates").get(0).getAsJsonObject().getAsJsonArray("cars").size());
+	}
+
 	private static void deleteIfExists(Path path) {
 		try {
 			java.nio.file.Files.deleteIfExists(path);
