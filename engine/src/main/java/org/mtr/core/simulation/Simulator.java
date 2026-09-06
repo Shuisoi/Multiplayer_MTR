@@ -63,6 +63,12 @@ public class Simulator extends Data implements Utilities {
 	 */
 	public ConsistTypeRegistry mmtrConsistTypes;
 	public String mmtrDefaultConsistTypeId;
+	/**
+	 * MMTR: periodic task sources (timetable-style adapters). Each fires on its own cadence and
+	 * attaches a mission to an idle parked train — the task belongs to the consist itself, no
+	 * player/AI needed.
+	 */
+	public final ObjectArrayList<org.mtr.core.mmtr.MmtrPeriodicTaskSource> mmtrPeriodicTaskSources = new ObjectArrayList<>();
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -527,6 +533,7 @@ public class Simulator extends Data implements Utilities {
 
 			jammedRouteIds.clear();
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
+			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			clients.forEach(client -> client.sendUpdates(this));
 
 			if (autoSave) {
