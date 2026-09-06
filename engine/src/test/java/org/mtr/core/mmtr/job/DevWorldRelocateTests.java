@@ -106,4 +106,61 @@ public final class DevWorldRelocateTests {
 		assertTrue(parkedOn1[0], "after the multi-hop the consist must be parked back on siding 1");
 	}
 
+	@Test
+	public void realYardArrivalMakeupMergesWagonOnSiding2() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(DEV_MTR_ROOT), "dev world save not present - skipping");
+		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, DEV_MTR_ROOT, false);
+		Depot.generateDepots(sim, new ObjectArrayList<>(sim.depots));
+		for (int i = 0; i < 300; i++) { sim.step(1000); }
+		sim.mmtrJobsMode = true;
+		sim.sidings.forEach(s -> { if (s.getId() == SIDING_1 || s.getId() == SIDING_2) { s.clearParkedVehicles(); s.setVehicleCars(new ObjectArrayList<>()); } });
+
+		final MmtrConsistJob wagon = new MmtrConsistJob();
+		wagon.jobId = "W-S2";
+		wagon.depotId = 1;
+		wagon.sidingId = SIDING_2;
+		wagon.startTimeOfDayMs = 1_000;
+		wagon.repeatDaily = false;
+		final MmtrCarSpec flat = new MmtrCarSpec();
+		flat.vehicleId = "flatcar"; flat.length = 10; flat.width = 2; flat.capacity = 100;
+		flat.bogie1Position = 0; flat.bogie2Position = 5; flat.couplingPadding1 = 0.5; flat.couplingPadding2 = 0.5;
+		wagon.cars.add(flat);
+
+		final MmtrConsistJob loco = new MmtrConsistJob();
+		loco.jobId = "M-S1";
+		loco.depotId = 1;
+		loco.sidingId = SIDING_1;
+		loco.startTimeOfDayMs = 20_000;
+		loco.repeatDaily = false;
+		final MmtrCarSpec engine = new MmtrCarSpec();
+		engine.vehicleId = "loco"; engine.length = 10; engine.width = 2; engine.capacity = 100;
+		engine.bogie1Position = 0; engine.bogie2Position = 5; engine.couplingPadding1 = 0.5; engine.couplingPadding2 = 0.5;
+		loco.cars.add(engine);
+		final MmtrJobStep to2 = new MmtrJobStep();
+		to2.stepId = "to2"; to2.type = MmtrJobStep.StepType.MOVE_TO; to2.targetId = SIDING_2; to2.dueTimeOfDayMs = 900_000;
+		loco.steps.add(to2);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(wagon);
+		jobs.add(loco);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		for (int second = 0; second < 700; second++) {
+			sim.step(1000);
+			final MmtrJobScheduler.JobState st = scheduler.stateOf("M-S1");
+			if (second % 60 == 0 || st == MmtrJobScheduler.JobState.DONE || st == MmtrJobScheduler.JobState.FAILED) {
+				System.out.println("[MERGE] t=" + second + " state=" + st + " step=" + scheduler.stepIndexOf("M-S1") + " cars=" + scheduler.carsOf("M-S1") + " fail=" + scheduler.failureOf("M-S1"));
+			}
+			if (st == MmtrJobScheduler.JobState.DONE || st == MmtrJobScheduler.JobState.FAILED) { break; }
+		}
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("M-S1"), "fail=" + scheduler.failureOf("M-S1"));
+		assertEquals(1, scheduler.stepIndexOf("M-S1"));
+		assertEquals(2, scheduler.carsOf("M-S1"), "arrival make-up must merge loco + wagon into 2 cars");
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("W-S2"), "wagon source consumed");
+		final int[] parkedOn2 = {0};
+		sim.sidings.forEach(s -> s.iterateVehicles(v -> { if (s.getId() == SIDING_2 && !v.getIsOnRoute()) { parkedOn2[0]++; } }));
+		assertTrue(parkedOn2[0] == 1, "exactly one merged consist parks on siding 2");
+	}
+
 }

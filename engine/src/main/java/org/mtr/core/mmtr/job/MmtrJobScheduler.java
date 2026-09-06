@@ -316,6 +316,63 @@ public final class MmtrJobScheduler {
 		throw new IllegalArgumentException("unknown job " + jobId);
 	}
 
+	/**
+	 * Arrival make-up: the target siding already holds another job's parked source stock. Merge this
+	 * consist's fleet onto it (this job's cars first, then the source's cars) by rebuilding the
+	 * parked vehicle on the target, consume the source job, and continue from the target siding.
+	 */
+	private boolean arrivalMergeConsist(JobInstance instance, Simulator simulator, long targetSidingId) {
+		final Siding from = findSiding(simulator, curSiding(instance));
+		final Siding to = findSiding(simulator, targetSidingId);
+		final Vehicle parked = findParkedOnSiding(simulator, targetSidingId);
+		if (from == null || to == null || parked == null || to.getIsManual()
+			|| !MmtrMotionRouter.canReachSiding(simulator, curSiding(instance), targetSidingId)) {
+			fail(instance, "arrival make-up on siding " + targetSidingId + " is not reachable / not an auto yard");
+			return false;
+		}
+		JobInstance source = null;
+		for (final JobInstance other : instances.values()) {
+			if (!other.consumed && other.vehicleId == parked.getId() && other != instance) {
+				source = other;
+				break;
+			}
+		}
+		if (source == null || !source.job.steps.isEmpty() && source.state != JobState.DONE && source.state != JobState.PENDING) {
+			fail(instance, "arrival make-up target stock has no owning source job ready to merge");
+			return false;
+		}
+		final ObjectArrayList<MmtrCarSpec> fleet = new ObjectArrayList<>();
+		fleet.addAll(instance.fleetCars.isEmpty() ? instance.job.cars : instance.fleetCars);
+		fleet.addAll(source.job.cars);
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> merged = toVehicleCars(fleet);
+		if (Siding.getTotalVehicleLength(merged) > to.getRailLength()) {
+			fail(instance, "merged formation does not fit target siding " + targetSidingId);
+			return false;
+		}
+		to.mmtrFormationWindow = true;
+		final Vehicle rebuilt = to.rebuildParkedConsist(merged);
+		to.mmtrFormationWindow = false;
+		if (rebuilt == null) {
+			fail(instance, "arrival make-up rebuild failed on siding " + targetSidingId);
+			return false;
+		}
+		if (from != to) {
+			from.clearParkedVehicles(); // the mover leaves its origin (reborn on the target)
+			from.setVehicleCars(new ObjectArrayList<>()); // and the origin must not respawn its stale template
+		}
+		source.consumed = true;
+		source.state = JobState.DONE;
+		instance.fleetCars.clear();
+		instance.fleetCars.addAll(fleet);
+		instance.vehicleId = rebuilt.getId();
+		instance.curSidingId = targetSidingId;
+		instance.awaitingStart = true;
+		instance.stepIndex++;
+		instance.state = JobState.RUNNING;
+		System.out.println("[MMTR-JOB] arrival make-up on " + targetSidingId + " merged " + instance.job.jobId + " + " + source.job.jobId + " -> vehicle " + rebuilt.getId() + " cars=" + merged.size());
+		return true;
+	}
+
 	/** Terminal cross-side move: clear the origin siding and stage the fleet on the target siding so
 	 * the engine spawns the consist there (relocation = a new birth at the destination). Requires an
 	 * empty auto target siding whose return leg makes the move reachable. */
@@ -332,6 +389,7 @@ public final class MmtrJobScheduler {
 			return false;
 		}
 		from.clearParkedVehicles();
+		from.setVehicleCars(new ObjectArrayList<>()); // no stale re-spawn at the origin
 		to.setVehicleCars(cars);
 		instance.vehicleId = 0;
 		instance.relocatingTo = toSidingId;
@@ -522,10 +580,17 @@ public final class MmtrJobScheduler {
 			// Cross-side move: relocate to ANOTHER siding of the (same) depot and continue from there.
 			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId != curSiding(instance)
 				&& findSiding(simulator, step.targetId) != null) {
-				if (!relocateParkedConsist(instance, simulator, step.targetId, currentMillis)) {
-					return; // relocation failed the instance already
+				if (findParkedOnSiding(simulator, step.targetId) != null) {
+					// Arrival make-up: another job's stock already parks on the target - merge it on arrival.
+					if (!arrivalMergeConsist(instance, simulator, step.targetId)) {
+						return; // merge failed the instance already
+					}
+				} else {
+					if (!relocateParkedConsist(instance, simulator, step.targetId, currentMillis)) {
+						return; // relocation failed the instance already
+					}
 				}
-				return; // RUNNING while the engine spawns the consist on the target siding
+				return; // continue on the next ticks from the target staging siding
 			}
 			// Parked with a movement step next: first departure or re-departure after a return.
 			if (step.type == MmtrJobStep.StepType.MOVE_TO || step.type == MmtrJobStep.StepType.SERVE) {

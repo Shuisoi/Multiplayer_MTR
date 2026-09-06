@@ -337,9 +337,10 @@ public final class Siding extends SidingSchema implements Utilities {
 			} else {
 				trainsAtDepot++;
 
-				if (trainsAtDepot > 1) {
+				final boolean allowDoublePark = mmtrFormationWindow && trainsAtDepot <= 2;
+				if (trainsAtDepot > 1 && !allowDoublePark) {
 					trainsToRemove.add(vehicle);
-				} else if (!pathSidingToMainRoute.isEmpty() && !getIsManual()) {
+				} else if (!allowDoublePark && !pathSidingToMainRoute.isEmpty() && !getIsManual()) {
 					final int departureIndex = matchDeparture();
 					if (departureIndex >= 0 && departureIndex < departures.size()) {
 						if (!transportMode.continuousMovement && vehicleIdMap.values().stream().anyMatch(checkVehicle -> checkVehicle.getDepartureIndex() == departureIndex)) {
@@ -409,6 +410,9 @@ public final class Siding extends SidingSchema implements Utilities {
 	 * daily respawn / when re-authoring web jobs so leftover stock never blocks a fresh spawn or a
 	 * make-up (the engine keeps at most one parked vehicle per siding).
 	 */
+	/** MMTR arrival make-up window: while true the siding tolerates up to two parked vehicles for one merge tick. */
+	public boolean mmtrFormationWindow;
+
 	public void clearParkedVehicles() {
 		final ObjectArraySet<Vehicle> toRemove = new ObjectArraySet<>();
 		vehicleIdMap.values().forEach(vehicle -> {
