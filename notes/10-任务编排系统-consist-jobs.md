@@ -233,3 +233,13 @@
   需要"站台→他场股道"返回腿的跨 depot 路由接入（SidingPathFinder/Depot 路径缓存扩展），属
   docs/03 M2 路由范围。前置工作建议：①跨 depot 共享站台路径可达性实验；②任务点股道类型/到达
   窗口；③真实 auto 车场终验存档。本轮仅记录与回归（207/0/0），详见 round21 验收矩阵。
+## 进度（round23）：真实存档 make-up 缺陷修复（mergedPlaced 时漏装模板）
+- 现象：真实 auto 空车场 + web 作业单 make-up 后，引擎 30s 内不刷出合并编组（stock never spawned）；
+  诊断（含临时调用栈）：调度器在 mergedPlaced 分支跳过 placeCars，从不安装合并模板 —— 合成世界此前
+  "通过"实为残留旧模板(1 节)刷出的假象，真实空场模板=0 才暴露。
+- 修复：pending 刷车等待分支删除 mergedPlaced 特判，统一按实例有效车列（spawnCars 优先，否则 job.cars）
+  placeCars 安装模板 -> 引擎自生真实合并编组。
+- 验证：
+  * 真实存档（auto 27m 车场）宏：make-up 合并 loco+flatcar=2 节 -> 引擎自生 -> auto service started ->
+    UNCOUPLE 摘 1 节留场 -> DONE step=2（同文件探针，运行后已删除探针）；
+  * 引擎全量 207 tests / 0 fail / 0 error（4 个 skip 为既有 dev/共享目录状态门控）。

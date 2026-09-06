@@ -126,21 +126,19 @@ public final class MmtrJobScheduler {
 			// The engine creates the parked vehicle on its next siding tick; until then we stay
 			// pending (a 30s grace protects against a siding that can never spawn).
 			if (!instance.carsPlaced) {
-				if (instance.mergedPlaced) {
-					// The merged template was already installed by the make-up; just wait for the engine spawn.
-					instance.carsPlaced = true;
-				} else {
-					if (instance.job.cars.isEmpty()) {
-						fail(instance, "job defines no rolling stock");
-						return;
-					}
-					if (!placeCars(simulator, instance)) {
-						fail(instance, "could not place job rolling stock on siding");
-						return;
-					}
-					instance.carsPlaced = true;
-					System.out.println("[MMTR-JOB] placed " + instance.job.cars.size() + " car(s) from job " + instance.job.jobId);
+				// The effective template is spawnCars after a make-up, plain job.cars otherwise -
+				// always install it so the engine can spawn the (merged) parked consist.
+				if (instance.spawnCars.isEmpty() && instance.job.cars.isEmpty()) {
+					fail(instance, "job defines no rolling stock");
+					return;
 				}
+				if (!placeCars(simulator, instance)) {
+					fail(instance, "could not place job rolling stock on siding");
+					return;
+				}
+				instance.carsPlaced = true;
+				final int placedCars = instance.spawnCars.isEmpty() ? instance.job.cars.size() : instance.spawnCars.size();
+				System.out.println("[MMTR-JOB] placed " + placedCars + " car(s) from job " + instance.job.jobId);
 			}
 			if (dayTime > instance.job.startTimeOfDayMs + SPAWN_GRACE_MILLIS) {
 				fail(instance, "stock never spawned on siding");
