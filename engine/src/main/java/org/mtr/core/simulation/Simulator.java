@@ -69,6 +69,11 @@ public class Simulator extends Data implements Utilities {
 	 * player/AI needed.
 	 */
 	public final ObjectArrayList<org.mtr.core.mmtr.MmtrPeriodicTaskSource> mmtrPeriodicTaskSources = new ObjectArrayList<>();
+	/**
+	 * MMTR: consist-job scheduler (web-driven diagrams). Null until a scheduler is attached; it
+	 * ticks each simulation tick after vehicle simulation.
+	 */
+	public org.mtr.core.mmtr.job.MmtrJobScheduler mmtrJobScheduler;
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -534,6 +539,9 @@ public class Simulator extends Data implements Utilities {
 			jammedRouteIds.clear();
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
+			if (mmtrJobScheduler != null) {
+				mmtrJobScheduler.tick(getCurrentMillis(), this);
+			}
 			clients.forEach(client -> client.sendUpdates(this));
 
 			if (autoSave) {

@@ -40,3 +40,14 @@
 - 彻底移除 depot 发车对老存档原 MTR 运营=停摆，仅当用户开启 mmtr 作业模式；默认行为后续再定
   （config 开关 mmtrJobsEnabled，默认 false 保留原逻辑到迁移完成）。
 - 每步到期未完成 => job FAILED + 记录原因（面板红字）。
+
+## 进度（round1）
+- MmtrJobScheduler（引擎执行器骨架）：按刷车时刻(operational day-time)启动股道上停场的编组 ->
+  挂 mission 无头跑当前路径终点(terminal)；每 tick 推进：mission COMPLETE -> 下一步/DONE；
+  step 超 dueTimeOfDayMs 未完成 -> job FAILED(记录原因)；车消失 -> FAILED。
+- Simulator 接入 mmtrJobScheduler 字段并在 simulateVehicles 后每 tick 调用。
+- MmtrJobSchedulerTests（合成世界确定性）：单步 due 120s -> RUNNING(t5) DONE(t37)；
+  due 6s -> FAILED(t7, "missed deadline")。
+- 说明：round1 步骤语义= MOVE_TO 到路径终点；SERVE/逐站停/COUPLE/UNCOUPLE 与平台级 ATO 停站
+  由后续执行器轮次接入；刷车(编组由 job.cars 生成) 尚未做（当前用世界已有停场车）。
+- engine 全量：192 tests / 0 fail / 0 error。
