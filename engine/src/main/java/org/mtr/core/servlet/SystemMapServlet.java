@@ -12,6 +12,7 @@ import org.mtr.core.data.NameColorDataBase;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.map.*;
 import org.mtr.core.operation.ArrivalsRequest;
+import org.mtr.core.operation.MmtrMissionControl;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Utilities;
@@ -49,6 +50,12 @@ public final class SystemMapServlet extends ServletBase {
 				case "arrivals" -> Utilities.getJsonObjectFromData(new ArrivalsRequest(jsonReader).getArrivals(simulator));
 				case "clients" -> clientsResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getClients, LIVE_DATA_CACHE_MILLIS)).get(simulator);
 				case "mmtr-trains" -> mmtrTrainsResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getMmtrTrains, LIVE_DATA_CACHE_MILLIS)).get(simulator);
+				case "mmtr-dispatch" -> {
+					final boolean ok = new MmtrMissionControl(jsonReader).dispatch(simulator);
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", ok);
+					yield result;
+				}
 				default -> null;
 			});
 		}

@@ -39,4 +39,13 @@ export class MmtrOpsPanelComponent {
 		}
 		return "库内";
 	}
+
+	/** Dispatch a parked manual train to the terminal of its current path (MANEUVER). */
+	protected dispatch(train: MmtrTrainState) {
+		this.mmtrTrainsService.dispatch(train.vehicleId, "MANEUVER");
+	}
+
+	protected canDispatch(train: MmtrTrainState): boolean {
+		return !train.onRoute && train.isManualAllowed;
+	}
 }

@@ -91,14 +91,24 @@ public final class MmtrTrainsServletTests {
 			}
 		}));
 		assertNotNull(parked[0], "a train must have spawned");
-		final MmtrMission mission = new MmtrMission(parked[0].getId(), MmtrMission.Kind.FREIGHT, siding.getId(), platformA.getId(), System.currentTimeMillis());
-		assertTrue(parked[0].setMmtrMission(mission), "mission assignment must succeed on an idle train");
-		assertEquals(MmtrMission.Kind.FREIGHT, parked[0].getMmtrMission().getKind());
 
-		// Fetch the live dashboard feed.
+		// Dispatch through the map servlet action (the dashboard's 派车 entry point).
 		final ObjectArrayList<Simulator> simulators = new ObjectArrayList<>();
 		simulators.add(sim);
 		final SystemMapServlet servlet = new SystemMapServlet(new ObjectImmutableList<>(simulators));
+		final JsonObject dispatchPayload = new JsonObject();
+		dispatchPayload.addProperty("vehicleId", parked[0].getId());
+		dispatchPayload.addProperty("kind", "FREIGHT");
+		dispatchPayload.addProperty("targetSidingId", platformA.getId());
+		dispatchPayload.addProperty("startNow", false);
+		final JsonObject[] dispatchResult = {null};
+		servlet.getContent("mmtr-dispatch", "", new Object2ObjectAVLTreeMap<>(), new JsonReader(dispatchPayload), sim, json -> dispatchResult[0] = json);
+		assertNotNull(dispatchResult[0], "dispatch endpoint must answer");
+		assertTrue(dispatchResult[0].get("ok").getAsBoolean(), "dispatch must succeed");
+		assertNotNull(parked[0].getMmtrMission(), "mission must be attached by the dispatch endpoint");
+		assertEquals(MmtrMission.Kind.FREIGHT, parked[0].getMmtrMission().getKind());
+
+		// Fetch the live dashboard feed.
 		final JsonObject[] result = {null};
 		servlet.getContent("mmtr-trains", "", new Object2ObjectAVLTreeMap<>(), new JsonReader(new JsonObject()), sim, json -> result[0] = json);
 		assertNotNull(result[0], "endpoint must answer");

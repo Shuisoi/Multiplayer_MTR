@@ -82,9 +82,27 @@ export class MmtrTrainsService {
 			},
 		});
 	}
-
 	private schedule() {
 		clearTimeout(this.timeoutId);
 		this.timeoutId = setTimeout(() => this.poll(), LIVE_REFRESH_INTERVAL_MILLIS) as unknown as number;
 	}
+
+	/**
+	 * Dispatch entry: assign a mission to a parked train and start it headlessly (AUTOPILOT).
+	 * Fire-and-forget; the next poll reflects the updated train state.
+	 */
+	public dispatch(vehicleId: number, kind = "MANEUVER") {
+		const url = `${document.location.origin}${document.location.pathname}mtr/api/map/mmtr-dispatch?dimension=${this.dimensionService.getDimensionIndex()}`;
+		this.httpClient.post<{ data: { ok: boolean } }>(url, {vehicleId, kind, startNow: true}).subscribe({
+			next: () => this.refresh(),
+			error: error => console.error("mmtr dispatch failed", error),
+		});
+	}
+
+	/** Force an immediate feed refresh (after a dispatch or mission change). */
+	public refresh() {
+		clearTimeout(this.timeoutId);
+		this.poll();
+	}
+
 }

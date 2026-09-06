@@ -11,6 +11,11 @@
 					<div class="mmtr-name">{{ train.sidingName }}<span class="mmtr-muted"> · {{ train.routeNumber || "无线路" }}</span></div>
 					<div class="mmtr-sub">{{ missionLabel(train) }}</div>
 				</div>
+				<div class="mmtr-actions">
+					@if (canDispatch(train)) {
+						<button type="button" class="mmtr-dispatch-btn" (click)="dispatch(train)">派车</button>
+					}
+				</div>
 				<div class="mmtr-badges">
 					<span class="mmtr-badge" [class.on-route]="train.onRoute" [class.parked]="!train.onRoute">{{ statusLabel(train) }}</span>
 					@if (train.mission && !train.mission!.failureReason) {

@@ -85,3 +85,25 @@
 .mmtr-badge.manual {
 	background: rgba(148, 91, 200, 0.35);
 }
+
+.mmtr-actions {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 0.2rem;
+}
+
+.mmtr-dispatch-btn {
+	font-size: 0.72rem;
+	padding: 0.15rem 0.6rem;
+	border-radius: 0.5rem;
+	border: 1px solid rgba(88, 166, 255, 0.6);
+	background: rgba(88, 166, 255, 0.25);
+	color: inherit;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.mmtr-dispatch-btn:hover {
+	background: rgba(88, 166, 255, 0.45);
+}
