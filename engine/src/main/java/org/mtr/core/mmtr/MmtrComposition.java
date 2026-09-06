@@ -260,15 +260,17 @@ public final class MmtrComposition {
 			}
 		}
 
-		// 2) Pipe equalisation between neighbours (two passes: front->rear and rear->front).
-		for (int pass = 0; pass < 2; pass++) {
-			for (int i = 0; i < units.size() - 1; i++) {
-				final Unit a = units.get(i);
-				final Unit b = units.get(i + 1);
-				final double difference = b.pipePressure - a.pipePressure;
-				final double move = clamp(difference * PIPE_EQUALIZATION_PER_SECOND * dt / 2.0);
-				a.pipePressure = clamp(a.pipePressure + move);
-				b.pipePressure = clamp(b.pipePressure - move);
+		// 2) Pipe pressure propagates from the head (control unit, driven by the handle) toward
+		// the rear: each following unit relaxes toward its neighbour ahead. A single front-to-rear
+		// pass keeps the head as the pressure source so charging and venting both travel down the
+		// train without dragging the leading pipe off its commanded value.
+		for (int i = 0; i < units.size() - 1; i++) {
+			final Unit ahead = units.get(i);
+			final Unit behind = units.get(i + 1);
+			final double gap = ahead.pipePressure - behind.pipePressure;
+			if (Math.abs(gap) > 1e-12) {
+				final double move = gap * PIPE_EQUALIZATION_PER_SECOND * dt;
+				behind.pipePressure = clamp(behind.pipePressure + move);
 			}
 		}
 
@@ -323,7 +325,8 @@ public final class MmtrComposition {
 		return false;
 	}
 
-	private double averagePipePressure() {
+	/** Average train-pipe pressure across all units (0..1). */
+	public double averagePipePressure() {
 		if (units.isEmpty()) {
 			return 1;
 		}
@@ -334,7 +337,8 @@ public final class MmtrComposition {
 		return sum / units.size();
 	}
 
-	private double averageCylinderPressure() {
+	/** Average brake-cylinder pressure across all units (0..1). */
+	public double averageCylinderPressure() {
 		if (units.isEmpty()) {
 			return 0;
 		}
@@ -343,6 +347,45 @@ public final class MmtrComposition {
 			sum += unit.brakeCylinderPressure;
 		}
 		return sum / units.size();
+	}
+
+
+	/**
+	 * Encodes every unit's (pipe, cylinder) air state into a compact snapshot string
+	 * ({@code "pipe,cyl;pipe,cyl;..."}). Empty when there are no units.
+	 */
+	public static String encodeAirStates(MmtrComposition composition) {
+		final StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < composition.size(); i++) {
+			if (i > 0) {
+				builder.append(';');
+			}
+			final Unit unit = composition.unit(i);
+			builder.append(unit.pipePressure).append(',').append(unit.brakeCylinderPressure);
+		}
+		return builder.toString();
+	}
+
+	/**
+	 * Seeds this composition's per-unit air state from a string produced by
+	 * {@link #encodeAirStates(MmtrComposition)}. Units beyond the payload keep their state;
+	 * extra payload entries are ignored.
+	 */
+	public void applyAirStateString(String airState) {
+		if (airState == null || airState.isEmpty()) {
+			return;
+		}
+		final String[] units = airState.split(";");
+		for (int i = 0; i < units.length && i < this.units.size(); i++) {
+			final String[] pair = units[i].split(",");
+			if (pair.length == 2) {
+				try {
+					this.units.get(i).setAirState(Double.parseDouble(pair[0]), Double.parseDouble(pair[1]));
+				} catch (NumberFormatException ignored) {
+					// malformed seed: keep the unit's current state
+				}
+			}
+		}
 	}
 
 	private static double clamp(double value) {

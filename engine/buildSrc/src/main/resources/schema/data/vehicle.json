@@ -148,6 +148,10 @@
 		"mmtrMassRatio": {
 			"type": "number",
 			"default": 1
+		},
+		"mmtrAirState": {
+			"type": "string",
+			"default": ""
 		}
 	}
 }

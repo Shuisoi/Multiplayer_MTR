@@ -15,6 +15,7 @@ import org.mtr.core.mmtr.ConsistType;
 import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.DriveController;
 import org.mtr.core.mmtr.DriveOutput;
+import org.mtr.core.mmtr.MmtrComposition;
 import org.mtr.core.mmtr.MmtrDriveAccess;
 import org.mtr.core.mmtr.MmtrProtection;
 import org.mtr.core.mmtr.MmtrSupport;
@@ -75,6 +76,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * no-identity path so that path keeps its old behaviour.
 	 */
 	private @Nullable UUID mmtrDriverUuid;
+	/**
+	 * MMTR: per-car composition used when the consist runs the AIR_BRAKE model (one pipe/cylinder
+	 * state per car, equalised along the train). Server persists it across ticks; mirrored clients
+	 * rebuild it from the latest snapshot (seeded via {@code mmtrAirState}).
+	 */
+	private @Nullable MmtrComposition mmtrComposition;
+	private String mmtrLastAirSeed = "";
 	/**
 	 * MMTR (server): remaining hold time (ms) after an overrun/SPAD protection emergency stop,
 	 * before control is released again (SCR-style lock). Mirrored clients just follow the
@@ -623,6 +631,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * Returns (and lazily builds) the per-car composition used by the AIR_BRAKE model: one unit
+	 * per vehicle car, all sharing the consist's ConsistType. Later (mixed formations) individual
+	 * cars may get their own ConsistType / powered flag.
+	 */
+	@Nullable
+	private MmtrComposition getMmtrComposition() {
+		if (mmtrComposition == null && mmtrConsistType != null) {
+			final MmtrComposition composition = new MmtrComposition();
+			final int carCount = Math.max(1, vehicleExtraData.immutableVehicleCars.size());
+			for (int i = 0; i < carCount; i++) {
+				composition.couple(new MmtrComposition.Unit("car" + i, mmtrConsistType, true));
+			}
+			mmtrComposition = composition;
+		}
+		return mmtrComposition;
+	}
+
+	/**
 	 * Server-side: writes the current MMTR drive state + consist parameters into the synced
 	 * vehicle fields so clients can mirror the physics and show the authoritative state.
 	 */
@@ -789,13 +815,34 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final boolean mmtrProtectionActive = mmtrProtectionNow;
 			final ConsistType mmtrType = mmtrConsistType;
 			final ControlState mmtrState = mmtrControl;
+			// AIR_BRAKE driving uses the per-car composition (one pipe/cylinder per car, train-pipe
+			// equalisation along the consist). Mirrored clients seed their composition from the
+			// synced mmtrAirState whenever a fresh snapshot arrives.
+			final boolean useCompositionAir = mmtrType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
+			final MmtrComposition mmtrCompositionNow = useCompositionAir ? getMmtrComposition() : null;
+			if (isClientside && mmtrCompositionNow != null && !mmtrAirState.isEmpty() && !mmtrLastAirSeed.equals(mmtrAirState)) {
+				mmtrCompositionNow.applyAirStateString(mmtrAirState);
+				mmtrLastAirSeed = mmtrAirState;
+			}
 			final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
-			final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) ->
-				mmtrProtectionActive && siSpeed > 0
-					? new DriveOutput(-mmtrType.getEmergencyDecelerationMps2(), true, true, 0, 1)
-					: mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis));
+			final MmtrComposition compForIntegration = mmtrCompositionNow;
+			final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) -> {
+				if (mmtrProtectionActive && siSpeed > 0) {
+					return new DriveOutput(-mmtrType.getEmergencyDecelerationMps2(), true, true, 0, 1);
+				}
+				if (compForIntegration != null) {
+					return compForIntegration.stepAir(mmtrState, siSpeed, stepMillis);
+				}
+				return mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
+			});
 			final double mmtrSpeed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
 			mmtrDistanceTravelled = mmtrResult.distanceMeters;
+			if (compForIntegration != null) {
+				// Publish per-car air state (mirror seed) + averages for the legacy HUD fields.
+				mmtrAirState = MmtrComposition.encodeAirStates(compForIntegration);
+				mmtrPipePressure = compForIntegration.averagePipePressure();
+				mmtrBrakeCylinderPressure = compForIntegration.averageCylinderPressure();
+			}
 			if (!isClientside) {
 				// Keep the legacy HUD in sync: show throttle positive, brake negative, coast at zero
 				// (emergency during protection). Also refresh the mirrored snapshot fields.
