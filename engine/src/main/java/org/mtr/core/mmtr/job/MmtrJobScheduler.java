@@ -257,9 +257,9 @@ public final class MmtrJobScheduler {
 	 * the engine spawns the consist there (relocation = a new birth at the destination). Requires an
 	 * empty auto target siding whose return leg makes the move reachable. */
 	private boolean relocateParkedConsist(JobInstance instance, Simulator simulator, long toSidingId, long currentMillis) {
-		final Siding from = findSiding(simulator, instance.job.sidingId);
+		final Siding from = findSiding(simulator, curSiding(instance));
 		final Siding to = findSiding(simulator, toSidingId);
-		if (from == null || to == null || to.getIsManual() || !MmtrMotionRouter.canReachSiding(simulator, instance.job.sidingId, toSidingId)) {
+		if (from == null || to == null || to.getIsManual() || !MmtrMotionRouter.canReachSiding(simulator, curSiding(instance), toSidingId)) {
 			fail(instance, "relocation to siding " + toSidingId + " is not reachable / not an auto yard");
 			return false;
 		}
@@ -272,6 +272,7 @@ public final class MmtrJobScheduler {
 		to.setVehicleCars(cars);
 		instance.vehicleId = 0;
 		instance.relocatingTo = toSidingId;
+		instance.curSidingId = 0; // adoption assigns the target siding
 		instance.relocateWaitStartMillis = currentMillis;
 		instance.stepIndex++;
 		instance.state = JobState.RUNNING;
@@ -299,7 +300,7 @@ public final class MmtrJobScheduler {
 	private Vehicle findFreeParkedVehicle(Simulator simulator, JobInstance self) {
 		final Vehicle[] found = {null};
 		simulator.sidings.forEach(siding -> {
-			if (found[0] != null || siding.getId() != self.job.sidingId) {
+			if (found[0] != null || siding.getId() != curSiding(self)) {
 				return;
 			}
 			siding.iterateVehicles(vehicle -> {
@@ -312,6 +313,10 @@ public final class MmtrJobScheduler {
 			});
 		});
 		return found[0];
+	}
+
+	private static long curSiding(JobInstance instance) {
+		return instance.curSidingId == 0 ? instance.job.sidingId : instance.curSidingId;
 	}
 
 	private boolean claimedByOther(long vehicleId, String selfJobId) {
@@ -332,7 +337,7 @@ public final class MmtrJobScheduler {
 	private boolean executeUncouple(JobInstance instance, Simulator simulator) {
 		final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
 		final int cut = step.targetIndex;
-		final Siding yard = findSiding(simulator, instance.job.sidingId);
+		final Siding yard = findSiding(simulator, curSiding(instance));
 		final Vehicle current = findVehicle(simulator, instance.vehicleId);
 		if (yard == null || current == null || current.getIsOnRoute()) {
 			fail(instance, "uncouple requires the consist parked at its yard siding (step " + step.stepId + ")");
@@ -395,9 +400,15 @@ public final class MmtrJobScheduler {
 			final Vehicle parked = findParkedOnSiding(simulator, instance.relocatingTo);
 			if (parked != null) {
 				instance.vehicleId = parked.getId();
-				instance.state = JobState.DONE;
-				System.out.println("[MMTR-JOB] relocated consist to siding " + instance.relocatingTo + " and parked (vehicle " + parked.getId() + ")");
-				return;
+				instance.curSidingId = instance.relocatingTo;
+				instance.awaitingStart = true;
+				instance.relocatingTo = 0;
+				System.out.println("[MMTR-JOB] relocated consist to siding " + instance.curSidingId + " and parked (vehicle " + parked.getId() + ")");
+				if (instance.stepIndex >= instance.job.steps.size()) {
+					instance.state = JobState.DONE;
+					return;
+				}
+				// fall through: continue executing the remaining steps from the new staging siding
 			}
 			if (currentMillis - instance.relocateWaitStartMillis > SPAWN_GRACE_MILLIS) {
 				fail(instance, "relocation never spawned on target siding " + instance.relocatingTo);
@@ -438,16 +449,16 @@ public final class MmtrJobScheduler {
 			if (!parkedOnYard) {
 				break; // en route: platform movement is advanced below
 			}
-			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId == instance.job.sidingId) {
+			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId == curSiding(instance)) {
 				// 退库: the consist has returned to its own yard siding - the return step completes.
 				System.out.println("[MMTR-JOB] MOVE_TO done back at yard siding " + step.targetId);
 				instance.stepIndex++;
 				instance.awaitingStart = true;
 				continue;
 			}
-			// Terminal cross-side arrival: move to ANOTHER siding of the (same) depot as the final step.
-			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId != instance.job.sidingId
-				&& findSiding(simulator, step.targetId) != null && instance.stepIndex + 1 >= instance.job.steps.size()) {
+			// Cross-side move: relocate to ANOTHER siding of the (same) depot and continue from there.
+			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId != curSiding(instance)
+				&& findSiding(simulator, step.targetId) != null) {
 				if (!relocateParkedConsist(instance, simulator, step.targetId, currentMillis)) {
 					return; // relocation failed the instance already
 				}
@@ -485,7 +496,7 @@ public final class MmtrJobScheduler {
 		if (vehicle.getIsOnRoute()) {
 			return false;
 		}
-		final Siding yard = findSiding(simulator, instance.job.sidingId);
+		final Siding yard = findSiding(simulator, curSiding(instance));
 		return yard != null && yard.getVehicleById(vehicle.getId()) != null;
 	}
 
@@ -556,7 +567,7 @@ public final class MmtrJobScheduler {
 	// --- AUTO mode: engine ATO runs the generated service; steps track platform visits ---
 
 	private boolean startAutoService(JobInstance instance, Simulator simulator) {
-		final Siding siding = findSiding(simulator, instance.job.sidingId);
+		final Siding siding = findSiding(simulator, curSiding(instance));
 		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
 		if (siding == null || vehicle == null) {
 			fail(instance, "auto service siding/vehicle unavailable");
@@ -675,6 +686,7 @@ public final class MmtrJobScheduler {
 		/** True when a parked consist may need a (re)departure (after a return or a yard op). */
 		boolean awaitingStart = true;
 		long relocatingTo;
+		long curSidingId;
 		long relocateWaitStartMillis;
 		/** This job's stock was merged into another job's consist (no longer stands alone). */
 		boolean consumed;
