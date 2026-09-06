@@ -132,3 +132,18 @@
   连续 tick 后仍是单辆停场（不破坏单停场不变量）。
 - 引擎全量（cleanTest）绿。说明：调度器把 COUPLE/UNCOUPLE 步骤接到该原语并解决"两列同到一条股道"
   的到达/驻留语义 = 下一切片（A1b），随后做 B（MOVE_TO 股道目标移动）。
+## 进度（round13-A1b）：COUPLE 起始编组收集（make-up）接入调度器 + 车底源 job
+- MmtrJobScheduler 新增"编组收集"起始模式：第一步为 COUPLE 的 job 到点时不自行刷车，而是等待目标
+  作业单（targetJobId）的挂车编组停场于同股道后，用 Siding.rebuildParkedConsist 把
+  [本 job 车列 + 目标车列] 合并重建为单车（真实物理编组），目标 job 标记 consumed，随后按剩余步骤
+  （MOVE_TO 等）正常发车。支持同 depot 同股道先后刷车 -> 自动连挂 -> 出库跑作业的编组作业流。
+- 空步骤 job = 纯"车底源"（如 8 节挂车）：到点刷车后停场等待（DONE，不再尝试挂 mission），供后续
+  COUPLE 收集；归属账本 claimedByOther 防止其它 job 误抢已认领的停场车。
+- 明确失败原因：目标 job 未加载 / 未到点刷出 / 已并编(consumed) / 超截止 / 编组超股道限长，均带可读
+  信息回写 web feed。
+- 测试（MmtrJobSchedulerTests）：jobCouplesEarlierTrailerStockThenRunsService——挂车 job 先停场 2 节
+  -> 机车 job 5s 后同股道收集成 3 节 -> AUTO 逐站跑完 COUPLE+MOVE_TO+MOVE_TO 全链 DONE（步骤=3）；
+  couplingStepFailsWhenTargetJobIsNotLoaded——未知目标立即 FAILED（"not loaded"）。
+- 说明：跨 depot / 机车开往 depot2 任务点股道（到达窗口）仍受 MTR 单停场不变量约束，属下一阶段 B
+  （MOVE_TO 股道移动）+ 到达编组窗口；UNCOUPLE 摘挂的股道切分尾车停场窗口同属其后。本轮 make-up
+  是同股道车场编排可用的真实合流路径。

@@ -425,4 +425,129 @@ public final class MmtrJobSchedulerTests {
 		assertTrue(stillThere[0], "rebuilt consist stays parked after ticks");
 	}
 
+	private static MmtrCarSpec car(String vehicleId, double length) {
+		final MmtrCarSpec car = new MmtrCarSpec();
+		car.vehicleId = vehicleId;
+		car.length = length;
+		car.width = 2;
+		car.capacity = 100;
+		car.bogie1Position = 0;
+		car.bogie2Position = 5;
+		car.couplingPadding1 = 0.5;
+		car.couplingPadding2 = 0.5;
+		return car;
+	}
+
+	/** Yard make-up: trailer job parks first, the later loco job couples it on and then runs a service. */
+	@Test
+	public void jobCouplesEarlierTrailerStockThenRunsService() {
+		final long[] ids = buildAutoWorld(false); // no stock preset: both jobs must spawn
+		final Simulator sim = AUTO_SIM[0];
+
+		final MmtrConsistJob trailers = new MmtrConsistJob();
+		trailers.jobId = "TRAILERS";
+		trailers.depotId = 1;
+		trailers.sidingId = ids[0];
+		trailers.startTimeOfDayMs = 1_000;
+		trailers.repeatDaily = false;
+		trailers.cars.add(car("flatcar", 10));
+		trailers.cars.add(car("flatcar", 10));
+
+		final MmtrConsistJob loco = new MmtrConsistJob();
+		loco.jobId = "LOCO";
+		loco.depotId = 1;
+		loco.sidingId = ids[0];
+		loco.startTimeOfDayMs = 5_000;
+		loco.repeatDaily = false;
+		loco.cars.add(car("loco", 10));
+
+		final MmtrJobStep couple = new MmtrJobStep();
+		couple.stepId = "couple";
+		couple.type = MmtrJobStep.StepType.COUPLE;
+		couple.targetJobId = "TRAILERS";
+		couple.dueTimeOfDayMs = 60_000;
+		loco.steps.add(couple);
+
+		final MmtrJobStep moveA = new MmtrJobStep();
+		moveA.stepId = "moveA";
+		moveA.type = MmtrJobStep.StepType.MOVE_TO;
+		moveA.targetId = ids[1];
+		moveA.dueTimeOfDayMs = 120_000;
+		loco.steps.add(moveA);
+
+		final MmtrJobStep moveB = new MmtrJobStep();
+		moveB.stepId = "moveB";
+		moveB.type = MmtrJobStep.StepType.MOVE_TO;
+		moveB.targetId = ids[2];
+		moveB.dueTimeOfDayMs = 240_000;
+		loco.steps.add(moveB);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(trailers);
+		jobs.add(loco);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		boolean sawTrailersParked = false;
+		final boolean[] sawCoupledThreeCarTemplate = {false};
+		boolean sawLocoRunning = false;
+		for (int second = 0; second < 400 && scheduler.stateOf("LOCO") != MmtrJobScheduler.JobState.DONE; second++) {
+			sim.step(1000);
+			if (scheduler.stateOf("TRAILERS") == MmtrJobScheduler.JobState.DONE) {
+				sawTrailersParked = true;
+			}
+			if (scheduler.stateOf("LOCO") == MmtrJobScheduler.JobState.RUNNING && scheduler.stepIndexOf("LOCO") >= 1 && !sawCoupledThreeCarTemplate[0]) {
+				sim.sidings.forEach(s -> {
+					if (s.getId() == ids[0] && s.getVehicleCars().size() == 3) {
+						sawCoupledThreeCarTemplate[0] = true;
+					}
+				});
+			}
+			if (scheduler.stateOf("LOCO") == MmtrJobScheduler.JobState.RUNNING) {
+				sawLocoRunning = true;
+			}
+		}
+		assertTrue(sawTrailersParked, "trailer stock job must spawn and park first (stock source)");
+		assertTrue(sawCoupledThreeCarTemplate[0], "yard make-up must merge loco + 2 trailers into the siding template");
+		assertTrue(sawLocoRunning, "loco job must run after coupling");
+		assertEquals(MmtrJobScheduler.JobState.DONE, scheduler.stateOf("LOCO"), "failure=" + scheduler.failureOf("LOCO"));
+		assertEquals(3, scheduler.stepIndexOf("LOCO"), "COUPLE + two MOVE_TO steps all completed");
+		assertNull(scheduler.failureOf("LOCO"));
+	}
+
+	@Test
+	public void couplingStepFailsWhenTargetJobIsNotLoaded() {
+		final long[] ids = buildAutoWorld(false);
+		final Simulator sim = AUTO_SIM[0];
+
+		final MmtrConsistJob loco = new MmtrConsistJob();
+		loco.jobId = "J-MISSING";
+		loco.depotId = 1;
+		loco.sidingId = ids[0];
+		loco.startTimeOfDayMs = 1_000;
+		loco.repeatDaily = false;
+		loco.cars.add(car("loco", 10));
+
+		final MmtrJobStep couple = new MmtrJobStep();
+		couple.stepId = "couple";
+		couple.type = MmtrJobStep.StepType.COUPLE;
+		couple.targetJobId = "NOPE-NOT-A-JOB";
+		couple.dueTimeOfDayMs = 60_000;
+		loco.steps.add(couple);
+
+		final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
+		jobs.add(loco);
+		final MmtrJobScheduler scheduler = MmtrJobScheduler.create(jobs);
+		sim.mmtrJobScheduler = scheduler;
+
+		for (int second = 0; second < 10; second++) {
+			sim.step(1000);
+			if (scheduler.stateOf("J-MISSING") == MmtrJobScheduler.JobState.FAILED) {
+				break;
+			}
+		}
+		assertEquals(MmtrJobScheduler.JobState.FAILED, scheduler.stateOf("J-MISSING"));
+		assertTrue(scheduler.failureOf("J-MISSING").contains("not loaded"), scheduler.failureOf("J-MISSING"));
+	}
+
 }

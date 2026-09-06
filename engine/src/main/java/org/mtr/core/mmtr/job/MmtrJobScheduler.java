@@ -85,7 +85,24 @@ public final class MmtrJobScheduler {
 		if (dayTime < instance.job.startTimeOfDayMs) {
 			return;
 		}
-		final Vehicle vehicle = findParkedVehicle(simulator, instance.job.sidingId);
+		// Coupling make-up start: the job begins by collecting another job's parked stock on the
+		// same yard siding (its first step is COUPLE). We must NOT spawn our own stock separately -
+		// the merged formation replaces the target's parked consist via the yard surgery primitive.
+		final boolean startsWithCouple = instance.stepIndex == 0 && !instance.job.steps.isEmpty()
+			&& instance.job.steps.get(0).type == MmtrJobStep.StepType.COUPLE;
+		if (startsWithCouple) {
+			switch (tryCoupleStart(instance, dayTime, simulator)) {
+				case WAIT:
+				case FAILED:
+					return;
+				case DONE:
+					instance.state = JobState.DONE;
+					return;
+				default:
+					break; // MERGED: continue with the regular claim/start flow below
+			}
+		}
+		final Vehicle vehicle = instance.vehicleId == 0 ? findFreeParkedVehicle(simulator, instance) : findVehicle(simulator, instance.vehicleId);
 		if (vehicle == null) {
 			// Spawn the consist from the job's rolling-stock template the first time we are due.
 			// The engine creates the parked vehicle on its next siding tick; until then we stay
@@ -110,6 +127,13 @@ public final class MmtrJobScheduler {
 		instance.vehicleId = vehicle.getId();
 		instance.startAbs = anchor + instance.job.startTimeOfDayMs;
 		instance.mode = vehicle.vehicleExtraData.getIsManualAllowed() ? Mode.MANUAL : Mode.AUTO;
+		if (instance.job.steps.isEmpty()) {
+			// Stock-only job (e.g. the trailer consist a later COUPLE make-up collects): spawn, park
+			// and wait - never attach a mission to an empty step list.
+			instance.state = JobState.DONE;
+			System.out.println("[MMTR-JOB] stock-only job " + instance.job.jobId + " parked on siding (available for coupling)");
+			return;
+		}
 		if (instance.mode == Mode.MANUAL) {
 			runManualStep(instance, simulator);
 			instance.state = JobState.RUNNING;
@@ -119,6 +143,117 @@ public final class MmtrJobScheduler {
 			}
 			instance.state = JobState.RUNNING;
 		}
+	}
+
+	/** Outcome of a coupling make-up attempt while the job is still pending on its yard siding. */
+	private enum CoupleOutcome { WAIT, MERGED, DONE, FAILED }
+
+	/**
+	 * COUPLE-as-first-step: collect the target job's parked stock on this siding. The merged
+	 * formation (this job's cars first, then the target job's trailers) replaces the target's
+	 * parked vehicle through the yard surgery, so the scheduler stays on ONE vehicle.
+	 */
+	private CoupleOutcome tryCoupleStart(JobInstance instance, long dayTime, Simulator simulator) {
+		final MmtrJobStep first = instance.job.steps.get(0);
+		final String targetJobId = first.targetJobId == null ? "" : first.targetJobId.trim();
+		if (targetJobId.isEmpty() || targetJobId.equals(instance.job.jobId)) {
+			fail(instance, "COUPLE step needs a target job id different from this job");
+			return CoupleOutcome.FAILED;
+		}
+		boolean known = false;
+		for (final MmtrConsistJob job : jobs) {
+			if (job.jobId.equals(targetJobId)) {
+				known = true;
+				break;
+			}
+		}
+		if (!known) {
+			fail(instance, "coupling target job '" + targetJobId + "' is not loaded by the scheduler");
+			return CoupleOutcome.FAILED;
+		}
+		final JobInstance target = instances.computeIfAbsent(targetJobId, key -> new JobInstance(jobOf(targetJobId)));
+		if (target == instance) {
+			fail(instance, "a job cannot couple onto itself");
+			return CoupleOutcome.FAILED;
+		}
+		if (target.consumed) {
+			fail(instance, "coupling target job '" + targetJobId + "' stock was already coupled into another job");
+			return CoupleOutcome.FAILED;
+		}
+		if (target.vehicleId == 0 || target.state == JobState.FAILED) {
+			// Target has not spawned (yet): wait for it up to this step's deadline.
+			if (dayTime > instance.deadlineOf(first)) {
+				fail(instance, "coupling target job '" + targetJobId + "' never spawned before due " + first.dueTimeOfDayMs);
+				return CoupleOutcome.FAILED;
+			}
+			return CoupleOutcome.WAIT;
+		}
+		final Siding yard = findSiding(simulator, instance.job.sidingId);
+		final Vehicle tail = yard == null ? null : yard.getVehicleById(target.vehicleId);
+		if (yard == null || tail == null || tail.getIsOnRoute()) {
+			if (dayTime > instance.deadlineOf(first)) {
+				fail(instance, "coupling target stock is not parked on the yard siding before due " + first.dueTimeOfDayMs);
+				return CoupleOutcome.FAILED;
+			}
+			return CoupleOutcome.WAIT;
+		}
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> merged = new ObjectArrayList<>();
+		for (final MmtrCarSpec spec : instance.job.cars) {
+			merged.add(toVehicleCar(spec));
+		}
+		for (final MmtrCarSpec spec : target.job.cars) {
+			merged.add(toVehicleCar(spec));
+		}
+		final Vehicle rebuilt = yard.rebuildParkedConsist(merged);
+		if (rebuilt == null) {
+			fail(instance, "coupled formation does not fit the yard siding (cars=" + merged.size() + ")");
+			return CoupleOutcome.FAILED;
+		}
+		target.consumed = true;
+		target.state = JobState.DONE;
+		instance.vehicleId = rebuilt.getId();
+		instance.startAbs = anchor + instance.job.startTimeOfDayMs;
+		instance.stepIndex = 1; // the COUPLE step completed with the merge
+		System.out.println("[MMTR-JOB] coupled " + targetJobId + " stock onto " + instance.job.jobId + " -> vehicle " + rebuilt.getId() + " cars=" + merged.size());
+		return instance.stepIndex >= instance.job.steps.size() ? CoupleOutcome.DONE : CoupleOutcome.MERGED;
+	}
+
+	private MmtrConsistJob jobOf(String jobId) {
+		for (final MmtrConsistJob job : jobs) {
+			if (job.jobId.equals(jobId)) {
+				return job;
+			}
+		}
+		throw new IllegalArgumentException("unknown job " + jobId);
+	}
+
+	/** The first parked, mission-idle vehicle on this job's siding that no other job has claimed. */
+	@Nullable
+	private Vehicle findFreeParkedVehicle(Simulator simulator, JobInstance self) {
+		final Vehicle[] found = {null};
+		simulator.sidings.forEach(siding -> {
+			if (found[0] != null || siding.getId() != self.job.sidingId) {
+				return;
+			}
+			siding.iterateVehicles(vehicle -> {
+				if (found[0] == null && !vehicle.getIsOnRoute() && !claimedByOther(vehicle.getId(), self.job.jobId)) {
+					final MmtrMission existing = vehicle.getMmtrMission();
+					if (existing == null || existing.isTerminal()) {
+						found[0] = vehicle;
+					}
+				}
+			});
+		});
+		return found[0];
+	}
+
+	private boolean claimedByOther(long vehicleId, String selfJobId) {
+		for (final JobInstance other : instances.values()) {
+			if (!other.job.jobId.equals(selfJobId) && !other.consumed && other.vehicleId == vehicleId) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void running(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
@@ -245,29 +380,14 @@ public final class MmtrJobScheduler {
 		}
 		final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = new ObjectArrayList<>();
 		for (final MmtrCarSpec spec : job.cars) {
-			cars.add(new org.mtr.core.data.VehicleCar(spec.vehicleId, spec.length, spec.width, spec.capacity, spec.bogie1Position, spec.bogie2Position, spec.couplingPadding1, spec.couplingPadding2));
+			cars.add(toVehicleCar(spec));
 		}
 		siding.setVehicleCars(cars);
 		return true;
 	}
 
-	@Nullable
-	private static Vehicle findParkedVehicle(Simulator simulator, long sidingId) {
-		final Vehicle[] found = {null};
-		simulator.sidings.forEach(siding -> {
-			if (found[0] != null || siding.getId() != sidingId) {
-				return;
-			}
-			siding.iterateVehicles(vehicle -> {
-				if (found[0] == null && !vehicle.getIsOnRoute()) {
-					final MmtrMission existing = vehicle.getMmtrMission();
-					if (existing == null || existing.isTerminal()) {
-						found[0] = vehicle;
-					}
-				}
-			});
-		});
-		return found[0];
+	private static org.mtr.core.data.VehicleCar toVehicleCar(MmtrCarSpec spec) {
+		return new org.mtr.core.data.VehicleCar(spec.vehicleId, spec.length, spec.width, spec.capacity, spec.bogie1Position, spec.bogie2Position, spec.couplingPadding1, spec.couplingPadding2);
 	}
 
 	@Nullable
@@ -302,6 +422,8 @@ public final class MmtrJobScheduler {
 		@Nullable String failureReason;
 		long startAbs;
 		boolean carsPlaced;
+		/** This job's stock was merged into another job's consist (no longer stands alone). */
+		boolean consumed;
 		/** Whether the consist was last seen stopped at the current step's target platform (AUTO SERVE). */
 		boolean wasAtTarget;
 
