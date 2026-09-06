@@ -253,6 +253,47 @@ public final class MmtrJobScheduler {
 		throw new IllegalArgumentException("unknown job " + jobId);
 	}
 
+	/** Terminal cross-side move: clear the origin siding and stage the fleet on the target siding so
+	 * the engine spawns the consist there (relocation = a new birth at the destination). Requires an
+	 * empty auto target siding whose return leg makes the move reachable. */
+	private boolean relocateParkedConsist(JobInstance instance, Simulator simulator, long toSidingId, long currentMillis) {
+		final Siding from = findSiding(simulator, instance.job.sidingId);
+		final Siding to = findSiding(simulator, toSidingId);
+		if (from == null || to == null || to.getIsManual() || !MmtrMotionRouter.canReachSiding(simulator, instance.job.sidingId, toSidingId)) {
+			fail(instance, "relocation to siding " + toSidingId + " is not reachable / not an auto yard");
+			return false;
+		}
+		final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = toVehicleCars(instance.fleetCars.isEmpty() ? instance.job.cars : instance.fleetCars);
+		if (cars.isEmpty() || Siding.getTotalVehicleLength(cars) > to.getRailLength()) {
+			fail(instance, "relocation formation does not fit target siding " + toSidingId);
+			return false;
+		}
+		from.clearParkedVehicles();
+		to.setVehicleCars(cars);
+		instance.vehicleId = 0;
+		instance.relocatingTo = toSidingId;
+		instance.relocateWaitStartMillis = currentMillis;
+		instance.stepIndex++;
+		instance.state = JobState.RUNNING;
+		System.out.println("[MMTR-JOB] relocating consist of " + instance.job.jobId + " to siding " + toSidingId + " (final arrival step)");
+		return true;
+	}
+
+	@Nullable
+	private static Vehicle findParkedOnSiding(Simulator simulator, long sidingId) {
+		final Vehicle[] found = {null};
+		simulator.sidings.forEach(siding -> {
+			if (found[0] == null && siding.getId() == sidingId) {
+				siding.iterateVehicles(vehicle -> {
+					if (found[0] == null && !vehicle.getIsOnRoute()) {
+						found[0] = vehicle;
+					}
+				});
+			}
+		});
+		return found[0];
+	}
+
 	/** The first parked, mission-idle vehicle on this job's siding that no other job has claimed. */
 	@Nullable
 	private Vehicle findFreeParkedVehicle(Simulator simulator, JobInstance self) {
@@ -349,6 +390,21 @@ public final class MmtrJobScheduler {
 	}
 
 	private void running(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
+		if (instance.relocatingTo != 0) {
+			// Terminal cross-side arrival: waiting for the engine to spawn the consist on the target siding.
+			final Vehicle parked = findParkedOnSiding(simulator, instance.relocatingTo);
+			if (parked != null) {
+				instance.vehicleId = parked.getId();
+				instance.state = JobState.DONE;
+				System.out.println("[MMTR-JOB] relocated consist to siding " + instance.relocatingTo + " and parked (vehicle " + parked.getId() + ")");
+				return;
+			}
+			if (currentMillis - instance.relocateWaitStartMillis > SPAWN_GRACE_MILLIS) {
+				fail(instance, "relocation never spawned on target siding " + instance.relocatingTo);
+				return;
+			}
+			return;
+		}
 		// Yard / parked phases run while the consist stands on its own siding: yard ops (UNCOUPLE),
 		// return-to-yard MOVE_TO completion ("退库") and (re)departures after a return. Platform
 		// movement in between is advanced by the mode-specific logic at the bottom.
@@ -388,6 +444,14 @@ public final class MmtrJobScheduler {
 				instance.stepIndex++;
 				instance.awaitingStart = true;
 				continue;
+			}
+			// Terminal cross-side arrival: move to ANOTHER siding of the (same) depot as the final step.
+			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId != instance.job.sidingId
+				&& findSiding(simulator, step.targetId) != null && instance.stepIndex + 1 >= instance.job.steps.size()) {
+				if (!relocateParkedConsist(instance, simulator, step.targetId, currentMillis)) {
+					return; // relocation failed the instance already
+				}
+				return; // RUNNING while the engine spawns the consist on the target siding
 			}
 			// Parked with a movement step next: first departure or re-departure after a return.
 			if (step.type == MmtrJobStep.StepType.MOVE_TO || step.type == MmtrJobStep.StepType.SERVE) {
@@ -610,6 +674,8 @@ public final class MmtrJobScheduler {
 		boolean started;
 		/** True when a parked consist may need a (re)departure (after a return or a yard op). */
 		boolean awaitingStart = true;
+		long relocatingTo;
+		long relocateWaitStartMillis;
 		/** This job's stock was merged into another job's consist (no longer stands alone). */
 		boolean consumed;
 		/** Whether the consist was last seen stopped at the current step's target platform (AUTO SERVE). */
