@@ -61,3 +61,12 @@
 ## 6. 与里程碑关系
 - 属于 docs/03 的 M2（任务引擎+AI+连解挂/Coupler）的移动内核；
 - 货运(接驳/装卸/报酬)M3 依赖此移动内核。
+## 7. 车辆位置通信协议（SimRail / Stepford 启发）
+- 原则：服务端权威；给客户端的不是"烤好的路线"，而是**逐帧可插值的轨道段位置**。
+- 引擎已新增 `mmtr-motion` feed（SystemMapServlet），每辆车输出 `MmtrMotionSnapshot`：
+  vehicleId/sidingId/sidingName、formation cars、headX/Z、
+  **段表示**：segStartX/Z・segEndX/Z（轨道段两端点）+ segmentReversed + segmentOffsetM + segmentLengthM
+  （客户端沿段按 offset 插值），外加 speedKmh/moving/onRoute/doorsOpen/platformId/mission。
+- 优点：客户端不需要任何 depot/route 知识即可插值渲染；换段/换场不改变协议；未来车头/尾双点只加字段。
+- 服务端现有权威仍来自 MTR rail progress；本协议是"解耦后的表示层"，为 L3（Vehicle 路径解耦、
+  MotionPlan 驱动）留好同一接口——L3 完成后同一 snapshot 字段继续使用。

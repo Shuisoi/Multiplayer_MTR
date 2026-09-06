@@ -828,4 +828,17 @@ public final class MmtrJobSchedulerTests {
 		assertTrue(!org.mtr.core.mmtr.job.MmtrMotionRouter.canReachSiding(sim, ids[0], -123456789L), "unknown siding is unreachable");
 	}
 
+	/** M2-Core: decoupled motion snapshot reports (segment, offset) independent of any baked route. */
+	@Test
+	public void motionSnapshotReportsSegmentPosition() {
+		final long[] ids = buildAutoWorldIn("mmtr-motion", true);
+		final Simulator sim = AUTO_SIM[0];
+		final org.mtr.core.mmtr.MmtrMotionSnapshot[] snap = {null};
+		sim.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> { if (snap[0] == null) { snap[0] = org.mtr.core.mmtr.MmtrMotionSnapshot.from(siding, vehicle); } }));
+		org.junit.jupiter.api.Assumptions.assumeTrue(snap[0] != null, "need a vehicle to snapshot");
+		assertTrue(!(snap[0].segStartX == 0 && snap[0].segStartZ == 0 && snap[0].segEndX == 0 && snap[0].segEndZ == 0), "vehicle must report a concrete rail segment");
+		assertTrue(snap[0].segmentOffsetM >= 0 && snap[0].segmentOffsetM <= snap[0].segmentLengthM + 1, "segment offset within segment");
+		assertTrue(snap[0].cars >= 1, "formation size reported");
+	}
+
 }

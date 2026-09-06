@@ -59,6 +59,7 @@ public final class SystemMapServlet extends ServletBase {
 				}
 				case "mmtr-jobs" -> Utilities.getJsonObjectFromData(simulator.getMmtrJobRegistry());
 				case "mmtr-job-references" -> getMmtrJobReferences(simulator);
+				case "mmtr-motion" -> getMmtrMotion(simulator);
 				case "mmtr-jobs-upsert" -> {
 					final org.mtr.core.mmtr.job.MmtrConsistJob job = new org.mtr.core.mmtr.job.MmtrConsistJob(jsonReader);
 					simulator.upsertMmtrJob(job);
@@ -206,6 +207,15 @@ public final class SystemMapServlet extends ServletBase {
 		// Reserved for the automatic signal / point layer (future infrastructure reaction layer).
 		root.add("signals", new com.google.gson.JsonArray());
 		root.add("points", new com.google.gson.JsonArray());
+		return root;
+	}
+
+	/** Decoupled vehicle motion feed: (segment id + offset) positions for clients/map (no baked routes). */
+	private static JsonObject getMmtrMotion(Simulator simulator) {
+		final com.google.gson.JsonArray snapshots = new com.google.gson.JsonArray();
+		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> snapshots.add(Utilities.getJsonObjectFromData(org.mtr.core.mmtr.MmtrMotionSnapshot.from(siding, vehicle)))));
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("snapshots", snapshots);
 		return root;
 	}
 
