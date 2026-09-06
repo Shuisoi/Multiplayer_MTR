@@ -227,3 +227,9 @@
 | 真实存档内完整 DONE 宏（需 auto 车场） | ⚠️ 环境缺失 | 存档仅 manual 车场；manual 引擎不自生车（约束已文档化） |
 | 引擎回归 | ✅ | cleanTest 207 tests / 0 fail / 0 skip（多轮） |
 | web 构建 | ✅ | ng lint+build exit 0 |
+## 计划（M2 跨车场任务点路由，用户拍板为后续专项）
+- 目标：B 条款"任务点（跨车场）股道移动"。当前引擎为"单车场进路模型"（每 siding 只生成
+  pathSidingToMainRoute / pathMainRouteToSiding 回本场）；让 A 场机车开往 B 场任务点股道并连挂，
+  需要"站台→他场股道"返回腿的跨 depot 路由接入（SidingPathFinder/Depot 路径缓存扩展），属
+  docs/03 M2 路由范围。前置工作建议：①跨 depot 共享站台路径可达性实验；②任务点股道类型/到达
+  窗口；③真实 auto 车场终验存档。本轮仅记录与回归（207/0/0），详见 round21 验收矩阵。
