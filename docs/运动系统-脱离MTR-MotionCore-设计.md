@@ -76,7 +76,7 @@
 
 ### 8.2 切片进展
 - 已做 8.1 + 「跨股道自动移动先下线」(increment A)：MmtrJobScheduler 的 cross-side MOVE_TO 改为 fail-fast(离线)；删除 DevWorldRelocateTests / DevWorldRouterProbeTests（仅测该旧重生搬迁）。compile + Motion Core 确定性测试绿。
-- 下一增量(B)：删除调度器内 arrivalMergeConsist / relocateParkedConsist / relocatingTo 完成态机/字段，及 MmtrMotionRouter(canReachSiding) 与 Siding.hasPathToMainRoute/hasReturnFromMainRoute，清理 MmtrJobSchedulerTests 中跨侧用例。
+- 已做 增量(B)：删除 MmtrJobScheduler 内 arrivalMergeConsist / relocateParkedConsist / relocatingTo 完成态机与字段（relocatingTo / relocateWaitStartMillis）及 reset；删除 MmtrMotionRouter(canReachSiding) 类与其测试方法。compile + Motion Core 确定性测试绿。Siding.hasPathToMainRoute/hasReturnFromMainRoute 暂留（Simulator 仍用）。
 
 ### 8.2b 后续切片（按序，每步可验）
 - 切片2：移除旧 relocation 的可达性门（MmtrMotionRouter.canReachSiding + Siding 的两条 has* 缓存判断），

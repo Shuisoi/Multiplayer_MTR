@@ -154,8 +154,6 @@ public final class MmtrJobScheduler {
 		instance.stepIndex = 0;
 		instance.vehicleId = 0;
 		instance.curSidingId = 0;
-		instance.relocatingTo = 0;
-		instance.relocateWaitStartMillis = 0;
 		instance.carsPlaced = false;
 		instance.mergedPlaced = false;
 		instance.consumed = false;
@@ -174,8 +172,6 @@ public final class MmtrJobScheduler {
 			source.stepIndex = 0;
 			source.vehicleId = 0;
 			source.curSidingId = 0;
-			source.relocatingTo = 0;
-			source.relocateWaitStartMillis = 0;
 			source.carsPlaced = false;
 			source.mergedPlaced = false;
 			source.consumed = false;
@@ -425,93 +421,6 @@ public final class MmtrJobScheduler {
 		throw new IllegalArgumentException("unknown job " + jobId);
 	}
 
-	/**
-	 * Arrival make-up: the target siding already holds another job's parked source stock. Merge this
-	 * consist's fleet onto it (this job's cars first, then the source's cars) by rebuilding the
-	 * parked vehicle on the target, consume the source job, and continue from the target siding.
-	 */
-	private boolean arrivalMergeConsist(JobInstance instance, Simulator simulator, long targetSidingId) {
-		final Siding from = findSiding(simulator, curSiding(instance));
-		final Siding to = findSiding(simulator, targetSidingId);
-		final Vehicle parked = findParkedOnSiding(simulator, targetSidingId);
-		if (from == null || to == null || parked == null || to.getIsManual()
-			|| !MmtrMotionRouter.canReachSiding(simulator, curSiding(instance), targetSidingId)) {
-			fail(instance, "arrival make-up on siding " + targetSidingId + " is not reachable / not an auto yard");
-			return false;
-		}
-		JobInstance source = null;
-		for (final JobInstance other : instances.values()) {
-			if (!other.consumed && other.vehicleId == parked.getId() && other != instance) {
-				source = other;
-				break;
-			}
-		}
-		if (source == null || !source.job.steps.isEmpty() && source.state != JobState.DONE && source.state != JobState.PENDING) {
-			fail(instance, "arrival make-up target stock has no owning source job ready to merge");
-			return false;
-		}
-		final ObjectArrayList<MmtrCarSpec> fleet = new ObjectArrayList<>();
-		fleet.addAll(instance.fleetCars.isEmpty() ? instance.job.cars : instance.fleetCars);
-		fleet.addAll(source.job.cars);
-		final ObjectArrayList<org.mtr.core.data.VehicleCar> merged = toVehicleCars(fleet);
-		if (Siding.getTotalVehicleLength(merged) > to.getRailLength()) {
-			fail(instance, "merged formation does not fit target siding " + targetSidingId);
-			return false;
-		}
-		to.mmtrFormationWindow = true;
-		final Vehicle rebuilt = to.rebuildParkedConsist(merged);
-		to.mmtrFormationWindow = false;
-		if (rebuilt == null) {
-			fail(instance, "arrival make-up rebuild failed on siding " + targetSidingId);
-			return false;
-		}
-		if (from != to) {
-			from.clearParkedVehicles(); // the mover leaves its origin (reborn on the target)
-			from.setVehicleCars(new ObjectArrayList<>()); // and the origin must not respawn its stale template
-		}
-		source.consumed = true;
-		source.state = JobState.DONE;
-		instance.fleetCars.clear();
-		instance.fleetCars.addAll(fleet);
-		instance.vehicleId = rebuilt.getId();
-		instance.curSidingId = targetSidingId;
-		markVisited(instance, targetSidingId);
-		markVisited(instance, instance.job.sidingId);
-		instance.awaitingStart = true;
-		instance.stepIndex++;
-		instance.state = JobState.RUNNING;
-		System.out.println("[MMTR-JOB] arrival make-up on " + targetSidingId + " merged " + instance.job.jobId + " + " + source.job.jobId + " -> vehicle " + rebuilt.getId() + " cars=" + merged.size());
-		return true;
-	}
-
-	/** Terminal cross-side move: clear the origin siding and stage the fleet on the target siding so
-	 * the engine spawns the consist there (relocation = a new birth at the destination). Requires an
-	 * empty auto target siding whose return leg makes the move reachable. */
-	private boolean relocateParkedConsist(JobInstance instance, Simulator simulator, long toSidingId, long currentMillis) {
-		final Siding from = findSiding(simulator, curSiding(instance));
-		final Siding to = findSiding(simulator, toSidingId);
-		if (from == null || to == null || to.getIsManual() || !MmtrMotionRouter.canReachSiding(simulator, curSiding(instance), toSidingId)) {
-			fail(instance, "relocation to siding " + toSidingId + " is not reachable / not an auto yard");
-			return false;
-		}
-		final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = toVehicleCars(instance.fleetCars.isEmpty() ? instance.job.cars : instance.fleetCars);
-		if (cars.isEmpty() || Siding.getTotalVehicleLength(cars) > to.getRailLength()) {
-			fail(instance, "relocation formation does not fit target siding " + toSidingId);
-			return false;
-		}
-		from.clearParkedVehicles();
-		from.setVehicleCars(new ObjectArrayList<>()); // no stale re-spawn at the origin
-		to.setVehicleCars(cars);
-		instance.vehicleId = 0;
-		instance.relocatingTo = toSidingId;
-		instance.curSidingId = 0; // adoption assigns the target siding
-		instance.relocateWaitStartMillis = currentMillis;
-		instance.stepIndex++;
-		instance.state = JobState.RUNNING;
-		System.out.println("[MMTR-JOB] relocating consist of " + instance.job.jobId + " to siding " + toSidingId + " (final arrival step)");
-		return true;
-	}
-
 	@Nullable
 	private static Vehicle findParkedOnSiding(Simulator simulator, long sidingId) {
 		final Vehicle[] found = {null};
@@ -633,28 +542,6 @@ public final class MmtrJobScheduler {
 	}
 
 	private void running(JobInstance instance, long currentMillis, long dayTime, Simulator simulator) {
-		if (instance.relocatingTo != 0) {
-			// Terminal cross-side arrival: waiting for the engine to spawn the consist on the target siding.
-			final Vehicle parked = findParkedOnSiding(simulator, instance.relocatingTo);
-			if (parked != null) {
-				instance.vehicleId = parked.getId();
-				instance.curSidingId = instance.relocatingTo;
-				markVisited(instance, instance.relocatingTo);
-				instance.awaitingStart = true;
-				instance.relocatingTo = 0;
-				System.out.println("[MMTR-JOB] relocated consist to siding " + instance.curSidingId + " and parked (vehicle " + parked.getId() + ")");
-				if (instance.stepIndex >= instance.job.steps.size()) {
-					instance.state = JobState.DONE;
-					return;
-				}
-				// fall through: continue executing the remaining steps from the new staging siding
-			}
-			if (currentMillis - instance.relocateWaitStartMillis > SPAWN_GRACE_MILLIS) {
-				fail(instance, "relocation never spawned on target siding " + instance.relocatingTo);
-				return;
-			}
-			return;
-		}
 		// Yard / parked phases run while the consist stands on its own siding: yard ops (UNCOUPLE),
 		// return-to-yard MOVE_TO completion ("退库") and (re)departures after a return. Platform
 		// movement in between is advanced by the mode-specific logic at the bottom.
@@ -973,14 +860,12 @@ public final class MmtrJobScheduler {
 		boolean autoDepartureKickLogged;
 		boolean paused;
 		boolean humanHold;
-		long relocatingTo;
-		long curSidingId;
+			long curSidingId;
 		long nextCycleAtMs;
 		int cyclesDone;
 		long lastLoopResetAtMillis;
 		final ObjectArrayList<Long> visitedSidings = new ObjectArrayList<>();
-		long relocateWaitStartMillis;
-		/** This job's stock was merged into another job's consist (no longer stands alone). */
+			/** This job's stock was merged into another job's consist (no longer stands alone). */
 		boolean consumed;
 		/** Whether the consist was last seen stopped at the current step's target platform (AUTO SERVE). */
 		boolean wasAtTarget;

@@ -819,15 +819,6 @@ public final class MmtrJobSchedulerTests {
 		assertEquals(5, sim.mmtrJobScheduler.stepIndexOf("L-E2E"), "full macro steps all completed from the registry file");
 		assertEquals(MmtrJobScheduler.JobState.DONE, sim.mmtrJobScheduler.stateOf("T-E2E"), "trailer stock job must be parked (source consumed)");
 	}
-	/** M2-Core L0: motion router reachability basics on the synthetic auto world. */
-	@Test
-	public void motionRouterReachabilityBasics() {
-		final long[] ids = buildAutoWorldIn("mmtr-router", true);
-		final Simulator sim = AUTO_SIM[0];
-		assertTrue(org.mtr.core.mmtr.job.MmtrMotionRouter.canReachSiding(sim, ids[0], ids[0]), "same siding is trivially reachable");
-		assertTrue(!org.mtr.core.mmtr.job.MmtrMotionRouter.canReachSiding(sim, ids[0], -123456789L), "unknown siding is unreachable");
-	}
-
 	/** M2-Core: decoupled motion snapshot reports (segment, offset) independent of any baked route. */
 	@Test
 	public void motionSnapshotReportsSegmentPosition() {

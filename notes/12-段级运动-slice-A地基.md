@@ -112,3 +112,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - 决策：本阶段删除旧"重生"搬迁（relocation/跨股道 MOVE_TO/到达合并 make-up），跨股道自动移动先下线。
 - 已做：MmtrJobScheduler cross-side MOVE_TO -> fail-fast 离线；删除 DevWorldRelocateTests / DevWorldRouterProbeTests。
   engine compile + Motion Core 确定性测试绿。
+## 13. 清理切片 #2 增量 B（删除旧重生搬迁残留代码）
+- 删除 MmtrJobScheduler 内 arrivalMergeConsist / relocateParkedConsist / relocatingTo 完成态机与字段及 reset；
+- 删除 MmtrMotionRouter（canReachSiding）类 + MmtrJobSchedulerTests.motionRouterReachabilityBasics。
+- compileJava/compileTestJava + Motion Core 确定性测试绿。
