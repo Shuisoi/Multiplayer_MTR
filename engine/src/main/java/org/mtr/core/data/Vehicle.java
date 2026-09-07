@@ -19,6 +19,7 @@ import org.mtr.core.mmtr.MmtrComposition;
 import org.mtr.core.mmtr.MmtrDriveAccess;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.MmtrProtection;
+import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.path.SidingPathFinder;
@@ -288,6 +289,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final MmtrMission mission = mmtrMission;
 		final boolean motionMission = mmtrMotionWalker != null;
+		// Motion-mode missions self-execute: whoever attached the mission (mission control op, job
+		// scheduler, periodic source) does not need to arm anything - the vehicle resolves the target
+		// platform/siding rail, plans the run and arms the auto step-run itself on the next tick.
+		// Missions armed eagerly by the ops layer (auto already on) are left alone.
+		if (motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && mission.getState() != MmtrMission.State.AT_TARGET && !mission.isTerminal()
+			&& !mmtrMotionAuto && mmtrMotionStopTargetM < 0 && data instanceof final Simulator simulator) {
+			mmtrMotionSelfArmMission(simulator, mission);
+		}
 		switch (mission.getState()) {
 			case ASSIGNED:
 				// The consist started moving (left the depot / began its run) => dispatched.
@@ -328,6 +337,38 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrMotionArrivalControlSeq = -1;
 			vehicleExtraData.closeDoors();
 		}
+	}
+
+	/**
+	 * MMTR (L3, slice 9): self-arm an AUTOPILOT mission on this motion vehicle - resolve the target
+	 * platform/siding rail by id, plan the run (MmtrRunPlanner), preset the en-route turnouts into the
+	 * authoritative store and arm the auto step-run (doors for passenger service). Infeasible targets
+	 * fail the mission with the reason, so task owners observe the failure through the mission.
+	 */
+	private void mmtrMotionSelfArmMission(Simulator simulator, MmtrMission mission) {
+		final long targetSidingId = mission.getTargetSidingId();
+		if (targetSidingId == 0) {
+			mission.fail("motion missions need an explicit target platform/siding id");
+			return;
+		}
+		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
+		if (targetRail == null) {
+			mission.fail("target siding " + targetSidingId + " has no graph rail");
+			return;
+		}
+		if (targetRail.getHexId().equals(mmtrMotionWalker.railHex())) {
+			mission.fail("target is the rail the vehicle is already on");
+			return;
+		}
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), 1.0);
+		if (!plan.feasible) {
+			mission.fail(plan.reason);
+			return;
+		}
+		MmtrRunPlanner.applyForkOps(plan, simulator.mmtrPointBranches);
+		setMmtrMotionAuto(true);
+		setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
+		System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
 	}
 
 	/**

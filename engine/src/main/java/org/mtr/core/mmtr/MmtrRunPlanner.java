@@ -174,6 +174,28 @@ public final class MmtrRunPlanner {
 		return plan;
 	}
 
+	/**
+	 * The real graph rail of the platform/siding with the given id, when drawn (null otherwise).
+	 * Shared by the mission control op and the vehicle's mission self-arm.
+	 */
+	@Nullable
+	public static Rail findSavedRailRail(Simulator simulator, long savedRailId) {
+		final Rail[] found = {null};
+		simulator.sidings.forEach(siding -> {
+			if (found[0] == null && siding.getId() == savedRailId) {
+				found[0] = siding.mmtrGraphRail();
+			}
+		});
+		if (found[0] == null) {
+			simulator.platforms.forEach(platform -> {
+				if (found[0] == null && platform.getId() == savedRailId) {
+					found[0] = platform.mmtrGraphRail();
+				}
+			});
+		}
+		return found[0];
+	}
+
 	/** Applies a feasible plan's turnout presets into {@code store} (skips identical settings). */
 	public static void applyForkOps(Plan plan, BranchStore store) {
 		for (final String[] op : plan.forkOps) {

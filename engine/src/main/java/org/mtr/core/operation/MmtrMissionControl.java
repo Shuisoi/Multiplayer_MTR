@@ -110,20 +110,7 @@ public final class MmtrMissionControl implements SerializedDataBase {
 
 	/** The real rail of the platform/siding with the given id (its drawn graph rail), if any. */
 	private static Rail findTargetRail(Simulator simulator, long targetSidingId) {
-		final Rail[] found = {null};
-		simulator.sidings.forEach(siding -> {
-			if (found[0] == null && siding.getId() == targetSidingId) {
-				found[0] = siding.mmtrGraphRail();
-			}
-		});
-		if (found[0] == null) {
-			simulator.platforms.forEach(platform -> {
-				if (found[0] == null && platform.getId() == targetSidingId) {
-					found[0] = platform.mmtrGraphRail();
-				}
-			});
-		}
-		return found[0];
+		return MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
 	}
 
 	private static long parseId(ReaderBase readerBase, String key) {

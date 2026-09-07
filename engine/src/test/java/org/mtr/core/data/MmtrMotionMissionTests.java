@@ -170,4 +170,59 @@ public final class MmtrMotionMissionTests {
 		assertNull(v.getMmtrMission(), "still no mission attached");
 		assertFalse(v.isMmtrMotionAuto(), "auto never armed on refusal");
 	}
+
+	@Test
+	public void plainMissionAssignmentSelfArmsAndRunsWithoutControlOp() {
+		final Net n = new Net();
+		final Vehicle v = n.spawn();
+		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final double expectedStop = walker.distanceM()
+			+ (n.yardRail.railMath.getLength() - walker.offsetM())
+			+ n.rX.railMath.getLength()
+			+ n.rP.railMath.getLength();
+
+		// Whoever attaches the mission (scheduler / periodic source / ops) needs no arming calls:
+		// the motion vehicle self-arms on its next tick.
+		final MmtrMission mission = new MmtrMission(v.getId(), MmtrMission.Kind.PASSENGER, n.siding.getId(), n.platform.getId(), 0L);
+		mission.setExecutor(MmtrMission.Executor.AUTOPILOT, null);
+		assertTrue(v.setMmtrMission(mission), "mission attached directly");
+
+		boolean doorsSeenWhileAtTarget = false;
+		int guard = 0;
+		while (guard++ < 8000 && (v.getMmtrMission() == null || v.getMmtrMission().getState() != MmtrMission.State.AT_TARGET)) {
+			n.siding.simulateVehicles(1000, null);
+		}
+		assertNotNull(v.getMmtrMission(), "mission present");
+		assertTrue(v.isMmtrMotionAuto(), "vehicle self-armed the auto step-run without any ops call");
+		assertEquals(MmtrMission.State.AT_TARGET, v.getMmtrMission().getState(), "mission arrived AT_TARGET after the self-armed run");
+		assertEquals(expectedStop, v.getRailProgress(), 0.05, "self-armed run stopped exactly at the planned platform stop");
+		assertEquals(n.rP.getHexId(), walker.railHex(), "vehicle arrived on the platform rail");
+		for (int i = 0; i < 10 && !doorsSeenWhileAtTarget; i++) {
+			n.siding.simulateVehicles(1000, null);
+			if (v.vehicleExtraData.getDoorMultiplier() > 0) {
+				doorsSeenWhileAtTarget = true;
+			}
+		}
+		assertTrue(doorsSeenWhileAtTarget, "doors open while AT_TARGET (passenger service)");
+
+		v.getMmtrMission().cancel();
+		n.siding.simulateVehicles(1000, null);
+		assertFalse(v.isMmtrMotionAuto(), "auto off after the terminal mission");
+	}
+
+	@Test
+	public void selfArmFailsMissionWhenTargetIsTheCurrentRail() {
+		final Net n = new Net();
+		final Vehicle v = n.spawn();
+		// Target = this vehicle's own yard siding rail: the self-arm must fail the mission with a
+		// reason instead of arming a nonsense run.
+		final MmtrMission mission = new MmtrMission(v.getId(), MmtrMission.Kind.MANEUVER, n.siding.getId(), n.siding.getId(), 0L);
+		mission.setExecutor(MmtrMission.Executor.AUTOPILOT, null);
+		assertTrue(v.setMmtrMission(mission), "mission attached directly");
+		n.siding.simulateVehicles(1000, null);
+		n.siding.simulateVehicles(1000, null);
+		assertNotNull(v.getMmtrMission(), "mission present");
+		assertEquals(MmtrMission.State.FAILED, v.getMmtrMission().getState(), "self-arm must fail the mission for the current-rail target");
+		assertFalse(v.isMmtrMotionAuto(), "auto never armed");
+	}
 }

@@ -34,7 +34,7 @@
 | 实机测试-手动驾驶Motion车-步骤.md | 真实 dev 服务端手动驾驶验证步骤 + 待运行时确认清单 | 有效（按它做实机验收） |
 
 ## 过程记录（notes/，只增不改命名）
-- notes/01–22：按轮次的技术笔记/决策/回归证据。最近：22 = L3 slice-8（运行中任务目标重定向：walker live retarget，任务目标覆盖陈旧 operator/充当未设岔权威，登轨停车、清除续行；MmtrMotionTaskTargetTests 2 例）。
+- notes/01–23：按轮次的技术笔记/决策/回归证据。最近：23 = L3 slice-9（任务自武装：motion 车对任何来源的 AUTOPILOT 任务自行 planner+auto 执行，不可行目标任务 FAILED；MmtrMotionMissionTests 4 例）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 仓库范围外（历史早期资料，未入库）
