@@ -1,23 +1,20 @@
-package org.mtr.core.mmtr.point;
+package org.mtr.core.data;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
-import org.mtr.core.data.Position;
-import org.mtr.core.data.Siding;
-import org.mtr.core.data.Rail;
-import org.mtr.core.data.TransportMode;
-import org.mtr.core.data.Vehicle;
-import org.mtr.core.data.VehicleCar;
-import org.mtr.core.data.VehicleExtraData;
 import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.ControlState;
+import org.mtr.core.mmtr.point.MmtrPointRegistry;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
+import org.mtr.core.mmtr.point.MmtrSwitch;
 import org.mtr.core.mmtr.segment.MmtrMotionDriver;
+import org.mtr.core.operation.MmtrDriveControl;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Angle;
 
 import java.nio.file.Files;
+import java.util.UUID;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -240,6 +237,37 @@ public final class MmtrVehicleLegsRunTests {
 			max = Math.max(max, spawned.getRailProgress());
 		}
 		assertTrue(max > 21, "Motion-legs vehicle spawned by the seam must advance past the fork, got " + max);
+	}
+
+
+	@Test
+	public void existingDriveCommandLayerDrivesMotionLegsVehicle() {
+		final Net n = new Net();
+		final ObjectArrayList<org.mtr.core.data.PathData> legs = legsFor(n, 0, n.rStraight.getHexId());
+		// A real yard siding with the Motion-legs vehicle staged, so the drive command can find it.
+		final Siding siding = new Siding(new Position(-25, 0, -2), new Position(-22, 0, 2), 8, TransportMode.TRAIN, n.sim);
+		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+		cars.add(new VehicleCar("probe", 2, 1, 10, 0, 1, 0.1, 0.1));
+		siding.setVehicleCars(cars);
+		n.sim.sidings.add(siding);
+		final Vehicle spawned = siding.spawnMmtrManualWithLegs(legs);
+		org.junit.jupiter.api.Assertions.assertNotNull(spawned, "seam must stage a Motion-legs manual vehicle");
+
+		// A driver sits in the cab; the existing operation-layer drive command drives the train.
+		final UUID driver = UUID.randomUUID();
+		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
+		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		spawned.updateRidingEntities(entities);
+		new MmtrDriveControl(spawned.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
+		assertTrue(spawned.isMmtrManualOverride(), "drive command must engage the MMTR override through the operation layer");
+
+		double max = spawned.getRailProgress();
+		for (int i = 0; i < 80; i++) {
+			spawned.simulate(1000, null, null);
+			max = Math.max(max, spawned.getRailProgress());
+		}
+		assertTrue(max > 21, "operation-layer-driven Motion vehicle must advance past the fork, got " + max);
+		assertEquals(n.rStraight.getHexId(), railAt(legs, indexAt(legs, max)).getHexId(), "on-route index sits on the straight rail after the drive command moved it");
 	}
 
 }
