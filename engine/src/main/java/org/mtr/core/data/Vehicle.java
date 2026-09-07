@@ -124,6 +124,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** applyMmtrControl() sequence; a changed sequence while stopped at a target = the driver's continue. */
 	private int mmtrControlApplySeq;
 	private int mmtrMotionArrivalControlSeq = -1;
+	/**
+	 * MMTR (L3): unmanned auto run (task/ATO foundation). While armed and a stop target is active,
+	 * the vehicle drives itself (cruise at the auto notch, service-brake envelope to the exact stop
+	 * target, doors per the stop request) without any driver override; arming the NEXT stop target
+	 * while stopped departs automatically (step-run). An active manual override always wins; when it
+	 * is released the auto run resumes.
+	 */
+	private boolean mmtrMotionAuto;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -669,6 +677,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 		vehicleExtraData.closeDoors();
 		final double previousSpeed = speed;
+		// Unmanned auto run: drives itself toward the armed stop target while no cab override is held.
+		final boolean autoActive = mmtrMotionAuto && !mmtrManualOverride && stopTargetActive && !mmtrMotionStoppedAtTarget && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() > 1e-6;
+		final int autoNotch = mmtrConsistType != null ? Math.max(1, Math.min(4, mmtrConsistType.getPowerNotches())) : 4;
 		final double remainingToStop = stopTargetActive ? mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() : Double.MAX_VALUE;
 		final boolean autoBraking = stopTargetActive && speed > 0 && remainingToStop > 0 && remainingToStop < 0.5 * speed * speed / Math.max(mmtrMotionServiceDecelPerMs(), 1e-12);
 
@@ -680,11 +691,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final double brakeDelta = Math.min(0.5 * speed * speed / Math.max(remainingToStop, 1e-3), mmtrMotionServiceDecelPerMs()) * millisElapsed;
 			speed = Math.max(0, speed - brakeDelta);
 			integratedDistance = speed > 0 ? speed * millisElapsed : 0;
-		} else if (overridden && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+		} else if ((overridden || autoActive) && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
 			// Same fixed sub-step ConsistDynamics integration as the legacy MMTR branch in
-			// simulateMoving (server side; motion mode has no clientside mirror yet).
+			// simulateMoving (server side; motion mode has no clientside mirror yet). Auto runs feed a
+			// synthesized cruise ControlState; an active cab override feeds the driver's own state.
 			final ConsistType mmtrType = mmtrConsistType;
-			final ControlState mmtrState = control;
+			final ControlState mmtrState = overridden ? control : new ControlState().setThrottleNotch(autoNotch).setReverser(1);
 			final boolean useCompositionAir = mmtrType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
 			final MmtrComposition mmtrCompositionNow = useCompositionAir ? getMmtrComposition() : null;
 			final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
@@ -701,15 +713,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrPipePressure = mmtrCompositionNow.averagePipePressure();
 				mmtrBrakeCylinderPressure = mmtrCompositionNow.averageCylinderPressure();
 			}
-		} else if (overridden) {
+		} else if (overridden || autoActive) {
 			// No consist-type policy: linear legacy-style integration from the ControlState notches.
 			// Stored VED values are SI (m/s^2) scaled by 1e-3; the internal per-ms rate is SI * 1e-6,
 			// so the per-tick speed change is value * 1e-3 * millisElapsed (m/ms).
 			final double accelPerMs = vehicleExtraData.getAcceleration() * 1e-3;
 			final double decelPerMs = vehicleExtraData.getDeceleration() * 1e-3;
-			if (braking) {
+			final boolean effectivePower = overridden ? wantPower : autoActive;
+			if (overridden && braking) {
 				speed = Math.max(0, speed - decelPerMs * millisElapsed);
-			} else if (wantPower) {
+			} else if (effectivePower) {
 				speed = Math.min(vehicleExtraData.getMaxManualSpeed(), speed + accelPerMs * millisElapsed);
 			} else {
 				speed = Math.max(0, speed - decelPerMs * 0.1 * millisElapsed); // coast-down
@@ -759,7 +772,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 
 		if (!isClientside) {
-			vehicleExtraData.setPowerLevel(wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0);
+			final int displayPower = overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
+			vehicleExtraData.setPowerLevel(displayPower);
 			vehicleExtraData.setSpeedTarget(speed);
 			updateMmtrSyncFields();
 		}
@@ -856,15 +870,40 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (isClientside || mmtrMotionWalker == null) {
 			return;
 		}
+		final boolean wasStoppedAtTarget = mmtrMotionStoppedAtTarget;
 		mmtrMotionStopTargetM = cumulativeDistanceM;
 		mmtrMotionStopOpenDoors = openDoors;
 		mmtrMotionStoppedAtTarget = false;
 		mmtrMotionArrivalControlSeq = -1;
+		// Auto step-run: arming the next stop target while stopped = depart automatically (the task
+		// owns the dwell time and re-arms when it is done). Manual holds still need a fresh control.
+		if (mmtrMotionAuto && wasStoppedAtTarget && cumulativeDistanceM >= 0) {
+			vehicleExtraData.closeDoors();
+			System.out.println("[MMTR-DRV] motion auto-departing to next stop target " + Math.round(cumulativeDistanceM * 100.0) / 100.0 + "m");
+		}
 	}
 
 	/** @return true when the vehicle is stopped exactly at its armed motion stop target. */
 	public boolean isMmtrMotionStoppedAtTarget() {
 		return mmtrMotionStoppedAtTarget;
+	}
+
+	/** @return true when the vehicle runs unmanned (auto step-run) in motion mode. */
+	public boolean isMmtrMotionAuto() {
+		return mmtrMotionAuto;
+	}
+
+	/**
+	 * MMTR (L3, server): enables/disables the unmanned auto step-run for this motion vehicle. While
+	 * enabled, arming a stop target drives the vehicle to it automatically; arming the next target
+	 * while stopped departs automatically. A manual override (cab driver) always wins while active.
+	 */
+	public void setMmtrMotionAuto(boolean auto) {
+		if (isClientside) {
+			return;
+		}
+		mmtrMotionAuto = auto;
+		System.out.println("[MMTR-DRV] motion auto run " + (auto ? "enabled" : "disabled"));
 	}
 
 	/**
