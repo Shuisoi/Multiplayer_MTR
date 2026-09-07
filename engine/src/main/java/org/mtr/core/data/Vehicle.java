@@ -113,6 +113,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private final ObjectArrayList<PathData> mmtrMotionLegs = new ObjectArrayList<>();
 	/** Walker leg count at the last shadow refresh (detects newly boarded rails). */
 	private int mmtrMotionLegCount;
+	/**
+	 * MMTR (L3): cumulative stop target for the current motion run (m in walker distance space);
+	 * -1 = no stop target (free run). When set, the vehicle auto service-brakes and comes to rest
+	 * exactly at the target, opens the doors if requested, and holds until a NEW control is applied.
+	 */
+	private double mmtrMotionStopTargetM = -1;
+	private boolean mmtrMotionStoppedAtTarget;
+	private boolean mmtrMotionStopOpenDoors;
+	/** applyMmtrControl() sequence; a changed sequence while stopped at a target = the driver's continue. */
+	private int mmtrControlApplySeq;
+	private int mmtrMotionArrivalControlSeq = -1;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -627,15 +638,49 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * slices; doors stay closed while running.
 	 */
 	private void simulateMmtrMotion(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
-		vehicleExtraData.closeDoors();
 		final ControlState control = mmtrActiveControl;
 		final boolean overridden = mmtrManualOverride && control != null;
 		final boolean wantPower = overridden && control.getReverser() > 0 && control.getThrottleNotch() > 0 && !(control.getBrakeNotch() > 0 || control.isEmergency());
 		final boolean braking = overridden && (control.getBrakeNotch() > 0 || control.isEmergency());
+		final boolean stopTargetActive = mmtrMotionStopTargetM >= 0;
+
+		// Stopped exactly at the armed stop target: hold there. Doors stay open when the stop asked
+		// for it; a FRESH control application (driver pushes again / task re-commands) closes the
+		// doors and starts the next run from the same spot.
+		if (mmtrMotionStoppedAtTarget) {
+			speed = 0;
+			if (mmtrMotionStopOpenDoors) {
+				vehicleExtraData.openDoors();
+			}
+			if (overridden && wantPower && mmtrControlApplySeq != mmtrMotionArrivalControlSeq) {
+				vehicleExtraData.closeDoors();
+				mmtrMotionStopTargetM = -1;
+				mmtrMotionStoppedAtTarget = false;
+				mmtrMotionArrivalControlSeq = -1;
+				System.out.println("[MMTR-DRV] motion departed stop target");
+			}
+			if (!isClientside) {
+				vehicleExtraData.setPowerLevel(0);
+				vehicleExtraData.setSpeedTarget(0);
+				updateMmtrSyncFields();
+			}
+			return;
+		}
+
+		vehicleExtraData.closeDoors();
 		final double previousSpeed = speed;
+		final double remainingToStop = stopTargetActive ? mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() : Double.MAX_VALUE;
+		final boolean autoBraking = stopTargetActive && speed > 0 && remainingToStop > 0 && remainingToStop < 0.5 * speed * speed / Math.max(mmtrMotionServiceDecelPerMs(), 1e-12);
 
 		double integratedDistance = 0;
-		if (overridden && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+		if (autoBraking) {
+			// Service-brake to an exact rest at the armed stop target (constant-decel law; the trailing
+			// clamp below trims the last sub-tick remainder). Driver traction is overridden inside the
+			// braking envelope, like an ATO stop; the driver's own emergency brake stays stronger.
+			final double brakeDelta = Math.min(0.5 * speed * speed / Math.max(remainingToStop, 1e-3), mmtrMotionServiceDecelPerMs()) * millisElapsed;
+			speed = Math.max(0, speed - brakeDelta);
+			integratedDistance = speed > 0 ? speed * millisElapsed : 0;
+		} else if (overridden && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
 			// Same fixed sub-step ConsistDynamics integration as the legacy MMTR branch in
 			// simulateMoving (server side; motion mode has no clientside mirror yet).
 			final ConsistType mmtrType = mmtrConsistType;
@@ -658,18 +703,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		} else if (overridden) {
 			// No consist-type policy: linear legacy-style integration from the ControlState notches.
+			// Stored VED values are SI (m/s^2) scaled by 1e-3; the internal per-ms rate is SI * 1e-6,
+			// so the per-tick speed change is value * 1e-3 * millisElapsed (m/ms).
+			final double accelPerMs = vehicleExtraData.getAcceleration() * 1e-3;
+			final double decelPerMs = vehicleExtraData.getDeceleration() * 1e-3;
 			if (braking) {
-				speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * millisElapsed);
+				speed = Math.max(0, speed - decelPerMs * millisElapsed);
 			} else if (wantPower) {
-				speed = Math.min(vehicleExtraData.getMaxManualSpeed(), speed + vehicleExtraData.getAcceleration() * millisElapsed);
+				speed = Math.min(vehicleExtraData.getMaxManualSpeed(), speed + accelPerMs * millisElapsed);
 			} else {
-				speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * 0.1 * millisElapsed); // coast-down
+				speed = Math.max(0, speed - decelPerMs * 0.1 * millisElapsed); // coast-down
 			}
 			integratedDistance = speed * millisElapsed;
 		} else if (speed > 0) {
 			// Override released mid-run: service-brake to rest (occupation safety).
-			speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * millisElapsed);
+			speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * 1e-3 * millisElapsed);
 			integratedDistance = speed * millisElapsed;
+		}
+
+		if (stopTargetActive && !mmtrMotionStoppedAtTarget) {
+			final double remaining = mmtrMotionStopTargetM - mmtrMotionWalker.distanceM();
+			if (remaining <= 1e-6) {
+				integratedDistance = 0;
+				speed = 0;
+			} else if (integratedDistance > remaining) {
+				integratedDistance = remaining; // land exactly on the armed stop target
+			}
 		}
 
 		if (integratedDistance > 0) {
@@ -681,7 +740,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			railProgress = mmtrMotionWalker.distanceM();
 			final double consumed = railProgress - before;
-			if (consumed < integratedDistance - 1e-9) {
+			if (stopTargetActive && railProgress >= mmtrMotionStopTargetM - 1e-6) {
+				speed = 0;
+				mmtrMotionArriveAtStopTarget();
+			} else if (consumed < integratedDistance - 1e-9) {
 				// Authority halt at an unset fork / end of line / target: cannot consume the whole
 				// integrated distance — come to rest and wait (a fresh advance re-asks the node).
 				speed = 0;
@@ -692,6 +754,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				lastMovementMillis = data.getCurrentMillis();
 				System.out.println("[MMTR-DRV] motion seg=" + mmtrMotionWalker.railHex() + " offset=" + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + " dist=" + Math.round(consumed * 1000.0) / 1000.0 + " speed=" + speed);
 			}
+		} else if (stopTargetActive && speed == 0 && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
+			mmtrMotionArriveAtStopTarget();
 		}
 
 		if (!isClientside) {
@@ -699,6 +763,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			vehicleExtraData.setSpeedTarget(speed);
 			updateMmtrSyncFields();
 		}
+	}
+
+	/** Marks the exact arrival at the armed stop target: rest, doors per the stop request, hold. */
+	private void mmtrMotionArriveAtStopTarget() {
+		speed = 0;
+		mmtrMotionStoppedAtTarget = true;
+		mmtrMotionArrivalControlSeq = mmtrControlApplySeq;
+		vehicleExtraData.closeDoors();
+		if (mmtrMotionStopOpenDoors) {
+			vehicleExtraData.openDoors();
+		}
+		System.out.println("[MMTR-DRV] motion arrived at stop target " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0 + "m (doors " + (mmtrMotionStopOpenDoors ? "open" : "closed") + ")");
+	}
+
+	/** Service deceleration in internal units (m/ms per ms); falls back to the VED value scaled to SI. */
+	private double mmtrMotionServiceDecelPerMs() {
+		final double siMps2 = mmtrConsistType != null ? mmtrConsistType.getServiceBrakeDecelerationMps2() : vehicleExtraData.getDeceleration() * 1000.0;
+		return siMps2 * 1e-6;
 	}
 
 	/** Enables/disables the MMTR explicit control path (used by the future input layer). */
@@ -731,6 +813,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!wasOverride && driverUuid != null) {
 			System.out.println("[MMTR-DRV] driver=" + driverUuid + " engaged override T" + controlState.getThrottleNotch() + " B" + controlState.getBrakeNotch() + " R" + controlState.getReverser());
 		}
+		mmtrControlApplySeq++;
 	}
 
 	/** Releases the MMTR explicit override (occupation lock) and neutralises the legacy HUD power. */
@@ -763,6 +846,28 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * MMTR (L3, server): arms a precise stop for the current motion run: the vehicle auto
+	 * service-brakes and comes to rest with its head exactly at {@code cumulativeDistanceM} (metres
+	 * from the run start, i.e. walker distance space), opens the doors when {@code openDoors}, and
+	 * holds there until a fresh control is applied (see {@link #applyMmtrControl}). Pass -1 to clear
+	 * (free run). Only meaningful while {@link #isMmtrMotion()}.
+	 */
+	public void setMmtrMotionStopTarget(double cumulativeDistanceM, boolean openDoors) {
+		if (isClientside || mmtrMotionWalker == null) {
+			return;
+		}
+		mmtrMotionStopTargetM = cumulativeDistanceM;
+		mmtrMotionStopOpenDoors = openDoors;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrMotionArrivalControlSeq = -1;
+	}
+
+	/** @return true when the vehicle is stopped exactly at its armed motion stop target. */
+	public boolean isMmtrMotionStoppedAtTarget() {
+		return mmtrMotionStoppedAtTarget;
+	}
+
+	/**
 	 * MMTR (L3, server-only): switches this vehicle to live Motion-Core run mode. The walker becomes
 	 * the motion authority: every tick the vehicle advances it by the physically integrated distance;
 	 * the walker crosses nodes by the CURRENT turnout/task state (an unset fork halts and waits, never
@@ -787,6 +892,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		sidingDepartureTime = -1;
 		reversed = false;
 		speed = 0;
+		mmtrMotionStopTargetM = -1;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrMotionStopOpenDoors = false;
+		mmtrMotionArrivalControlSeq = -1;
 		if (walker == null) {
 			railProgress = vehicleExtraData.getDefaultPosition();
 		} else {
