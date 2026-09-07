@@ -15,6 +15,7 @@ import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Slice A/B live-routing proof: {@link MmtrLiveRouter} walks the real rail graph one node at a
@@ -366,6 +367,37 @@ public final class MmtrLiveRouterTests {
 			d2.applyControl(new org.mtr.core.mmtr.ControlState().setBrakeNotch(1), 100, 1e-6, 2e-6, 0.004);
 		}
 		assertEquals(false, d2.stopped(), "brake-only never moves the train");
+	}
+
+	@Test
+	public void motionTrainCanNeverMoveBackwards() {
+		final Net n = new Net();
+		// 火车不能倒车 at the walker level: negative advances are clamped away and the consumed
+		// distance is strictly monotonic - there is no reverse gear anywhere in Motion Core.
+		final MmtrMotionWalker w = MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), new BranchStore(), null);
+		w.advance(7);
+		assertEquals(7, w.distanceM(), 1e-9);
+		final double before = w.distanceM();
+		w.advance(-10); // an impossible reverse request: must be a no-op, never move backwards
+		assertEquals(before, w.distanceM(), 1e-9, "negative advance is clamped to zero");
+		assertEquals(7, w.offsetM(), 1e-9, "position unchanged by the reverse request");
+		w.advance(3);
+		w.advance(-100);
+		assertEquals(10, w.distanceM(), 1e-9, "distance only ever grows");
+
+		// Driver facade (cab control mapped onto Motion Core) is forward-only: throttle never
+		// produces backward motion and braking coasts to a non-negative stop.
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), new BranchStore(), null);
+		for (int i = 0; i < 200; i++) {
+			d.manualTick(100, true, false, 1e-6, 2e-6, 0.004);
+		}
+		final double progressed = d.walker.distanceM();
+		assertTrue(progressed > 0, "forward throttle moves the train");
+		for (int i = 0; i < 200; i++) {
+			d.manualTick(100, false, true, 1e-6, 2e-6, 0.004); // heavy braking only
+		}
+		assertTrue(d.walker.distanceM() >= progressed, "braking never reverses the train");
+		assertTrue(d.walker.offsetM() >= 0, "offset never negative");
 	}
 
 	// --- P3: direction-aware runtime forks - T junction (no straight) and X crossing (multi-leg) ---

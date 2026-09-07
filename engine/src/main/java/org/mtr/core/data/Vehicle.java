@@ -854,6 +854,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				return mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
 			});
 			speed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
+			// 火车不能倒车: the walker only moves forward - any negative speed from a controller is
+			// clamped away defensively (braking/coasting already stay non-negative in ConsistDynamics).
+			speed = Math.max(0, speed);
 			integratedDistance = mmtrResult.distanceMeters;
 			if (mmtrCompositionNow != null) {
 				mmtrAirState = MmtrComposition.encodeAirStates(mmtrCompositionNow);
@@ -976,6 +979,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrActiveControl = controlState.copy();
 		// Server-authoritative input guard: clamp whatever the client sent before storing/mirroring.
 		MmtrDriveAccess.sanitize(mmtrActiveControl);
+		// 火车不能倒车: Motion-Core vehicles have no reverse gear - any reverser <= 0 request is
+		// ignored (reverser forced to 1) so legacy direction keys can never drive the walker back.
+		if (mmtrMotionWalker != null && mmtrActiveControl.getReverser() < 1) {
+			mmtrActiveControl.setReverser(1);
+		}
 		mmtrDriverUuid = driverUuid;
 		mmtrManualOverride = true;
 		if (!wasOverride && driverUuid != null) {
