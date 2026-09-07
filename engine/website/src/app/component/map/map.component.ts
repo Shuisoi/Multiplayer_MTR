@@ -70,9 +70,9 @@ export class MapComponent implements AfterViewInit {
 
 	readonly stationClicked = output<string>();
 	readonly clientClicked = output<string>();
-	private readonly wrapperRef = viewChild.required<ElementRef<HTMLDivElement>>("wrapper");
+	private readonly wrapperRef = viewChild<ElementRef<HTMLDivElement>>("wrapper");
 	private readonly canvasRef = viewChild<ElementRef<HTMLCanvasElement>>("canvas");
-	private readonly statsRef = viewChild.required<ElementRef<HTMLDivElement>>("stats");
+	private readonly statsRef = viewChild<ElementRef<HTMLDivElement>>("stats");
 	readonly clientGroupsOnRoute = signal<ClientGroupOnRoute[]>([]);
 	readonly textLabels = signal<TextLabel[]>([]);
 	/** MMTR: live mission-driven train markers (task belongs to the train; the marker shows it). */
@@ -117,6 +117,8 @@ export class MapComponent implements AfterViewInit {
 	private lineGeometryThin: LineGeometry | undefined;
 	private lineGeometryThinDashed: LineGeometry | undefined;
 	private pointsForLineConnection: Record<string, [number, number, boolean][]> = {};
+
+	private viewReadyRetries = 0;
 
 	private canvas() {
 		return this.canvasRef()!.nativeElement; // only used after the view is initialised
@@ -367,9 +369,20 @@ export class MapComponent implements AfterViewInit {
 	}
 
 	ngAfterViewInit() {
+		// Defensive startup: the template queries must be resolved before the WebGL scene is built.
+		// If a query is still unavailable at this lifecycle point, retry on the next tick instead of
+		// throwing (seen in production where the point/layer effects flush before view init).
+		if (!this.wrapperRef() || !this.canvasRef() || !this.statsRef()) {
+			if (this.viewReadyRetries++ < 30) {
+				setTimeout(() => this.ngAfterViewInit(), 16);
+			} else {
+				console.warn("[mmtr-map] map view queries never resolved; map disabled");
+			}
+			return;
+		}
 		const stats = isDevMode() ? new Stats() : undefined;
 		if (stats) {
-			this.statsRef().nativeElement.append(stats.dom);
+			this.statsRef()!.nativeElement.append(stats.dom);
 		}
 
 		this.scene.background = new THREE.Color(this.getBackgroundColor()).convertLinearToSRGB();
@@ -443,7 +456,7 @@ export class MapComponent implements AfterViewInit {
 		};
 		this.animationFrameId = requestAnimationFrame(animate);
 
-		this.controls = new OrbitControls(this.camera, this.wrapperRef().nativeElement);
+		this.controls = new OrbitControls(this.camera, this.wrapperRef()!.nativeElement);
 		this.controls.target.set(0, 0, 0);
 		this.controls.update();
 		this.controls.mouseButtons = {LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN};
