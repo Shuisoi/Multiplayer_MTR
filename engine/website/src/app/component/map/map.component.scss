@@ -80,3 +80,161 @@ canvas {
 	flex: none;
 	box-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
 }
+.point-marker {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	border: 2px solid var(--background-color);
+	cursor: pointer;
+	pointer-events: auto;
+	z-index: 3;
+	box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+	will-change: transform;
+}
+
+.point-marker.state-locked { background: #ff6d6d; }
+.point-marker.state-manual { background: #3ddc84; }
+.point-marker.state-held { background: #f6c343; }
+.point-marker.state-idle { background: #9aa0a6; }
+
+.point-console {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	width: min(320px, calc(100% - 24px));
+	max-height: calc(100% - 24px);
+	overflow-y: auto;
+	background: color-mix(in srgb, var(--background-color) 92%, transparent);
+	border: 1px solid var(--p-content-border-color);
+	border-radius: 8px;
+	padding: 8px;
+	z-index: 4;
+	pointer-events: auto;
+	font-size: 0.72rem;
+	line-height: 1.4;
+	color: var(--p-text-color);
+}
+
+.point-console-header {
+	align-items: center;
+	margin-bottom: 4px;
+}
+
+.point-console-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+	font-size: 0.78rem;
+	white-space: nowrap;
+}
+
+.point-console .icon-button {
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	font-size: 0.7rem;
+}
+
+.point-feedback {
+	padding: 2px 6px;
+	border-radius: 4px;
+	margin-bottom: 4px;
+	background: rgba(255, 109, 109, 0.15);
+	color: #ff6d6d;
+}
+
+.point-feedback.ok {
+	background: rgba(61, 220, 132, 0.15);
+	color: #3ddc84;
+}
+
+.point-row {
+	border-top: 1px solid var(--p-content-border-color);
+	padding: 4px 0;
+}
+
+.point-row:first-of-type {
+	border-top: none;
+}
+
+.point-row-locked .point-via {
+	color: #ff6d6d;
+}
+
+.point-via {
+	font-family: monospace;
+	font-size: 0.68rem;
+	word-break: break-all;
+}
+
+.point-form {
+	opacity: 0.7;
+	font-family: inherit;
+	margin-left: 4px;
+}
+
+.point-status {
+	opacity: 0.85;
+	font-size: 0.66rem;
+	margin: 2px 0;
+}
+
+.point-legs {
+	flex-wrap: wrap;
+}
+
+.point-leg {
+	border: 1px solid var(--p-content-border-color);
+	background: transparent;
+	color: var(--p-text-color);
+	border-radius: 4px;
+	padding: 1px 7px;
+	font-size: 0.68rem;
+	cursor: pointer;
+}
+
+.point-leg.active {
+	background: #3ddc84;
+	border-color: #3ddc84;
+	color: #06210f;
+	font-weight: 600;
+}
+
+.point-leg-clear {
+	color: #ff6d6d;
+}
+
+.small-button {
+	font-size: 0.66rem;
+	padding: 1px 8px;
+}
+
+.point-console button {
+	border: 1px solid var(--p-content-border-color);
+	background: transparent;
+	color: var(--p-text-color);
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.point-close {
+	width: 22px;
+	height: 22px;
+	line-height: 1;
+	font-size: 0.75rem;
+}
+
+.point-lock {
+	font-size: 0.66rem;
+	padding: 1px 8px;
+}
+
+.point-lock.locked {
+	color: #ff6d6d;
+	border-color: #ff6d6d;
+}
+

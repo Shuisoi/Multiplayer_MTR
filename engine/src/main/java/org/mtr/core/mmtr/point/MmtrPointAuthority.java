@@ -185,6 +185,20 @@ public final class MmtrPointAuthority {
 		return h != null && h.owner.equals(owner);
 	}
 
+	/** Queue snapshot for the UI: the owners queued on this point (oldest first), as owner@leg. */
+	public ObjectArrayList<String> queuedSnapshot(long x, long y, long z, String viaRailHex) {
+		final ObjectArrayList<String> out = new ObjectArrayList<>();
+		final String k = key(x, y, z, viaRailHex);
+		expireLocked(k, clock.getAsLong());
+		final ArrayDeque<Req> q = queued.get(k);
+		if (q != null) {
+			for (final Req r : q) {
+				out.add(r.owner + "@" + r.leg);
+			}
+		}
+		return out;
+	}
+
 	public String state(long x, long y, long z, String viaRailHex) {
 		final String k = key(x, y, z, viaRailHex);
 		final long now = clock.getAsLong();

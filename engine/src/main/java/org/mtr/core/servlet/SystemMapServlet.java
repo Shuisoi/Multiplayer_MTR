@@ -173,10 +173,14 @@ public final class SystemMapServlet extends ServletBase {
 					final long y = jsonReader.getLong("y", 0);
 					final long z = jsonReader.getLong("z", 0);
 					final String via = jsonReader.getString("via", "");
-					final int branch = jsonReader.getInt("branch", 0);
+					// "branch" is optional: a lock/unlock-only op must not clobber the operator branch.
+					final boolean hasBranch = data != null && data.contains("\"branch\"");
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
-					result.addProperty("ok", !via.isEmpty() && simulator.mmtrSetPoint(x, y, z, via, branch));
+					result.addProperty("ok", !via.isEmpty());
 					if (!via.isEmpty()) {
+						if (hasBranch) {
+							simulator.mmtrSetPoint(x, y, z, via, jsonReader.getInt("branch", 0));
+						}
 						if (jsonReader.getBoolean("lock", false)) {
 							simulator.mmtrPointLock(x, y, z, via);
 							result.addProperty("locked", true);
@@ -332,18 +336,46 @@ public final class SystemMapServlet extends ServletBase {
 		return root;
 	}
 
-	/** Turnout list: auto-discovered 道岔 with their operator branch states. */
+	/**
+	 * Turnout console feed (道岔, P2 UI): every direction-aware (node, approach rail) fork with two
+	 * or more ordered continuations, enriched with the operator manual branch, the authority state
+	 * (locked / holder / queue) and the ordered legs each with its direction kind. Coordinates and
+	 * via rail hex together key one point; leg indexes are the SAME indexes the walker/planner elect
+	 * against (straight > left > right > other ordering).
+	 */
 	private static JsonObject getMmtrPoints(org.mtr.core.simulation.Simulator simulator) {
 		final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
-		for (final org.mtr.core.mmtr.point.MmtrSwitch s : simulator.mmtrDiscoverPoints()) {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint> discovered = org.mtr.core.mmtr.point.MmtrPoint.discoverDirectionAware(simulator);
+		for (final org.mtr.core.mmtr.point.MmtrPoint p : discovered) {
+			if (p.legs.size() < 2) {
+				continue; // pass-throughs / dead ends are not operator forks
+			}
 			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
-			o.addProperty("x", s.nodeX);
-			o.addProperty("y", s.nodeY);
-			o.addProperty("z", s.nodeZ);
-			o.addProperty("via", s.viaRailHex);
-			o.addProperty("branch0", s.branch0Hex);
-			o.addProperty("branch1", s.branch1Hex);
-			o.addProperty("branch", s.branch);
+			o.addProperty("x", p.nodeX);
+			o.addProperty("y", p.nodeY);
+			o.addProperty("z", p.nodeZ);
+			o.addProperty("via", p.viaRailHex);
+			o.addProperty("form", p.form.name());
+			final com.google.gson.JsonArray legs = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : p.legs) {
+				final com.google.gson.JsonObject legJson = new com.google.gson.JsonObject();
+				legJson.addProperty("hex", leg.railHex);
+				legJson.addProperty("kind", leg.kind.name());
+				legs.add(legJson);
+			}
+			o.add("legs", legs);
+			final org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore store = simulator.mmtrPointBranches;
+			final int manual = store.contains(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex) ? store.get(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex) : -1;
+			o.addProperty("manual", manual);
+			o.addProperty("locked", simulator.mmtrPointAuthority.isLocked(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex));
+			final String holder = simulator.mmtrPointAuthority.holder(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex);
+			o.addProperty("holder", holder == null ? "" : holder);
+			o.addProperty("holderLeg", simulator.mmtrPointAuthority.grantedLeg(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex));
+			final com.google.gson.JsonArray queue = new com.google.gson.JsonArray();
+			for (final String q : simulator.mmtrPointAuthority.queuedSnapshot(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex)) {
+				queue.add(q);
+			}
+			o.add("queue", queue);
 			points.add(o);
 		}
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();

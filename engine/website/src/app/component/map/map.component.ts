@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import {AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, ElementRef, inject, isDevMode, output, signal, viewChild} from "@angular/core";
+import {AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, effect, ElementRef, inject, isDevMode, output, signal, viewChild} from "@angular/core";
 import {takeUntilDestroyed} from "@angular/core/rxjs-interop";
 import SETTINGS from "../../utility/settings";
 import {ANIMATION_DURATION_MILLIS, ARROW_SPACING, CLIENT_IMAGE_PADDING, CLIENT_IMAGE_SIZE} from "../../utility/map.constants";
@@ -17,6 +17,7 @@ import {MapSelectionService} from "../../service/map-selection.service";
 import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {ClientsService} from "../../service/clients.service";
 import {MmtrTrainsService} from "../../service/mmtr-trains.service";
+import {MmtrPoint, MmtrPointsService} from "../../service/mmtr-points.service";
 import {TooltipModule} from "primeng/tooltip";
 import {NgOptimizedImage} from "@angular/common";
 import {TranslocoDirective} from "@jsverse/transloco";
@@ -54,6 +55,7 @@ export class MapComponent implements AfterViewInit {
 	private readonly mapSelectionService = inject(MapSelectionService);
 	private readonly clientsService = inject(ClientsService);
 	private readonly mmtrTrainsService = inject(MmtrTrainsService);
+	readonly mmtrPointsService = inject(MmtrPointsService);
 	private readonly themeService = inject(ThemeService);
 
 	readonly stationClicked = output<string>();
@@ -65,6 +67,13 @@ export class MapComponent implements AfterViewInit {
 	readonly textLabels = signal<TextLabel[]>([]);
 	/** MMTR: live mission-driven train markers (task belongs to the train; the marker shows it). */
 	readonly trainMarkers = signal<TrainMarker[]>([]);
+	/** P2: fork (道岔) markers on the map - one per junction node with 2+ continuations, coloured by
+	 * state (locked red / operator green / auto-held amber / idle gray). Clicking selects the node
+	 * and opens the point console. */
+	readonly pointMarkers = signal<PointMarker[]>([]);
+	/** P2: the fork rows of the selected node (one per approach rail), fed to the point console. */
+	readonly selectedNodePoints = signal<MmtrPoint[]>([]);
+	private selectedNodeKey = "";
 	readonly clientImageSize = CLIENT_IMAGE_SIZE;
 	readonly loading = this.mapDataService.mapLoading;
 
@@ -93,6 +102,133 @@ export class MapComponent implements AfterViewInit {
 
 	private canvas() {
 		return this.canvasRef().nativeElement;
+	}
+
+	constructor() {
+		// P2: whenever the turnout feed refreshes (3s poll + after each write), reproject the fork
+		// markers and keep the open console row data current.
+		effect(() => {
+			this.mmtrPointsService.points();
+			this.updatePointOverlays();
+		});
+	}
+
+	/** Project the fork markers and the open console selection onto the current camera view. */
+	private updatePointOverlays() {
+		const canvas = this.canvasRef()?.nativeElement;
+		if (!canvas || canvas.clientWidth === 0 || canvas.clientHeight === 0 || !this.controls) {
+			return;
+		}
+		const halfCanvasWidth = canvas.clientWidth / 2;
+		const halfCanvasHeight = canvas.clientHeight / 2;
+		const grouped = new Map<string, MmtrPoint[]>();
+		for (const point of this.mmtrPointsService.points()) {
+			if (point.legs.length < 2) {
+				continue;
+			}
+			const key = `${point.x},${point.y},${point.z}`;
+			if (!grouped.has(key)) {
+				grouped.set(key, []);
+			}
+			grouped.get(key)!.push(point);
+		}
+		const newMarkers: PointMarker[] = [];
+		for (const [key, points] of grouped) {
+			const first = points[0];
+			const canvasX = (first.x - this.camera.position.x) * this.camera.zoom;
+			const canvasY = (first.z + this.camera.position.y) * this.camera.zoom;
+			if (Math.abs(canvasX) > halfCanvasWidth || Math.abs(canvasY) > halfCanvasHeight) {
+				continue;
+			}
+			const anyLocked = points.some(point => point.locked);
+			const anyManual = points.some(point => point.manual >= 0);
+			const anyHeld = points.some(point => point.holder !== "");
+			newMarkers.push({
+				key,
+				count: points.length,
+				state: anyLocked ? "locked" : anyManual ? "manual" : anyHeld ? "held" : "idle",
+				x: canvasX + halfCanvasWidth,
+				y: canvasY + halfCanvasHeight,
+			});
+		}
+		newMarkers.sort((a, b) => a.state.localeCompare(b.state));
+		this.pointMarkers.set(newMarkers);
+		this.refreshSelection();
+	}
+
+	/** Keep the console selection in sync with the live feed (rows refresh after every poll/write). */
+	private refreshSelection() {
+		if (this.selectedNodeKey === "") {
+			this.selectedNodePoints.set([]);
+			return;
+		}
+		const selected = this.mmtrPointsService.points().filter(point => point.legs.length >= 2 && `${point.x},${point.y},${point.z}` === this.selectedNodeKey);
+		this.selectedNodePoints.set(selected);
+	}
+
+	/** Open (or close when re-clicked) the point console for the given junction node. */
+	protected selectNode(key: string) {
+		this.selectedNodeKey = this.selectedNodeKey === key ? "" : key;
+		this.refreshSelection();
+	}
+
+	protected closeNode() {
+		this.selectedNodeKey = "";
+		this.refreshSelection();
+	}
+
+	protected pointStatus(point: MmtrPoint): string {
+		const parts: string[] = [];
+		if (point.locked) {
+			parts.push("锁定");
+		}
+		if (point.manual >= 0 && point.manual < point.legs.length) {
+			parts.push(`人工 → ${point.manual}:${this.kindText(point.legs[point.manual].kind)}`);
+		} else if (point.manual < 0 && !point.locked && point.holder === "") {
+			parts.push("未设等待");
+		}
+		if (point.holder !== "") {
+			parts.push(`自动:${point.holder}@${point.holderLeg}`);
+		}
+		if (point.queue.length > 0) {
+			parts.push(`排队:${point.queue.length}`);
+		}
+		return parts.join(" · ");
+	}
+
+	protected kindText(kind: string): string {
+		switch (kind) {
+			case "STRAIGHT": return "直";
+			case "LEFT": return "左";
+			case "RIGHT": return "右";
+			default: return "他";
+		}
+	}
+
+	protected formText(form: string): string {
+		switch (form) {
+			case "FORK": return "分叉";
+			case "TEE": return "丁字";
+			case "MULTI": return "多支";
+			default: return form;
+		}
+	}
+
+	protected shortHex(hex: string): string {
+		const digits = hex.replace(/-/g, "");
+		return digits.length > 10 ? `…${digits.slice(-10)}` : hex;
+	}
+
+	protected throwBranch(point: MmtrPoint, leg: number) {
+		this.mmtrPointsService.setBranch(point, leg);
+	}
+
+	protected clearBranch(point: MmtrPoint) {
+		this.mmtrPointsService.clearBranch(point);
+	}
+
+	protected toggleLock(point: MmtrPoint) {
+		this.mmtrPointsService.setLocked(point, !point.locked);
 	}
 
 	ngAfterViewInit() {
@@ -638,6 +774,7 @@ export class MapComponent implements AfterViewInit {
 		this.textLabels.set(newTextLabels);
 		this.clientGroupsOnRoute.set(newClientGroupsOnRoute);
 		this.trainMarkers.set(newTrainMarkers);
+		this.updatePointOverlays();
 		this.changeDetectorRef.detectChanges();
 	}
 
@@ -726,6 +863,14 @@ interface TrainMarker {
 	readonly vehicleId: string;
 	readonly label: string;
 	readonly missionState: string;
+	readonly x: number;
+	readonly y: number;
+}
+
+interface PointMarker {
+	readonly key: string;
+	readonly count: number;
+	readonly state: "locked" | "manual" | "held" | "idle";
 	readonly x: number;
 	readonly y: number;
 }

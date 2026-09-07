@@ -57,6 +57,51 @@
 					}
 				</div>
 			}
+			@for (pointMarker of pointMarkers(); track pointMarker.key) {
+				<div class="point-marker" [class.state-locked]="pointMarker.state === 'locked'" [class.state-manual]="pointMarker.state === 'manual'" [class.state-held]="pointMarker.state === 'held'" [class.state-idle]="pointMarker.state === 'idle'"
+				     [style.transform]="'translate(-50%,-50%) translate(' + pointMarker.x + 'px, ' + pointMarker.y + 'px)'"
+				     role="button" tabindex="0" [attr.aria-label]="'道岔 ' + pointMarker.key"
+				     (mousedown)="selectNode(pointMarker.key); $event.stopPropagation()"
+				     (keydown.enter)="selectNode(pointMarker.key); $event.stopPropagation()"
+				     (keydown.space)="selectNode(pointMarker.key); $event.stopPropagation(); $event.preventDefault()"
+				     [pTooltip]="pointMarker.key + (pointMarker.count > 1 ? ' · ' + pointMarker.count + ' 个进向' : '')" tooltipPosition="top"></div>
+			}
+			@if (selectedNodePoints().length > 0) {
+				<div class="point-console" (mousedown)="$event.stopPropagation()">
+					<div class="row space-between point-console-header">
+						<div class="point-console-title">
+							<iconify-icon icon="mdi:sign-direction" aria-hidden="true"></iconify-icon>
+							道岔 {{ selectedNodePoints()[0].x }}, {{ selectedNodePoints()[0].y }}, {{ selectedNodePoints()[0].z }}
+						</div>
+						<button class="point-close" (click)="closeNode()" aria-label="关闭" title="关闭">✕</button>
+					</div>
+					@if (mmtrPointsService.feedback(); as feedback) {
+						<div class="point-feedback" [class.ok]="feedback.ok">{{ feedback.text }}</div>
+					}
+					@for (point of selectedNodePoints(); track point.via) {
+						<div class="point-row" [class.point-row-locked]="point.locked">
+							<div class="row gap-small space-between">
+								<div class="point-via">进向 {{ shortHex(point.via) }} <span class="point-form">{{ formText(point.form) }}</span></div>
+								<button class="point-lock" [class.locked]="point.locked" (click)="toggleLock(point)" [pTooltip]="point.locked ? '锁定中：自动申请排队，解锁后自动可接管' : '锁定：自动申请排队，人工独占'" tooltipPosition="left">
+									{{ point.locked ? '解锁' : '锁定' }}
+								</button>
+							</div>
+							<div class="point-status">{{ pointStatus(point) }}</div>
+							<div class="row gap-small point-legs">
+								@for (leg of point.legs; track $index) {
+									<button class="point-leg" [class.active]="point.manual === $index"
+									        (click)="throwBranch(point, $index)" [pTooltip]="leg.hex" tooltipPosition="top">
+										{{ $index }} {{ kindText(leg.kind) }}
+									</button>
+								}
+								@if (point.manual >= 0) {
+									<button class="point-leg point-leg-clear" (click)="clearBranch(point)" [pTooltip]="'清除人工设岔：未设=等待/自动可接管'" tooltipPosition="top">✕设</button>
+								}
+							</div>
+						</div>
+					}
+				</div>
+			}
 		</div>
 	</div>
 	<div #stats aria-hidden="true"></div>
