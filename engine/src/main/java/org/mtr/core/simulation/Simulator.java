@@ -802,7 +802,7 @@ public class Simulator extends Data implements Utilities {
 
 			rails.forEach(rail -> rail.tick1(this));
 			rails.forEach(rail -> rail.tick2(millisElapsed));
-			depots.forEach(Depot::tick);
+			// MTR depot auto path-generation pipeline removed (auto rebuilt on Motion/tasks): nothing auto-dispatches.
 
 			// Try setting a siding's default path data
 			// If a siding doesn't have a rail associated with it, it should be removed from the data set
