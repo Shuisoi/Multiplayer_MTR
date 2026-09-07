@@ -126,3 +126,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - MmtrMotionDriver 在 MmtrMotionWalker 上做巡航纵向驱动：每 tick advance(speed*dt)，到无权威岔口/端点/目标轨制动至停。
 - 4 用例绿：branch0 -> 开过岔落到 rBeyondA；branch1 -> rBeyondB；未设岔停在 approach 远端(AWAITING)；目标轨 board -> atTarget 停。
 - 这是 Vehicle 后端调用以真正"逐 tick 把车开起来"的确定性核心。
+## 16. 切片4：真实 -96 岔口驱动层验证（MmtrMotionDriver 实跑）
+- DevWorldMotionWalkTests：在真实 dev 存档沿 -96 via 轨开一列车到 (-96,-60,76)：
+  未设岔停在节点(offset=len)；BranchStore 0 -> 实际跨上 branch0 直向真实轨(atTarget)；1 -> 跨上 branch1 分叉真实轨。
+  = "车实际沿该轨"在 Motion Core 驱动层成立。
