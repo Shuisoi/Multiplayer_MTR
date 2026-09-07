@@ -166,6 +166,18 @@ public final class SystemMapServlet extends ServletBase {
 					result.add("states", states);
 					yield result;
 				}
+				case "mmtr-topology" -> getMmtrTopology(simulator);
+				case "mmtr-points" -> getMmtrPoints(simulator);
+				case "mmtr-point-op" -> {
+					final long x = jsonReader.getLong("x", 0);
+					final long y = jsonReader.getLong("y", 0);
+					final long z = jsonReader.getLong("z", 0);
+					final String via = jsonReader.getString("via", "");
+					final int branch = jsonReader.getInt("branch", 0);
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", via.isEmpty() ? false : simulator.mmtrSetPoint(x, y, z, via, branch));
+					yield result;
+				}
 				default -> null;
 			});
 		}
@@ -278,6 +290,55 @@ public final class SystemMapServlet extends ServletBase {
 		// Reserved for the automatic signal / point layer (future infrastructure reaction layer).
 		root.add("signals", new com.google.gson.JsonArray());
 		root.add("points", new com.google.gson.JsonArray());
+		return root;
+	}
+
+	/** Turnout list: auto-discovered 道岔 with their operator branch states. */
+	private static JsonObject getMmtrPoints(org.mtr.core.simulation.Simulator simulator) {
+		final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.point.MmtrSwitch s : simulator.mmtrDiscoverPoints()) {
+			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+			o.addProperty("x", s.nodeX);
+			o.addProperty("y", s.nodeY);
+			o.addProperty("z", s.nodeZ);
+			o.addProperty("via", s.viaRailHex);
+			o.addProperty("branch0", s.branch0Hex);
+			o.addProperty("branch1", s.branch1Hex);
+			o.addProperty("branch", s.branch);
+			points.add(o);
+		}
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("points", points);
+		return root;
+	}
+
+	/** Rail-topology dump: every through/junction node (degree >= 2) with its neighbour rails -
+	 * used to identify real turnouts (道岔) and decide how a 0/1 branch maps onto the track. */
+	private static JsonObject getMmtrTopology(org.mtr.core.simulation.Simulator simulator) {
+		final com.google.gson.JsonArray nodes = new com.google.gson.JsonArray();
+		simulator.positionsToRail.forEach((node, neighbourMap) -> {
+			if (neighbourMap.size() < 2) {
+				return; // dead ends are not junction-relevant
+			}
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("x", node.getX());
+			out.addProperty("y", node.getY());
+			out.addProperty("z", node.getZ());
+			out.addProperty("degree", neighbourMap.size());
+			final com.google.gson.JsonArray neighbours = new com.google.gson.JsonArray();
+			neighbourMap.forEach((pos, rail) -> {
+				final com.google.gson.JsonObject n = new com.google.gson.JsonObject();
+				n.addProperty("x", pos.getX());
+				n.addProperty("y", pos.getY());
+				n.addProperty("z", pos.getZ());
+				n.addProperty("rail", rail.getHexId());
+				neighbours.add(n);
+			});
+			out.add("neighbors", neighbours);
+			nodes.add(out);
+		});
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("nodes", nodes);
 		return root;
 	}
 

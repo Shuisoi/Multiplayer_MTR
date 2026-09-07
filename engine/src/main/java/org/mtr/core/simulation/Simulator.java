@@ -94,6 +94,9 @@ public class Simulator extends Data implements Utilities {
 	private java.nio.file.Path mmtrManifestPath;
 	/** AI diagram step execution (web consist jobs). Off by default; reserved for the future task layer. */
 	public boolean mmtrAiJobStepsEnabled;
+	/** Operator-set turnout (道岔) branch states, persisted to mmtr-points.json. */
+	public org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore mmtrPointBranches = new org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore();
+	private java.nio.file.Path mmtrPointsPath;
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -223,6 +226,10 @@ public class Simulator extends Data implements Utilities {
 		} catch (Exception e) {
 			log.warn("Failed to load MMTR rolling-stock manifest for {}: {}", dimension, e.getMessage());
 		}
+
+		// MMTR: operator turnout (道岔) branch states.
+		mmtrPointsPath = savePath.resolve("mmtr-points.json");
+		mmtrPointBranches = org.mtr.core.mmtr.point.MmtrPointRegistry.loadBranches(mmtrPointsPath);
 
 		// MMTR: web-authored consist jobs (replaces the depot timetable for mmtr-managed stock).
 		mmtrJobsPath = savePath.resolve("mmtr-jobs.json");
@@ -423,6 +430,26 @@ public class Simulator extends Data implements Utilities {
 		});
 		System.out.println("[MMTR-MFST] cleared all vehicles + templates on " + dimension);
 	}
+
+	/** Discover all turnouts (道岔) on the rail graph with the operator branch states applied. */
+	public ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> mmtrDiscoverPoints() {
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> points = org.mtr.core.mmtr.point.MmtrPointRegistry.discover(this);
+		for (final org.mtr.core.mmtr.point.MmtrSwitch s : points) {
+			s.branch = mmtrPointBranches.get(s.nodeX, s.nodeY, s.nodeZ, s.viaRailHex);
+		}
+		return points;
+	}
+
+	/** Set an operator turnout branch (0/1) and persist it. */
+	public boolean mmtrSetPoint(long x, long y, long z, String viaRailHex, int branch) {
+		mmtrPointBranches.set(x, y, z, viaRailHex, branch);
+		if (mmtrPointsPath != null) {
+			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
+		}
+		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + (branch & 1));
+		return true;
+	}
+
 
 	/**
 	 * MMTR vehicle-level operation: delete the train with the given world-unique vehicle id
