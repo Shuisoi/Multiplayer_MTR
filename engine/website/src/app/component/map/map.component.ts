@@ -136,8 +136,12 @@ export class MapComponent implements AfterViewInit {
 		}
 		const positions: number[] = [];
 		for (const rail of rails) {
-			positions.push(rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX);
-			positions.push(rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX);
+			// Sample polylines per rail: consecutive curve points become line segments, so bends
+			// follow the in-game rail geometry instead of one straight chord per rail.
+			for (let i = 0; i + 1 < rail.pts.length; i++) {
+				positions.push(rail.pts[i].x, -rail.pts[i].z, MapComponent.RAIL_Z_INDEX);
+				positions.push(rail.pts[i + 1].x, -rail.pts[i + 1].z, MapComponent.RAIL_Z_INDEX);
+			}
 		}
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
