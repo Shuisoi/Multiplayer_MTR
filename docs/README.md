@@ -35,7 +35,7 @@
 | 实机测试-手动驾驶Motion车-步骤.md | 真实 dev 服务端手动驾驶验证步骤 + 待运行时确认清单 | 有效（按它做实机验收） |
 
 ## 过程记录（notes/，只增不改命名）
-- notes/01–26：按轮次的技术笔记/决策/回归证据。最近：26 = motion 车客户端镜像推送（schema mmtrMotionMirror/RunTotal/RunStop + VED 影子路径同步 + 周期推送 + 镜像不回库/停点夹持；MmtrManifestMotionSpawnTests 线上字段断言）。
+- notes/01–27：按轮次的技术笔记/决策/回归证据。最近：27 = 道岔系统 P1（方向感知发现+形态分类：MmtrPoint legs 排序/LegKind/Form TEE-FORK-MULTI 等；合成网 4 测试）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 仓库范围外（历史早期资料，未入库）
