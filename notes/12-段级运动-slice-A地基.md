@@ -89,3 +89,13 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
   （物理/dwell/signal/turnback 均在 Vehicle.simulate 内依赖整条累计路径，L3 级大改）。
 - MmtrLiveRouter 目前给出"自由开车应走的轨序/停在哪等权威"，尚未接入 Vehicle 实际运动与任务执行器。
 - slice C 真实 -95 岔口"车实际经过对应轨"引擎内断言，仍需真实存档/运行环境。
+
+## 9. 会话续轮 #3（续）：MmtrLiveRouter.integrate —— 解耦 (segment+offset) 运动状态机（绿/将提交）
+- MmtrLiveRouter.integrate(data, startRail, startAt, distanceM, branches, target, maxNodes)：沿真实轨
+  按距离推进 (railHex, offsetM)：一段用尽即到节点，经权威（operator/task，绝不 auto）选下一段，
+  overshoot 余量 carry 到被选支；返回 MmtrMotionPoint{railHex, offsetM(0..len), status}。
+- 新 5 用例全绿：mid-segment 停在请求 offset；未设岔行进 25m -> AWAITING_AUTHORITY 停 approach 远端 offset=20；
+  branch0 走 45m -> 落到 rBeyondA offset5；branch1 -> 落到 diverge 支 rBeyondB（翻转即换轨）；task 目标 diverge
+  覆盖陈旧 operator0 -> 到岔即 board target AT_TARGET。
+- 意义：这是 slice A 的解耦运动模型本体（段的 offset 状态 + 到节点按权威接续），在真实轨上端到端可跑可验，
+  不依赖 Vehicle 预烘焙 path。接进 Vehicle.simulate（物理/停站/信号）仍属未做的 Vehicle 层工作。

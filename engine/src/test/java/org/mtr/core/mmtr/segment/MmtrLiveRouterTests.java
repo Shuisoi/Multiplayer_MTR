@@ -121,4 +121,56 @@ public final class MmtrLiveRouterTests {
 		assertEquals(3, route.railHexOrder.size());
 		assertEquals(n.rBeyondA.getHexId(), route.railHexOrder.get(route.railHexOrder.size() - 1));
 	}
+
+	// --- MmtrLiveRouter.integrate: decoupled (segment, offset) motion state over a live route ---
+
+	@Test
+	public void integrateStopsMidSegmentAtRequestedOffset() {
+		final Net n = new Net();
+		final MmtrLiveRouter.MmtrMotionPoint p = MmtrLiveRouter.integrate(n.sim, n.rIn, new Position(-20, 0, 0), 5, new BranchStore(), null, 20);
+		assertEquals(n.rIn.getHexId(), p.railHex);
+		assertEquals(5, p.offsetM, 1e-6);
+		assertEquals(MmtrLiveRouter.Status.TRAVELLING, p.status);
+	}
+
+	@Test
+	public void integrateHaltsAtUnsetForkAwaitingAuthority() {
+		final Net n = new Net();
+		// 25m > approach(20m) so the train reaches node0 with distance left, but no one set the fork.
+		final MmtrLiveRouter.MmtrMotionPoint p = MmtrLiveRouter.integrate(n.sim, n.rIn, new Position(-20, 0, 0), 25, new BranchStore(), null, 20);
+		assertEquals(MmtrLiveRouter.Status.AWAITING_AUTHORITY, p.status);
+		assertEquals(n.rIn.getHexId(), p.railHex, "stopped on the approach rail at its far end");
+		assertEquals(20, p.offsetM, 1e-6);
+		assertEquals("0,0,0", p.haltNodeKey);
+	}
+
+	@Test
+	public void integrateCarriesRemainderOntoElectStraightBranch() {
+		final Net n = new Net();
+		// branch0 -> straight (20m) then on to rBeyondA (20m): 45m lands 5m into rBeyondA.
+		final MmtrLiveRouter.MmtrMotionPoint p = MmtrLiveRouter.integrate(n.sim, n.rIn, new Position(-20, 0, 0), 45, n.branch0(), null, 20);
+		assertEquals(MmtrLiveRouter.Status.TRAVELLING, p.status);
+		assertEquals(n.rBeyondA.getHexId(), p.railHex);
+		assertEquals(5, p.offsetM, 1e-6);
+	}
+
+	@Test
+	public void integrateFollowsDivergeWhenFlipped() {
+		final Net n = new Net();
+		// branch1 -> diverge (~23.3m) then rBeyondB: 60m lands mid-way on rBeyondB.
+		final MmtrLiveRouter.MmtrMotionPoint p = MmtrLiveRouter.integrate(n.sim, n.rIn, new Position(-20, 0, 0), 60, n.branch1(), null, 20);
+		assertEquals(MmtrLiveRouter.Status.TRAVELLING, p.status);
+		assertEquals(n.rBeyondB.getHexId(), p.railHex, "flipped turnout sent the train onto the diverging platform branch");
+	}
+
+	@Test
+	public void integrateReachesTargetRailViaTask() {
+		final Net n = new Net();
+		// Operator still branch0, but task targets the diverging rail; crossing the fork boards it.
+		final MmtrLiveRouter.MmtrMotionPoint p = MmtrLiveRouter.integrate(n.sim, n.rIn, new Position(-20, 0, 0), 60, n.branch0(), n.rDiverge.getHexId(), 20);
+		assertEquals(MmtrLiveRouter.Status.AT_TARGET, p.status);
+		assertEquals(n.rDiverge.getHexId(), p.railHex);
+		assertEquals(0, p.offsetM, 1e-6);
+	}
+
 }

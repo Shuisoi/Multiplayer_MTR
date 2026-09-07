@@ -24,7 +24,7 @@ import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 public final class MmtrLiveRouter {
 
 	public enum Status {
-		ON_ROUTE, AT_TARGET, AWAITING_AUTHORITY, END_OF_LINE, MAX_STEPS
+		ON_ROUTE, TRAVELLING, AT_TARGET, AWAITING_AUTHORITY, END_OF_LINE, MAX_STEPS
 	}
 
 	/** The ordered rail sequence a live route follows, plus where/why it stopped. */
@@ -134,6 +134,100 @@ public final class MmtrLiveRouter {
 			currentRail = next;
 		}
 		return route.finish(Status.MAX_STEPS, null);
+	}
+
+	/** A decoupled (segment + offset) position reached after integrating a distance over a live route. */
+	public static final class MmtrMotionPoint {
+		public final String railHex;
+		/** Metres travelled from the node where the train entered {@link #railHex}, in [0, railLength]. */
+		public final double offsetM;
+		public final Status status;
+		public final @Nullable String haltNodeKey;
+
+		MmtrMotionPoint(String railHex, double offsetM, Status status, @Nullable String haltNodeKey) {
+			this.railHex = railHex;
+			this.offsetM = offsetM;
+			this.status = status;
+			this.haltNodeKey = haltNodeKey;
+		}
+	}
+
+	/**
+	 * Integrates a distance over the rail graph (slice A motion model): starts on {@code startRail}
+	 * at {@code startAt} travelling toward its far end, and moves {@code distanceM} metres one
+	 * segment at a time. Whenever a segment is fully consumed the train is at a node and the next
+	 * rail is elected by authority (operator/task, never auto). The result is the final decoupled
+	 * position {@code (railHex, offsetM)} — the (segment, offset) state a free-driven vehicle holds,
+	 * independent of any pre-baked path.
+	 */
+	public static MmtrMotionPoint integrate(Data data, Rail startRail, Position startAt, double distanceM, BranchStore branches, @Nullable String targetRailHex, int maxNodes) {
+		Position node = otherEnd(data, startAt, startRail);
+		if (node == null) {
+			return new MmtrMotionPoint(startRail.getHexId(), 0, Status.END_OF_LINE, null);
+		}
+		double remaining = Math.max(0, distanceM);
+		Rail currentRail = startRail;
+		Position enteredFrom = startAt;
+		final Position[] haltNode = {null};
+
+		for (int step = 0; step < maxNodes; step++) {
+			if (currentRail.getHexId().equals(targetRailHex)) {
+				return new MmtrMotionPoint(currentRail.getHexId(), 0, Status.AT_TARGET, null);
+			}
+			final double len = currentRail.railMath.getLength();
+			if (remaining <= len) {
+				return new MmtrMotionPoint(currentRail.getHexId(), remaining, Status.TRAVELLING, null);
+			}
+			remaining -= len; // arrive at node, still distance to cover
+
+			final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(node);
+			if (neighbors == null) {
+				return new MmtrMotionPoint(currentRail.getHexId(), len, Status.END_OF_LINE, null);
+			}
+			final ObjectArrayList<Rail> forwardRails = new ObjectArrayList<>();
+			final ObjectArrayList<Position> forwardEnds = new ObjectArrayList<>();
+			for (final Object2ObjectOpenHashMap.Entry<Position, Rail> e : neighbors.object2ObjectEntrySet()) {
+				if (e.getValue() != currentRail) {
+					forwardRails.add(e.getValue());
+					forwardEnds.add(e.getKey());
+				}
+			}
+
+			final Rail next;
+			if (forwardRails.isEmpty()) {
+				return new MmtrMotionPoint(currentRail.getHexId(), len, Status.END_OF_LINE, null);
+			} else if (forwardRails.size() == 1) {
+				next = forwardRails.get(0);
+			} else {
+				final @Nullable Rail elected = electRailAtFork(node, enteredFrom, forwardRails, forwardEnds, currentRail, targetRailHex, branches, haltNode);
+				if (elected == null) {
+					return new MmtrMotionPoint(currentRail.getHexId(), len, Status.AWAITING_AUTHORITY, haltNode[0] == null ? nodeKey(node) : nodeKey(haltNode[0]));
+				}
+				next = elected;
+			}
+
+			if (next.getHexId().equals(targetRailHex)) {
+				return new MmtrMotionPoint(next.getHexId(), 0, Status.AT_TARGET, null);
+			}
+			enteredFrom = node;
+			node = otherEnd(data, node, next);
+			currentRail = next;
+		}
+		return new MmtrMotionPoint(currentRail.getHexId(), currentRail.railMath.getLength(), Status.MAX_STEPS, null);
+	}
+
+	/** The far-end node of {@code rail} given that we are at {@code at} (one of its endpoints). */
+	private static @Nullable Position otherEnd(Data data, Position at, Rail rail) {
+		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(at);
+		if (neighbors == null) {
+			return null;
+		}
+		for (final Object2ObjectOpenHashMap.Entry<Position, Rail> e : neighbors.object2ObjectEntrySet()) {
+			if (e.getValue() == rail) {
+				return e.getKey();
+			}
+		}
+		return null;
 	}
 
 	/**
