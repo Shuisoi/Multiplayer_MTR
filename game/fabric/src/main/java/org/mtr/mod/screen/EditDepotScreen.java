@@ -2,7 +2,6 @@ package org.mtr.mod.screen;
 
 import org.apache.commons.lang3.StringUtils;
 import org.mtr.core.data.*;
-import org.mtr.core.operation.DepotOperationByIds;
 import org.mtr.core.operation.UpdateDataRequest;
 import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2LongAVLTreeMap;
@@ -21,9 +20,6 @@ import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.generated.lang.TranslationProvider;
-import org.mtr.mod.packet.PacketDepotClear;
-import org.mtr.mod.packet.PacketDepotGenerate;
-import org.mtr.mod.packet.PacketDepotInstantDeploy;
 import org.mtr.mod.packet.PacketUpdateData;
 
 import java.text.DateFormat;
@@ -47,9 +43,6 @@ public class EditDepotScreen extends EditNameColorScreenBase<Depot> {
 	private final ButtonWidgetExtension buttonAddDeparture;
 
 	private final ButtonWidgetExtension buttonEditInstructions;
-	private final ButtonWidgetExtension buttonInstantDeploy;
-	private final ButtonWidgetExtension buttonGenerateRoute;
-	private final ButtonWidgetExtension buttonClearTrains;
 	private final CheckboxWidgetExtension checkboxRepeatIndefinitely;
 	private final TextFieldWidgetExtension textFieldCruisingAltitude;
 	private final DashboardList departuresList;
@@ -108,31 +101,7 @@ public class EditDepotScreen extends EditNameColorScreenBase<Depot> {
 			Collections.sort(routes);
 			MinecraftClient.getInstance().openScreen(new Screen(new DashboardListSelectorScreen(new ObjectImmutableList<>(routes), data.getRouteIds(), false, true, this)));
 		});
-		buttonInstantDeploy = new ButtonWidgetExtension(0, 0, 0, SQUARE_SIZE, TranslationProvider.GUI_MTR_INSTANT_DEPLOY.getMutableText(), button -> {
-			saveData();
-			final DepotOperationByIds depotOperationByIds = new DepotOperationByIds();
-			depotOperationByIds.addDepotId(depot.getId());
-			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDepotInstantDeploy(depotOperationByIds));
-		});
-		buttonGenerateRoute = new ButtonWidgetExtension(0, 0, 0, SQUARE_SIZE, TranslationProvider.GUI_MTR_REFRESH_PATH.getMutableText(), button -> {
-			saveData();
-			final DepotOperationByIds depotOperationByIds = new DepotOperationByIds();
-			depotOperationByIds.addDepotId(depot.getId());
-			DEPOT_GENERATION_START_TIME.put(depot.getId(), System.currentTimeMillis());
-			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDepotGenerate(depotOperationByIds));
-		});
-		buttonClearTrains = new ButtonWidgetExtension(0, 0, 0, SQUARE_SIZE, TranslationProvider.GUI_MTR_CLEAR_VEHICLES.getMutableText(), button -> {
-			saveData();
-			final DepotOperationByIds depotOperationByIds = new DepotOperationByIds();
-			depotOperationByIds.addDepotId(depot.getId());
-			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDepotClear(depotOperationByIds));
-		});
-		checkboxRepeatIndefinitely = new CheckboxWidgetExtension(0, 0, 0, SQUARE_SIZE, true, button -> {
-			saveData();
-			final DepotOperationByIds depotOperationByIds = new DepotOperationByIds();
-			depotOperationByIds.addDepotId(depot.getId());
-			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDepotGenerate(depotOperationByIds));
-		});
+		checkboxRepeatIndefinitely = new CheckboxWidgetExtension(0, 0, 0, SQUARE_SIZE, true, button -> saveData());
 		checkboxRepeatIndefinitely.setMessage2(TranslationProvider.GUI_MTR_REPEAT_INDEFINITELY.getText());
 		textFieldCruisingAltitude = new TextFieldWidgetExtension(0, 0, 0, SQUARE_SIZE, 5, TextCase.DEFAULT, "[^-\\d]", String.valueOf(DEFAULT_CRUISING_ALTITUDE));
 	}
@@ -143,9 +112,6 @@ public class EditDepotScreen extends EditNameColorScreenBase<Depot> {
 
 		final int buttonWidth = (width - rightPanelsX) / 2;
 		IDrawing.setPositionAndWidth(buttonEditInstructions, rightPanelsX, PANELS_START, buttonWidth * 2);
-		IDrawing.setPositionAndWidth(buttonInstantDeploy, rightPanelsX, PANELS_START + SQUARE_SIZE, buttonWidth * 2);
-		IDrawing.setPositionAndWidth(buttonGenerateRoute, rightPanelsX, PANELS_START + SQUARE_SIZE * 2, buttonWidth * (showScheduleControls ? 1 : 2));
-		IDrawing.setPositionAndWidth(buttonClearTrains, rightPanelsX + buttonWidth, PANELS_START + SQUARE_SIZE * 2, buttonWidth);
 		IDrawing.setPositionAndWidth(checkboxRepeatIndefinitely, rightPanelsX, PANELS_START + SQUARE_SIZE * 3 + (showCruisingAltitude ? SQUARE_SIZE + TEXT_FIELD_PADDING : 0), buttonWidth * 2);
 		checkboxRepeatIndefinitely.setChecked(data.getRepeatInfinitely());
 
@@ -179,13 +145,10 @@ public class EditDepotScreen extends EditNameColorScreenBase<Depot> {
 		buttonAddDeparture.active = false;
 
 		addChild(new ClickableWidget(buttonEditInstructions));
-		addChild(new ClickableWidget(buttonInstantDeploy));
-		addChild(new ClickableWidget(buttonGenerateRoute));
 		if (showScheduleControls) {
 			addChild(new ClickableWidget(buttonUseRealTime));
 			addChild(new ClickableWidget(buttonReset));
-			addChild(new ClickableWidget(buttonClearTrains));
-			addChild(new ClickableWidget(checkboxRepeatIndefinitely));
+				addChild(new ClickableWidget(checkboxRepeatIndefinitely));
 		}
 		if (showCruisingAltitude) {
 			addChild(new ClickableWidget(textFieldCruisingAltitude));
