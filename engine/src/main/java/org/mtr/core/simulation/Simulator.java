@@ -434,6 +434,32 @@ public class Simulator extends Data implements Utilities {
 		System.out.println("[MMTR-MFST] cleared all vehicles + templates on " + dimension);
 	}
 
+	private Object[] mmtrLinesCache; // {signature, lines}
+
+	/**
+	 * Automatic line detection (线路自动识别): deterministic partition of every real rail into
+	 * "lines" (straightest-continuation strokes, longest first). Cached against a rail-set
+	 * signature so frequent map polling never re-runs the detector; invalidates when rails change.
+	 */
+	public ObjectArrayList<org.mtr.core.mmtr.line.MmtrLineDetector.MmtrLine> mmtrDetectLines() {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> hexes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+		for (final org.mtr.core.data.Rail rail : rails) {
+			hexes.add(rail.getHexId());
+		}
+		hexes.sort(null);
+		final StringBuilder sig = new StringBuilder().append(hexes.size()).append('|');
+		for (final String hex : hexes) {
+			sig.append(hex).append(',');
+		}
+		final String signature = sig.toString();
+		if (mmtrLinesCache != null && mmtrLinesCache[0].equals(signature)) {
+			return (ObjectArrayList<org.mtr.core.mmtr.line.MmtrLineDetector.MmtrLine>) mmtrLinesCache[1];
+		}
+		final ObjectArrayList<org.mtr.core.mmtr.line.MmtrLineDetector.MmtrLine> lines = org.mtr.core.mmtr.line.MmtrLineDetector.detect(this);
+		mmtrLinesCache = new Object[]{signature, lines};
+		return lines;
+	}
+
 	/** Discover all turnouts (道岔) on the rail graph with the operator branch states applied. */
 	public ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> mmtrDiscoverPoints() {
 		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> points = org.mtr.core.mmtr.point.MmtrPointRegistry.discover(this);

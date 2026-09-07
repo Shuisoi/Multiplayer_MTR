@@ -167,6 +167,7 @@ public final class SystemMapServlet extends ServletBase {
 					yield result;
 				}
 				case "mmtr-topology" -> getMmtrTopology(simulator);
+				case "mmtr-lines" -> getMmtrLines(simulator);
 				case "mmtr-points" -> getMmtrPoints(simulator);
 				case "mmtr-point-op" -> {
 					final long x = jsonReader.getLong("x", 0);
@@ -445,6 +446,26 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
 		root.add("nodes", nodes);
 		root.add("rails", rails);
+		return root;
+	}
+
+	/** Automatic lines feed (线路自动识别): every detected line with its rails in stroke order. */
+	private static JsonObject getMmtrLines(org.mtr.core.simulation.Simulator simulator) {
+		final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.line.MmtrLineDetector.MmtrLine line : simulator.mmtrDetectLines()) {
+			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+			o.addProperty("id", line.id());
+			o.addProperty("name", line.name());
+			o.addProperty("lengthM", Math.round(line.lengthM * 10.0) / 10.0);
+			final com.google.gson.JsonArray rails = new com.google.gson.JsonArray();
+			for (final String hex : line.rails) {
+				rails.add(hex);
+			}
+			o.add("rails", rails);
+			lines.add(o);
+		}
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("lines", lines);
 		return root;
 	}
 
