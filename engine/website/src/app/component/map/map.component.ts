@@ -34,6 +34,10 @@ const lineMaterialNormal = new LineMaterial({color: 0xFFFFFF, linewidth: 6 * SET
 const lineMaterialNormalDashed = new LineMaterial({color: 0xFFFFFF, linewidth: 6 * SETTINGS.scale * devicePixelRatio, vertexColors: true, dashed: true});
 const lineMaterialThin = new LineMaterial({color: 0xFFFFFF, linewidth: 3 * SETTINGS.scale * devicePixelRatio, vertexColors: true});
 const lineMaterialThinDashed = new LineMaterial({color: 0xFFFFFF, linewidth: 3 * SETTINGS.scale * devicePixelRatio, vertexColors: true, dashed: true});
+/** P2 rail topology layer: fat ROUND white edges (fully opaque), black halo pass underneath so the
+ * white edges stay readable on light themes too. Edges are pure topology - one line per real rail. */
+const lineMaterialRailHalo = new LineMaterial({color: 0x000000, linewidth: 9 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.45});
+const lineMaterialRailCore = new LineMaterial({color: 0xFFFFFF, linewidth: 5 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 
 @Component({
 	selector: "app-map",
@@ -83,8 +87,8 @@ export class MapComponent implements AfterViewInit {
 	private animationFrameId = 0;
 	private clientPositions: Record<string, { x: number, y: number }> = {};
 
-	private railLines: THREE.LineSegments | undefined;
-	private static readonly RAIL_Z_INDEX = -6;
+	private railLayer: THREE.Group | undefined;
+	private static readonly RAIL_Z_INDEX = 0;
 
 	private readonly clientGroupsOnRouteRaw: {
 		clients: { id: string, name: string }[],
@@ -123,35 +127,40 @@ export class MapComponent implements AfterViewInit {
 		});
 	}
 
-	/** (Re)build the LineSegments layer of the real track network (world x / -z plane). */
+	/**
+	 * (Re)build the rail topology layer: one fat ROUND white edge per real rail (pure topology -
+	 * the rail's two real nodes connected straight, no curve sampling), with a dark halo pass
+	 * underneath that keeps the white readable on light themes too.
+	 */
 	private applyRailLayer() {
 		const rails = this.mmtrTopologyService.rails();
-		if (this.railLines) {
-			this.scene.remove(this.railLines);
-			this.railLines.geometry.dispose();
-			this.railLines = undefined;
+		if (this.railLayer) {
+			this.railLayer.children.forEach(child => {
+				if ((child as unknown as Line2).isLine2) {
+					(child as unknown as Line2).geometry.dispose();
+				}
+			});
+			this.scene.remove(this.railLayer);
+			this.railLayer = undefined;
 		}
 		if (rails.length === 0) {
 			return;
 		}
-		const positions: number[] = [];
+		const group = new THREE.Group();
 		for (const rail of rails) {
-			// Sample polylines per rail: consecutive curve points become line segments, so bends
-			// follow the in-game rail geometry instead of one straight chord per rail.
-			for (let i = 0; i + 1 < rail.pts.length; i++) {
-				positions.push(rail.pts[i].x, -rail.pts[i].z, MapComponent.RAIL_Z_INDEX);
-				positions.push(rail.pts[i + 1].x, -rail.pts[i + 1].z, MapComponent.RAIL_Z_INDEX);
-			}
+			const geometry = new LineGeometry();
+			geometry.setPositions([
+				rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX,
+				rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX,
+			]);
+			const halo = new Line2(geometry, lineMaterialRailHalo);
+			halo.computeLineDistances();
+			const core = new Line2(geometry, lineMaterialRailCore);
+			core.computeLineDistances();
+			group.add(halo, core);
 		}
-		const geometry = new THREE.BufferGeometry();
-		geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
-		const material = new THREE.LineBasicMaterial({
-			color: this.isDarkTheme() ? 0x8a939b : 0x5a646d,
-			transparent: true,
-			opacity: this.isDarkTheme() ? 0.55 : 0.4,
-		});
-		this.railLines = new THREE.LineSegments(geometry, material);
-		this.scene.add(this.railLines);
+		this.railLayer = group;
+		this.scene.add(this.railLayer);
 	}
 
 	/** Project the fork markers and the open console selection onto the current camera view. */
@@ -331,6 +340,8 @@ export class MapComponent implements AfterViewInit {
 				lineMaterialNormalDashed.resolution.set(clientWidth, clientHeight);
 				lineMaterialThin.resolution.set(clientWidth, clientHeight);
 				lineMaterialThinDashed.resolution.set(clientWidth, clientHeight);
+				lineMaterialRailHalo.resolution.set(clientWidth, clientHeight);
+				lineMaterialRailCore.resolution.set(clientWidth, clientHeight);
 				this.camera.updateProjectionMatrix();
 			}
 

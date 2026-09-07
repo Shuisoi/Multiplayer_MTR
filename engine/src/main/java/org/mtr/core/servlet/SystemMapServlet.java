@@ -430,21 +430,16 @@ public final class SystemMapServlet extends ServletBase {
 			if (ends == null || ends[1] == null) {
 				return;
 			}
+			// Pure topology edge: the web track display connects the rail's two real nodes with one
+			// straight edge (no in-game curve sampling) - the map is a track graph, not geometry.
 			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
 			o.addProperty("hex", hex);
-			// Sample the REAL rail curve (circle/segment geometry from RailMath) so the web track
-			// display follows the in-game shape instead of a straight chord between the endpoints.
-			final double railLength = rail.railMath.getLength();
-			final int samples = Math.max(2, Math.min(28, (int) Math.ceil(railLength / 5.0)));
-			final com.google.gson.JsonArray pts = new com.google.gson.JsonArray();
-			for (int i = 0; i <= samples; i++) {
-				final org.mtr.core.tool.Vector v = rail.railMath.getPosition((double) i / samples, false);
-				final com.google.gson.JsonObject pt = new com.google.gson.JsonObject();
-				pt.addProperty("x", Math.round(v.x() * 10.0) / 10.0);
-				pt.addProperty("z", Math.round(v.z() * 10.0) / 10.0);
-				pts.add(pt);
-			}
-			o.add("pts", pts);
+			o.addProperty("x1", ends[0].getX());
+			o.addProperty("y1", ends[0].getY());
+			o.addProperty("z1", ends[0].getZ());
+			o.addProperty("x2", ends[1].getX());
+			o.addProperty("y2", ends[1].getY());
+			o.addProperty("z2", ends[1].getZ());
 			rails.add(o);
 		});
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();

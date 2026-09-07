@@ -3,11 +3,16 @@ import {DestroyRef, inject, Injectable, signal} from "@angular/core";
 import {DimensionService} from "./dimension.service";
 import {SLOW_REFRESH_INTERVAL_MILLIS} from "../utility/refresh.constants";
 
-/** One real rail segment of the map dimension: its sampled centreline (curve points, world
- * coordinates, sampled along the real RailMath geometry by the engine so bends follow the track). */
+/** One track-graph edge (real rail) of the map dimension: both endpoint nodes in world
+ * coordinates - the map draws one straight topology edge between them. */
 export interface MmtrRailSegment {
 	hex: string;
-	pts: { x: number; z: number }[];
+	x1: number;
+	y1: number;
+	z1: number;
+	x2: number;
+	y2: number;
+	z2: number;
 }
 
 /**
