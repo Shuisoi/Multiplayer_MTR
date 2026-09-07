@@ -20,6 +20,7 @@ import org.mtr.core.mmtr.MmtrDriveAccess;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.MmtrProtection;
 import org.mtr.core.mmtr.MmtrSupport;
+import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.simulation.Simulator;
@@ -99,6 +100,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * MMTR (server): when the current mission entered AT_TARGET; used to complete after a dwell.
 	 */
 	private long mmtrMissionTargetArrivedMillis;
+	/**
+	 * MMTR (L3, server): live Motion-Core run mode. When non-null this vehicle's RUNNING motion is
+	 * decided per tick by the walker — (segment, offset), fork branches elected live from the current
+	 * BranchStore/task at each node — instead of a pre-baked whole-journey path. {@link #railProgress}
+	 * is the walker's cumulative distance and {@link #mmtrMotionLegs} is the growing ordered leg
+	 * shadow (cumulative PathData) that the legacy render/occupancy helpers walk. Clientside mirrors
+	 * never engage this mode (they keep replaying the synced legacy path).
+	 */
+	private @Nullable MmtrMotionWalker mmtrMotionWalker;
+	/** Motion-mode leg shadow: cumulative PathData list, refreshed when the walker boards a new rail. */
+	private final ObjectArrayList<PathData> mmtrMotionLegs = new ObjectArrayList<>();
+	/** Walker leg count at the last shadow refresh (detects newly boarded rails). */
+	private int mmtrMotionLegCount;
 	@Nullable
 	private final Siding siding;
 	/**
@@ -315,7 +329,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	public void initVehiclePositions(Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
-		writeVehiclePositions(Utilities.getIndexFromConditionalList(vehicleExtraData.immutablePath, railProgress), vehiclePositions);
+		// Motion-mode vehicles seed their occupancy from the live walker shadow each tick instead.
+		if (mmtrMotionWalker == null) {
+			writeVehiclePositions(Utilities.getIndexFromConditionalList(vehicleExtraData.immutablePath, railProgress), vehiclePositions);
+		}
 	}
 
 	public void simulate(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, @Nullable Long2ObjectOpenHashMap<LongObjectImmutablePair<Vehicle>> vehicleTimesAlongRoute) {
@@ -348,7 +365,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			atoOverride = false;
 		}
 
-		if (getIsOnRoute()) {
+		// MMTR (L3): live Motion-Core run vehicles (see {@link #engageMmtrMotion}) tick their own
+		// segment+offset state machine; the legacy baked-path on-route/stopped/depot dispatch does not
+		// apply while engaged.
+		final boolean mmtrMotionMode = !isClientside && mmtrMotionWalker != null;
+
+		if (mmtrMotionMode) {
+			simulateMmtrMotion(millisElapsed, vehiclePositions);
+			currentIndex = 0;
+		} else if (getIsOnRoute()) {
 			if (vehicleExtraData.getRepeatIndex2() == 0 && railProgress >= vehicleExtraData.getTotalDistance() - (vehicleExtraData.getRailLength() - vehicleExtraData.getTotalVehicleLength()) / 2) {
 				// If the route does not repeat infinitely and the vehicle is reaching the end
 				currentIndex = 0;
@@ -377,10 +402,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		stoppingCooldown = Math.max(0, stoppingCooldown - millisElapsed);
 
 		if (vehiclePositions != null && vehiclePositions.size() > 1) {
-			writeVehiclePositions(currentIndex, vehiclePositions.get(1));
+			if (mmtrMotionMode) {
+				writeMmtrMotionVehiclePositions(vehiclePositions.get(1));
+			} else {
+				writeVehiclePositions(currentIndex, vehiclePositions.get(1));
+			}
 		}
 
-		if (vehicleTimesAlongRoute != null) {
+		if (vehicleTimesAlongRoute != null && !mmtrMotionMode) {
 			final long timeAlongRoute = getTimeAlongRoute(railProgress);
 			if (timeAlongRoute > 0) {
 				vehicleTimesAlongRoute.put(departureIndex, new LongObjectImmutablePair<>(timeAlongRoute, this));
@@ -587,6 +616,90 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * MMTR (L3): one tick of the live Motion-Core run state machine (server). The existing cab control
+	 * (a ControlState via {@link #applyMmtrControl}) drives the MMTR physics model exactly like the
+	 * legacy path branch; the integrated distance advances the embedded {@link MmtrMotionWalker},
+	 * which moves the consist by (segment, offset) and elects each next rail at the node from the
+	 * CURRENT turnout state / task (an unset fork halts and waits — the next tick re-asks, so flipping
+	 * the branch makes the same vehicle continue). Speed is zeroed the moment the walker can no longer
+	 * consume distance (authority halt / end of line). Platform dwell / doors / signals are later
+	 * slices; doors stay closed while running.
+	 */
+	private void simulateMmtrMotion(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		vehicleExtraData.closeDoors();
+		final ControlState control = mmtrActiveControl;
+		final boolean overridden = mmtrManualOverride && control != null;
+		final boolean wantPower = overridden && control.getReverser() > 0 && control.getThrottleNotch() > 0 && !(control.getBrakeNotch() > 0 || control.isEmergency());
+		final boolean braking = overridden && (control.getBrakeNotch() > 0 || control.isEmergency());
+		final double previousSpeed = speed;
+
+		double integratedDistance = 0;
+		if (overridden && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+			// Same fixed sub-step ConsistDynamics integration as the legacy MMTR branch in
+			// simulateMoving (server side; motion mode has no clientside mirror yet).
+			final ConsistType mmtrType = mmtrConsistType;
+			final ControlState mmtrState = control;
+			final boolean useCompositionAir = mmtrType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
+			final MmtrComposition mmtrCompositionNow = useCompositionAir ? getMmtrComposition() : null;
+			final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
+			final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) -> {
+				if (mmtrCompositionNow != null) {
+					return mmtrCompositionNow.stepAir(mmtrState, siSpeed, stepMillis);
+				}
+				return mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
+			});
+			speed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
+			integratedDistance = mmtrResult.distanceMeters;
+			if (mmtrCompositionNow != null) {
+				mmtrAirState = MmtrComposition.encodeAirStates(mmtrCompositionNow);
+				mmtrPipePressure = mmtrCompositionNow.averagePipePressure();
+				mmtrBrakeCylinderPressure = mmtrCompositionNow.averageCylinderPressure();
+			}
+		} else if (overridden) {
+			// No consist-type policy: linear legacy-style integration from the ControlState notches.
+			if (braking) {
+				speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * millisElapsed);
+			} else if (wantPower) {
+				speed = Math.min(vehicleExtraData.getMaxManualSpeed(), speed + vehicleExtraData.getAcceleration() * millisElapsed);
+			} else {
+				speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * 0.1 * millisElapsed); // coast-down
+			}
+			integratedDistance = speed * millisElapsed;
+		} else if (speed > 0) {
+			// Override released mid-run: service-brake to rest (occupation safety).
+			speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * millisElapsed);
+			integratedDistance = speed * millisElapsed;
+		}
+
+		if (integratedDistance > 0) {
+			final double before = mmtrMotionWalker.distanceM();
+			mmtrMotionWalker.advance(integratedDistance);
+			if (mmtrMotionWalker.legCount() > mmtrMotionLegCount) {
+				refreshMmtrMotionLegs();
+				mmtrMotionLegCount = mmtrMotionWalker.legCount();
+			}
+			railProgress = mmtrMotionWalker.distanceM();
+			final double consumed = railProgress - before;
+			if (consumed < integratedDistance - 1e-9) {
+				// Authority halt at an unset fork / end of line / target: cannot consume the whole
+				// integrated distance — come to rest and wait (a fresh advance re-asks the node).
+				speed = 0;
+				if (previousSpeed > 1e-9) {
+					System.out.println("[MMTR-DRV] motion authority halt on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + "m (awaiting operator/task)");
+				}
+			} else {
+				lastMovementMillis = data.getCurrentMillis();
+				System.out.println("[MMTR-DRV] motion seg=" + mmtrMotionWalker.railHex() + " offset=" + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + " dist=" + Math.round(consumed * 1000.0) / 1000.0 + " speed=" + speed);
+			}
+		}
+
+		if (!isClientside) {
+			vehicleExtraData.setPowerLevel(wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0);
+			vehicleExtraData.setSpeedTarget(speed);
+			updateMmtrSyncFields();
+		}
+	}
 
 	/** Enables/disables the MMTR explicit control path (used by the future input layer). */
 	public void setMmtrManualOverride(boolean enabled) { mmtrManualOverride = enabled; }
@@ -635,6 +748,59 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		vehicleExtraData.setPowerLevel(0);
 		if (releasedDriver != null) {
 			System.out.println("[MMTR-DRV] driver=" + releasedDriver + " released override (auto)");
+		}
+	}
+
+	/** @return true when this vehicle runs in live Motion-Core mode (L3). */
+	public boolean isMmtrMotion() {
+		return mmtrMotionWalker != null;
+	}
+
+	/** @return the live Motion-Core walker when this vehicle runs in motion mode, else {@code null}. */
+	@Nullable
+	public MmtrMotionWalker getMmtrMotionWalker() {
+		return mmtrMotionWalker;
+	}
+
+	/**
+	 * MMTR (L3, server-only): switches this vehicle to live Motion-Core run mode. The walker becomes
+	 * the motion authority: every tick the vehicle advances it by the physically integrated distance;
+	 * the walker crosses nodes by the CURRENT turnout/task state (an unset fork halts and waits, never
+	 * auto), and railProgress/render/occupancy follow the walker plus its growing leg shadow. The
+	 * legacy baked-path state machine is bypassed while engaged. Call with the walker seeded on the
+	 * rail the consist stands on. Clientside mirrors must never engage this mode.
+	 */
+	public void engageMmtrMotion(@Nullable MmtrMotionWalker walker) {
+		if (isClientside) {
+			log.warn("Vehicle#engageMmtrMotion is server-side only; ignoring on clientside mirror");
+			return;
+		}
+		releaseMmtrManualOverride();
+		mmtrMotionWalker = walker;
+		mmtrMotionLegCount = 0;
+		mmtrMotionLegs.clear();
+		mmtrProtection = false;
+		mmtrProtectionLockRemaining = 0;
+		atoOverride = false;
+		vehicleExtraData.closeDoors();
+		departureIndex = -1;
+		sidingDepartureTime = -1;
+		reversed = false;
+		speed = 0;
+		if (walker == null) {
+			railProgress = vehicleExtraData.getDefaultPosition();
+		} else {
+			refreshMmtrMotionLegs();
+			mmtrMotionLegCount = walker.legCount();
+			railProgress = walker.distanceM();
+		}
+	}
+
+	/** Rebuild the motion leg shadow from the walker's recorded legs (cumulative PathData). */
+	private void refreshMmtrMotionLegs() {
+		mmtrMotionLegs.clear();
+		if (mmtrMotionWalker != null) {
+			mmtrMotionLegs.addAll(mmtrMotionWalker.buildLegs());
 		}
 	}
 
@@ -1065,6 +1231,53 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * Motion-mode occupancy footprint over the walker's growing leg shadow (same blocked-bounds
+	 * bookkeeping as {@link #writeVehiclePositions}, minus signal reservations and client pushes,
+	 * which motion mode does not handle yet). Other vehicles block on this footprint through the
+	 * shared vehiclePositions maps.
+	 */
+	private void writeMmtrMotionVehiclePositions(Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
+		if (vehiclePositions == null || mmtrMotionLegs.isEmpty() || !getIsOnRoute()) {
+			return;
+		}
+		int index = indexInMmtrMotionLegs(railProgress);
+		while (index >= 0) {
+			final PathData pathData = mmtrMotionLegs.get(index);
+			if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
+				break;
+			}
+			if (index > 0) {
+				final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
+				if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
+					final Position position1 = pathData.getOrderedPosition1();
+					final Position position2 = pathData.getOrderedPosition2();
+					Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
+						final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+						newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
+						return newVehiclePosition;
+					}, Object2ObjectAVLTreeMap::new);
+				}
+			}
+			index--;
+		}
+	}
+
+	/** Index of the leg whose cumulative range contains {@code progress} (last leg when beyond). */
+	private int indexInMmtrMotionLegs(double progress) {
+		for (int i = 0; i < mmtrMotionLegs.size(); i++) {
+			if (mmtrMotionLegs.get(i).getEndDistance() > progress) {
+				return i;
+			}
+		}
+		return Math.max(0, mmtrMotionLegs.size() - 1);
+	}
+
+	/** Motion-mode leg shadow, or the legacy baked path when not in motion mode (single lookup chokepoint). */
+	private java.util.List<PathData> motionOrLegacyPath() {
+		return mmtrMotionWalker == null ? vehicleExtraData.immutablePath : mmtrMotionLegs;
+	}
+
+	/**
 	 * Indicate which portions of each path segment are occupied by this vehicle. Also check if the vehicle needs to send a socket update:
 	 * <ul>
 	 * <li>Entered a client's view radius</li>
@@ -1206,7 +1419,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 	@Nullable
 	private PositionAndTiltAngle getPositionAndTiltAngle(double value, DoubleArrayList overrideY) {
-		final PathData pathData = Utilities.getElement(vehicleExtraData.immutablePath, Utilities.getIndexFromConditionalList(vehicleExtraData.immutablePath, value));
+		final java.util.List<PathData> path = motionOrLegacyPath();
+		final PathData pathData = Utilities.getElement(path, Utilities.getIndexFromConditionalList(path, value));
 		if (pathData == null) {
 			return null;
 		} else {

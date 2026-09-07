@@ -29,6 +29,8 @@ public final class MmtrMotionWalker {
 	private Position enteredFrom;
 	private Position ahead;
 	private double offsetM;
+	/** Total distance actually consumed since this walker started, m (the head's cumulative progress). */
+	private double distanceM;
 
 	private boolean haltedAtAuthority;
 	private boolean endOfLine;
@@ -61,6 +63,16 @@ public final class MmtrMotionWalker {
 
 	public double offsetM() {
 		return offsetM;
+	}
+
+	/** Total distance consumed since this walker started (m) — the head's cumulative run progress. */
+	public double distanceM() {
+		return distanceM;
+	}
+
+	/** Number of legs (boarded rails) recorded so far; grows as nodes are crossed. */
+	public int legCount() {
+		return legs.size();
 	}
 
 	/** Node the train is currently moving toward. */
@@ -116,10 +128,12 @@ public final class MmtrMotionWalker {
 			final double toNode = len - offsetM;
 			if (remaining < toNode) {
 				offsetM += remaining;
+				distanceM += remaining;
 				return;
 			}
 			remaining -= toNode;
 			offsetM = len; // reached the ahead node
+			distanceM += toNode;
 
 			final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(ahead);
 			if (neighbors == null) {

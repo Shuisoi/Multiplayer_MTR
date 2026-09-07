@@ -1,7 +1,8 @@
 # Motion Core ↔ Vehicle 集成 · 交接文档（给新会话）
 
 > 用途：开新会话做「让引擎 Vehicle 本体跑 Motion Core」这项核心改造时，先读本文档即可接手，无需回顾冗长历史。
-> 仓库：本机 mmtr/ 是独立 git 仓库（引擎在 mmtr/engine，Minecraft 模组在 mmtr/game）。当前 HEAD：78e6610（clean）。
+> 仓库：本机 mmtr/ 是独立 git 仓库（引擎在 mmtr/engine，Minecraft 模组在 mmtr/game）。
+> ⚠ 状态标注：本文头部写于 78e6610（16:30）；此后 09-07 17:07–18:16 已删除 MTR depot 自动路径烘焙/时刻表自动发车（§3 的 T4 前置删除链完成、全量转绿），HEAD 至 1222962（docs 重组）；再后本会话追加 **L3 slice-1：Vehicle live motion mode**（Vehicle 内嵌 MmtrMotionWalker，(segment+offset) 逐 tick、岔口按当前道岔态实时裁决，未设岔停车等待、搬岔即换向；含真实 -96 岔口活搬岔用例），详见 **notes/14**，全量 231/0/2。§5 的 T4 删除前提已实质前置完成大半；本文 §3 之后内容按 notes/14 + git log 为准。
 > 语言：文档中文；代码/提交信息英文。
 
 ---
