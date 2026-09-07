@@ -159,4 +159,42 @@ public final class MmtrPointDirectionTests {
 			assertEquals(point.legs.get(i).railHex, again.legs.get(i).railHex, "stable leg order across rediscovery");
 		}
 	}
+
+	@Test
+	public void humanShapeTurnoutExcludesCrossArmAndTurnBackReaches() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-point-human"), false);
+		final Position node = new Position(0, 0, 0);
+		// 人字 wye: stem continues up-right; the two arms go back-down-left / back-down-right so the
+		// far end of the OTHER arm lies behind a vehicle arriving from one arm.
+		final Rail stem = through(node, new Position(16, 0, -12));
+		final Rail armA = through(new Position(-17, 0, 10), node);   // arrival side A
+		final Rail armB = through(new Position(-23, 0, -10), node);  // other arm (behind A's heading)
+		sim.rails.add(stem);
+		sim.rails.add(armA);
+		sim.rails.add(armB);
+		sim.sync();
+
+		final MmtrPoint fromA = pointAt(sim, 0, 0, 0, armA);
+		assertNotNull(fromA, "wye discovered from arm A");
+		assertEquals(1, fromA.legs.size(), "from one arm only the stem is reachable (人字: 从左只能到上, not 右)");
+		assertEquals(stem.getHexId(), fromA.legs.get(0).railHex, "the stem is the only forward continuation");
+	}
+
+	@Test
+	public void collinearTurnBackRailIsNotAForwardContinuation() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-point-return"), false);
+		final Position node = new Position(0, 0, 0);
+		final Rail approach = through(new Position(-20, 0, 0), node);
+		final Rail forward = through(node, new Position(20, 0, 0));
+		final Rail backward = through(node, new Position(-30, 0, 0)); // same line BEHIND the node
+		sim.rails.add(approach);
+		sim.rails.add(forward);
+		sim.rails.add(backward);
+		sim.sync();
+
+		final MmtrPoint point = pointAt(sim, 0, 0, 0, approach);
+		assertNotNull(point, "discovered from the west approach");
+		assertEquals(1, point.legs.size(), "the collinear turn-back rail is not offered as a continuation");
+		assertEquals(forward.getHexId(), point.legs.get(0).railHex, "only the forward rail continues");
+	}
 }
