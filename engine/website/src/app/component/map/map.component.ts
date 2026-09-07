@@ -71,7 +71,7 @@ export class MapComponent implements AfterViewInit {
 	readonly stationClicked = output<string>();
 	readonly clientClicked = output<string>();
 	private readonly wrapperRef = viewChild.required<ElementRef<HTMLDivElement>>("wrapper");
-	private readonly canvasRef = viewChild.required<ElementRef<HTMLCanvasElement>>("canvas");
+	private readonly canvasRef = viewChild<ElementRef<HTMLCanvasElement>>("canvas");
 	private readonly statsRef = viewChild.required<ElementRef<HTMLDivElement>>("stats");
 	readonly clientGroupsOnRoute = signal<ClientGroupOnRoute[]>([]);
 	readonly textLabels = signal<TextLabel[]>([]);
@@ -93,6 +93,7 @@ export class MapComponent implements AfterViewInit {
 
 	private railLayer: THREE.Group | undefined;
 	private readonly lineGroups = new Map<string, THREE.Group>();
+	private readonly liveLineMaterials: LineMaterial[] = [];
 	private static readonly RAIL_Z_INDEX = 0;
 	/** Monochrome line styling: gray tiers + focus emphasis (black & white console). */
 	private static readonly LINE_GRAYS = [0xFFFFFF, 0xD4DAE0, 0xAEB6BE, 0x8B949C];
@@ -118,7 +119,7 @@ export class MapComponent implements AfterViewInit {
 	private pointsForLineConnection: Record<string, [number, number, boolean][]> = {};
 
 	private canvas() {
-		return this.canvasRef().nativeElement;
+		return this.canvasRef()!.nativeElement; // only used after the view is initialised
 	}
 
 	constructor() {
@@ -195,6 +196,7 @@ export class MapComponent implements AfterViewInit {
 				const coreWidth = (isFocused ? 7 : 5) * SETTINGS.scale * devicePixelRatio;
 				const haloMat = new LineMaterial({color: 0x000000, linewidth: haloWidth, transparent: true, opacity: isFocused ? 0.7 : 0.45});
 				const coreMat = new LineMaterial({color: isFocused ? 0xFFFFFF : gray, linewidth: coreWidth, depthWrite: false});
+				this.liveLineMaterials.push(haloMat, coreMat);
 				const layerGroup = new THREE.Group();
 				for (const hex of line.rails) {
 					const rail = rails.find(candidate => candidate.hex === hex);
@@ -242,6 +244,8 @@ export class MapComponent implements AfterViewInit {
 			this.scene.remove(group);
 		});
 		this.lineGroups.clear();
+		this.liveLineMaterials.forEach(material => material.dispose());
+		this.liveLineMaterials.length = 0;
 	}
 
 	/** Project the fork markers and the open console selection onto the current camera view. */
@@ -423,6 +427,7 @@ export class MapComponent implements AfterViewInit {
 				lineMaterialThinDashed.resolution.set(clientWidth, clientHeight);
 				lineMaterialRailHalo.resolution.set(clientWidth, clientHeight);
 				lineMaterialRailCore.resolution.set(clientWidth, clientHeight);
+				this.liveLineMaterials.forEach(material => material.resolution.set(clientWidth, clientHeight));
 				this.camera.updateProjectionMatrix();
 			}
 
