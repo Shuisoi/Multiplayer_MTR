@@ -89,6 +89,7 @@ public final class MmtrRunPlanner {
 		final ObjectArrayList<Position> queue = new ObjectArrayList<>();
 		queue.add(startNode);
 		prev.put(startNode, new NodeRec(null, null));
+		final Position behind = walker.enteredFromPosition();
 		Position entry = null;
 		while (!queue.isEmpty()) {
 			final Position node = queue.remove(0);
@@ -101,6 +102,13 @@ public final class MmtrRunPlanner {
 				continue;
 			}
 			neighbors.forEach((other, rail) -> {
+				// Real-yard fix (P3 real-machine): BFS is undirected, so from the CURRENT ahead node
+				// it must never hop back onto the rail the walker came from - the train cannot reverse.
+				// Real yards often continue behind the parked rail (extra leads), which used to let the
+				// planner route "forward" trains backwards through the yard rear (halt at the real fork).
+				if (node.equals(startNode) && behind != null && other.equals(behind)) {
+					return;
+				}
 				if (!prev.containsKey(other)) {
 					prev.put(other, new NodeRec(node, rail));
 					queue.add(other);

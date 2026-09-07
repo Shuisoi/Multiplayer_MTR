@@ -82,6 +82,78 @@ public final class MmtrRunPlannerTests {
 		}
 	}
 
+	/**
+	 * Real-yard regression (P3 real-machine): the yard rail CONTINUES behind the parked rail into
+	 * more track (like the real depot yard, whose rear leads into other leads). The planner BFS is
+	 * undirected, so a target reachable only behind the parked rail must NOT be planned "backwards"
+	 * - the walker can never reverse. Forward-only routes stay feasible.
+	 */
+	private static final class RearNet {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-run-planner-rear"), false);
+		final Position yardBack = new Position(-32, 0, 0);
+		final Position yardMouth = new Position(-20, 0, 0);
+		final Rail yardRail = Rail.newSidingRail(yardBack, Angle.fromAngle(0), yardMouth, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Rail rX = through(yardMouth, new Position(60, 0, 0));
+		final Rail rY = through(yardMouth, new Position(60, 0, 14));
+		final Rail rearChain = through(yardBack, new Position(-60, 0, 0)); // track continues behind the parked rail
+		final Rail rearPlatformRail = Rail.newPlatformRail(new Position(-60, 0, 0), Angle.fromAngle(0), new Position(-100, 0, 0), Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Depot depot = new Depot(TransportMode.TRAIN, sim);
+		final Siding siding = new Siding(yardBack, yardMouth, 12, TransportMode.TRAIN, sim);
+		final Station rearStation = new Station(sim);
+		final Platform rearPlatform = new Platform(new Position(-60, 0, 0), new Position(-100, 0, 0), TransportMode.TRAIN, sim);
+		final BranchStore store = new BranchStore();
+
+		RearNet() {
+			depot.setName("Yard");
+			depot.setCorners(new Position(-40, -5, -5), new Position(-10, 5, 5));
+			rearStation.setName("Rear");
+			rearStation.setCorners(new Position(-110, -5, -5), new Position(-50, 5, 5));
+			sim.rails.add(yardRail);
+			sim.rails.add(rX);
+			sim.rails.add(rY);
+			sim.rails.add(rearChain);
+			sim.rails.add(rearPlatformRail);
+			sim.depots.add(depot);
+			sim.sidings.add(siding);
+			sim.stations.add(rearStation);
+			sim.platforms.add(rearPlatform);
+			final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+			cars.add(new VehicleCar("probe", 2, 1, 10, 0, 1, 0.1, 0.1));
+			siding.setVehicleCars(cars);
+			sim.mmtrConsistTypes = ConsistTypeRegistry.parse(CONSIST_JSON);
+			sim.mmtrDefaultConsistTypeId = "emu";
+			sim.sync();
+			assertTrue(depot.savedRails.contains(siding), "siding must attach to the depot yard");
+			assertTrue(rearStation.savedRails.contains(rearPlatform), "rear platform must attach to its station");
+			siding.tick();
+		}
+
+		Vehicle spawn() {
+			final MmtrMotionWalker walker = siding.mmtrMotionWalkerFromYard(null, store, null);
+			assertNotNull(walker, "yard walker must resolve");
+			final Vehicle vehicle = siding.spawnMmtrMotionVehicle(walker);
+			assertNotNull(vehicle, "motion seam must spawn");
+			return vehicle;
+		}
+	}
+
+	@Test
+	public void plannerRefusesBackwardsRoutesThroughTheYardRear() {
+		final RearNet n = new RearNet();
+		final Vehicle v = n.spawn();
+
+		// The rear platform is only reachable by going back out of the yard's rear end - the walker
+		// faces the mouth and can never reverse: the plan must be infeasible, never a backward route.
+		final MmtrRunPlanner.Plan behind = MmtrRunPlanner.planToRail(n.sim, v, n.rearPlatformRail.getHexId(), 0.5);
+		assertFalse(behind.feasible, "target behind the parked rail must not be routed backwards: " + behind.reason);
+		assertTrue(behind.reason.contains("not reachable"), "reason explains the unreachability: " + behind.reason);
+
+		// The forward target stays perfectly feasible (regression guard for the guard).
+		final MmtrRunPlanner.Plan ahead = MmtrRunPlanner.planToRail(n.sim, v, n.rX.getHexId(), 0.5);
+		assertTrue(ahead.feasible, "forward target still planned: " + ahead.reason);
+		assertEquals(1, ahead.forkOps.size(), "one en-route turnout (the yard mouth)");
+	}
+
 	private static void tickUntil(Siding siding, java.util.function.BooleanSupplier condition, int maxTicks) {
 		for (int i = 0; i < maxTicks && !condition.getAsBoolean(); i++) {
 			siding.simulateVehicles(1000, null);

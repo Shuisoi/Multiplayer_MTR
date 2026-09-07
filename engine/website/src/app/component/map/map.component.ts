@@ -18,6 +18,7 @@ import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {ClientsService} from "../../service/clients.service";
 import {MmtrTrainsService} from "../../service/mmtr-trains.service";
 import {MmtrPoint, MmtrPointsService} from "../../service/mmtr-points.service";
+import {MmtrTopologyService} from "../../service/mmtr-topology.service";
 import {TooltipModule} from "primeng/tooltip";
 import {NgOptimizedImage} from "@angular/common";
 import {TranslocoDirective} from "@jsverse/transloco";
@@ -56,6 +57,7 @@ export class MapComponent implements AfterViewInit {
 	private readonly clientsService = inject(ClientsService);
 	private readonly mmtrTrainsService = inject(MmtrTrainsService);
 	readonly mmtrPointsService = inject(MmtrPointsService);
+	private readonly mmtrTopologyService = inject(MmtrTopologyService);
 	private readonly themeService = inject(ThemeService);
 
 	readonly stationClicked = output<string>();
@@ -80,6 +82,9 @@ export class MapComponent implements AfterViewInit {
 	private timeoutId = 0;
 	private animationFrameId = 0;
 	private clientPositions: Record<string, { x: number, y: number }> = {};
+
+	private railLines: THREE.LineSegments | undefined;
+	private static readonly RAIL_Z_INDEX = -6;
 
 	private readonly clientGroupsOnRouteRaw: {
 		clients: { id: string, name: string }[],
@@ -111,6 +116,38 @@ export class MapComponent implements AfterViewInit {
 			this.mmtrPointsService.points();
 			this.updatePointOverlays();
 		});
+		// P2 follow-up: draw the real rail topology underneath (scene clears rebuild from the signal).
+		effect(() => {
+			this.mmtrTopologyService.rails();
+			this.applyRailLayer();
+		});
+	}
+
+	/** (Re)build the LineSegments layer of the real track network (world x / -z plane). */
+	private applyRailLayer() {
+		const rails = this.mmtrTopologyService.rails();
+		if (this.railLines) {
+			this.scene.remove(this.railLines);
+			this.railLines.geometry.dispose();
+			this.railLines = undefined;
+		}
+		if (rails.length === 0) {
+			return;
+		}
+		const positions: number[] = [];
+		for (const rail of rails) {
+			positions.push(rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX);
+			positions.push(rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX);
+		}
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+		const material = new THREE.LineBasicMaterial({
+			color: this.isDarkTheme() ? 0x8a939b : 0x5a646d,
+			transparent: true,
+			opacity: this.isDarkTheme() ? 0.55 : 0.4,
+		});
+		this.railLines = new THREE.LineSegments(geometry, material);
+		this.scene.add(this.railLines);
 	}
 
 	/** Project the fork markers and the open console selection onto the current camera view. */
@@ -319,6 +356,7 @@ export class MapComponent implements AfterViewInit {
 		this.mapDataService.drawMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => {
 			this.scene.background = new THREE.Color(this.getBackgroundColor()).convertLinearToSRGB();
 			this.scene.clear();
+			this.applyRailLayer();
 
 			if (needsCenter) {
 				this.centerMap();

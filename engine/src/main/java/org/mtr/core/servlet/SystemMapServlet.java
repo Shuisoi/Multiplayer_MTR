@@ -174,7 +174,7 @@ public final class SystemMapServlet extends ServletBase {
 					final long z = jsonReader.getLong("z", 0);
 					final String via = jsonReader.getString("via", "");
 					// "branch" is optional: a lock/unlock-only op must not clobber the operator branch.
-					final boolean hasBranch = data != null && data.contains("\"branch\"");
+					final boolean hasBranch = jsonReader.has("branch");
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					result.addProperty("ok", !via.isEmpty());
 					if (!via.isEmpty()) {
@@ -383,13 +383,17 @@ public final class SystemMapServlet extends ServletBase {
 		return root;
 	}
 
-	/** Rail-topology dump: every through/junction node (degree >= 2) with its neighbour rails -
-	 * used to identify real turnouts (道岔) and decide how a 0/1 branch maps onto the track. */
+	/**
+	 * Rail-topology feed (web track display): every node (degree >= 1, buffers included) with its
+	 * neighbour rails, PLUS the full rail segment list with both real endpoints - the map draws the
+	 * actual track network underneath the fork markers (topological display), not just the abstract
+	 * schematic connections.
+	 */
 	private static JsonObject getMmtrTopology(org.mtr.core.simulation.Simulator simulator) {
 		final com.google.gson.JsonArray nodes = new com.google.gson.JsonArray();
 		simulator.positionsToRail.forEach((node, neighbourMap) -> {
-			if (neighbourMap.size() < 2) {
-				return; // dead ends are not junction-relevant
+			if (neighbourMap.isEmpty()) {
+				return;
 			}
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
 			out.addProperty("x", node.getX());
@@ -408,8 +412,37 @@ public final class SystemMapServlet extends ServletBase {
 			out.add("neighbors", neighbours);
 			nodes.add(out);
 		});
+		// Deduplicated rail segments: collect each rail's two endpoint nodes from the position map.
+		final com.google.gson.JsonArray rails = new com.google.gson.JsonArray();
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Rail> byHex = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Position[]> railEnds = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
+		simulator.positionsToRail.forEach((node, neighbourMap) -> neighbourMap.forEach((pos, rail) -> {
+			byHex.putIfAbsent(rail.getHexId(), rail);
+			final org.mtr.core.data.Position[] ends = railEnds.computeIfAbsent(rail.getHexId(), k -> new org.mtr.core.data.Position[2]);
+			if (ends[0] == null) {
+				ends[0] = node;
+			} else if (ends[1] == null && !ends[0].equals(node)) {
+				ends[1] = node;
+			}
+		}));
+		byHex.forEach((hex, rail) -> {
+			final org.mtr.core.data.Position[] ends = railEnds.get(hex);
+			if (ends == null || ends[1] == null) {
+				return;
+			}
+			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+			o.addProperty("hex", hex);
+			o.addProperty("x1", ends[0].getX());
+			o.addProperty("y1", ends[0].getY());
+			o.addProperty("z1", ends[0].getZ());
+			o.addProperty("x2", ends[1].getX());
+			o.addProperty("y2", ends[1].getY());
+			o.addProperty("z2", ends[1].getZ());
+			rails.add(o);
+		});
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
 		root.add("nodes", nodes);
+		root.add("rails", rails);
 		return root;
 	}
 

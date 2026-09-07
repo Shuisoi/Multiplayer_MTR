@@ -35,6 +35,11 @@ public final class JsonReader extends ReaderBase {
 		iterateMap(value, map::put);
 	}
 
+	/** Whether the request body / document contains the given top-level key. */
+	public boolean has(String key) {
+		return map.containsKey(key);
+	}
+
 	private JsonReader(Object2ObjectArrayMap<String, JsonElement> map) {
 		this.map = map;
 	}
