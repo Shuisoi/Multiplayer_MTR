@@ -166,6 +166,61 @@
 	transform: translateX(0);
 }
 
+
+.mmtr-map-overlays-right {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 21;
+	pointer-events: none;
+}
+
+.mmtr-layer-switch {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	background: rgba(10, 12, 15, 0.92);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 6px;
+	padding: 6px 8px;
+	pointer-events: auto;
+}
+
+.mmtr-layer-switch-title {
+	color: #8b949c;
+	font-size: 10px;
+	letter-spacing: 0.22em;
+	text-align: center;
+}
+
+.mmtr-layer-switch .mmtr-chip {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, 0.25);
+	color: #9aa1aa;
+	border-radius: 3px;
+	font-size: 12px;
+	padding: 3px 14px;
+	cursor: pointer;
+	text-align: center;
+}
+
+.mmtr-layer-switch .mmtr-chip:hover {
+	color: #fff;
+	border-color: #fff;
+}
+
+.mmtr-layer-switch .mmtr-chip.on {
+	background: #ffffff;
+	border-color: #ffffff;
+	color: #0b0d10;
+	font-weight: 600;
+}
+
+.mmtr-layer-switch .mmtr-chip-reset {
+	border-color: #4a515a;
+	color: #cfd5db;
+}
+
 :host ::ng-deep .mmtr-drawer app-mmtr-ops-panel {
 	display: flex;
 	flex-direction: column;

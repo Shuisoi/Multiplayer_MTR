@@ -18,6 +18,15 @@
 		<div class="mmtr-map">
 			<app-map/>
 		</div>
+		<div class="mmtr-map-overlays-right">
+			<div class="mmtr-layer-switch">
+				<span class="mmtr-layer-switch-title">图层</span>
+				<button class="mmtr-chip" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">道岔</button>
+				<button class="mmtr-chip" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">线路</button>
+				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>
+				<button class="mmtr-chip mmtr-chip-reset" (click)="resetLayers()">重置</button>
+			</div>
+		</div>
 		<div class="mmtr-map-overlays">
 			<div class="mmtr-layer-chips">
 				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>

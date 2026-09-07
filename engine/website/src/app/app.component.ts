@@ -64,4 +64,13 @@ export class AppComponent {
 	protected toggleDrawer() {
 		this.drawerOpen.set(!this.drawerOpen());
 	}
+
+	/** Layer switches back to their defaults (all on, all lines visible, no focus). */
+	protected resetLayers() {
+		this.layersService.rails.set(true);
+		this.layersService.linesLayer.set(true);
+		this.layersService.points.set(true);
+		this.layersService.visibleLines.set([]);
+		this.layersService.focusedLine.set("");
+	}
 }
