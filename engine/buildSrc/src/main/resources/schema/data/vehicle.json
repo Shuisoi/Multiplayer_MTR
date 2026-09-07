@@ -152,6 +152,18 @@
 		"mmtrAirState": {
 			"type": "string",
 			"default": ""
+		},
+		"mmtrMotionMirror": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrRunTotalDistance": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrRunStopTarget": {
+			"type": "number",
+			"default": -1
 		}
 	}
 }

@@ -125,6 +125,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** applyMmtrControl() sequence; a changed sequence while stopped at a target = the driver's continue. */
 	private int mmtrControlApplySeq;
 	private int mmtrMotionArrivalControlSeq = -1;
+	/** Last client push for a waiting motion vehicle (1 s cadence keeps stopped mirrors corrected). */
+	private long mmtrMotionLastClientPushMillis;
 	/**
 	 * MMTR (L3): unmanned auto run (task/ATO foundation). While armed and a stop target is active,
 	 * the vehicle drives itself (cruise at the auto notch, service-brake envelope to the exact stop
@@ -335,7 +337,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrMotionStoppedAtTarget = false;
 			mmtrMotionStopOpenDoors = false;
 			mmtrMotionArrivalControlSeq = -1;
+			mmtrRunStopTarget = -1;
 			vehicleExtraData.closeDoors();
+			vehicleExtraData.mmtrMarkSyncDirty();
 		}
 	}
 
@@ -442,12 +446,22 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// segment+offset state machine; the legacy baked-path on-route/stopped/depot dispatch does not
 		// apply while engaged.
 		final boolean mmtrMotionMode = !isClientside && mmtrMotionWalker != null;
+		// Client mirrors of motion vehicles replay along the synced leg shadow: they must never treat
+		// the shadow end as a baked journey end - they hold at the armed stop target and at the shadow
+		// end (authority halt / end of line) until the next server update extends or re-arms the run.
+		if (mmtrMotionMirror && railProgress > 0) {
+			if (mmtrRunStopTarget >= 0 && railProgress >= mmtrRunStopTarget - 1e-3) {
+				speed = 0;
+			} else if (mmtrRunTotalDistance > 0 && railProgress >= mmtrRunTotalDistance - 1e-6) {
+				speed = 0;
+			}
+		}
 
 		if (mmtrMotionMode) {
 			simulateMmtrMotion(millisElapsed, vehiclePositions);
 			currentIndex = 0;
 		} else if (getIsOnRoute()) {
-			if (vehicleExtraData.getRepeatIndex2() == 0 && railProgress >= vehicleExtraData.getTotalDistance() - (vehicleExtraData.getRailLength() - vehicleExtraData.getTotalVehicleLength()) / 2) {
+			if (!mmtrMotionMirror && vehicleExtraData.getRepeatIndex2() == 0 && railProgress >= vehicleExtraData.getTotalDistance() - (vehicleExtraData.getRailLength() - vehicleExtraData.getTotalVehicleLength()) / 2) {
 				// If the route does not repeat infinitely and the vehicle is reaching the end
 				currentIndex = 0;
 				if (!isClientside) {
@@ -701,6 +715,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * slices; doors stay closed while running.
 	 */
 	private void simulateMmtrMotion(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		mmtrMotionMirror = true;
 		final ControlState control = mmtrActiveControl;
 		final boolean overridden = mmtrManualOverride && control != null;
 		final boolean wantPower = overridden && control.getReverser() > 0 && control.getThrottleNotch() > 0 && !(control.getBrakeNotch() > 0 || control.isEmergency());
@@ -720,6 +735,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrMotionStopTargetM = -1;
 				mmtrMotionStoppedAtTarget = false;
 				mmtrMotionArrivalControlSeq = -1;
+				mmtrRunStopTarget = -1;
+				vehicleExtraData.mmtrMarkSyncDirty();
 				System.out.println("[MMTR-DRV] motion departed stop target");
 			}
 			if (!isClientside) {
@@ -934,6 +951,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrMotionStopOpenDoors = openDoors;
 		mmtrMotionStoppedAtTarget = false;
 		mmtrMotionArrivalControlSeq = -1;
+		mmtrRunStopTarget = cumulativeDistanceM;
+		vehicleExtraData.mmtrMarkSyncDirty();
 		// Auto step-run: arming the next stop target while stopped = depart automatically (the task
 		// owns the dwell time and re-arms when it is done). Manual holds still need a fresh control.
 		if (mmtrMotionAuto && wasStoppedAtTarget && cumulativeDistanceM >= 0) {
@@ -996,19 +1015,30 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrMotionArrivalControlSeq = -1;
 		if (walker == null) {
 			railProgress = vehicleExtraData.getDefaultPosition();
+			mmtrMotionMirror = false;
+			mmtrRunTotalDistance = 0;
+			mmtrRunStopTarget = -1;
 		} else {
+			mmtrMotionMirror = true;
 			refreshMmtrMotionLegs();
 			mmtrMotionLegCount = walker.legCount();
 			railProgress = walker.distanceM();
 		}
 	}
 
-	/** Rebuild the motion leg shadow from the walker's recorded legs (cumulative PathData). */
+	/** Rebuild the motion leg shadow from the walker's recorded legs (cumulative PathData) and mirror it
+	 * into the synced VED path / run fields so client VehicleUpdates carry the rails this vehicle runs on. */
 	private void refreshMmtrMotionLegs() {
 		mmtrMotionLegs.clear();
 		if (mmtrMotionWalker != null) {
 			mmtrMotionLegs.addAll(mmtrMotionWalker.buildLegs());
 		}
+		vehicleExtraData.mmtrSetSyncPath(mmtrMotionLegs);
+		mmtrRunTotalDistance = mmtrMotionLegs.isEmpty() ? 0 : mmtrMotionLegs.get(mmtrMotionLegs.size() - 1).getEndDistance();
+		// The sync-path copy filter keeps segments up to the stopping point; a live run has no baked
+		// stop, so leave it far ahead so every client update carries the full leg shadow.
+		vehicleExtraData.setStoppingPoint(Double.MAX_VALUE / 4);
+		vehicleExtraData.mmtrMarkSyncDirty();
 	}
 
 	/** @return the uuid currently holding the MMTR explicit override, or {@code null} */
@@ -1444,28 +1474,63 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * shared vehiclePositions maps.
 	 */
 	private void writeMmtrMotionVehiclePositions(Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
-		if (vehiclePositions == null || mmtrMotionLegs.isEmpty() || !getIsOnRoute()) {
+		if (mmtrMotionLegs.isEmpty()) {
 			return;
 		}
-		int index = indexInMmtrMotionLegs(railProgress);
-		while (index >= 0) {
-			final PathData pathData = mmtrMotionLegs.get(index);
-			if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
-				break;
+		if (vehiclePositions != null && getIsOnRoute()) {
+			int index = indexInMmtrMotionLegs(railProgress);
+			while (index >= 0) {
+				final PathData pathData = mmtrMotionLegs.get(index);
+				if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
+					break;
+				}
+				if (index > 0) {
+					final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
+					if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
+						final Position position1 = pathData.getOrderedPosition1();
+						final Position position2 = pathData.getOrderedPosition2();
+						Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
+							final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+							newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
+							return newVehiclePosition;
+						}, Object2ObjectAVLTreeMap::new);
+					}
+				}
+				index--;
 			}
-			if (index > 0) {
-				final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
-				if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
+		}
+
+		// MMTR (L3): push this motion vehicle to nearby clients like the legacy path writer, so the
+		// car is visible in-game and the client mirror replays the rails it is actually running on
+		// (VED path synced to the leg shadow by refreshMmtrMotionLegs). Dirty changes push at once; a
+		// 1 s cadence also refreshes mirrors that are waiting (fork / stop target / line end).
+		if (siding != null && siding.area != null && data instanceof final Simulator simulator && !simulator.clients.isEmpty()) {
+			final boolean needsUpdate = vehicleExtraData.checkForUpdate();
+			final long now = data.getCurrentMillis();
+			final boolean forcePush = now - mmtrMotionLastClientPushMillis >= 1000;
+			if (needsUpdate || forcePush) {
+				final @Nullable Position[] minMaxPositions = {null, null};
+				int index = indexInMmtrMotionLegs(railProgress);
+				while (index >= 0) {
+					final PathData pathData = mmtrMotionLegs.get(index);
 					final Position position1 = pathData.getOrderedPosition1();
 					final Position position2 = pathData.getOrderedPosition2();
-					Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
-						final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
-						newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
-						return newVehiclePosition;
-					}, Object2ObjectAVLTreeMap::new);
+					minMaxPositions[0] = Position.getMin(minMaxPositions[0], Position.getMin(position1, position2));
+					minMaxPositions[1] = Position.getMax(minMaxPositions[1], Position.getMax(position1, position2));
+					if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
+						break;
+					}
+					index--;
 				}
+				simulator.clients.forEach(client -> {
+					final Position clientPosition = client.getPosition();
+					final double updateRadius = client.getUpdateRadius();
+					if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(clientPosition, updateRadius) : Utilities.isBetween(clientPosition, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
+						client.update(this, needsUpdate, 0);
+					}
+				});
+				mmtrMotionLastClientPushMillis = now;
 			}
-			index--;
 		}
 	}
 

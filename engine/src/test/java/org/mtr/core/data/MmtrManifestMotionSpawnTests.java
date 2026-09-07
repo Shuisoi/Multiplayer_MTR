@@ -82,6 +82,15 @@ public final class MmtrManifestMotionSpawnTests {
 		assertTrue(!vehicle.getIsOnRoute(), "spawned car is parked in the yard");
 		final double parkedProgress = vehicle.getRailProgress();
 
+		// Client mirror wire prep: the vehicle is marked as a motion mirror, carries the synced leg
+		// shadow as its updatable path and reports the run total - so VehicleUpdates can render and
+		// replay the live run client-side without the baked-journey end semantics.
+		final com.google.gson.JsonObject vehicleJson = org.mtr.core.tool.Utilities.getJsonObjectFromData(vehicle);
+		assertTrue(vehicleJson.get("mmtrMotionMirror") != null && vehicleJson.get("mmtrMotionMirror").getAsBoolean(), "motion mirror flag serialized");
+		assertTrue(vehicleJson.get("mmtrRunTotalDistance") != null && vehicleJson.get("mmtrRunTotalDistance").getAsDouble() > 0, "run total serialized");
+		final org.mtr.core.data.VehicleExtraData syncedCopy = vehicle.vehicleExtraData.copy(0);
+		assertTrue(syncedCopy.immutablePath.size() > 0, "synced VED path carries the motion leg shadow (" + syncedCopy.immutablePath.size() + " legs)");
+
 		// Drive with the existing cab control: throttle + forward reverser, like the game client keys.
 		final UUID driver = UUID.randomUUID();
 		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();

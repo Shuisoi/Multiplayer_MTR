@@ -247,6 +247,20 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 		return totalVehicleLength;
 	}
 
+	/**
+	 * MMTR (L3): replace the synced path list (serialized into client VehicleUpdates) with the live
+	 * Motion-Core leg shadow, so a motion vehicle's client mirror receives the rails it is running on.
+	 */
+	public void mmtrSetSyncPath(ObjectArrayList<PathData> legs) {
+		path.clear();
+		path.addAll(legs);
+	}
+
+	/** MMTR (L3): mark the vehicle dirty so the next tick pushes a client update (mirror refresh). */
+	public void mmtrMarkSyncDirty() {
+		hasRidingEntityUpdate = true;
+	}
+
 	public double getMaxManualSpeed() {
 		return maxManualSpeed;
 	}

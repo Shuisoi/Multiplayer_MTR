@@ -34,7 +34,7 @@
 | 实机测试-手动驾驶Motion车-步骤.md | 真实 dev 服务端手动驾驶验证步骤 + 待运行时确认清单 | 有效（按它做实机验收） |
 
 ## 过程记录（notes/，只增不改命名）
-- notes/01–25：按轮次的技术笔记/决策/回归证据。最近：25 = 实机修复（manifest 停场车改 motion 形态出生：legacy 车局限=库内终点循环开不出去；Siding 模板播种 motion 化 + MmtrManifestMotionSpawnTests，248/0/2）。
+- notes/01–26：按轮次的技术笔记/决策/回归证据。最近：26 = motion 车客户端镜像推送（schema mmtrMotionMirror/RunTotal/RunStop + VED 影子路径同步 + 周期推送 + 镜像不回库/停点夹持；MmtrManifestMotionSpawnTests 线上字段断言）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 仓库范围外（历史早期资料，未入库）
