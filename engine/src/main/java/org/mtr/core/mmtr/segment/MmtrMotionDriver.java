@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Data;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
+import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 
 /**
@@ -94,6 +95,21 @@ public final class MmtrMotionDriver {
 				speed = 0;
 			}
 		}
+	}
+
+	/**
+	 * Drives this consist with the engine's EXISTING drive control ({@link ControlState} — the same
+	 * object MmtrDriveControl already sends to a Vehicle): throttle/brake notches become Motion Core
+	 * accel/coast/brake, moving the train by (segment + offset) with forks decided live by authority.
+	 * Motion Core is the motion UNDERNEATH the existing cab control, not a new control system.
+	 */
+	public void applyControl(ControlState control, long dtMs, double accelMps2, double decelMps2, double maxMetersPerMs) {
+		if (control == null) {
+			return;
+		}
+		final boolean brake = control.getBrakeNotch() > 0 || control.isEmergency();
+		final boolean throttle = !brake && control.getThrottleNotch() > 0;
+		manualTick(dtMs, throttle, brake, accelMps2, decelMps2, maxMetersPerMs);
 	}
 
 	/** Drive until rest or {@code maxTicks} elapsed at the given cruise; returns whether it came to rest. */

@@ -340,4 +340,23 @@ public final class MmtrLiveRouterTests {
 		assertEquals(false, d.haltedAtAuthority(), "after the driver decides, the same train continues");
 		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex());
 	}
+
+	@Test
+	public void existingCabControlDrivesMotionCoreTrain() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), null);
+		// The engine's existing drive control (ControlState, as MmtrDriveControl sends it) drives this train.
+		final org.mtr.core.mmtr.ControlState throttle = new org.mtr.core.mmtr.ControlState().setThrottleNotch(1);
+		for (int i = 0; i < 400 && !d.stopped(); i++) {
+			d.applyControl(throttle, 100, 1e-6, 2e-6, 0.004);
+		}
+		assertEquals(true, d.stopped());
+		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex(), "existing ControlState throttle drives the Motion Core train across the fork");
+		// Brake control brings a fresh train to a stand before the fork if we never set it? Use emergency brake:
+		final MmtrMotionDriver d2 = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), new BranchStore(), null);
+		for (int i = 0; i < 200 && !d2.stopped(); i++) {
+			d2.applyControl(new org.mtr.core.mmtr.ControlState().setBrakeNotch(1), 100, 1e-6, 2e-6, 0.004);
+		}
+		assertEquals(false, d2.stopped(), "brake-only never moves the train");
+	}
 }
