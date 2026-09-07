@@ -285,4 +285,25 @@ public final class MmtrLiveRouterTests {
 		}
 		assertEquals(legs.get(legs.size() - 1).getEndDistance(), ved.immutablePath.get(ved.immutablePath.size() - 1).getEndDistance(), 1e-6);
 	}
+
+	// --- 自由开: a spawned train drives freely; at an unset fork it waits for the operator, then continues
+
+	@Test
+	public void generatedTrainFreelyDrivesAndOperatorDecidesAtFork() {
+		final Net n = new Net();
+		final BranchStore store = new BranchStore(); // shared, mutable: operator decides live
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), store, null);
+		// Drive freely: reaches the fork, nobody set it -> halts awaiting the operator (随便开, 到岔口你定).
+		final boolean rest1 = d.driveToRest(1000, 0.004, 60);
+		assertEquals(true, rest1);
+		assertEquals(true, d.haltedAtAuthority(), "free train halts at the unset fork, waiting for the operator");
+		assertEquals(20, d.walker.offsetM(), 1e-6);
+
+		// Operator now sets the branch (搬 0 走直) -> the same train continues freely.
+		store.set(n.node0.getX(), n.node0.getY(), n.node0.getZ(), n.rIn.getHexId(), 0);
+		final boolean rest2 = d.driveToRest(1000, 0.004, 60);
+		assertEquals(true, rest2);
+		assertEquals(false, d.haltedAtAuthority(), "once the operator decides, the train proceeds");
+		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex(), "train crossed the fork onto the straight branch after the operator decided");
+	}
 }

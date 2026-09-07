@@ -107,6 +107,9 @@ public final class MmtrMotionWalker {
 	 * is left unconsumed and the walker stops there.
 	 */
 	public void advance(double deltaM) {
+		// A halt at an unset fork is a "waiting for the operator/任务 to decide", not terminal: a fresh
+		// advance() re-attempts the node (自由开). End-of-line / target stay terminal.
+		haltedAtAuthority = false;
 		double remaining = Math.max(0, deltaM);
 		while (remaining > 0 && !haltedAtAuthority && !endOfLine && !atTarget) {
 			final double len = rail.railMath.getLength();

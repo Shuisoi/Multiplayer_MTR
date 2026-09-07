@@ -58,7 +58,9 @@ public final class MmtrMotionDriver {
 	 * boarded) the driver brakes to rest.
 	 */
 	public void tick(long dtMs, double cruiseMetersPerMillisecond) {
-		if (walker.atTarget() || walker.haltedAtAuthority() || walker.endOfLine()) {
+		// Terminal conditions only stop the consist. A halt at an unset fork (自由开) is re-attempted
+		// every tick so that once the operator/任务 sets the branch the same train simply continues.
+		if (walker.atTarget() || walker.endOfLine()) {
 			speed = 0;
 			return;
 		}

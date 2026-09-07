@@ -149,3 +149,8 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - 新增 createWithLegs(...)：可直接用 Motion Core 的 buildLegs() 轨序构造 VehicleExtraData（Vehicle 的运行路径载体），
   不拼三份烘焙缓存。测试：branch0 到 rBeyondA 的 legs(=3) 注入后 immutablePath 同长、累计距离单调。绿。
   下一步：在发车/任务处用 createWithLegs 生成"Motion Core 决定路线"的真实 Vehicle 并让其运行。
+## 22. 自由开（随便开）：岔口等你定、定后继续走
+- MmtrMotionWalker.advance()：在无权威岔口停下属"等操作者/任务决定"而非终态；新 advance 会重试节点。
+- MmtrMotionDriver.tick()：不再因 haltedAtAuthority 直接停，每 tick 重试；仍无权威则停、设岔后同车继续。
+- 测试 generatedTrainFreelyDrivesAndOperatorDecidesAtFork：生成的车自由开 -> 到未设岔口停下等 -> operator 设 0 -> 同车继续走直。
+  = 生成列车 + 随便开（到岔口你定）。
