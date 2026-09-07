@@ -99,3 +99,8 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
   覆盖陈旧 operator0 -> 到岔即 board target AT_TARGET。
 - 意义：这是 slice A 的解耦运动模型本体（段的 offset 状态 + 到节点按权威接续），在真实轨上端到端可跑可验，
   不依赖 Vehicle 预烘焙 path。接进 Vehicle.simulate（物理/停站/信号）仍属未做的 Vehicle 层工作。
+## 10. 会话续轮 #7：全量回归零新增失败（证据）
+- 全量 gradlew test：245 completed / 16 failed / 2 skipped。失败集与基线（216/16/2）完全一致，
+  仍是 DevWorld* + MmtrJobSchedulerTests 这 16 个真实场区/job 集成测试（进行中的 job 子系统自身）；
+  确定性核心（MiniWorld*/Mmtr*/Siding* 等）与全部 Motion Core 新增测试（MmtrSegmentMotionTests、
+  MmtrTurnoutRoutingTests、MmtrLiveRouterTests、DevWorldTurnoutFlipTests）全绿 => 我的改动零回归。
