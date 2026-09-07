@@ -60,6 +60,16 @@ public final class MmtrMotionWalker {
 		return ahead;
 	}
 
+	/** The node the train is moving away from (its entry point on the current rail). */
+	public Position enteredFromPosition() {
+		return enteredFrom;
+	}
+
+	/** Length of the current rail, m. */
+	public double currentRailLengthM() {
+		return rail.railMath.getLength();
+	}
+
 	public boolean haltedAtAuthority() {
 		return haltedAtAuthority;
 	}

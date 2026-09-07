@@ -133,3 +133,8 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 ## 17. 切片4 增量回归证据
 - 全量 gradlew test：245 completed / 13 failed / 2 skipped（新增 MmtrMotionDriver 4 用例 + DevWorldMotionWalk 1 用例，全绿）；
   13 失败仍全为既有 mmtr-job 子系统（最初基线即红）=> 切片4 增量为纯新增绿、无新增失败。
+## 18. 切片4：Motion Core 驱动车可直接以 MmtrMotionSnapshot 表示输出
+- MmtrMotionSnapshot.ofWalker(walker)：由 walker 当前轨几何填 segment 端点/offset，输出无 Vehicle、无烘焙 path 的
+  (segment,offset) 运动表示（引擎 map/ops 已用同一 DTO）。
+- DevWorldMotionWalkTests 新增：真实 -96 岔口把车开到 branch1 后，ofWalker 快照 segStart = -96 节点、offset=0。
+  编译 + 测试绿。

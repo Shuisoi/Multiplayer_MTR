@@ -78,6 +78,32 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		return out;
 	}
 
+	/**
+	 * Builds a decoupled (segment + offset) motion snapshot directly from a Motion Core walker — i.e.
+	 * from a consist being <em>driven by Motion Core</em>, with no Vehicle / no baked MTR path in the
+	 * loop. The segment endpoints come from the walker's current rail geometry; clients interpolate on
+	 * the same representation the engine already feeds the map/ops UI. This is the slice-4 seam that
+	 * lets a Motion-Core-driven consist be rendered/reported without any MTR VehicleExtraData path.
+	 */
+	public static MmtrMotionSnapshot ofWalker(org.mtr.core.mmtr.segment.MmtrMotionWalker walker) {
+		final MmtrMotionSnapshot out = new MmtrMotionSnapshot();
+		final org.mtr.core.data.Position start = walker.enteredFromPosition();
+		final org.mtr.core.data.Position end = walker.aheadNode();
+		if (start != null) {
+			out.segStartX = start.getX();
+			out.segStartZ = start.getZ();
+		}
+		if (end != null) {
+			out.segEndX = end.getX();
+			out.segEndZ = end.getZ();
+		}
+		out.segmentReversed = false;
+		out.segmentLengthM = walker.currentRailLengthM();
+		out.segmentOffsetM = Math.max(0, walker.offsetM());
+		out.moving = !walker.haltedAtAuthority() && !walker.atTarget() && !walker.endOfLine();
+		return out;
+	}
+
 	@Override
 	public void updateData(ReaderBase readerBase) {
 		vehicleId = readerBase.getString("vehicleId", "");

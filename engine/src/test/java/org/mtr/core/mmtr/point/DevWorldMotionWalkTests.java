@@ -71,6 +71,31 @@ public final class DevWorldMotionWalkTests {
 		assertEquals(sw.branch1Hex, d1.walker.railHex(), "搬1走岔 - consist must cross onto branch1 (diverging) real rail");
 	}
 
+	@Test
+	public void drivenConsistIsObservableViaMotionSnapshot() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(DEV_MTR_ROOT), "dev world save not present - skipping");
+		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, DEV_MTR_ROOT, false);
+		final ObjectArrayList<MmtrSwitch> all = MmtrPointRegistry.discover(sim);
+		MmtrSwitch sw = null;
+		for (final MmtrSwitch s : all) { if (s.nodeX == NX && s.nodeY == NY && s.nodeZ == NZ) { sw = s; break; } }
+		org.junit.jupiter.api.Assumptions.assumeTrue(sw != null, "no turnout at -96");
+		final Position node = new Position(NX, NY, NZ);
+		final Rail via = findRailByHex(sim, sw.viaRailHex);
+		final Position startPos = otherEnd(sim, node, via);
+		org.junit.jupiter.api.Assumptions.assumeTrue(startPos != null, "via rail has far end");
+		final BranchStore b1 = new BranchStore();
+		b1.set(NX, NY, NZ, via.getHexId(), 1);
+		final MmtrMotionDriver d = MmtrMotionDriver.start(sim, via, startPos, b1, sw.branch1Hex);
+		d.driveToRest(1000, 0.004, 200);
+		assertTrue(d.atTarget(), "consist should have driven onto branch1");
+
+		// The driven consist is observable in the decoupled motion representation, no MTR Vehicle path.
+		final org.mtr.core.mmtr.MmtrMotionSnapshot snap = org.mtr.core.mmtr.MmtrMotionSnapshot.ofWalker(d.walker);
+		assertEquals(NX, Math.round(snap.segStartX), "snapshot segment starts at the -96 node where branch1 was boarded");
+		assertTrue(snap.segEndX != snap.segStartX || snap.segEndZ != snap.segStartZ, "snapshot must report a concrete rail segment");
+		assertEquals(0.0, snap.segmentOffsetM, 1e-6, "just boarded branch1 -> offset 0");
+	}
+
 	private static Rail findRailByHex(Simulator sim, String hex) {
 		final Rail[] found = {null};
 		sim.positionsToRail.forEach((pos, neigh) -> neigh.forEach((q, rail) -> { if (found[0] == null && rail.getHexId().equals(hex)) { found[0] = rail; } }));
