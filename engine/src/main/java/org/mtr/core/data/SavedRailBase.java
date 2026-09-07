@@ -32,6 +32,15 @@ public abstract class SavedRailBase<T extends SavedRailBase<T, U>, U extends Are
 		super(DataFixer.convertSavedRailBase(readerBase), data);
 	}
 
+	/**
+	 * MMTR (L3): the real rail from the graph spanning this saved rail's two endpoints, when drawn.
+	 * Platform/siding stops resolve to their physical rail through this (used by MmtrRunPlanner).
+	 */
+	@Nullable
+	public Rail mmtrGraphRail() {
+		return Data.tryGet(data.positionsToRail, position1, position2);
+	}
+
 	@Override
 	public boolean isValid() {
 		return true;

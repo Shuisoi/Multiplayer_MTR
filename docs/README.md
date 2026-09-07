@@ -34,7 +34,7 @@
 | 实机测试-手动驾驶Motion车-步骤.md | 真实 dev 服务端手动驾驶验证步骤 + 待运行时确认清单 | 有效（按它做实机验收） |
 
 ## 过程记录（notes/，只增不改命名）
-- notes/01–19：按轮次的技术笔记/决策/回归证据。最近：19 = L3 slice-6（MmtrRunPlanner 进路规划服务：BFS 进路 + 沿途岔口预置 + walker 空间停点换算，MOVE_TO 底座；MmtrRunPlannerTests 3 例）。
+- notes/01–20：按轮次的技术笔记/决策/回归证据。最近：20 = L3 slice-7（任务驱动 motion 车闭环：MmtrMissionControl 派发 AUTOPILOT 任务 → planner 规划/岔口预置/auto 武装 → 平台轨精确停稳 AT_TARGET 门开 → 终态交回 idle；MmtrMotionMissionTests 2 例）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 仓库范围外（历史早期资料，未入库）

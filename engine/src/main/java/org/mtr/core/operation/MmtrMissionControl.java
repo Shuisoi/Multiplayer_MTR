@@ -1,7 +1,9 @@
 package org.mtr.core.operation;
 
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.Rail;
 import org.mtr.core.mmtr.MmtrMission;
+import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.serializer.SerializedDataBase;
 import org.mtr.core.serializer.WriterBase;
@@ -67,18 +69,61 @@ public final class MmtrMissionControl implements SerializedDataBase {
 			if (vehicle.getId() != vehicleId || dispatched[0]) {
 				return;
 			}
+			final boolean motionVehicle = vehicle.isMmtrMotion();
+			// Motion-mode vehicles run their mission through the live Motion Core: resolve the target
+			// rail (platform/siding id) and plan the run BEFORE attaching; without a feasible plan the
+			// dispatch is refused.
+			MmtrRunPlanner.Plan motionPlan = null;
+			if (motionVehicle && parsedExecutor == MmtrMission.Executor.AUTOPILOT) {
+				final Rail targetRail = findTargetRail(simulator, targetSidingId);
+				if (targetRail == null || vehicle.getMmtrMotionWalker() != null && targetRail.getHexId().equals(vehicle.getMmtrMotionWalker().railHex())) {
+					return; // unresolvable target / already on it -> refuse
+				}
+				motionPlan = MmtrRunPlanner.planToRail(simulator, vehicle, targetRail.getHexId(), 1.0);
+				if (!motionPlan.feasible) {
+					return; // route planning failed -> refuse
+				}
+			}
 			final MmtrMission mission = new MmtrMission(vehicle.getId(), parsedKind, siding.getId(), targetSidingId, System.currentTimeMillis());
 			mission.setExecutor(parsedExecutor, playerUuid);
 			if (!vehicle.setMmtrMission(mission)) {
 				return;
 			}
 			if (parsedExecutor == MmtrMission.Executor.AUTOPILOT && startNow) {
-				// Headless mission drive: engage the manual seam so the train actually moves.
-				vehicle.engageMissionAutopilot();
+				if (motionVehicle && motionPlan != null) {
+					// Headless motion mission: plan presets into the authoritative turnout store, then arm
+					// the auto step-run to the planned stop (doors for passenger service). The vehicle's
+					// mission state machine observes arrival and completes after the dwell.
+					MmtrRunPlanner.applyForkOps(motionPlan, simulator.mmtrPointBranches);
+					vehicle.setMmtrMotionAuto(true);
+					vehicle.setMmtrMotionStopTarget(motionPlan.stopCumulativeM, parsedKind == MmtrMission.Kind.PASSENGER);
+					System.out.println("[MMTR-MSG] motion mission " + parsedKind + " armed to rail " + motionPlan.targetRailHex + " stop @" + Math.round(motionPlan.stopCumulativeM) + "m");
+				} else if (!motionVehicle) {
+					// Headless mission drive: engage the manual seam so the train actually moves.
+					vehicle.engageMissionAutopilot();
+				}
 			}
 			dispatched[0] = true;
 		}));
 		return dispatched[0];
+	}
+
+	/** The real rail of the platform/siding with the given id (its drawn graph rail), if any. */
+	private static Rail findTargetRail(Simulator simulator, long targetSidingId) {
+		final Rail[] found = {null};
+		simulator.sidings.forEach(siding -> {
+			if (found[0] == null && siding.getId() == targetSidingId) {
+				found[0] = siding.mmtrGraphRail();
+			}
+		});
+		if (found[0] == null) {
+			simulator.platforms.forEach(platform -> {
+				if (found[0] == null && platform.getId() == targetSidingId) {
+					found[0] = platform.mmtrGraphRail();
+				}
+			});
+		}
+		return found[0];
 	}
 
 	private static long parseId(ReaderBase readerBase, String key) {

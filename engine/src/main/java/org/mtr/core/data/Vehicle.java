@@ -287,6 +287,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		final MmtrMission mission = mmtrMission;
+		final boolean motionMission = mmtrMotionWalker != null;
 		switch (mission.getState()) {
 			case ASSIGNED:
 				// The consist started moving (left the depot / began its run) => dispatched.
@@ -295,13 +296,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 				break;
 			case DISPATCHED:
-				if (isStoppedAtMissionTarget()) {
+				// Motion-mode missions arrive when the armed stop target is reached exactly;
+				// legacy-path missions use their path/platform stop semantics.
+				if (motionMission ? isMmtrMotionStoppedAtTarget() : isStoppedAtMissionTarget()) {
 					mission.atTarget();
 					mmtrMissionTargetArrivedMillis = data.getCurrentMillis();
-					// An AUTOPILOT mission drives headlessly: release the throttle on arrival so the
-					// consist settles at the target (platform dwell or depot terminal) instead of
-					// re-departing on the repeating depot path.
-					if (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed()) {
+					if (!motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed()) {
+						// An AUTOPILOT mission drives headlessly: release the throttle on arrival so the
+						// consist settles at the target (platform dwell or depot terminal) instead of
+						// re-departing on the repeating depot path.
 						vehicleExtraData.setPowerLevel(0);
 					}
 				}
@@ -314,6 +317,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				break;
 			default:
 				break;
+		}
+		// A terminal motion mission (complete / failed / canceled) hands the vehicle back to idle:
+		// auto run off, stop target cleared, doors closed - the consist rests where it is.
+		if (motionMission && mission.isTerminal()) {
+			mmtrMotionAuto = false;
+			mmtrMotionStopTargetM = -1;
+			mmtrMotionStoppedAtTarget = false;
+			mmtrMotionStopOpenDoors = false;
+			mmtrMotionArrivalControlSeq = -1;
+			vehicleExtraData.closeDoors();
 		}
 	}
 
@@ -454,7 +467,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// MMTR: keep the mission alive. An AUTOPILOT mission on a manual-allowed consist is
 			// driven headlessly (refresh the manual seam so it never times out), then the mission
 			// state machine advances from observed train state (moved / at target / dwell done).
-			if (mmtrMission != null && !mmtrMission.isTerminal() && mmtrMission.getState() != MmtrMission.State.AT_TARGET && mmtrMission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed()) {
+			// Motion-mode missions run through the auto step-run instead - no legacy manual seam.
+			if (mmtrMission != null && !mmtrMission.isTerminal() && mmtrMission.getState() != MmtrMission.State.AT_TARGET && mmtrMission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed() && mmtrMotionWalker == null) {
 				engageMissionAutopilot();
 			}
 			mmtrMissionTick();
