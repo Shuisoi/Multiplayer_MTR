@@ -467,19 +467,6 @@ public final class Siding extends SidingSchema implements Utilities {
 		return !pathMainRouteToSiding.isEmpty();
 	}
 
-	/** MMTR L1 dynamic routing: read-only snapshots of the generated legs (outbound to main / main route / return to this siding). */
-	public ObjectArrayList<PathData> copyOutboundLegs() {
-		return new ObjectArrayList<>(pathSidingToMainRoute);
-	}
-
-	public ObjectArrayList<PathData> copyRouteLegs() {
-		return new ObjectArrayList<>(pathMainRoute);
-	}
-
-	public ObjectArrayList<PathData> copyReturnLegs() {
-		return new ObjectArrayList<>(pathMainRouteToSiding);
-	}
-
 	public void startGeneratingDepartures() {
 		departures.clear();
 		tempReturnTimes.clear();

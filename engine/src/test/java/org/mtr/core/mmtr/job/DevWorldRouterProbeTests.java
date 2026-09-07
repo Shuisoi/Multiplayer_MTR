@@ -26,8 +26,5 @@ public final class DevWorldRouterProbeTests {
 		} });
 		assertTrue(MmtrMotionRouter.canReachSiding(sim, SIDING_1, SIDING_2), "siding 1 must be able to plan a leg to siding 2");
 		assertTrue(MmtrMotionRouter.canReachSiding(sim, SIDING_2, SIDING_1), "siding 2 must be able to plan a leg to siding 1");
-		final MmtrMotionRouter.MmtrMotionPlan plan12 = MmtrMotionRouter.buildLegPlan(sim, SIDING_1, SIDING_2);
-		assertTrue(plan12.legs.size() > 0, "leg plan 1->2 must contain legs on the real yard");
-		assertTrue(plan12.totalLength() > 0, "leg plan 1->2 must have positive length");
 	}
 }

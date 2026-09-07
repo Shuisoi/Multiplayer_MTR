@@ -62,3 +62,27 @@
 ## 7. 诚实状态
 - 已完成并验证：第 3 节解耦内核（路由 + 决策 + 段状态 + 真实轨图验证）。
 - 未完成（主体）：第 4 节 M1/M2/M3 —— 把内核接进 running Vehicle（改 1292 行 Vehicle 的运动路径，高风险 L3 级）。真实 -96/-95 岔口翻转的【决策层】已验证（f6cec64）；车实际沿该轨运动的验证需 M1 接线完成。
+---
+## 8. 删除与迁移策略（清理旧系统，无需并行可用）
+
+> 目标：Motion Core 成为唯一运动系统；被其取代的旧路径化/缓存化机制逐步删除，不再保留并行可用。
+> 每步以「删除 -> 更新调用方/测试 -> 编译+可验」推进。
+
+### 8.1 第一步（已完成，编译可验）：删除死代码腿装配
+- 移除 MmtrMotionRouter.MmtrMotionPlan 与 buildLegPlan（基于每股道 path 缓存的腿装配，主流程并未真正用来开车，仅测试/探针引用）。
+- 移除 Siding.copyOutboundLegs / copyRouteLegs / copyReturnLegs（仅为该腿装配提供缓存快照）。
+- 保留 MmtrMotionRouter.canReachSiding + Siding.hasPathToMainRoute / hasReturnFromMainRoute（仍被旧 relocation 当可达性门引用，下一步处理）。
+- 更新 MmtrJobSchedulerTests.motionRouterReachabilityBasics 与 DevWorldRouterProbeTests 去掉 buildLegPlan 断言。
+
+### 8.2 后续切片（按序，每步可验）
+- 切片2：移除旧 relocation 的可达性门（MmtrMotionRouter.canReachSiding + Siding 的两条 has* 缓存判断），
+  由 Motion Core 用真实轨道图的可达/路由（MmtrLiveRouter）取代；同时处理 MmtrJobScheduler 的
+  arrivalMergeConsist / relocateParkedConsist 等旧"重生搬运"流程。
+- 切片3：mmtr-job 旧 job/relocation 子系统（rebirth、path 缓存、其 16 个失败测试）整体退役删除，
+  任务按 Motion Core 路由执行。
+- 切片4（引擎 Vehicle 层）：把预烘焙 pathData 运动（Depot.generateRoute / Siding.generateRoute ->
+  VehicleExtraData.immutablePath）换成 Motion Core 驱动（MmtrMotionWalker 逐 tick + 权威决策），删除旧机制。
+
+### 8.3 每步验收
+删除后 engine compileJava/compileTestJava 通过；Motion Core 确定性测试（MmtrSegmentMotionTests /
+MmtrTurnoutRoutingTests / MmtrLiveRouterTests / DevWorldTurnoutFlipTests）仍绿；不再保留被删旧系统。

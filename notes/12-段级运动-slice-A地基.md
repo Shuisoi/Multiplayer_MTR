@@ -104,3 +104,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
   仍是 DevWorld* + MmtrJobSchedulerTests 这 16 个真实场区/job 集成测试（进行中的 job 子系统自身）；
   确定性核心（MiniWorld*/Mmtr*/Siding* 等）与全部 Motion Core 新增测试（MmtrSegmentMotionTests、
   MmtrTurnoutRoutingTests、MmtrLiveRouterTests、DevWorldTurnoutFlipTests）全绿 => 我的改动零回归。
+## 11. 会话续轮（用户拍板 A + 清理旧系统）：删除切片 #1
+- 用户：A（独立 Motion Core 作为交付）+ 直接清理被 Motion Core 取代的旧系统、无需并行可用。
+- 已删：MmtrMotionRouter.MmtrMotionPlan/buildLegPlan + Siding.copy*Legs（死代码/仅测试用），
+  并更新 MmtrJobSchedulerTests / DevWorldRouterProbeTests。engine compileJava/compileTestJava 通过。
