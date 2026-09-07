@@ -145,3 +145,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - MmtrMotionWalker 记录其跨过的每段，buildLegs() 产出有序、累计距离、Vehicle 可跑的 PathData 轨序
   （路线由 Motion Core 逐段选，非烘焙）。真实 -96 测试：到 branch1 后 legs 覆盖 via+branch1，末段 endDistance 正确。
   这是让 Vehicle 路径来源换成 Motion Core 的第一块真实代码。
+## 21. Vehicle 本体接线 T2：VehicleExtraData.createWithLegs()
+- 新增 createWithLegs(...)：可直接用 Motion Core 的 buildLegs() 轨序构造 VehicleExtraData（Vehicle 的运行路径载体），
+  不拼三份烘焙缓存。测试：branch0 到 rBeyondA 的 legs(=3) 注入后 immutablePath 同长、累计距离单调。绿。
+  下一步：在发车/任务处用 createWithLegs 生成"Motion Core 决定路线"的真实 Vehicle 并让其运行。

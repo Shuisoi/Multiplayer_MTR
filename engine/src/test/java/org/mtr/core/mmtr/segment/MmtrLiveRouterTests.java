@@ -263,4 +263,26 @@ public final class MmtrLiveRouterTests {
 		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex());
 	}
 
+
+	@Test
+	public void vehiclePathComesFromMotionCoreLegs() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), n.rBeyondA.getHexId());
+		d.driveToRest(1000, 0.004, 60);
+		assertEquals(true, d.atTarget());
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.PathData> legs = d.walker.buildLegs();
+		assertEquals(3, legs.size(), "via + straight + beyondA legs");
+
+		// A real Vehicle's path carrier can be built straight from the Motion Core legs.
+		final org.mtr.core.data.VehicleExtraData ved = org.mtr.core.data.VehicleExtraData.createWithLegs(
+			1L, n.node0.getX(), 10, new it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.VehicleCar>(),
+			legs, 0.0008, 0.0008, true, 20, 30000L);
+		assertEquals(3, ved.immutablePath.size(), "Vehicle path == Motion Core legs count");
+		double prev = -1;
+		for (final org.mtr.core.data.PathData pd : ved.immutablePath) {
+			assertEquals(true, pd.getEndDistance() > prev, "cumulative distance must increase");
+			prev = pd.getEndDistance();
+		}
+		assertEquals(legs.get(legs.size() - 1).getEndDistance(), ved.immutablePath.get(ved.immutablePath.size() - 1).getEndDistance(), 1e-6);
+	}
 }

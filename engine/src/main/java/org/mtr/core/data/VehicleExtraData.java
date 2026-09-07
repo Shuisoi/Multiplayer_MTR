@@ -446,6 +446,28 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 		return ridingEntities.stream().anyMatch(vehicleRidingEntity -> vehicleRidingEntity.uuid.equals(uuid));
 	}
 
+	/**
+	 * T2 (Motion Core adoption): builds a {@link VehicleExtraData} whose running path is supplied
+	 * directly as an ordered, cumulative leg list (e.g. {@code MmtrMotionWalker.buildLegs()} — a route
+	 * Motion Core decided segment by segment by turnout authority) instead of assembling the path from
+	 * the pre-baked per-siding caches ({@code pathSidingToMainRoute/pathMainRoute/pathMainRouteToSiding}).
+	 * A real {@code Vehicle} constructed with this runs exactly the Motion-Core-chosen rails.
+	 */
+	public static VehicleExtraData createWithLegs(
+		long depotId, long sidingId, double railLength, ObjectArrayList<VehicleCar> vehicleCars, ObjectArrayList<PathData> legs,
+		double acceleration, double deceleration, boolean isManualAllowed, double maxManualSpeed, long manualToAutomaticTime
+	) {
+		final ObjectArrayList<PathData> path = legs == null ? new ObjectArrayList<>() : new ObjectArrayList<>(legs);
+		final double newRailLength = Siding.getRailLength(railLength);
+		final double newTotalVehicleLength = Siding.getTotalVehicleLength(vehicleCars);
+		final double totalDistance = path.isEmpty() ? 0 : org.mtr.core.tool.Utilities.getElement(path, -1).getEndDistance();
+		final double defaultPosition = (newRailLength + newTotalVehicleLength) / 2;
+		return new VehicleExtraData(depotId, sidingId, newRailLength, newTotalVehicleLength, 0, 0,
+			Siding.roundAcceleration(acceleration), Siding.roundAcceleration(deceleration), isManualAllowed,
+			Math.max(org.mtr.core.tool.Utilities.kilometersPerHourToMetersPerMillisecond(1), maxManualSpeed),
+			manualToAutomaticTime, totalDistance, defaultPosition, vehicleCars, path);
+	}
+
 	public static VehicleExtraData create(
 		long depotId, long sidingId, double railLength, ObjectArrayList<VehicleCar> vehicleCars,
 		ObjectArrayList<PathData> pathSidingToMainRoute, ObjectArrayList<PathData> pathMainRoute, ObjectArrayList<PathData> pathMainRouteToSiding, PathData defaultPathData,
