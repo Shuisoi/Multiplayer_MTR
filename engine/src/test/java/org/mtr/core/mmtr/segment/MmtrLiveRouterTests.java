@@ -173,4 +173,51 @@ public final class MmtrLiveRouterTests {
 		assertEquals(0, p.offsetM, 1e-6);
 	}
 
+
+	// --- MmtrMotionWalker: resumable per-tick (segment,offset) engine over a live route ---
+
+	@Test
+	public void walkResumesMidRailThenCrossesByAuthority() {
+		final Net n = new Net();
+		final MmtrMotionWalker w = MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), null);
+		w.advance(5); // mid-approach
+		assertEquals(n.rIn.getHexId(), w.railHex());
+		assertEquals(5, w.offsetM(), 1e-6);
+		// Continue 18m: 15m to node0 + 3m onto the elected straight rail.
+		w.advance(18);
+		assertEquals(false, w.haltedAtAuthority());
+		assertEquals(n.rStraight.getHexId(), w.railHex(), "crossed the fork onto the straight branch");
+		assertEquals(3, w.offsetM(), 1e-6);
+	}
+
+	@Test
+	public void walkHaltsAtUnsetForkAwaitingAuthority() {
+		final Net n = new Net();
+		final MmtrMotionWalker w = MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), new BranchStore(), null);
+		w.advance(25);
+		assertEquals(true, w.haltedAtAuthority());
+		assertEquals(n.rIn.getHexId(), w.railHex());
+		assertEquals(20, w.offsetM(), 1e-6, "stopped at the far end of the approach rail, before the unset fork");
+	}
+
+	@Test
+	public void walkFollowsDivergeWhenFlipped() {
+		final Net n = new Net();
+		final MmtrMotionWalker w = MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch1(), null);
+		w.advance(22); // 20m approach + 2m onto the diverging rail
+		assertEquals(false, w.haltedAtAuthority());
+		assertEquals(n.rDiverge.getHexId(), w.railHex(), "flipped turnout -> train crossed onto the diverging branch");
+		assertEquals(2, w.offsetM(), 1e-6);
+	}
+
+	@Test
+	public void walkStopsWhenTargetRailBoarded() {
+		final Net n = new Net();
+		final MmtrMotionWalker w = MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), n.rBeyondA.getHexId());
+		w.advance(45);
+		assertEquals(true, w.atTarget());
+		assertEquals(n.rBeyondA.getHexId(), w.railHex());
+		assertEquals(0, w.offsetM(), 1e-6);
+	}
+
 }
