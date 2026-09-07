@@ -161,7 +161,7 @@ public final class MmtrRunPlanner {
 			final Rail desired = plan.nodes.get(i + 1).equals(farEnd) ? target : prev.get(plan.nodes.get(i + 1)).rail;
 			final ObjectArrayList<Rail> forwards = forwardRails(sim, node, incoming);
 			if (forwards.size() >= 2) {
-				final int op = branchOperator(sim, approach, node, forwards, desired);
+				final int op = branchOperator(sim, approach, node, incoming, forwards, desired);
 				if (op < 0) {
 					plan.reason = "turnout at node requires a branch outside the walker's branch0/1 choice";
 					return plan;
@@ -223,39 +223,18 @@ public final class MmtrRunPlanner {
 		return out;
 	}
 
-	/** -1 when the desired next rail is not the walker's branch0/branch1 choice at this node. */
-	private static int branchOperator(Simulator sim, Position approachNode, Position forkNode, ObjectArrayList<Rail> forwards, Rail desired) {
-		final double ax = forkNode.getX() - approachNode.getX();
-		final double az = forkNode.getZ() - approachNode.getZ();
-		final double[] cos = new double[forwards.size()];
-		for (int i = 0; i < forwards.size(); i++) {
-			final Position other = otherEndOf(sim, forkNode, forwards.get(i));
-			if (other == null) {
-				return -1;
+	/** Index of the desired next rail in the direction-ordered fork legs (same ordering the
+	 * walker's electAtFork uses at runtime), or -1 when desired is not a candidate leg. */
+	private static int branchOperator(Simulator sim, Position approachNode, Position forkNode, Rail incoming, ObjectArrayList<Rail> forwards, Rail desired) {
+		final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(forkNode);
+		if (neighbors == null || incoming == null || desired == null) {
+			return -1;
+		}
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(forkNode, approachNode, incoming, neighbors);
+		for (int i = 0; i < legs.size(); i++) {
+			if (legs.get(i).railHex.equals(desired.getHexId())) {
+				return i;
 			}
-			final double bx = other.getX() - forkNode.getX();
-			final double bz = other.getZ() - forkNode.getZ();
-			final double la = Math.sqrt(ax * ax + az * az);
-			final double lb = Math.sqrt(bx * bx + bz * bz);
-			cos[i] = la == 0 || lb == 0 ? -2 : (ax * bx + az * bz) / (la * lb);
-		}
-		int b0 = 0;
-		for (int i = 1; i < cos.length; i++) {
-			if (cos[i] > cos[b0]) {
-				b0 = i;
-			}
-		}
-		int b1 = b0 == 0 ? 1 : 0;
-		for (int i = 0; i < cos.length; i++) {
-			if (i != b0 && cos[i] > cos[b1]) {
-				b1 = i;
-			}
-		}
-		if (forwards.get(b0) == desired) {
-			return 0;
-		}
-		if (forwards.get(b1) == desired) {
-			return 1;
 		}
 		return -1;
 	}

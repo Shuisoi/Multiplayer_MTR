@@ -28,8 +28,15 @@ public final class MmtrPointRegistry {
 	public static final class BranchStore {
 		public final Map<String, Integer> branches = new HashMap<>();
 
+		/** Stores the raw operator index (0..legs-1 under the direction-aware ordering, legacy 0/1
+		 * on two-leg forks); never auto, and never masked to 1 so multi-leg junctions can express
+		 * every ordered leg. Negative inputs are refused (treated as unset by {@link #contains}). */
 		public void set(long x, long y, long z, String viaRailHex, int branch) {
-			branches.put(key(x, y, z, viaRailHex), branch & 1);
+			if (branch < 0) {
+				branches.remove(key(x, y, z, viaRailHex));
+			} else {
+				branches.put(key(x, y, z, viaRailHex), branch);
+			}
 		}
 
 		/** True when an operator explicitly set this turnout branch (distinguishes "0" from unset). */

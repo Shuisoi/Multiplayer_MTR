@@ -139,6 +139,96 @@ public final class MmtrRunPlannerTests {
 		assertEquals(0, v.getSpeed(), 1e-9, "resting at the planned stop");
 	}
 
+
+	/**
+	 * P3 TEE mainline: the yard rail runs straight into the mouth node at (0,0,0) where the line
+	 * continues ONLY at 90 degrees - rL along +Z, rR along -Z, no straight continuation. Both
+	 * continuations have the same cosine (0): legacy top-2 ordering could not express them
+	 * deterministically. The planner must map them onto the ordered legs (0 = left, 1 = right) and
+	 * the preset must drive the auto run onto the exact planned rail.
+	 */
+	private static final class TeeNet {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-run-planner-tee"), false);
+		final Position yardBack = new Position(-12, 0, 0);
+		final Position node = new Position(0, 0, 0);
+		final Rail yardRail = Rail.newSidingRail(yardBack, Angle.fromAngle(0), node, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Rail rL = newZ(node, new Position(0, 0, 30)); // +Z (left of an eastbound approach)
+		final Rail rR = newZ(node, new Position(0, 0, -30)); // -Z (right)
+		final Depot depot = new Depot(TransportMode.TRAIN, sim);
+		final Siding siding = new Siding(yardBack, node, 12, TransportMode.TRAIN, sim);
+		final BranchStore store = new BranchStore();
+
+		private static Rail newZ(Position p1, Position p2) {
+			final boolean plus = p2.getZ() > p1.getZ();
+			return Rail.newRail(p1, plus ? Angle.fromAngle(90) : Angle.fromAngle(270), p2, plus ? Angle.fromAngle(270) : Angle.fromAngle(90), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+				80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		}
+
+		TeeNet() {
+			depot.setName("Yard");
+			depot.setCorners(new Position(-20, -5, -5), new Position(0, 5, 5));
+			sim.rails.add(yardRail);
+			sim.rails.add(rL);
+			sim.rails.add(rR);
+			sim.depots.add(depot);
+			sim.sidings.add(siding);
+			final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+			cars.add(new VehicleCar("probe", 2, 1, 10, 0, 1, 0.1, 0.1));
+			siding.setVehicleCars(cars);
+			sim.mmtrConsistTypes = ConsistTypeRegistry.parse(CONSIST_JSON);
+			sim.mmtrDefaultConsistTypeId = "emu";
+			sim.sync();
+			assertTrue(depot.savedRails.contains(siding), "siding must attach to the depot yard");
+			siding.tick();
+		}
+
+		Vehicle spawn() {
+			final MmtrMotionWalker walker = siding.mmtrMotionWalkerFromYard(null, store, null);
+			assertNotNull(walker, "yard walker must resolve");
+			final Vehicle vehicle = siding.spawnMmtrMotionVehicle(walker);
+			assertNotNull(vehicle, "motion seam must spawn");
+			return vehicle;
+		}
+	}
+
+	@Test
+	public void plannerPresetsTeeJunctionLegIndexesFromOrderedLegs() {
+		final TeeNet n = new TeeNet();
+		final Vehicle v = n.spawn();
+
+		final MmtrRunPlanner.Plan left = MmtrRunPlanner.planToRail(n.sim, v, n.rL.getHexId(), 0.5);
+		assertTrue(left.feasible, "plan onto the left TEE leg must be feasible: " + left.reason);
+		assertEquals(1, left.forkOps.size(), "one en-route turnout (the yard mouth)");
+		assertEquals("0", left.forkOps.get(0)[4], "the +Z leg is ordered leg 0 (left of the approach)");
+
+		final MmtrRunPlanner.Plan right = MmtrRunPlanner.planToRail(n.sim, v, n.rR.getHexId(), 0.5);
+		assertTrue(right.feasible, "plan onto the right TEE leg must be feasible: " + right.reason);
+		assertEquals("1", right.forkOps.get(0)[4], "the -Z leg is ordered leg 1 (right)");
+	}
+
+	@Test
+	public void plannerDrivesAutoRunThroughTeeOntoPlannedLeg() {
+		final TeeNet n = new TeeNet();
+		final Vehicle v = n.spawn();
+		final double fraction = 0.5;
+
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(n.sim, v, n.rL.getHexId(), fraction);
+		assertTrue(plan.feasible, "plan through the TEE must be feasible: " + plan.reason);
+		final double expectedStop = v.getMmtrMotionWalker().distanceM()
+			+ (n.yardRail.railMath.getLength() - v.getMmtrMotionWalker().offsetM())
+			+ fraction * n.rL.railMath.getLength();
+		assertEquals(expectedStop, plan.stopCumulativeM, 1e-6, "stop distance in walker space");
+
+		MmtrRunPlanner.applyForkOps(plan, n.store);
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(plan.stopCumulativeM, true);
+		tickUntil(n.siding, v::isMmtrMotionStoppedAtTarget, 3000);
+		assertEquals(plan.stopCumulativeM, v.getRailProgress(), 0.05, "auto run stopped exactly at the planned stop");
+		assertEquals(n.rL.getHexId(), v.getMmtrMotionWalker().railHex(), "vehicle turned onto the planned +Z leg at the TEE");
+		assertTrue(v.vehicleExtraData.getDoorMultiplier() > 0, "stop opened doors");
+		assertFalse(v.isMmtrManualOverride(), "planner-driven run needed no driver");
+	}
+
 	@Test
 	public void plannerReportsInfeasibleCases() {
 		final Net n = new Net();

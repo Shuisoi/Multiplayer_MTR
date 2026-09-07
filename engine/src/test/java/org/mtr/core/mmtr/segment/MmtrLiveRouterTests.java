@@ -36,6 +36,14 @@ public final class MmtrLiveRouterTests {
 			80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
+	// Perpendicular rail with matching tangents (90/270): an x-axis helper with 0/180 tangents would
+	// collapse into a zero-length rail, so vertical continuations must carry their own tangents.
+	private static Rail railZ(Position p1, Position p2) {
+		final boolean plus = p2.getZ() > p1.getZ();
+		return Rail.newRail(p1, plus ? Angle.fromAngle(90) : Angle.fromAngle(270), p2, plus ? Angle.fromAngle(270) : Angle.fromAngle(90), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+	}
+
 	// Yard mainline with a real fork: approach -> node0 -> { straight to A, 45deg diverge to B };
 	// each branch then continues onward so routing can be observed across multiple nodes.
 	private static final class Net {
@@ -358,5 +366,100 @@ public final class MmtrLiveRouterTests {
 			d2.applyControl(new org.mtr.core.mmtr.ControlState().setBrakeNotch(1), 100, 1e-6, 2e-6, 0.004);
 		}
 		assertEquals(false, d2.stopped(), "brake-only never moves the train");
+	}
+
+	// --- P3: direction-aware runtime forks - T junction (no straight) and X crossing (multi-leg) ---
+	// A T junction met from its stem has exactly two continuations (left/right by the approach
+	// direction): operator 0/1 elects them deterministically; an unset T halts. An X crossing keeps
+	// the straight as leg 0 and exposes the perpendicular rails at full leg indexes (here: 2), so an
+	// operator can pick a continuation the legacy top-2 model could never express.
+
+	@Test
+	public void walkerTeeJunctionOperator0GoesLeftOperator1GoesRight() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-live-tee"), false);
+		final Position node = new Position(0, 0, 0);
+		final Rail via = through(new Position(-20, 0, 0), node); // approach along +x into the stem
+		final Rail left = railZ(node, new Position(0, 0, 20));  // +z continuation
+		final Rail right = railZ(node, new Position(0, 0, -20)); // -z continuation
+		sim.rails.add(via);
+		sim.rails.add(left);
+		sim.rails.add(right);
+		sim.sync();
+
+		final BranchStore store0 = new BranchStore();
+		store0.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 0);
+		final MmtrMotionWalker w0 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), store0, null);
+		w0.advance(25); // 20m approach + 5m onto the elected continuation
+		assertEquals(false, w0.haltedAtAuthority());
+		assertEquals(left.getHexId(), w0.railHex(), "operator 0 at a T = the left continuation, deterministically");
+		assertEquals(5, w0.offsetM(), 1e-6);
+
+		final BranchStore store1 = new BranchStore();
+		store1.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 1);
+		final MmtrMotionWalker w1 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), store1, null);
+		w1.advance(25);
+		assertEquals(right.getHexId(), w1.railHex(), "operator 1 at a T = the right continuation");
+
+		// Unset T: halt at the stem node, never auto-pick between equal-cosine legs.
+		final MmtrMotionWalker wu = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), new BranchStore(), null);
+		wu.advance(25);
+		assertEquals(true, wu.haltedAtAuthority(), "unset T junction halts the train");
+		assertEquals(via.getHexId(), wu.railHex());
+		assertEquals(20, wu.offsetM(), 1e-6, "stopped exactly at the stem node");
+
+		// A task naming the right continuation overrides a stale operator 0.
+		final BranchStore stale = new BranchStore();
+		stale.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 0);
+		final MmtrMotionWalker wt = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), stale, right.getHexId());
+		wt.advance(25);
+		assertEquals(right.getHexId(), wt.railHex(), "task target wins at the T junction");
+	}
+
+	@Test
+	public void walkerXCrossingElectsLegIndexBeyondLegacyBinary() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-live-x"), false);
+		final Position node = new Position(0, 0, 0);
+		final Rail via = through(new Position(-20, 0, 0), node);   // approach from -x
+		final Rail straight = through(node, new Position(20, 0, 0)); // east continuation
+		final Rail north = railZ(new Position(0, 0, -20), node);   // -z arm
+		final Rail south = railZ(node, new Position(0, 0, 20));    // +z arm
+		sim.rails.add(via);
+		sim.rails.add(straight);
+		sim.rails.add(north);
+		sim.rails.add(south);
+		sim.sync();
+		for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(node, new Position(-20, 0, 0), via, sim.positionsToRail.get(node))) {
+			System.out.println("[MMTR-PROBE] leg " + leg.kind + " " + leg.railHex + " cos=" + leg.cos);
+		}
+
+		// Legs from the -x approach: [straight(east), left(+z), right(-z)] - straight stays 0,
+		// and the perpendicular arms are expressible at full indexes 1..2.
+		final BranchStore store2 = new BranchStore();
+		store2.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 2);
+		final MmtrMotionWalker w2 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), store2, null);
+		w2.advance(25);
+		assertEquals(false, w2.haltedAtAuthority());
+		assertEquals(north.getHexId(), w2.railHex(), "operator 2 elects the third ordered leg across the crossing");
+
+		final BranchStore store1 = new BranchStore();
+		store1.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 1);
+		final MmtrMotionWalker w1 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), store1, null);
+		w1.advance(25);
+		assertEquals(south.getHexId(), w1.railHex(), "operator 1 elects the left perpendicular");
+
+		final BranchStore store0 = new BranchStore();
+		store0.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 0);
+		final MmtrMotionWalker w0 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), store0, null);
+		w0.advance(25);
+		assertEquals(straight.getHexId(), w0.railHex(), "operator 0 still means the straight at a crossing");
+
+		// An out-of-range operator index (3 with three legs) is refused: halt, do not fall back.
+		final BranchStore store3 = new BranchStore();
+		store3.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 3);
+		final MmtrMotionWalker w3 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), store3, null);
+		w3.advance(25);
+		assertEquals(true, w3.haltedAtAuthority(), "stale out-of-range operator index never auto-elects");
+		assertEquals(via.getHexId(), w3.railHex());
+		assertEquals(20, w3.offsetM(), 1e-6);
 	}
 }

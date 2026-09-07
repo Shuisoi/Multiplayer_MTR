@@ -208,36 +208,43 @@ public final class MmtrMotionWalker {
 	}
 
 	private @Nullable Rail electAtFork(ObjectArrayList<Rail> forwardRails, ObjectArrayList<Position> forwardEnds) {
-		final double ax = ahead.getX() - enteredFrom.getX();
-		final double az = ahead.getZ() - enteredFrom.getZ();
-		final double[] cos = new double[forwardRails.size()];
-		for (int i = 0; i < forwardRails.size(); i++) {
-			final double bx = forwardEnds.get(i).getX() - ahead.getX();
-			final double bz = forwardEnds.get(i).getZ() - ahead.getZ();
-			final double la = Math.sqrt(ax * ax + az * az);
-			final double lb = Math.sqrt(bx * bx + bz * bz);
-			cos[i] = la == 0 || lb == 0 ? -2 : (ax * bx + az * bz) / (la * lb);
-		}
-		int b0 = 0;
-		for (int i = 1; i < cos.length; i++) {
-			if (cos[i] > cos[b0]) {
-				b0 = i;
-			}
-		}
-		int b1 = b0 == 0 ? 1 : 0;
-		for (int i = 0; i < cos.length; i++) {
-			if (i != b0 && cos[i] > cos[b1]) {
-				b1 = i;
-			}
-		}
-		final MmtrNodeRouter.Continuation continuation = new MmtrNodeRouter.Continuation(forwardRails.get(b0).getHexId(), forwardRails.get(b1).getHexId());
-		final @Nullable String chosen = MmtrNodeRouter.electFromStore(continuation, branches, ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId(), targetRailHex);
-		if (chosen == null) {
+		// P1/P3: continuations are ordered deterministically per approach direction
+		// (straight > left > right > other, cosine inside a kind - MmtrPoint), not by raw cosine
+		// over map iteration. The operator branch (persisted 0/1 - or any leg index for multi-leg
+		// junctions) and the task target are resolved against that ordering, so T junctions pick
+		// left=0/right=1, crossings keep the straight as leg 0 and ordering never flips.
+		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(ahead);
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = neighbors == null ? new ObjectArrayList<>() : org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(ahead, enteredFrom, rail, neighbors);
+		if (legs.isEmpty()) {
 			return null;
 		}
-		for (int i = 0; i < forwardRails.size(); i++) {
-			if (forwardRails.get(i).getHexId().equals(chosen)) {
-				return forwardRails.get(i);
+		Rail chosen = null;
+		// Task target hits any leg first (legacy task-over-stale-operator semantics).
+		if (targetRailHex != null) {
+			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : legs) {
+				if (leg.railHex.equals(targetRailHex)) {
+					chosen = findRailByHex(forwardRails, leg.railHex);
+					break;
+				}
+			}
+		}
+		// Operator branch: contains() = set by point-op / planner preset (never auto).
+		if (chosen == null && branches.contains(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId())) {
+			final int operator = branches.get(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId());
+			if (operator >= 0 && operator < legs.size()) {
+				chosen = findRailByHex(forwardRails, legs.get(operator).railHex);
+			}
+		}
+		if (chosen == null && legs.size() == 1) {
+			chosen = findRailByHex(forwardRails, legs.get(0).railHex); // single continuation never needs authority
+		}
+		return chosen;
+	}
+
+	private static Rail findRailByHex(ObjectArrayList<Rail> forwardRails, String hex) {
+		for (final Rail forwardRail : forwardRails) {
+			if (forwardRail.getHexId().equals(hex)) {
+				return forwardRail;
 			}
 		}
 		return null;

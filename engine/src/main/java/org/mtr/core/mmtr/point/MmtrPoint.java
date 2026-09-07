@@ -115,7 +115,7 @@ public final class MmtrPoint {
 		final ObjectArrayList<MmtrPoint> out = new ObjectArrayList<>();
 		sim.positionsToRail.forEach((node, neighbors) -> {
 			neighbors.forEach((entryEnd, viaRail) -> {
-				final ObjectArrayList<MmtrPointLeg> legs = computeLegs(node, entryEnd, viaRail, neighbors);
+				final ObjectArrayList<MmtrPointLeg> legs = computeOrderedLegs(node, entryEnd, viaRail, neighbors);
 				if (!legs.isEmpty()) {
 					out.add(new MmtrPoint(node.getX(), node.getY(), node.getZ(), viaRail.getHexId(), legs));
 				}
@@ -129,7 +129,11 @@ public final class MmtrPoint {
 	 * (the approach rail's far end): distinct neighbour rails excluding the approach rail, each
 	 * classified by the angle between the approach direction and the candidate direction.
 	 */
-	private static ObjectArrayList<MmtrPointLeg> computeLegs(Position node, Position entryEnd, Rail viaRail, Object2ObjectOpenHashMap<Position, Rail> neighbors) {
+	/**
+	 * Ordered continuations of {@code viaRail} at {@code node} arriving from {@code entryEnd}: used by
+	 * the runtime walker and the run planner so every layer shares the SAME deterministic ordering.
+	 */
+	public static ObjectArrayList<MmtrPointLeg> computeOrderedLegs(Position node, Position entryEnd, Rail viaRail, Object2ObjectOpenHashMap<Position, Rail> neighbors) {
 		final ObjectArrayList<MmtrPointLeg> legs = new ObjectArrayList<>();
 		final double dx = node.getX() - entryEnd.getX();
 		final double dz = node.getZ() - entryEnd.getZ();

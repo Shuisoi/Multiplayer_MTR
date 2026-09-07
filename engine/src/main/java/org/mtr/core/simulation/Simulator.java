@@ -440,13 +440,15 @@ public class Simulator extends Data implements Utilities {
 		return points;
 	}
 
-	/** Set an operator turnout branch (0/1) and persist it. */
+	/** Set an operator turnout branch index (0..legs-1 in the ordered-leg model, legacy 0/1 on
+	 * two-leg forks) and persist it. A negative branch removes the operator setting (halt at that
+	 * fork, never auto). */
 	public boolean mmtrSetPoint(long x, long y, long z, String viaRailHex, int branch) {
 		mmtrPointBranches.set(x, y, z, viaRailHex, branch);
 		if (mmtrPointsPath != null) {
 			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
 		}
-		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + (branch & 1));
+		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + (branch < 0 ? "unset" : String.valueOf(branch)));
 		return true;
 	}
 
