@@ -52,6 +52,7 @@ public final class PacketUpdateVehiclesLifts extends PacketRequestResponseBase {
 			minecraftClientData.railIdToCurrentlyBlockedSignalColors.put(signalBlockUpdate.getRailId(), signalBlockUpdate.getCurrentlyBlockedSignalColors());
 		});
 
+		org.mtr.mod.Init.LOGGER.info("[MMTR-CL] vehicles_lifts packet: update1=" + hasUpdate1 + " vehiclesOnClient=" + minecraftClientData.vehicles.size());
 		if (hasUpdate1 || hasUpdate2) {
 			if (hasUpdate1) {
 				EntityHelper.HIDDEN_PLAYERS.clear();

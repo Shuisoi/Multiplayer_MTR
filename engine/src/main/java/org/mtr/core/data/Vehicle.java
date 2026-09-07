@@ -1500,35 +1500,39 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 
-		// MMTR (L3): push this motion vehicle to nearby clients like the legacy path writer, so the
-		// car is visible in-game and the client mirror replays the rails it is actually running on
-		// (VED path synced to the leg shadow by refreshMmtrMotionLegs). Dirty changes push at once; a
-		// 1 s cadence also refreshes mirrors that are waiting (fork / stop target / line end).
+		// MMTR (L3): push this motion vehicle to nearby clients on EVERY tick like the legacy path
+		// writer. A throttled cadence is not enough: other response cycles (signals etc.) fire
+		// between pushes, and a response that misses this vehicle's keep/update removes the client
+		// mirror (visible as create -> remove oscillation). Payloads only go out when dirty / new;
+		// the per-tick call keeps the vehicle in the keep set continuously.
 		if (siding != null && siding.area != null && data instanceof final Simulator simulator && !simulator.clients.isEmpty()) {
 			final boolean needsUpdate = vehicleExtraData.checkForUpdate();
 			final long now = data.getCurrentMillis();
-			final boolean forcePush = now - mmtrMotionLastClientPushMillis >= 1000;
-			if (needsUpdate || forcePush) {
-				final @Nullable Position[] minMaxPositions = {null, null};
-				int index = indexInMmtrMotionLegs(railProgress);
-				while (index >= 0) {
-					final PathData pathData = mmtrMotionLegs.get(index);
-					final Position position1 = pathData.getOrderedPosition1();
-					final Position position2 = pathData.getOrderedPosition2();
-					minMaxPositions[0] = Position.getMin(minMaxPositions[0], Position.getMin(position1, position2));
-					minMaxPositions[1] = Position.getMax(minMaxPositions[1], Position.getMax(position1, position2));
-					if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
-						break;
-					}
-					index--;
+			final boolean logPush = needsUpdate || now - mmtrMotionLastClientPushMillis >= 1000;
+			final @Nullable Position[] minMaxPositions = {null, null};
+			int index = indexInMmtrMotionLegs(railProgress);
+			while (index >= 0) {
+				final PathData pathData = mmtrMotionLegs.get(index);
+				final Position position1 = pathData.getOrderedPosition1();
+				final Position position2 = pathData.getOrderedPosition2();
+				minMaxPositions[0] = Position.getMin(minMaxPositions[0], Position.getMin(position1, position2));
+				minMaxPositions[1] = Position.getMax(minMaxPositions[1], Position.getMax(position1, position2));
+				if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
+					break;
 				}
-				simulator.clients.forEach(client -> {
-					final Position clientPosition = client.getPosition();
-					final double updateRadius = client.getUpdateRadius();
-					if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(clientPosition, updateRadius) : Utilities.isBetween(clientPosition, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
-						client.update(this, needsUpdate, 0);
+				index--;
+			}
+			simulator.clients.forEach(client -> {
+				final Position clientPosition = client.getPosition();
+				final double updateRadius = client.getUpdateRadius();
+				if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(clientPosition, updateRadius) : Utilities.isBetween(clientPosition, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
+					client.update(this, needsUpdate, 0);
+					if (logPush) {
+						System.out.println("[MMTR-SYNC] push vehicle " + id + " dirty=" + needsUpdate + " client=" + client.uuid + " progress=" + Math.round(railProgress) + " legs=" + mmtrMotionLegs.size() + " radius=" + updateRadius + " pos=" + clientPosition.getX() + "," + clientPosition.getZ());
 					}
-				});
+				}
+			});
+			if (logPush) {
 				mmtrMotionLastClientPushMillis = now;
 			}
 		}

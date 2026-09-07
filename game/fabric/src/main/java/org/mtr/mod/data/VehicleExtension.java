@@ -46,6 +46,7 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	public VehicleExtension(VehicleUpdate vehicleUpdate, Data data) {
 		super(vehicleUpdate.getVehicleExtraData(), null, new JsonReader(Utilities.getJsonObjectFromData(vehicleUpdate.getVehicle())), data);
 		serverSpeedKilometersPerHour = getSpeed() * 3600;
+		org.mtr.mod.Init.LOGGER.info("[MMTR-CL] mirror created id=" + getId() + " cars=" + vehicleExtraData.immutableVehicleCars.size() + " path=" + vehicleExtraData.immutablePath.size() + " progress=" + railProgress + " doors=" + vehicleExtraData.getDoorMultiplier());
 		final PersistentVehicleData tempPersistentVehicleData = MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.get(getId());
 		if (tempPersistentVehicleData == null) {
 			persistentVehicleData = new PersistentVehicleData(vehicleExtraData.immutableVehicleCars, getTransportMode());
