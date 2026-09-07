@@ -410,6 +410,43 @@ public final class Siding extends SidingSchema implements Utilities {
 	}
 
 	/**
+	 * MMTR Motion-Core dispatch seam (T3): spawn a parked manual-allowed vehicle on this siding whose
+	 * running path is supplied directly as Motion Core legs ({@code MmtrMotionWalker.buildLegs()} - a
+	 * route Motion Core chose segment by segment by turnout authority) instead of the pre-baked
+	 * per-siding path caches. The yard must be idle (no vehicle on route, at most one parked) so the
+	 * Motion legs do not fight a legacy generated route; the parked vehicle is replaced by the new one.
+	 * Returns {@code null} when the yard is busy, the formation does not fit the rail, or {@code legs}
+	 * is unusable. This is the additive production seam the task/operator dispatch layer calls to put a
+	 * real vehicle on Motion-Core-chosen rails; legacy auto trains are untouched.
+	 */
+	@Nullable
+	public Vehicle spawnMmtrManualWithLegs(ObjectArrayList<PathData> legs) {
+		if (legs == null || legs.isEmpty() || vehicleCars.isEmpty()) {
+			return null;
+		}
+		if (Siding.getTotalVehicleLength(vehicleCars) > railLength + 1e-6) {
+			return null;
+		}
+		Vehicle parked = null;
+		for (final Vehicle vehicle : vehicleIdMap.values()) {
+			if (vehicle.getIsOnRoute()) {
+				return null; // yard must be idle for Motion-Core dispatch
+			}
+			if (parked != null) {
+				return null; // more than one parked vehicle is not dispatchable
+			}
+			parked = vehicle;
+		}
+		if (parked != null) {
+			vehicleIdMap.remove(parked.getId());
+		}
+		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, legs,
+			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		vehicleIdMap.put(vehicle.getId(), vehicle);
+		return vehicle;
+	}
+
+	/**
 	 * MMTR yard reset: remove every parked (not-on-route) vehicle from this siding. Used before a
 	 * daily respawn / when re-authoring web jobs so leftover stock never blocks a fresh spawn or a
 	 * make-up (the engine keeps at most one parked vehicle per siding).
