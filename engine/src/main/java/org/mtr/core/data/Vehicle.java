@@ -771,11 +771,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				speed = 0;
 				mmtrMotionArriveAtStopTarget();
 			} else if (consumed < integratedDistance - 1e-9) {
-				// Authority halt at an unset fork / end of line / target: cannot consume the whole
-				// integrated distance — come to rest and wait (a fresh advance re-asks the node).
 				speed = 0;
 				if (previousSpeed > 1e-9) {
-					System.out.println("[MMTR-DRV] motion authority halt on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + "m (awaiting operator/task)");
+					if (mmtrMotionWalker.atTarget()) {
+						System.out.println("[MMTR-DRV] motion arrived at task target rail " + mmtrMotionWalker.railHex() + " (offset " + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + "m)");
+					} else {
+						// Authority halt at an unset fork / end of line: cannot consume the whole
+						// integrated distance — come to rest and wait (a fresh advance re-asks the node).
+						System.out.println("[MMTR-DRV] motion authority halt on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + "m (awaiting operator/task)");
+					}
 				}
 			} else {
 				lastMovementMillis = data.getCurrentMillis();

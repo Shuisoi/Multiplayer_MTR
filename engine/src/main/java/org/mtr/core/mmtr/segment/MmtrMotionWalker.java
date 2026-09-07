@@ -23,7 +23,7 @@ public final class MmtrMotionWalker {
 
 	public final Data data;
 	private final BranchStore branches;
-	private final @Nullable String targetRailHex;
+	private @Nullable String targetRailHex;
 
 	private Rail rail;
 	private Position enteredFrom;
@@ -127,6 +127,20 @@ public final class MmtrMotionWalker {
 
 	public boolean atTarget() {
 		return atTarget;
+	}
+
+	/**
+	 * MMTR (L3, slice 8): live retargeting of a RUNNING walker — the task/ops layer can redirect the
+	 * vehicle at its next fork: {@link MmtrNodeRouter} gives the task target priority over a stale
+	 * operator setting and overrides \"unset = wait\", and the walker comes to rest once it boards the
+	 * target rail (offset 0 of that rail). Pass {@code null} (or a different rail) to clear/resume
+	 * free running; retargeting away from a boarded target resumes the run.
+	 */
+	public void setTargetRailHex(@Nullable String targetRailHex) {
+		this.targetRailHex = targetRailHex;
+		if (targetRailHex == null || !rail.getHexId().equals(targetRailHex)) {
+			atTarget = false; // a retarget away from the current rail resumes the run
+		}
 	}
 
 	/**
