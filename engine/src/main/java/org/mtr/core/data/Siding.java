@@ -38,9 +38,6 @@ public final class Siding extends SidingSchema implements Utilities {
 	private PathData defaultPathData;
 	private double timeOffsetForRepeating;
 
-	private final ObjectArrayList<PathData> pathMainRoute = new ObjectArrayList<>();
-	private final ObjectArrayList<PathData> pathSidingToMainRoute = new ObjectArrayList<>();
-	private final ObjectArrayList<PathData> pathMainRouteToSiding = new ObjectArrayList<>();
 	/**
 	 * Vehicles on this siding; also doubles as an ID map
 	 */
@@ -72,10 +69,7 @@ public final class Siding extends SidingSchema implements Utilities {
 	public static final double MAX_ACCELERATION = 1D / 50000;
 	public static final double MIN_ACCELERATION = 1D / 2500000;
 	private static final Random RANDOM = new Random();
-	private static final String KEY_PATH_SIDING_TO_MAIN_ROUTE = "pathSidingToMainRoute";
-	private static final String KEY_PATH_MAIN_ROUTE_TO_SIDING = "pathMainRouteToSiding";
 	private static final String KEY_VEHICLES = "vehicles";
-
 	public Siding(Position position1, Position position2, double railLength, TransportMode transportMode, Data data) {
 		super(getRailLength(railLength), position1, position2, transportMode, data);
 		vehicleReaders = ObjectImmutableList.of();
@@ -83,8 +77,6 @@ public final class Siding extends SidingSchema implements Utilities {
 
 	public Siding(ReaderBase readerBase, Data data) {
 		super(DataFixer.convertSiding(readerBase), data);
-		readerBase.iterateReaderArray(KEY_PATH_SIDING_TO_MAIN_ROUTE, pathSidingToMainRoute::clear, readerBaseChild -> pathSidingToMainRoute.add(new PathData(readerBaseChild)));
-		readerBase.iterateReaderArray(KEY_PATH_MAIN_ROUTE_TO_SIDING, pathMainRouteToSiding::clear, readerBaseChild -> pathMainRouteToSiding.add(new PathData(readerBaseChild)));
 		vehicleReaders = savePathDataReaderBase(readerBase, KEY_VEHICLES);
 		updateData(readerBase);
 		DataFixer.unpackSidingVehicleCars(readerBase, transportMode, railLength, vehicleCars);
@@ -106,8 +98,6 @@ public final class Siding extends SidingSchema implements Utilities {
 	@Override
 	public void serializeFullData(WriterBase writerBase) {
 		super.serializeFullData(writerBase);
-		writerBase.writeDataset(pathSidingToMainRoute, KEY_PATH_SIDING_TO_MAIN_ROUTE);
-		writerBase.writeDataset(pathMainRouteToSiding, KEY_PATH_MAIN_ROUTE_TO_SIDING);
 		writerBase.writeDataset(vehicleIdMap.values(), KEY_VEHICLES);
 	}
 
@@ -268,9 +258,6 @@ public final class Siding extends SidingSchema implements Utilities {
 
 		if (area == null) {
 			vehicleIdMap.clear();
-			pathMainRoute.clear();
-			pathSidingToMainRoute.clear();
-			pathMainRouteToSiding.clear();
 			return;
 		}
 
@@ -433,16 +420,6 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 		System.out.println("[MMTR-VEH] deleted vehicle " + vehicleId + " from siding " + id + " (" + name + ")" + (parked ? " (slot released)" : ""));
 		return true;
-	}
-
-	/** MMTR dynamic routing: whether this siding has a generated outbound leg to the main route. */
-	public boolean hasPathToMainRoute() {
-		return !pathSidingToMainRoute.isEmpty();
-	}
-
-	/** MMTR dynamic routing: whether this siding has a generated return leg from the main route. */
-	public boolean hasReturnFromMainRoute() {
-		return !pathMainRouteToSiding.isEmpty();
 	}
 
 	public void startGeneratingDepartures() {
@@ -644,8 +621,6 @@ public final class Siding extends SidingSchema implements Utilities {
 	}
 
 	void writePathCache() {
-		PathData.writePathCache(pathSidingToMainRoute, data, transportMode);
-		PathData.writePathCache(pathMainRouteToSiding, data, transportMode);
 	}
 
 	long getRepeatInterval(long defaultAmount) {
@@ -815,173 +790,15 @@ public final class Siding extends SidingSchema implements Utilities {
 		});
 		return vehicleIds.isEmpty() ? "" : String.format("%s_%s", String.join("_", vehicleIds), departureIndex);
 	}
-
-	/**
-	 * After a path is set, generate the distance and time values. Should only be called during initialisation and after a path is generated.
-	 */
 	private void generatePathDistancesAndTimeSegments() {
+		// MTR depot-route distance/time generation removed (auto rebuilt on Motion/tasks): the
+		// three per-siding route caches are gone; sidings resolve only their yard rail.
 		vehicleIdMap.clear();
-		pathMainRoute.clear();
 		trips.clear();
 		platformTripStopTimes.clear();
 		timeSegments.clear();
-
-		if (pathSidingToMainRoute.isEmpty() || area == null || area.getPath().isEmpty() || !area.getRepeatInfinitely() && pathMainRouteToSiding.isEmpty()) {
-			pathSidingToMainRoute.clear();
-			pathMainRouteToSiding.clear();
-		} else {
-			pathMainRoute.addAll(area.getPath());
-			final boolean overlappingFromRepeating = SidingPathFinder.overlappingPaths(pathMainRoute, pathMainRoute);
-			final double totalVehicleLength = getTotalVehicleLength(vehicleCars);
-
-			if (SidingPathFinder.overlappingPaths(pathSidingToMainRoute, pathMainRoute)) {
-				final PathData pathData = pathMainRoute.removeFirst();
-				if (area.getRepeatInfinitely() && !overlappingFromRepeating) {
-					pathMainRoute.add(pathData);
-				}
-			} else {
-				if (area.getRepeatInfinitely() && overlappingFromRepeating) {
-					pathSidingToMainRoute.add(pathMainRoute.removeFirst());
-				}
-			}
-
-			if (SidingPathFinder.overlappingPaths(pathMainRoute, pathMainRouteToSiding)) {
-				pathMainRouteToSiding.removeFirst();
-			}
-
-			SidingPathFinder.generatePathDataDistances(pathSidingToMainRoute, 0);
-			SidingPathFinder.generatePathDataDistances(pathMainRoute, Utilities.getElement(pathSidingToMainRoute, -1).getEndDistance());
-			SidingPathFinder.generatePathDataDistances(pathMainRouteToSiding, Utilities.getElement(pathMainRoute, -1).getEndDistance());
-
-			final ObjectArrayList<PathData> path = new ObjectArrayList<>();
-			path.addAll(pathSidingToMainRoute);
-			path.addAll(pathMainRoute);
-			path.addAll(pathMainRouteToSiding);
-
-			final double totalDistance = Utilities.getElement(path, -1).getEndDistance();
-			final DoubleArrayList stoppingDistances = new DoubleArrayList();
-			for (final PathData pathData : path) {
-				if (pathData.getDwellTime() > 0) {
-					stoppingDistances.add(pathData.getEndDistance());
-				}
-			}
-
-			final ObjectArrayList<RoutePlatformInfo> routePlatformInfoList = new ObjectArrayList<>();
-			for (int i = 0; i < area.routes.size(); i++) {
-				final Route route = area.routes.get(i);
-				route.durations.clear();
-				for (int j = 0; j < route.getRoutePlatforms().size(); j++) {
-					final long platformId = route.getRoutePlatforms().get(j).platform.getId();
-					if (j == 0 && !routePlatformInfoList.isEmpty() && Utilities.getElement(routePlatformInfoList, -1).platformId == platformId) {
-						routePlatformInfoList.removeLast();
-					}
-					routePlatformInfoList.add(new RoutePlatformInfo(route, i, platformId, route.getDestination(j)));
-				}
-			}
-
-			double railProgress = (railLength + totalVehicleLength) / 2;
-			double nextStoppingDistance = 0;
-			double speed = 0;
-			double time = 0;
-			LongConsumer writeRouteDuration = null;
-			int tripStopIndex = 0;
-			for (int i = 0; i < path.size(); i++) {
-				if (railProgress >= nextStoppingDistance) {
-					if (stoppingDistances.isEmpty()) {
-						nextStoppingDistance = totalDistance;
-					} else {
-						nextStoppingDistance = stoppingDistances.removeDouble(0);
-					}
-				}
-
-				if (i == pathSidingToMainRoute.size()) {
-					timeOffsetForRepeating = time; // TODO slight inaccuracy if vehicle length is different from the first platform length
-				}
-
-				final PathData pathData = path.get(i);
-				final double currentDistance = pathData.getEndDistance();
-
-				while (railProgress < currentDistance) {
-					final int speedChange;
-					if (nextStoppingDistance - railProgress + 1 < 0.5 * speed * speed / deceleration) {
-						// Needs to stop ahead
-						speed = Math.max(speed - deceleration, deceleration);
-						speedChange = -1;
-					} else {
-						final double upcomingSlowerSpeed = getUpcomingSlowerSpeed(path, i, railProgress, speed, deceleration);
-						if (upcomingSlowerSpeed >= 0 && speed > upcomingSlowerSpeed) {
-							// Slower rail ahead
-							speed = Math.max(speed - deceleration, upcomingSlowerSpeed);
-							speedChange = -1;
-						} else {
-							// Check current rail speed
-							final double railSpeed = pathData.getSpeedLimitMetersPerMillisecond();
-							if (railSpeed < speed) {
-								speed = Math.max(speed - deceleration, railSpeed);
-								speedChange = -1;
-							} else if (railSpeed > speed) {
-								speed = Math.min(speed + acceleration, railSpeed);
-								speedChange = 1;
-							} else {
-								speedChange = 0;
-							}
-						}
-					}
-
-					if (timeSegments.isEmpty() || Utilities.getElement(timeSegments, -1).speedChange != speedChange) {
-						timeSegments.add(new TimeSegment(railProgress, speed, time, speedChange, acceleration, deceleration));
-					}
-
-					railProgress = Math.min(railProgress + speed, currentDistance);
-					time++;
-				}
-
-				if (pathData.getSavedRailBaseId() != 0) {
-					final long startTime = Math.round(time);
-					time += pathData.getDwellTime();
-					final long endTime = Math.round(time);
-
-					while (!routePlatformInfoList.isEmpty()) {
-						final RoutePlatformInfo routePlatformInfo = routePlatformInfoList.getFirst();
-
-						if (routePlatformInfo.platformId != pathData.getSavedRailBaseId()) {
-							break;
-						}
-
-						if (!platformTripStopTimes.containsKey(pathData.getSavedRailBaseId())) {
-							platformTripStopTimes.put(pathData.getSavedRailBaseId(), new ObjectArraySet<>());
-						}
-
-						final Trip currentTrip = Utilities.getElement(trips, -1);
-						if (currentTrip == null || routePlatformInfo.routeIndex != currentTrip.routeIndex) {
-							final Trip trip = new Trip(routePlatformInfo.route, routePlatformInfo.routeIndex, trips.size(), this);
-							tripStopIndex = 0;
-							platformTripStopTimes.get(pathData.getSavedRailBaseId()).add(trip.addStopTime(startTime, endTime, pathData.getSavedRailBaseId(), 0, routePlatformInfo.customDestination));
-							trips.add(trip);
-						} else {
-							platformTripStopTimes.get(pathData.getSavedRailBaseId()).add(currentTrip.addStopTime(startTime, endTime, pathData.getSavedRailBaseId(), tripStopIndex, routePlatformInfo.customDestination));
-						}
-
-						if (writeRouteDuration != null) {
-							writeRouteDuration.accept(startTime);
-						}
-
-						writeRouteDuration = newStartTime -> routePlatformInfo.route.durations.add(newStartTime - endTime);
-						tripStopIndex++;
-						routePlatformInfoList.removeFirst();
-					}
-				} else {
-					time += pathData.getDwellTime();
-				}
-
-				if (i + 1 < path.size() && pathData.isOppositeRail(path.get(i + 1))) {
-					railProgress += totalVehicleLength;
-				}
-			}
-
-			timeOffsetForRepeating = time - timeOffsetForRepeating;
-		}
 	}
+
 
 	public static double getRailLength(double rawRailLength) {
 		return Utilities.round(rawRailLength, 3);
