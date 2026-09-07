@@ -52,10 +52,29 @@ Motion Core 驱动：车的运行状态 = (当前轨道段 + 段内偏移)，到
 - data/Depot.java：generateRoute / writePathCache（出库腿来源）；Simulator.java:514 用到 hasPathToMainRoute/hasReturnFromMainRoute。
 - operation/MmtrDriveControl.java：现有驾驶命令 ControlState（throttle/brake/emergency/reverser + driverUuid）-> vehicle.applyMmtrControl。
 
+> 状态更新（commit f04ff20）：T3 / T3b 已完成并验证（见 §5b），T4 尚未删烘焙（前置见 §5b 说明）。
+
 ## 5. 建议落地切片（每步 compile + 对应测试可验，再提交）
 - T3（推荐先做，可测）：在发车/生成 manual 车处用 createWithLegs + Motion Core buildLegs() 生成一辆「路线由 Motion Core 决定」的真实 Vehicle，并让它在合成场区/真实存档里跑起来（railProgress 前进 + 跨岔换向断言）。这一步把 Motion Core 选轨真正送进一辆活的车。
 - T3b：让那辆 manual 车能被现有 ControlState（MmtrDriveControl / rider 驾驶）驱动，运动走 Motion Core；验证人用现有键位/命令能把它往前开、到岔口设岔换向、停目标。
 - T4：删旧烘焙（Depot.generateRoute / Siding.generateRoute 三缓存拼装、Simulator.hasPath*），改为 Motion Core 取径。
+
+
+## 5b. T3/T3b 已完成（commit f04ff20，全量回归零新增失败）
+- 交付物：真实 Vehicle 的运行路径来源换成 Motion Core 轨序（createWithLegs(legs)，legs=MmtrMotionWalker.buildLegs()），
+  用现有座舱控制（applyMmtrControl / ControlState，即 MmtrDriveControl 送进 Vehicle 的那个对象）驱动；到真实岔口按道岔
+  选轨跨上不同真实轨。引擎内真实 Vehicle 达成，非仅 DTO 断言。
+- 代码：
+  - main: Siding.spawnMmtrManualWithLegs(ObjectArrayList<PathData> legs)（Siding.java，rebuildParkedConsist 之后，additive）。
+  - test: MmtrVehicleLegsRunTests（4 用例全绿）：synthetic 真岔 branch0->straight / branch1->diverge 两辆真 Vehicle 越过
+    岔口；裸 Siding 经 spawnMmtrManualWithLegs 产出 manual 车并可开；真实 dev 存档 -96 岔口真 Vehicle 越过叉点落到
+    branch0Hex / branch1Hex 真实轨（10.4 验收）。
+- 回归：定向 63/0；全量 256 completed / 13 failed（全为既有 mmtr-job 红：MmtrJobSchedulerTests 12 + DevWorldJobSmokeTests 1）/ 2 skipped。
+- T4（删烘焙）为何未在本切片删：三份缓存（pathSidingToMainRoute/pathMainRoute/pathMainRouteToSiding）仍被 auto/
+  scheduled 车 + 时刻表/平台停站 + Depot 出库 + 众多既有测试（MiniWorldDeterministicDrive/DepotDeparture/Siding 等）
+  使用。安全删它们 = 先把全部 Vehicle（含 auto）运动切到 Motion Core（Vehicle.simulate* 目前按 immutablePath 单调累计
+  前进 + stoppingIndex/dwell/signal/turnback，属 notes/12 标注的 L3 级大改）。故 T4 另立切片，前置是"运行中的车由 Motion
+  Core (segment+offset) 逐 tick 驱动"（MmtrMotionSnapshot.ofWalker 已给可渲染表示）。
 
 ## 6. 构建 / 验证纪律（新会话务必照做）
 - JDK：JAVA_HOME=C:\Users\30354\.jdks\jdk-21.0.12.1+1，PATH 前置其 bin。引擎工作目录 mmtr/engine。
