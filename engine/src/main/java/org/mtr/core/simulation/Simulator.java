@@ -97,6 +97,9 @@ public class Simulator extends Data implements Utilities {
 	/** Operator-set turnout (道岔) branch states, persisted to mmtr-points.json. */
 	public org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore mmtrPointBranches = new org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore();
 	private java.nio.file.Path mmtrPointsPath;
+	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
+	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
+	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -450,6 +453,37 @@ public class Simulator extends Data implements Utilities {
 		}
 		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + (branch < 0 ? "unset" : String.valueOf(branch)));
 		return true;
+	}
+
+	// --- P3 turnout authority machine interface (multi-level control) ---
+
+	/** Auto logic requests a leg of an en-route turnout (approach locking). Returns GRANTED/QUEUED. */
+	public org.mtr.core.mmtr.point.MmtrPointAuthority.Result mmtrPointRequest(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis) {
+		final org.mtr.core.mmtr.point.MmtrPointAuthority.Result result = mmtrPointAuthority.request(x, y, z, viaRailHex, owner, leg, untilMillis);
+		System.out.println("[MMTR-PT] req " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex + " leg " + leg + " -> " + result);
+		return result;
+	}
+
+	/** The train crossed (or gave up on) a point: its hold is consumed and the queue advances. */
+	public void mmtrPointRelease(long x, long y, long z, String viaRailHex, String owner) {
+		mmtrPointAuthority.passed(x, y, z, viaRailHex, owner);
+		System.out.println("[MMTR-PT] rel " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex);
+	}
+
+	/** Operator parks a point for manual use: auto requests queue until mmtrPointUnlock. */
+	public void mmtrPointLock(long x, long y, long z, String viaRailHex) {
+		mmtrPointAuthority.lock(x, y, z, viaRailHex);
+		System.out.println("[MMTR-PT] lock " + x + "," + y + "," + z + " via " + viaRailHex);
+	}
+
+	public void mmtrPointUnlock(long x, long y, long z, String viaRailHex) {
+		mmtrPointAuthority.unlock(x, y, z, viaRailHex);
+		System.out.println("[MMTR-PT] unlock " + x + "," + y + "," + z + " via " + viaRailHex);
+	}
+
+	/** Release every turnout request held/queued by this owner (terminal missions, resets). */
+	public void mmtrPointReleaseAll(String owner) {
+		mmtrPointAuthority.releaseAll(owner);
 	}
 
 

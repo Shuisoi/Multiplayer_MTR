@@ -23,6 +23,8 @@ public final class MmtrMotionWalker {
 
 	public final Data data;
 	private final BranchStore branches;
+	private org.mtr.core.mmtr.point.MmtrPointAuthority pointAuthority;
+	private String pointAuthorityOwner;
 	private @Nullable String targetRailHex;
 
 	private Rail rail;
@@ -35,6 +37,9 @@ public final class MmtrMotionWalker {
 	private boolean haltedAtAuthority;
 	private boolean endOfLine;
 	private boolean atTarget;
+	/** Authority-question forks (>=2 continuations) this walker has actually crossed since the last
+	 * drain, as point keys x,y,z|viaHex - lets the owner stop refreshing crossed holds. */
+	private final ObjectArrayList<String> crossedPointKeys = new ObjectArrayList<>();
 
 	/** Ordered engine-runnable legs (PathData) over the rails the walker has traversed/boarded. */
 	private final ObjectArrayList<PathData> legs = new ObjectArrayList<>();
@@ -121,12 +126,30 @@ public final class MmtrMotionWalker {
 		return haltedAtAuthority;
 	}
 
+	/** Forks crossed since the last drain, as x,y,z|viaHex point keys (consumed). */
+	public ObjectArrayList<String> drainCrossedPointKeys() {
+		final ObjectArrayList<String> out = new ObjectArrayList<>(crossedPointKeys);
+		crossedPointKeys.clear();
+		return out;
+	}
+
 	public boolean endOfLine() {
 		return endOfLine;
 	}
 
 	public boolean atTarget() {
 		return atTarget;
+	}
+
+	/**
+	 * P3: wire this walker into the turnout authority under {@code owner} (mission/vehicle id).
+	 * While wired, an unset fork with an authority grant for this owner is crossed at the granted
+	 * ordered-leg index, and each point actually crossed releases the owner's hold so the next
+	 * queued auto request can take it. Pass null/null to unwire (plain operator free-driving).
+	 */
+	public void setPointAuthority(org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner) {
+		pointAuthority = authority;
+		pointAuthorityOwner = owner;
 	}
 
 	/**
@@ -191,6 +214,12 @@ public final class MmtrMotionWalker {
 					haltedAtAuthority = true;
 					return;
 				}
+				// The train has crossed the fork node onto the elected continuation: its authority
+				// hold (if any) is consumed and the queue advances (over-release is a no-op).
+				crossedPointKeys.add(ahead.getX() + "," + ahead.getY() + "," + ahead.getZ() + "|" + rail.getHexId());
+				if (pointAuthority != null && pointAuthorityOwner != null) {
+					pointAuthority.passed(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId(), pointAuthorityOwner);
+				}
 			}
 
 			rail = next;
@@ -219,20 +248,35 @@ public final class MmtrMotionWalker {
 			return null;
 		}
 		Rail chosen = null;
-		// Task target hits any leg first (legacy task-over-stale-operator semantics).
-		if (targetRailHex != null) {
+		final long px = ahead.getX();
+		final long py = ahead.getY();
+		final long pz = ahead.getZ();
+		final String viaHex = rail.getHexId();
+		// Decision order (design R2): manual operator > explicit auto grant > legacy task target >
+		// single continuation; nothing auto-elects a two+-leg fork without one of the first three.
+		if (branches.contains(px, py, pz, viaHex)) {
+			// Manual operator (point-op / legacy preset): highest priority, never auto.
+			final int operator = branches.get(px, py, pz, viaHex);
+			if (operator >= 0 && operator < legs.size()) {
+				chosen = findRailByHex(forwardRails, legs.get(operator).railHex);
+			}
+		}
+		if (chosen == null && pointAuthority != null && pointAuthorityOwner != null) {
+			// Explicit auto grant for THIS owner at its ordered-leg index (authority expiry-checked).
+			if (pointAuthority.isGrantedTo(px, py, pz, viaHex, pointAuthorityOwner)) {
+				final int granted = pointAuthority.grantedLeg(px, py, pz, viaHex);
+				if (granted >= 0 && granted < legs.size()) {
+					chosen = findRailByHex(forwardRails, legs.get(granted).railHex);
+				}
+			}
+		}
+		if (chosen == null && targetRailHex != null) {
+			// Legacy live task target: legacy ops steering hint, used only when no manual/grant holds.
 			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : legs) {
 				if (leg.railHex.equals(targetRailHex)) {
 					chosen = findRailByHex(forwardRails, leg.railHex);
 					break;
 				}
-			}
-		}
-		// Operator branch: contains() = set by point-op / planner preset (never auto).
-		if (chosen == null && branches.contains(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId())) {
-			final int operator = branches.get(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId());
-			if (operator >= 0 && operator < legs.size()) {
-				chosen = findRailByHex(forwardRails, legs.get(operator).railHex);
 			}
 		}
 		if (chosen == null && legs.size() == 1) {

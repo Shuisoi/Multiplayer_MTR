@@ -83,8 +83,13 @@ public final class MmtrMotionTaskTargetTests {
 		}
 	}
 
+	// P3 decision order (manual operator > task): a live task retarget cannot override a branch
+	// the operator has actually set - the vehicle follows the operator rail and the task stays
+	// pending for the next (still unset) fork. Once the operator clears the branch BEFORE the fork,
+	// the task target takes over exactly as before.
+
 	@Test
-	public void liveTaskRetargetOverridesStaleOperatorAtTheFork() {
+	public void liveTaskRetargetYieldsToManualOperatorAtTheFork() {
 		final Net n = new Net();
 		// The operator has preset 0 = straight; the task redirects to the diverging rail mid-run.
 		n.store.set(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId(), 0);
@@ -92,7 +97,6 @@ public final class MmtrMotionTaskTargetTests {
 		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
 		final double midYard = walker.distanceM() + (n.yardRail.railMath.getLength() - walker.offsetM()) * 0.5;
 
-		// Run until mid-yard, then retarget live: the diverging rail becomes the task target.
 		boolean retargeted = false;
 		for (int i = 0; i < 200 && !retargeted; i++) {
 			n.siding.simulateVehicles(1000, null);
@@ -103,27 +107,44 @@ public final class MmtrMotionTaskTargetTests {
 		}
 		assertTrue(retargeted, "vehicle reached mid-yard for the live retarget, progress=" + v.getRailProgress());
 
-		// The fork decision follows the TASK target (over the stale operator 0): boards rY and rests.
+		// The fork decision follows the MANUAL operator (0 = straight) - P3 manual-first semantics.
+		boolean boardedStraight = false;
+		for (int i = 0; i < 300 && !boardedStraight; i++) {
+			n.siding.simulateVehicles(1000, null);
+			boardedStraight = n.rA.getHexId().equals(walker.railHex());
+		}
+		assertTrue(boardedStraight, "manual operator branch must win over the task retarget at the fork, rail=" + walker.railHex());
+		assertFalse(walker.atTarget(), "the (conflicting) task target is not boarded");
+		assertFalse(walker.haltedAtAuthority(), "no authority halt: the operator decided the fork");
+	}
+
+	@Test
+	public void taskTakesOverOnceTheOperatorClearsTheBranchBeforeTheFork() {
+		final Net n = new Net();
+		n.store.set(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId(), 0);
+		final Vehicle v = n.spawnManual();
+		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final double midYard = walker.distanceM() + (n.yardRail.railMath.getLength() - walker.offsetM()) * 0.5;
+
+		boolean retargeted = false;
+		for (int i = 0; i < 200 && !retargeted; i++) {
+			n.siding.simulateVehicles(1000, null);
+			if (v.getRailProgress() >= midYard) {
+				walker.setTargetRailHex(n.rY.getHexId());
+				n.store.set(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId(), -1); // operator clears the branch
+				retargeted = true;
+			}
+		}
+		assertTrue(retargeted, "vehicle reached mid-yard for the retarget+clear, progress=" + v.getRailProgress());
+
 		boolean boarded = false;
 		for (int i = 0; i < 300 && !boarded; i++) {
 			n.siding.simulateVehicles(1000, null);
 			boarded = n.rY.getHexId().equals(walker.railHex());
 		}
-		assertTrue(boarded, "task target must win over the stale operator 0 at the fork, rail=" + walker.railHex());
+		assertTrue(boarded, "once the operator clears the branch, the task target decides the fork, rail=" + walker.railHex());
 		assertTrue(walker.atTarget(), "walker rests on the task target rail");
 		assertEquals(0, v.getSpeed(), 1e-9, "vehicle at rest on the task target rail");
-		assertTrue(walker.offsetM() < 2.0, "rested just after boarding the target rail, offset=" + walker.offsetM());
-		final double stalledProgress = v.getRailProgress();
-
-		// Clearing the task target resumes the same run.
-		walker.setTargetRailHex(null);
-		double max = stalledProgress;
-		for (int i = 0; i < 300; i++) {
-			n.siding.simulateVehicles(1000, null);
-			max = Math.max(max, v.getRailProgress());
-		}
-		assertTrue(max > stalledProgress + 5, "vehicle resumes running after the task target is cleared, got " + max);
-		assertTrue(n.rY.getHexId().equals(walker.railHex()) || max > stalledProgress + 20, "resumed on the diverging rail");
 	}
 
 	@Test

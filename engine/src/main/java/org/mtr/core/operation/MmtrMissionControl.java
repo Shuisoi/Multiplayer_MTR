@@ -91,13 +91,22 @@ public final class MmtrMissionControl implements SerializedDataBase {
 			}
 			if (parsedExecutor == MmtrMission.Executor.AUTOPILOT && startNow) {
 				if (motionVehicle && motionPlan != null) {
-					// Headless motion mission: plan presets into the authoritative turnout store, then arm
-					// the auto step-run to the planned stop (doors for passenger service). The vehicle's
-					// mission state machine observes arrival and completes after the dwell.
-					MmtrRunPlanner.applyForkOps(motionPlan, simulator.mmtrPointBranches);
-					vehicle.setMmtrMotionAuto(true);
-					vehicle.setMmtrMotionStopTarget(motionPlan.stopCumulativeM, parsedKind == MmtrMission.Kind.PASSENGER);
-					System.out.println("[MMTR-MSG] motion mission " + parsedKind + " armed to rail " + motionPlan.targetRailHex + " stop @" + Math.round(motionPlan.stopCumulativeM) + "m");
+					// Headless motion mission: request every en-route turnout through the P3 point
+					// authority under this vehicle (approach locking - never a store preset), then arm the
+					// auto step-run to the planned stop (doors for passenger service). When a fork is
+					// operator-locked or held by another train the vehicle is not armed yet: its own
+					// mission self-arm retries the grants each tick and starts the run the moment all
+					// forks are granted (nothing auto-elects around a busy point).
+					if (vehicle.armMmtrPointRun(simulator, motionPlan)) {
+						vehicle.setMmtrMotionAuto(true);
+						vehicle.setMmtrMotionStopTarget(motionPlan.stopCumulativeM, parsedKind == MmtrMission.Kind.PASSENGER);
+						System.out.println("[MMTR-MSG] motion mission " + parsedKind + " armed to rail " + motionPlan.targetRailHex + " stop @" + Math.round(motionPlan.stopCumulativeM) + "m");
+					} else {
+						// Stay assigned and unarmed (stop target untouched so the self-arm condition stays
+						// true): the vehicle's mission machine retries the grants every tick and arms the
+						// run the moment every fork is granted.
+						System.out.println("[MMTR-MSG] motion mission " + parsedKind + " queued behind turnout authority to rail " + motionPlan.targetRailHex);
+					}
 				} else if (!motionVehicle) {
 					// Headless mission drive: engage the manual seam so the train actually moves.
 					vehicle.engageMissionAutopilot();

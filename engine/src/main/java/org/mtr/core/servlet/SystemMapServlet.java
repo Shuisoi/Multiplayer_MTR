@@ -175,7 +175,46 @@ public final class SystemMapServlet extends ServletBase {
 					final String via = jsonReader.getString("via", "");
 					final int branch = jsonReader.getInt("branch", 0);
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
-					result.addProperty("ok", via.isEmpty() ? false : simulator.mmtrSetPoint(x, y, z, via, branch));
+					result.addProperty("ok", !via.isEmpty() && simulator.mmtrSetPoint(x, y, z, via, branch));
+					if (!via.isEmpty()) {
+						if (jsonReader.getBoolean("lock", false)) {
+							simulator.mmtrPointLock(x, y, z, via);
+							result.addProperty("locked", true);
+						}
+						if (jsonReader.getBoolean("unlock", false)) {
+							simulator.mmtrPointUnlock(x, y, z, via);
+							result.addProperty("locked", false);
+						}
+					}
+					yield result;
+				}
+				case "mmtr-point-req" -> {
+					final long x = jsonReader.getLong("x", 0);
+					final long y = jsonReader.getLong("y", 0);
+					final long z = jsonReader.getLong("z", 0);
+					final String via = jsonReader.getString("via", "");
+					final String owner = jsonReader.getString("owner", "");
+					final int leg = jsonReader.getInt("leg", 0);
+					final long untilMillis = jsonReader.getLong("untilMillis", System.currentTimeMillis() + 10L * 60L * 1000L);
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					if (via.isEmpty() || owner.isEmpty()) {
+						result.addProperty("ok", false);
+					} else {
+						result.addProperty("result", simulator.mmtrPointRequest(x, y, z, via, owner, leg, untilMillis).name());
+					}
+					yield result;
+				}
+				case "mmtr-point-rel" -> {
+					final long x = jsonReader.getLong("x", 0);
+					final long y = jsonReader.getLong("y", 0);
+					final long z = jsonReader.getLong("z", 0);
+					final String via = jsonReader.getString("via", "");
+					final String owner = jsonReader.getString("owner", "");
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", !via.isEmpty() && !owner.isEmpty());
+					if (!via.isEmpty() && !owner.isEmpty()) {
+						simulator.mmtrPointRelease(x, y, z, via, owner);
+					}
 					yield result;
 				}
 				default -> null;

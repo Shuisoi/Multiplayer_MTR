@@ -407,12 +407,17 @@ public final class MmtrLiveRouterTests {
 		assertEquals(via.getHexId(), wu.railHex());
 		assertEquals(20, wu.offsetM(), 1e-6, "stopped exactly at the stem node");
 
-		// A task naming the right continuation overrides a stale operator 0.
+		// P3 manual-first: an operator setting beats even a conflicting task target...
 		final BranchStore stale = new BranchStore();
 		stale.set(node.getX(), node.getY(), node.getZ(), via.getHexId(), 0);
 		final MmtrMotionWalker wt = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), stale, right.getHexId());
 		wt.advance(25);
-		assertEquals(right.getHexId(), wt.railHex(), "task target wins at the T junction");
+		assertEquals(left.getHexId(), wt.railHex(), "manual operator outranks a conflicting task target at the T junction");
+
+		// ...and the legacy target still steers when no operator has set the fork.
+		final MmtrMotionWalker wt2 = MmtrMotionWalker.start(sim, via, new Position(-20, 0, 0), new BranchStore(), right.getHexId());
+		wt2.advance(25);
+		assertEquals(right.getHexId(), wt2.railHex(), "task target elects the right continuation when the fork is unset");
 	}
 
 	@Test

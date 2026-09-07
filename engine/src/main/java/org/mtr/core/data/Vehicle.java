@@ -127,6 +127,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private int mmtrMotionArrivalControlSeq = -1;
 	/** Last client push for a waiting motion vehicle (1 s cadence keeps stopped mirrors corrected). */
 	private long mmtrMotionLastClientPushMillis;
+	/** P3: the plan whose en-route forks this vehicle requested through the turnout authority
+	 * (refreshed every tick while the mission run is armed); null when no auto plan is active. */
+	private MmtrRunPlanner.Plan mmtrMotionPlan;
+	/** P3: authority owner key of this vehicle's requests (mission runs), reset on release. */
+	private String mmtrPointOwner = "";
+	/** P3: en-route forks still ahead of this vehicle (not yet crossed); refreshed while armed so a
+	 * crossed fork is never re-requested (its hold was already released at the crossing). */
+	private final ObjectArrayList<String[]> mmtrPendingPointOps = new ObjectArrayList<>();
+	private static final long MMTR_POINT_REQUEST_MILLIS = 10L * MILLIS_PER_MINUTE;
 	/**
 	 * MMTR (L3): unmanned auto run (task/ATO foundation). While armed and a stop target is active,
 	 * the vehicle drives itself (cruise at the auto notch, service-brake envelope to the exact stop
@@ -330,8 +339,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				break;
 		}
 		// A terminal motion mission (complete / failed / canceled) hands the vehicle back to idle:
-		// auto run off, stop target cleared, doors closed - the consist rests where it is.
+		// auto run off, stop target cleared, doors closed - the consist rests where it is. Its P3
+		// turnout authority requests (un-crossed forks) are released so queued trains can proceed.
 		if (motionMission && mission.isTerminal()) {
+			releaseMmtrPointRequests();
 			mmtrMotionAuto = false;
 			mmtrMotionStopTargetM = -1;
 			mmtrMotionStoppedAtTarget = false;
@@ -340,6 +351,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrRunStopTarget = -1;
 			vehicleExtraData.closeDoors();
 			vehicleExtraData.mmtrMarkSyncDirty();
+		}
+
+		// P3: while an auto mission run is armed, refresh the turnout grant/queue windows of the
+		// STILL-PENDING (not yet crossed) forks every tick so a slow run or a long lock wait never
+		// lets the requests expire mid-route; crossed forks were released at the crossing and must
+		// not be re-requested.
+		if (motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && mmtrMotionAuto && !mission.isTerminal()
+			&& data instanceof final Simulator simulator && !mmtrPointOwner.isEmpty() && !mmtrPendingPointOps.isEmpty()) {
+			MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
 		}
 	}
 
@@ -369,10 +389,65 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mission.fail(plan.reason);
 			return;
 		}
-		MmtrRunPlanner.applyForkOps(plan, simulator.mmtrPointBranches);
+		if (!armMmtrPointRun(simulator, plan)) {
+			// Feasible but a fork is operator-locked or held by another train: the mission stays
+			// ASSIGNED and this self-arm retries every tick until the grants land (operator unlock
+			// / the other train's release); nothing auto-elects around a busy point.
+			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " waiting for turnout authority on rail " + plan.targetRailHex);
+			return;
+		}
 		setMmtrMotionAuto(true);
 		setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
 		System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
+	}
+
+	/**
+	 * P3: request every en-route turnout of a feasible plan through the simulator's point authority
+	 * under this vehicle's owner key and wire the walker to it. Idempotent: re-requesting refreshes
+	 * grant/queue windows while the run is armed (approach locking stays alive). Returns whether all
+	 * forks are currently granted to this vehicle.
+	 */
+	public boolean armMmtrPointRun(Simulator simulator, MmtrRunPlanner.Plan plan) {
+		mmtrMotionPlan = plan;
+		mmtrPendingPointOps.clear();
+		for (final String[] op : plan.forkOps) {
+			mmtrPendingPointOps.add(op.clone());
+		}
+		final String owner = "v" + getId();
+		mmtrPointOwner = owner;
+		final org.mtr.core.mmtr.point.MmtrPointAuthority authority = simulator.mmtrPointAuthority;
+		if (mmtrMotionWalker != null) {
+			mmtrMotionWalker.setPointAuthority(authority, owner);
+		}
+		return MmtrRunPlanner.requestForkOps(plan, authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+	}
+
+	/** Drop crossed forks from the pending request set (their holds were released at the crossing). */
+	private void drainMmtrCrossedPoints() {
+		if (mmtrPointOwner.isEmpty() || mmtrMotionWalker == null || mmtrPendingPointOps.isEmpty()) {
+			return;
+		}
+		final ObjectArrayList<String> crossed = mmtrMotionWalker.drainCrossedPointKeys();
+		if (crossed.isEmpty()) {
+			return;
+		}
+		mmtrPendingPointOps.removeIf(op -> crossed.contains(op[0] + "," + op[1] + "," + op[2] + "|" + op[3]));
+	}
+
+	/** P3: drop every turnout request this vehicle holds/queued (terminal missions, yard reset). */
+	public void releaseMmtrPointRequests() {
+		if (!mmtrPointOwner.isEmpty()) {
+			final org.mtr.core.mmtr.point.MmtrPointAuthority authority = data instanceof final Simulator simulator ? simulator.mmtrPointAuthority : null;
+			if (authority != null) {
+				authority.releaseAll(mmtrPointOwner);
+			}
+			mmtrPointOwner = "";
+		}
+		if (mmtrMotionWalker != null) {
+			mmtrMotionWalker.setPointAuthority(null, null);
+		}
+		mmtrPendingPointOps.clear();
+		mmtrMotionPlan = null;
 	}
 
 	/**
@@ -819,6 +894,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (integratedDistance > 0) {
 			final double before = mmtrMotionWalker.distanceM();
 			mmtrMotionWalker.advance(integratedDistance);
+			// P3: forks crossed inside this advance had their authority holds released at the
+			// crossing - drop them from the pending refresh set so they are never re-requested.
+			drainMmtrCrossedPoints();
 			if (mmtrMotionWalker.legCount() > mmtrMotionLegCount) {
 				refreshMmtrMotionLegs();
 				mmtrMotionLegCount = mmtrMotionWalker.legCount();

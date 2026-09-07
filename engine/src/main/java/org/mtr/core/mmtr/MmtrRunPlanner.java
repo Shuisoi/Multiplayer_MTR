@@ -210,6 +210,32 @@ public final class MmtrRunPlanner {
 		}
 	}
 
+	/**
+	 * P3: request every en-route turnout of a feasible plan through the {@link MmtrPointAuthority}
+	 * under {@code owner} (approach locking - requests land before the vehicle arrives). Re-requesting
+	 * refreshes the grant/queue window and is idempotent. Returns whether the owner currently holds
+	 * every fork (all granted now; queued forks stay queued and the caller waits/retries).
+	 */
+	public static boolean requestForkOps(Plan plan, org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner, long untilMillis) {
+		return requestForkOps(plan.forkOps, authority, owner, untilMillis);
+	}
+
+	/** Request a specific set of fork ops (plan.forkOps or a still-pending subset of them). */
+	public static boolean requestForkOps(ObjectArrayList<String[]> forkOps, org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner, long untilMillis) {
+		boolean all = true; // an empty op set has nothing to wait on
+		for (final String[] op : forkOps) {
+			final long x = Long.parseLong(op[0]);
+			final long y = Long.parseLong(op[1]);
+			final long z = Long.parseLong(op[2]);
+			final String viaHex = op[3];
+			final int leg = Integer.parseInt(op[4]);
+			if (authority.request(x, y, z, viaHex, owner, leg, untilMillis) != org.mtr.core.mmtr.point.MmtrPointAuthority.Result.GRANTED) {
+				all = false;
+			}
+		}
+		return all;
+	}
+
 	private static ObjectArrayList<Rail> forwardRails(Simulator sim, Position node, Rail current) {
 		final ObjectArrayList<Rail> out = new ObjectArrayList<>();
 		final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(node);
