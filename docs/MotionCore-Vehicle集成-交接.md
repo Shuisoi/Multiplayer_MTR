@@ -58,6 +58,15 @@ Motion Core 驱动：车的运行状态 = (当前轨道段 + 段内偏移)，到
 - T3（推荐先做，可测）：在发车/生成 manual 车处用 createWithLegs + Motion Core buildLegs() 生成一辆「路线由 Motion Core 决定」的真实 Vehicle，并让它在合成场区/真实存档里跑起来（railProgress 前进 + 跨岔换向断言）。这一步把 Motion Core 选轨真正送进一辆活的车。
 - T3b：让那辆 manual 车能被现有 ControlState（MmtrDriveControl / rider 驾驶）驱动，运动走 Motion Core；验证人用现有键位/命令能把它往前开、到岔口设岔换向、停目标。
 - T4：删旧烘焙（Depot.generateRoute / Siding.generateRoute 三缓存拼装、Simulator.hasPath*），改为 Motion Core 取径。
+> T4 阻塞证据（goal round，全量 256 绿集内）：当前 8 个绿测试类都靠 Depot.generateDepots -> "SUCCESSFUL"
+> （= auto/scheduled 路径烘焙）才能发车跑车：MiniWorldLineTests、MiniWorldDeterministicDriveTests、
+> MmtrMissionDriveTests、MmtrPeriodicTaskTests、MmtrTrainsServletTests、DepotDepartureTests、MiniWorldMissionTests、
+> MmtrMultiplayerFoundationTests（后者的 VehicleExtraData.create 亦走三缓存）。Motion Core 自身的 buildLegs()
+> 也调 SidingPathFinder.generatePathDataDistances。=> 直接删 generateRoute/三缓存会破坏整个 auto 服务 + 这 8 类绿测试，
+> 违反"不新增失败"。要让烘焙可删，前置 = 把全部 Vehicle（含 auto/scheduled）运动切到 Motion Core 逐 tick
+> (segment+offset)（Vehicle.simulate*/bogies/signal/停站/turnback 的 L3 大改，见 notes/12）。故 T4 应作为单独、
+> 多轮、分片的工作立项，而不是一次低风险删除。
+
 
 
 ## 5b. T3/T3b 已完成（commit f04ff20，全量回归零新增失败）
