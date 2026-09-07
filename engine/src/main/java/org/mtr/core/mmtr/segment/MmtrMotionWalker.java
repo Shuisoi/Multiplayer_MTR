@@ -5,7 +5,9 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Data;
 import org.mtr.core.data.Position;
+import org.mtr.core.data.PathData;
 import org.mtr.core.data.Rail;
+import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 
 /**
@@ -32,6 +34,9 @@ public final class MmtrMotionWalker {
 	private boolean endOfLine;
 	private boolean atTarget;
 
+	/** Ordered engine-runnable legs (PathData) over the rails the walker has traversed/boarded. */
+	private final ObjectArrayList<PathData> legs = new ObjectArrayList<>();
+
 	private MmtrMotionWalker(Data data, Rail startRail, Position startAt, BranchStore branches, @Nullable String targetRailHex) {
 		this.data = data;
 		this.branches = branches;
@@ -41,6 +46,9 @@ public final class MmtrMotionWalker {
 		this.ahead = otherEnd(startAt, startRail);
 		this.offsetM = 0;
 		this.atTarget = startRail.getHexId().equals(targetRailHex);
+		if (!this.atTarget && this.ahead != null) {
+			this.legs.add(new PathData(startRail, 0L, 0L, 0, startAt, this.ahead));
+		}
 	}
 
 	public static MmtrMotionWalker start(Data data, Rail startRail, Position startAt, BranchStore branches, @Nullable String targetRailHex) {
@@ -68,6 +76,17 @@ public final class MmtrMotionWalker {
 	/** Length of the current rail, m. */
 	public double currentRailLengthM() {
 		return rail.railMath.getLength();
+	}
+
+	/**
+	 * The ordered, engine-runnable legs (PathData with cumulative distances) covering the route the
+	 * Motion Core walker has traversed so far. This is what a real Vehicle can be handed instead of a
+	 * pre-baked whole-journey path — the route was decided segment by segment by Motion Core.
+	 */
+	public ObjectArrayList<PathData> buildLegs() {
+		final ObjectArrayList<PathData> out = new ObjectArrayList<>(legs);
+		SidingPathFinder.generatePathDataDistances(out, 0);
+		return out;
 	}
 
 	public boolean haltedAtAuthority() {
@@ -131,6 +150,9 @@ public final class MmtrMotionWalker {
 			enteredFrom = ahead;
 			ahead = otherEnd(ahead, next);
 			offsetM = 0;
+			if (ahead != null) {
+				legs.add(new PathData(rail, 0L, 0L, 0, enteredFrom, ahead));
+			}
 			if (rail.getHexId().equals(targetRailHex)) {
 				atTarget = true;
 				return;

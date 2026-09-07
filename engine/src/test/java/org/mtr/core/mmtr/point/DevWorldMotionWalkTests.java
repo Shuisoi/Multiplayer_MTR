@@ -109,4 +109,31 @@ public final class DevWorldMotionWalkTests {
 		for (final Object2ObjectOpenHashMap.Entry<Position, Rail> e : neighbors.object2ObjectEntrySet()) { if (e.getValue() == rail) { return e.getKey(); } }
 		return null;
 	}
+
+	@Test
+	public void motionCoreEmitsRunnableLegsForVehicle() {
+		org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(DEV_MTR_ROOT), "dev world save not present - skipping");
+		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, DEV_MTR_ROOT, false);
+		final ObjectArrayList<MmtrSwitch> all = MmtrPointRegistry.discover(sim);
+		MmtrSwitch sw = null;
+		for (final MmtrSwitch s : all) { if (s.nodeX == NX && s.nodeY == NY && s.nodeZ == NZ) { sw = s; break; } }
+		org.junit.jupiter.api.Assumptions.assumeTrue(sw != null, "no turnout at -96");
+		final Position node = new Position(NX, NY, NZ);
+		final Rail via = findRailByHex(sim, sw.viaRailHex);
+		final Position startPos = otherEnd(sim, node, via);
+		org.junit.jupiter.api.Assumptions.assumeTrue(startPos != null, "via rail has far end");
+		final BranchStore b1 = new BranchStore();
+		b1.set(NX, NY, NZ, via.getHexId(), 1);
+		final MmtrMotionDriver d = MmtrMotionDriver.start(sim, via, startPos, b1, sw.branch1Hex);
+		d.driveToRest(1000, 0.004, 200);
+		assertTrue(d.atTarget(), "should have boarded branch1");
+
+		// T1: Motion Core emits an ordered, runnable leg list (Vehicle path carrier).
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.PathData> legs = d.walker.buildLegs();
+		assertTrue(legs.size() >= 2, "legs must cover via-rail + branch1, got " + legs.size());
+		final org.mtr.core.data.PathData last = legs.get(legs.size() - 1);
+		final double expected = via.railMath.getLength() + findRailByHex(sim, sw.branch1Hex).railMath.getLength();
+		assertEquals(expected, last.getEndDistance(), 1e-3, "final leg end distance spans via + elected branch1 rails");
+		assertTrue(last.getEndDistance() > legs.get(0).getEndDistance(), "legs must be cumulative/monotonic");
+	}
 }

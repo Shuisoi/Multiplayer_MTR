@@ -141,3 +141,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 ## 19. 切片4：ofWalker 插值车头世界坐标
 - MmtrMotionSnapshot.ofWalker 在 segment 端点间按 offset 线性插值出 headX/headZ，输出完整可渲染的
   (segment,offset,head) 快照（无 Vehicle/无烘焙 path）。真实 -96 测试断言 offset=0 时 head=-96 节点。绿。
+## 20. Vehicle 本体接线 T1：MmtrMotionWalker.buildLegs()
+- MmtrMotionWalker 记录其跨过的每段，buildLegs() 产出有序、累计距离、Vehicle 可跑的 PathData 轨序
+  （路线由 Motion Core 逐段选，非烘焙）。真实 -96 测试：到 branch1 后 legs 覆盖 via+branch1，末段 endDistance 正确。
+  这是让 Vehicle 路径来源换成 Motion Core 的第一块真实代码。
