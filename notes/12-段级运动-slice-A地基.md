@@ -138,3 +138,6 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
   (segment,offset) 运动表示（引擎 map/ops 已用同一 DTO）。
 - DevWorldMotionWalkTests 新增：真实 -96 岔口把车开到 branch1 后，ofWalker 快照 segStart = -96 节点、offset=0。
   编译 + 测试绿。
+## 19. 切片4：ofWalker 插值车头世界坐标
+- MmtrMotionSnapshot.ofWalker 在 segment 端点间按 offset 线性插值出 headX/headZ，输出完整可渲染的
+  (segment,offset,head) 快照（无 Vehicle/无烘焙 path）。真实 -96 测试断言 offset=0 时 head=-96 节点。绿。

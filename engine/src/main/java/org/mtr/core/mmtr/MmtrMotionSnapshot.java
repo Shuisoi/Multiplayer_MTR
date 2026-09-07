@@ -101,6 +101,16 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		out.segmentLengthM = walker.currentRailLengthM();
 		out.segmentOffsetM = Math.max(0, walker.offsetM());
 		out.moving = !walker.haltedAtAuthority() && !walker.atTarget() && !walker.endOfLine();
+		// World head position interpolated along the current segment at the current offset
+		// (straight-segment projection between the two rail endpoints; sufficient for render/map).
+		final double len = out.segmentLengthM > 0 ? out.segmentLengthM : 1;
+		final double frac = Math.min(1, out.segmentOffsetM / len);
+		if (start != null && end != null) {
+			out.headX = start.getX() + (end.getX() - start.getX()) * frac;
+			out.headZ = start.getZ() + (end.getZ() - start.getZ()) * frac;
+		}
+		out.speedKmh = 0;
+		out.cars = 0;
 		return out;
 	}
 

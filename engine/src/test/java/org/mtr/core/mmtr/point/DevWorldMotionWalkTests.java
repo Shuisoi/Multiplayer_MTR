@@ -94,6 +94,7 @@ public final class DevWorldMotionWalkTests {
 		assertEquals(NX, Math.round(snap.segStartX), "snapshot segment starts at the -96 node where branch1 was boarded");
 		assertTrue(snap.segEndX != snap.segStartX || snap.segEndZ != snap.segStartZ, "snapshot must report a concrete rail segment");
 		assertEquals(0.0, snap.segmentOffsetM, 1e-6, "just boarded branch1 -> offset 0");
+		assertEquals(NX, Math.round(snap.headX), "head position at offset 0 equals the -96 boarding node");
 	}
 
 	private static Rail findRailByHex(Simulator sim, String hex) {
