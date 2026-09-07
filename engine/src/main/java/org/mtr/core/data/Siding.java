@@ -313,7 +313,6 @@ public final class Siding extends SidingSchema implements Utilities {
 		boolean spawnTrain = true;
 
 		final ObjectArraySet<Vehicle> trainsToRemove = new ObjectArraySet<>();
-		final LongOpenHashSet visitedDepartureIndices = new LongOpenHashSet();
 		for (final Vehicle vehicle : vehicleIdMap.values()) {
 			vehicle.simulate(millisElapsed, vehiclePositions, vehicleTimesAlongRoute);
 
@@ -322,43 +321,20 @@ public final class Siding extends SidingSchema implements Utilities {
 			}
 
 			if (vehicle.getIsOnRoute()) {
-				if (!getIsUnlimited()) {
-					final long departureIndex = vehicle.getDepartureIndex();
-					if (departureIndex < 0 && !getIsManual() || departureIndex >= departures.size() || visitedDepartureIndices.contains(departureIndex)) {
-						trainsToRemove.add(vehicle);
-					} else {
-						visitedDepartureIndices.add(departureIndex);
-					}
-				}
-
-				if (getIsManual() && departures.isEmpty()) {
-					departures.add(vehicle.getSidingDepartureTime() - MILLIS_PER_DAY);
-				}
+				// MTR timetable auto-dispatch removed (auto rebuilt on Motion/tasks): a train on the
+				// network was put there by a driver / task / manual spawn; nothing auto-prunes or
+				// auto-re-cycles it by a timetable departure index.
 			} else {
 				trainsAtDepot++;
-
 				final boolean allowDoublePark = mmtrFormationWindow && trainsAtDepot <= 2;
 				if (trainsAtDepot > 1 && !allowDoublePark) {
 					trainsToRemove.add(vehicle);
-				} else if (!allowDoublePark && !pathSidingToMainRoute.isEmpty() && !getIsManual()) {
-					final int departureIndex = matchDeparture();
-					if (departureIndex >= 0 && departureIndex < departures.size()) {
-						if (!transportMode.continuousMovement && vehicleIdMap.values().stream().anyMatch(checkVehicle -> checkVehicle.getDepartureIndex() == departureIndex)) {
-							if (millisElapsed <= MILLIS_PER_HOUR) {
-								log.debug("Already deployed vehicle from {} for departure index {}", getDepotName(), departureIndex);
-							}
-						} else {
-							vehicle.startUp(departureIndex, departures.getLong(departureIndex));
-						}
-					}
-				}
-
-				if (getIsManual()) {
-					departures.clear();
 				}
 			}
 		}
 
+		// Keep at most one parked train from the template (manual / MMTR stock). MTR no longer
+		// auto-dispatches a service train onto a timetable route.
 		if (defaultPathData != null && !vehicleCars.isEmpty() && spawnTrain && (getIsUnlimited() || vehicleIdMap.size() < getMaxVehicles())
 			&& (!mmtrManualSpawn || !mmtrSessionSpawned)) {
 			final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
