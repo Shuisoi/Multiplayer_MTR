@@ -2,7 +2,20 @@
 
 > 用途：开新会话做「让引擎 Vehicle 本体跑 Motion Core」这项核心改造时，先读本文档即可接手，无需回顾冗长历史。
 > 仓库：本机 mmtr/ 是独立 git 仓库（引擎在 mmtr/engine，Minecraft 模组在 mmtr/game）。
-> ⚠ 状态标注：本文头部写于 78e6610（16:30）；此后 09-07 17:07–18:16 已删除 MTR depot 自动路径烘焙/时刻表自动发车（§3 的 T4 前置删除链完成、全量转绿），HEAD 至 1222962（docs 重组）；再后本会话追加 **L3 slice-1：Vehicle live motion mode**（Vehicle 内嵌 MmtrMotionWalker，(segment+offset) 逐 tick、岔口按当前道岔态实时裁决，未设岔停车等待、搬岔即换向；含真实 -96 岔口活搬岔用例），详见 **notes/14**，全量 231/0/2。§5 的 T4 删除前提已实质前置完成大半；本文 §3 之后内容按 notes/14 + git log 为准。
+> ⚠ 状态标注（重要）：本文正文写于 78e6610（16:30，T3/T3b 时刻）；其后进展远超前文，**正文仅作历史/锚点参考**，当前状态一律以本文下方「L3 主线进展（新会话先读）」+ notes/14–21 + git log 为准。
+>
+> ### L3 主线进展（新会话先读，2026-09 会话收口）
+> 1. 09-07 17:07–18:16：删除 MTR depot 自动路径烘焙/时刻表自动发车（§3 的 T4 前置删除链，全量转绿）→ 1222962。
+> 2. 本会话 L3 slice-1..7（每片提交+测试+notes，全量从 227/0/2 推进到 **243/0/2 全绿，零新增失败**）：
+>    - slice-1（b6cbf6e，notes/14）：**Vehicle live motion mode**——Vehicle 内嵌 MmtrMotionWalker，(segment+offset) 逐 tick、岔口按当前道岔态实时裁决、未设岔停车等待、搬岔即换向；增长影子 legs（渲染/占用沿用）、mmtr-motion 快照由 walker 直出；含真实 -96 岔口活搬岔用例（MmtrVehicleMotionRunTests 5 例）。
+>    - slice-2（cdbf6a9，notes/15）：yard 停场起步（startAtOffset）+ **Siding.spawnMmtrMotionVehicle** 发车接缝（MmtrYardMotionDepartureTests 2 例）。
+>    - slice-3（3d6a19c，notes/16）：**真实 dev 存档端到端**——seam 停场车出库→真实咽喉到 -96 未设停车→活搬岔跨被选真实轨（DevYardMotionE2ETests，0 skip）。
+>    - slice-4（6ac7a06，notes/17）：**精确停点**——制动包络恒减速精确落点（无过冲）、按请求开门、新令续行、运行中再武装；含 slice-1 无政策回落单位修正（MmtrMotionStopTargetTests 2 例）。
+>    - slice-5（462c664，notes/18）：**无人自动运行 auto step-run**——武装停点即自动跑/停/开门，任务再武装自动续行；未设岔自动等、搬岔自动续（MmtrMotionAutoRunTests 2 例）。
+>    - slice-6（a937365，notes/19）：**MmtrRunPlanner 进路规划服务**——BFS 进路+沿途岔口预置（与 walker 同 cos 规则）+ walker 空间停点换算，MOVE_TO 底座（MmtrRunPlannerTests 3 例）。
+>    - slice-7（1956115，notes/20）：**任务驱动 motion 车闭环**——MmtrMissionControl AUTOPILOT 派发→planner+岔口预置进权威 store+auto 武装→平台轨精确停稳 AT_TARGET 门开→终态交回 idle（MmtrMotionMissionTests 2 例）。
+> 3. **T4 收尾评估**：notes/21——旧烘焙自动生成面已全部删除（legacy create() 全仓 0 调用）；残余=存档兼容(writePathCache)/停场模板(defaultPathData)/归档接缝(spawnMmtrManualWithLegs，仅测试)，均有主、无需再删。
+> 4. **剩余（另立项）**：作业调度器(SERVE/MOVE_TO 宏)接 motion；行经段信号/限速（M2）；平台停点对齐；客户端渲染/镜像；实机人工确认清单（03 实机测试文档 §7）。验证纪律：每片全量零新增失败（现 243/0/2）。
 > 语言：文档中文；代码/提交信息英文。
 
 ---

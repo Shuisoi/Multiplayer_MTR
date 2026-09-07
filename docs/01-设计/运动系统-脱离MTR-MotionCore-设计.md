@@ -143,3 +143,13 @@ MmtrTurnoutRoutingTests / MmtrLiveRouterTests / DevWorldTurnoutFlipTests）仍�
 ### 10.4 验收
 一辆真实 Vehicle：出库 -> 到岔口按当前道岔态换向 -> 进目标股道/站台停稳，全程由 Motion Core 驱动；
 引擎内可见其 railProgress/占用沿被选真实轨前进；翻转 -96 岔口 -> 车实际换走另一轨；旧烘焙机制已删。
+
+---
+
+## 状态更新（2026-09 会话收口，正文为设计基线）
+§10.4 验收已按 slice-1..7 分片达成并有测试证据（notes/14–20，提交 b6cbf6e→1956115，
+全量 227→243 零新增失败）：真实 Vehicle 出库→岔口按当前道岔态换向→目标精确停稳全程 Motion Core；
+-96 翻转在真实 dev 存档验证（slice-3）；手动与 AUTOPILOT 任务车均在 live 模式闭环（slice-1/7）。
+T4 收尾评估见 notes/21（自动烘焙删除面完成；残余机制各有保留理由）。
+未做（与 §4 M1/M2/M3 对应）：作业调度宏接 motion、行经段信号/限速（M2）、平台停点对齐、
+客户端渲染/镜像、跨场路由。以 notes/21 + git log 为最新。
