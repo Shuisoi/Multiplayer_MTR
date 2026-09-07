@@ -94,6 +94,6 @@ Motion Core 驱动：车的运行状态 = (当前轨道段 + 段内偏移)，到
 
 ## 7. 文档地图（按需加载）
 - 本文档（新会话先读）：目标 / 已完成 / 剩余 / 锚点 / 验证。
-- docs/运动系统-脱离MTR-MotionCore-设计.md：完整架构 / 解耦边界 / 删除与迁移策略 / 验收 / §10 T1–T4 规约。
+- docs/01-设计/运动系统-脱离MTR-MotionCore-设计.md：完整架构 / 解耦边界 / 删除与迁移策略 / 验收 / §10 T1–T4 规约。
 - notes/12-段级运动-slice-A地基.md：按轮次的过程记录（含各提交点）与全量回归证据。
 - 提交锚点（历史）：652507e(决策+段) 3e3e18a(图层岔) c9ec451(路由) a434e84(integrate) 8c8c379(设计doc) f6cec64(真实-96决策) 1179d47(Walker) 0ab03da(Driver) 4e47449(真实-96驱动) 36f4d83(buildLegs/T1) e4cb07f(createWithLegs/T2) e0b6193(自由开续走) bc2ffdb(手动开) 78e6610(applyControl/现有控制驱动)。

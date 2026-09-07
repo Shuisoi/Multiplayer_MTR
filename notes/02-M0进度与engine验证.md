@@ -15,7 +15,7 @@
 1. game composite：在 game/settings.gradle 用 includeBuild(../engine) + dependencySubstitution 把
    org.mtr:Transport-Simulation-Core 换为 engine 源码；删 game/libs/Transport-Simulation-Core-0.0.1.jar 引用（保留 Build-Tools jar）。
 2. game 构建验证：gradlew.bat fabric:setupFiles fabric:build -PminecraftVersion=1.20.4（JDK21；首次会拉 loom/yarn/MC，较重）。
-3. M0b：EngineBridge 接口 + MC<->engine 网络桥（草案放 docs/05-EngineBridge-设计.md）与带宽基准。
+3. M0b：EngineBridge 接口 + MC<->engine 网络桥（草案放 docs/01-设计/EngineBridge-设计.md）与带宽基准。
 ## M0 验证完成（补记 2026-09）
 - engine：TSC 基线 ce3a509082 在 JDK21 下 classes 编译通过；shadowJar(33MB) 生成；standalone --help OK。
 - game：fabric:build BUILD SUCCESSFUL（loom 1.10.5, Gradle 8.14, JDK21 运行）；
@@ -30,7 +30,7 @@
 - 集成方式：scripts/sync-engine.ps1 把 engine shadowJar 同步为 game/libs/Transport-Simulation-Core-0.0.1.jar（上游式）。
 
 ## 下一步（M0b）
-EngineBridge 设计文档已建（docs/05-EngineBridge-设计.md）。实现顺序建议：
+EngineBridge 设计文档已建（docs/01-设计/EngineBridge-设计.md）。实现顺序建议：
   1) 引擎侧加 bridge 占位 op/echo + 配置文件；
   2) MC 侧 EngineBridge 接口与 NetworkEngineBridge(连接/心跳/重连)；
   3) 最小 end-to-end：空世界+最小线路，外部引擎驱动一辆列车，MC 端能看到并渲染；
