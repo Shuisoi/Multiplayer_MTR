@@ -1,0 +1,103 @@
+package org.mtr.core.data;
+
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.junit.jupiter.api.Test;
+import org.mtr.core.mmtr.ConsistTypeRegistry;
+import org.mtr.core.mmtr.ControlState;
+import org.mtr.core.mmtr.manifest.MmtrRollingStockManifest;
+import org.mtr.core.operation.MmtrDriveControl;
+import org.mtr.core.simulation.Simulator;
+import org.mtr.core.tool.Angle;
+
+import java.nio.file.Paths;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Real-server driving fix: rolling-stock manifest stock on a manual siding must spawn in LIVE
+ * Motion-Core mode (yard walker, no baked single-yard-rail path) so a driver can actually leave the
+ * yard - the legacy manifest car was confined to its 35 m yard rail (parked offset == journey end)
+ * and could never drive out. This test applies the manifest exactly like the engine startup/reset
+ * and verifies the first template tick stages a motion vehicle that the existing cab control then
+ * drives out of the yard onto the network rail.
+ */
+public final class MmtrManifestMotionSpawnTests {
+
+	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
+	private static final String CONSIST_JSON = "{"
+		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "}";
+
+	private static Rail through(Position p1, Position p2) {
+		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+	}
+
+	/** Depot yard YR (-32..-20) -> mouth -> network rail MA (-20..100). */
+	private static final class Net {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-manifest-motion"), false);
+		final Position yardBack = new Position(-32, 0, 0);
+		final Position yardMouth = new Position(-20, 0, 0);
+		final Rail yardRail = Rail.newSidingRail(yardBack, Angle.fromAngle(0), yardMouth, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Rail mouthRail = through(yardMouth, new Position(100, 0, 0));
+		final Depot depot = new Depot(TransportMode.TRAIN, sim);
+		final Siding siding = new Siding(yardBack, yardMouth, 12, TransportMode.TRAIN, sim);
+
+		Net() {
+			depot.setName("Yard");
+			depot.setCorners(new Position(-40, -5, -5), new Position(-10, 5, 5));
+			sim.rails.add(yardRail);
+			sim.rails.add(mouthRail);
+			sim.depots.add(depot);
+			sim.sidings.add(siding);
+			sim.mmtrConsistTypes = ConsistTypeRegistry.parse(CONSIST_JSON);
+			sim.mmtrDefaultConsistTypeId = "emu";
+			sim.sync();
+			assertTrue(depot.savedRails.contains(siding), "siding must attach to the depot yard");
+			siding.tick(); // resolve the yard defaultPathData (the engine does this per tick)
+			final String manifest = "{"
+				+ "\"depots\":[{\"depotId\":\"" + depot.getId() + "\",\"name\":\"Yard\",\"sidings\":[{\"sidingId\":\"" + siding.getId()
+				+ "\",\"name\":\"1\",\"cars\":[{\"vehicleId\":\"probe\",\"length\":2,\"width\":1,\"capacity\":10,\"bogie1Position\":0,\"bogie2Position\":1,\"couplingPadding1\":0.1,\"couplingPadding2\":0.1}]}]}]}";
+			sim.mmtrRollingStock = MmtrRollingStockManifest.parse(manifest);
+		}
+	}
+
+	@Test
+	public void manifestStockSpawnsAsMotionVehicleAndDrivesOutOfTheYard() {
+		final Net n = new Net();
+		final int placed = n.sim.mmtrResetAndApplyRollingStock();
+		assertEquals(1, placed, "manifest installs stock on the declared siding");
+
+		// First engine tick: the template spawner stages the car in MOTION mode (yard walker).
+		n.siding.simulateVehicles(1000, null);
+		final Vehicle[] found = {null};
+		n.siding.iterateVehicles(vehicle -> found[0] = vehicle);
+		assertNotNull(found[0], "manifest stock spawned on the siding");
+		final Vehicle vehicle = found[0];
+		assertTrue(vehicle.isMmtrMotion(), "manifest manual stock must spawn in live Motion-Core mode, not as a legacy yard-rail car");
+		assertTrue(!vehicle.getIsOnRoute(), "spawned car is parked in the yard");
+		final double parkedProgress = vehicle.getRailProgress();
+
+		// Drive with the existing cab control: throttle + forward reverser, like the game client keys.
+		final UUID driver = UUID.randomUUID();
+		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
+		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		vehicle.updateRidingEntities(entities);
+		new MmtrDriveControl(vehicle.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
+		assertTrue(vehicle.isMmtrManualOverride(), "cab control holds the override");
+
+		double max = parkedProgress;
+		for (int i = 0; i < 600; i++) {
+			n.siding.simulateVehicles(1000, null);
+			max = Math.max(max, vehicle.getRailProgress());
+		}
+		final double yardLen = n.yardRail.railMath.getLength();
+		assertTrue(max > yardLen + 5, "motion stock must drive out of the yard onto the network rail, progress=" + max + " (yard " + yardLen + " m)");
+		assertTrue(vehicle.getIsOnRoute(), "departed vehicle is on route");
+		assertEquals(n.mouthRail.getHexId(), vehicle.getMmtrMotionWalker().railHex(), "vehicle runs on the network rail after leaving the yard");
+	}
+}

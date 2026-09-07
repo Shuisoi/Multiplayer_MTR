@@ -288,13 +288,28 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 
 		// Keep at most one parked train from the template (manual / MMTR stock). MTR no longer
-		// auto-dispatches a service train onto a timetable route.
+		// auto-dispatches a service train onto a timetable route. MMTR-manual sidings (rolling-stock
+		// manifest) spawn their stock in LIVE Motion-Core mode (segment+offset walker from the yard,
+		// free-run/forks live) instead of a legacy baked single-yard-rail path - so a driver can
+		// actually leave the yard.
 		if (defaultPathData != null && !vehicleCars.isEmpty() && spawnTrain && (getIsUnlimited() || vehicleIdMap.size() < getMaxVehicles())
 			&& (!mmtrManualSpawn || !mmtrSessionSpawned)) {
-			final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
-			vehicleIdMap.put(vehicle.getId(), vehicle);
+			Vehicle vehicle = null;
 			if (mmtrManualSpawn) {
-				mmtrSessionSpawned = true;
+				final MmtrMotionWalker walker = mmtrMotionWalkerFromYard(null, data instanceof org.mtr.core.simulation.Simulator simulator ? simulator.mmtrPointBranches : null, null);
+				if (walker != null) {
+					vehicle = spawnMmtrMotionVehicle(walker);
+				}
+				if (vehicle == null) {
+					System.out.println("[MMTR-MFST] manual siding " + id + " could not stage a Motion-Core car (yard busy/unwalkable) - legacy fallback");
+				}
+			}
+			if (vehicle == null) {
+				vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+				vehicleIdMap.put(vehicle.getId(), vehicle);
+				if (mmtrManualSpawn) {
+					mmtrSessionSpawned = true;
+				}
 			}
 		}
 
