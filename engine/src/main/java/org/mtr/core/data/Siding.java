@@ -38,8 +38,6 @@ public final class Siding extends SidingSchema implements Utilities {
 	private PathData defaultPathData;
 	private double timeOffsetForRepeating;
 
-	private final ObjectArrayList<SidingPathFinder<Depot, Siding, Station, Platform>> sidingPathFinderSidingToMainRoute = new ObjectArrayList<>();
-	private final ObjectArrayList<SidingPathFinder<Station, Platform, Depot, Siding>> sidingPathFinderMainRouteToSiding = new ObjectArrayList<>();
 	private final ObjectArrayList<PathData> pathMainRoute = new ObjectArrayList<>();
 	private final ObjectArrayList<PathData> pathSidingToMainRoute = new ObjectArrayList<>();
 	private final ObjectArrayList<PathData> pathMainRouteToSiding = new ObjectArrayList<>();
@@ -242,54 +240,21 @@ public final class Siding extends SidingSchema implements Utilities {
 		vehicleIdMap.clear();
 	}
 
-	public void generateRoute(Platform firstPlatform, @Nullable Platform lastPlatform, int stopIndex, long cruisingAltitude) {
-		vehicleIdMap.clear();
-		pathSidingToMainRoute.clear();
-		pathMainRouteToSiding.clear();
-		sidingPathFinderSidingToMainRoute.clear();
-		sidingPathFinderSidingToMainRoute.add(new SidingPathFinder<>(data, this, firstPlatform, -1));
-		sidingPathFinderMainRouteToSiding.clear();
-		if (lastPlatform != null) {
-			sidingPathFinderMainRouteToSiding.add(new SidingPathFinder<>(data, lastPlatform, this, stopIndex));
-		}
-	}
 
 	public boolean tick() {
-		// Generate any pending paths
-		SidingPathFinder.findPathTick(pathSidingToMainRoute, sidingPathFinderSidingToMainRoute, area == null ? 0 : area.getCruisingAltitude(), () -> finishGeneratingPath(false), (startSavedRail, endSavedRail) -> {
-			log.info("Path not found from {} siding {} to main route", getDepotName(), name);
-			finishGeneratingPath(true);
-		});
-		SidingPathFinder.findPathTick(pathMainRouteToSiding, sidingPathFinderMainRouteToSiding, area == null ? 0 : area.getCruisingAltitude(), () -> {
-			if (area != null) {
-				if (SidingPathFinder.overlappingPaths(area.getPath(), pathMainRouteToSiding)) {
-					pathMainRouteToSiding.removeFirst();
-				}
-			}
-			finishGeneratingPath(false);
-		}, (startSavedRail, endSavedRail) -> {
-			log.info("Path not found from main route to {} siding {}", getDepotName(), name);
-			finishGeneratingPath(true);
-		});
-
-		// Attempt to find a corresponding rail for this siding and return true if failed
+		// MTR depot-route auto-generation removed (auto rebuilt on Motion/tasks). The siding only
+		// resolves its own yard rail (defaultPathData) for parked stock.
 		if (defaultPathData == null) {
 			final Rail rail = Data.tryGet(data.positionsToRail, position1, position2);
 			if (rail == null) {
-				// Ensure depot generation is unblocked before this invalid siding is removed
-				if (!sidingPathFinderSidingToMainRoute.isEmpty() || !sidingPathFinderMainRouteToSiding.isEmpty()) {
-					sidingPathFinderSidingToMainRoute.clear();
-					sidingPathFinderMainRouteToSiding.clear();
-					finishGeneratingPath(true);
-				}
-			} else {
-				defaultPathData = new PathData(rail, id, 1, -1, 0, rail.railMath.getLength(), position1, rail.getStartAngle(position1), position2, rail.getStartAngle(position2));
+				// No corresponding rail: this siding is invalid and should be removed.
+				return true;
 			}
-			return defaultPathData == null;
-		} else {
-			return false;
+			defaultPathData = new PathData(rail, id, 1, -1, 0, rail.railMath.getLength(), position1, rail.getStartAngle(position1), position2, rail.getStartAngle(position2));
 		}
+		return false;
 	}
+
 
 	public void initVehiclePositions(Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
 		vehicleIdMap.values().forEach(vehicle -> vehicle.initVehiclePositions(vehiclePositions));
@@ -749,15 +714,6 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 	}
 
-	/**
-	 * Should only be called after a path is generated, whether successful or not.
-	 */
-	private void finishGeneratingPath(boolean failed) {
-		if (sidingPathFinderSidingToMainRoute.isEmpty() && sidingPathFinderMainRouteToSiding.isEmpty()) {
-			writePathCache();
-			generatePathDistancesAndTimeSegments();
-		}
-	}
 
 	private VehicleDeviationInfo getVehicleDeviationInfo(long currentMillis, int departureIndex, long departureOffset) {
 		final Vehicle vehicle;
