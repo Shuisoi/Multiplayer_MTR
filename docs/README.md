@@ -34,7 +34,7 @@
 | 实机测试-手动驾驶Motion车-步骤.md | 真实 dev 服务端手动驾驶验证步骤 + 待运行时确认清单 | 有效（按它做实机验收） |
 
 ## 过程记录（notes/，只增不改命名）
-- notes/01–14：按轮次的技术笔记/决策/回归证据。最近：14 = L3 slice-1（Vehicle live motion mode：内嵌 MmtrMotionWalker 逐 tick 驱动、岔口实时裁决，全量 231/0/2）。
+- notes/01–15：按轮次的技术笔记/决策/回归证据。最近：15 = L3 slice-2（yard 停场起步 + Siding 发车接缝：停场 manual 车由现有座舱控制出库，全程 live Motion Core，全量 233/0/2）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 仓库范围外（历史早期资料，未入库）

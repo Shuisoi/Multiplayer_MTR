@@ -39,7 +39,7 @@ public final class MmtrMotionWalker {
 	/** Ordered engine-runnable legs (PathData) over the rails the walker has traversed/boarded. */
 	private final ObjectArrayList<PathData> legs = new ObjectArrayList<>();
 
-	private MmtrMotionWalker(Data data, Rail startRail, Position startAt, BranchStore branches, @Nullable String targetRailHex) {
+	private MmtrMotionWalker(Data data, Rail startRail, Position startAt, double initialOffsetM, BranchStore branches, @Nullable String targetRailHex) {
 		this.data = data;
 		this.branches = branches;
 		this.targetRailHex = targetRailHex;
@@ -51,10 +51,26 @@ public final class MmtrMotionWalker {
 		if (!this.atTarget && this.ahead != null) {
 			this.legs.add(new PathData(startRail, 0L, 0L, 0, startAt, this.ahead));
 		}
+		// Parked starts: the consist's head may stand mid-rail inside a yard, not at the entry node.
+		// Offset is measured from the entry node toward {@code ahead}; it must not pass the far node
+		// (a parked body ahead of the node would have no elected continuation).
+		final double railLength = startRail.railMath.getLength();
+		this.offsetM = Math.max(0, Math.min(initialOffsetM, railLength));
+		this.distanceM = this.offsetM;
 	}
 
 	public static MmtrMotionWalker start(Data data, Rail startRail, Position startAt, BranchStore branches, @Nullable String targetRailHex) {
-		return new MmtrMotionWalker(data, startRail, startAt, branches, targetRailHex);
+		return new MmtrMotionWalker(data, startRail, startAt, 0, branches, targetRailHex);
+	}
+
+	/**
+	 * Starts a walker on {@code startRail} with its head already {@code initialOffsetM} metres inside
+	 * the rail (measured from {@code startAt} toward the far node) — the yard-parked position. The
+	 * initial offset must not reach the far node; a fresh {@link #advance} then runs the rest of the
+	 * rail and crosses its far node by authority like any other node.
+	 */
+	public static MmtrMotionWalker startAtOffset(Data data, Rail startRail, Position startAt, double initialOffsetM, BranchStore branches, @Nullable String targetRailHex) {
+		return new MmtrMotionWalker(data, startRail, startAt, initialOffsetM, branches, targetRailHex);
 	}
 
 	public String railHex() {

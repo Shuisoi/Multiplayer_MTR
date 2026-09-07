@@ -9,6 +9,8 @@ import org.mtr.core.directions.DirectionsFinder;
 import org.mtr.core.generated.data.SidingSchema;
 import org.mtr.core.oba.*;
 import org.mtr.core.operation.ArrivalResponse;
+import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
+import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.serializer.WriterBase;
@@ -371,6 +373,91 @@ public final class Siding extends SidingSchema implements Utilities {
 		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, legs,
 			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicleIdMap.put(vehicle.getId(), vehicle);
+		return vehicle;
+	}
+
+	/**
+	 * MMTR (L3, slice 2): build the live Motion-Core walker for a yard-parked consist of this siding:
+	 * the yard rail (defaultPathData) is walked from its rear end (the rail end whose node connects to
+	 * the fewest other rails — a depot tail/buffer; override with {@code rearEnd} when the topology is
+	 * ambiguous) and the head starts at the parked position inside the rail so the body fits the yard.
+	 * A driver can then depart the parked vehicle with the existing cab control and it runs the whole
+	 * way by Motion Core (every fork elected live) — no pre-baked route at all. Returns {@code null}
+	 * when the yard rail is unresolved or the formation does not fit the yard.
+	 */
+	@Nullable
+	public MmtrMotionWalker mmtrMotionWalkerFromYard(@Nullable Position rearEnd, @Nullable BranchStore branches, @Nullable String targetRailHex) {
+		if (defaultPathData == null || vehicleCars.isEmpty()) {
+			return null;
+		}
+		final Rail rail = defaultPathData.getRail();
+		if (rail == null) {
+			return null;
+		}
+		final double trainLength = Siding.getTotalVehicleLength(vehicleCars);
+		final double railLengthM = rail.railMath.getLength();
+		if (trainLength > railLengthM + 1e-6) {
+			return null;
+		}
+		final Position end1 = position1;
+		final Position end2 = position2;
+		final Position rear = rearEnd != null ? rearEnd : (countOtherRailsAt(end1, rail) <= countOtherRailsAt(end2, rail) ? end1 : end2);
+		// Parked head offset: body fully inside the rail, rear clear of the buffer node, roughly centred.
+		final double headOffset = Math.max(trainLength, Math.min((railLengthM + trainLength) / 2, railLengthM));
+		return MmtrMotionWalker.startAtOffset(data, rail, rear, headOffset, branches == null && data instanceof Simulator ? ((Simulator) data).mmtrPointBranches : branches, targetRailHex);
+	}
+
+	private int countOtherRailsAt(Position node, Rail yardRail) {
+		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(node);
+		if (neighbors == null) {
+			return 0;
+		}
+		int count = 0;
+		for (final Object2ObjectOpenHashMap.Entry<Position, Rail> e : neighbors.object2ObjectEntrySet()) {
+			if (e.getValue() != yardRail) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * MMTR (L3, slice 2): Motion-Core dispatch seam — spawns (replacing the single parked stock, yard
+	 * must be idle) a manual-allowed vehicle that is ALREADY in live motion mode: parked at the yard
+	 * position, walker seeded from {@link #mmtrMotionWalkerFromYard}, no route baked anywhere. The
+	 * driver departs it with the existing cab control (ControlState); every fork after that is elected
+	 * live by Motion Core from the current turnout state. The siding's session-spawn slot is taken so
+	 * the template respawner does not seed a second parked train once this one has left.
+	 */
+	@Nullable
+	public Vehicle spawnMmtrMotionVehicle(MmtrMotionWalker walker) {
+		if (walker == null || vehicleCars.isEmpty()) {
+			return null;
+		}
+		if (Siding.getTotalVehicleLength(vehicleCars) > railLength + 1e-6) {
+			return null;
+		}
+		Vehicle parked = null;
+		for (final Vehicle vehicle : vehicleIdMap.values()) {
+			if (vehicle.getIsOnRoute()) {
+				return null; // yard must be idle for Motion-Core dispatch
+			}
+			if (parked != null) {
+				return null; // more than one parked vehicle is not dispatchable
+			}
+			parked = vehicle;
+		}
+		if (parked != null) {
+			vehicleIdMap.remove(parked.getId());
+		}
+		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(),
+			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		vehicle.engageMmtrMotion(walker);
+		vehicleIdMap.put(vehicle.getId(), vehicle);
+		// Take the siding's spawn slot: the template respawner must not seed a second parked train once
+		// this one departs (manual policy + session flag together gate that re-seed).
+		mmtrManualSpawn = true;
+		mmtrSessionSpawned = true;
 		return vehicle;
 	}
 
