@@ -220,6 +220,10 @@ public interface Utilities {
 	}
 
 	static long circularClamp(long value, long min, long max, long totalDegrees) {
+		if (totalDegrees <= 0) {
+			// Degenerate period (no timetable in the Motion-Core engine): never spin on zero/negative wrap.
+			return value;
+		}
 		long result = value;
 		while (result < min) {
 			result += totalDegrees;
@@ -231,6 +235,10 @@ public interface Utilities {
 	}
 
 	static double circularClamp(double value, double min, double max, double totalDegrees) {
+		if (totalDegrees <= 0) {
+			// Degenerate period (no timetable in the Motion-Core engine): never spin on zero/negative wrap.
+			return value;
+		}
 		double result = value;
 		while (result < min) {
 			result += totalDegrees;
