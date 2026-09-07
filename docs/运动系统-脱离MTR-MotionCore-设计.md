@@ -90,3 +90,25 @@
 ### 8.3 每步验收
 删除后 engine compileJava/compileTestJava 通过；Motion Core 确定性测试（MmtrSegmentMotionTests /
 MmtrTurnoutRoutingTests / MmtrLiveRouterTests / DevWorldTurnoutFlipTests）仍绿；不再保留被删旧系统。
+
+---
+## 9. 验收与状态（round 12 / goal 收口）
+
+### 已达成并验证
+- Motion Core 解耦内核（MmtrSegmentStep / MmtrNodeRouter / MmtrPointRegistry+BranchStore / MmtrLiveRouter.route /
+  integrate / MmtrMotionWalker）在真实轨上通过确定性测试；含真实场区 -96/-95 岔口『搬0走直、搬1走岔』决策层翻转（DevWorldTurnoutFlipTests）。
+- 成文设计文档（本文）含架构/解耦边界/删除与迁移策略/验收。
+- mmtr 层被取代的旧路径化/缓存化搬迁机制已清理：死代码腿装配、跨股道"重生"自动移动、MmtrMotionRouter 已删除；清理全程 compileJava/TestJava + Motion Core 测试可验，全量回归无新增失败（13 个失败均为既有 mmtr-job 子系统，最初基线即红）。
+
+### 未达成（主体，需另行立项/资源）
+- 切片4：引擎 Vehicle 层把 MTR 预烘焙 pathData 运动换成 Motion Core 驱动（以 MmtrMotionWalker 逐 tick +
+  节点权威决策替代 VehicleExtraData.immutablePath / Depot.generateRoute 烘焙链路）并删除旧机制。这是改 1292 行
+  Vehicle + 发车/时刻表链路的 L3 重写，超出本 goal 轮次可安全收尾的范围。
+- mmtr-job 调度子系统自身仍在建设中（红）；其多股道用例依赖被下线的跨股道移动，需 Motion Core 真实驱动后恢复。
+
+### 切片4 起步接缝（供后续）
+1) 给 Vehicle 增加"decoupled 运行模式"（由 mmtrManualOverride / 任务触发）：运行时状态 = MmtrMotionWalker 的
+   (railHex, offsetM, speed)，每 tick advance(speed*dt)，旧 defaultPathData 路径不再作为其唯一轨道。
+2) MmtrMotionSnapshot 继续输出 (segment,offset)；服务端权威由 Motion Core 提供。
+3) 合成场区先验（出库→岔口按道岔换向→目标停稳），再接真实 dev 存档 -96 岔口"车实际沿该轨"。
+定义达成：运行中的车由 Motion Core 以 (segment+offset)+权威决策驱动，MTR 只作轨道图/几何来源；旧烘焙运动机制已删。
