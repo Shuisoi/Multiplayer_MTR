@@ -68,3 +68,24 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
   Vehicle.simulateMoving/simulateStopped/stoppingIndex/dwell/signal/turnback 深度依赖整条累计路径，
   属 L3 级大改；本轮只把"决策模型 + 图层面权威路由"做出来并验绿，未触碰 Vehicle 核心。
 - slice C 真实 -95 岔口引擎内"车实际经过对应轨"断言（需把自由开接进一辆真实存档车 + run/saves 配置）。
+
+## 7. 会话续轮 #3 成果（slice B 运行时路由 = 自由开要走的轨序，已验/将提交）
+- 新增 org.mtr.core.mmtr.segment.MmtrLiveRouter：<b>运行时逐节点权威路由</b>。
+  给定 data/startRail/startAt(+可选 targetRailHex)/BranchStore，沿真实 positionsToRail 前进：
+  * 到某节点枚举 approach 续向，用与 discover 相同的 cos 规则分出 straightest(branch0)/diverging(branch1)；
+  * 经 MmtrNodeRouter.electFromStore 用 operator/task 选下一轨（task 覆盖陈旧 operator；绝不 auto）；
+  * 单续向节点不要求权威直接续；真岔无 operator 无 task -> AWAITING_AUTHORITY（在 haltNode 停下）；
+  * 走到目标轨 -> AT_TARGET；死端 -> END_OF_LINE；maxSteps 兜底。
+  返回按顺序经过的 railHexOrder + 停止状态。这取代"生成期 disallow + 烘焙"，是自由开要走的轨序。
+- MmtrLiveRouterTests（org.mtr.core.mmtr.segment，绿，BUILD SUCCESSFUL）：
+  合成场区 approach->node0->{straight->A 支路, 45°diverge->B 支路}，各支再接续：
+  * 未设岔 + 无 task -> AWAITING_AUTHORITY，停在 node0，railHexOrder=[approach]；
+  * operator 0 -> 轨序经 straight 支（搬A走A）；operator 1 -> 经 diverge 支（搬B走B）；翻转即换真实轨序；
+  * 直通节点无 authority 继续（branch0 走到 rBeyondA）；
+  * task 指定 B 支覆盖陈旧 operator 0；target=rBeyondA -> AT_TARGET 且轨序到目标止。
+
+## 8. 仍未做（诚实边界，slice A 本体在 Vehicle 层）
+- 仍没把 running Vehicle 从 immutablePath 整段烘焙切到 MmtrLiveRouter 输出的逐段轨序 + segment+offset 驱动
+  （物理/dwell/signal/turnback 均在 Vehicle.simulate 内依赖整条累计路径，L3 级大改）。
+- MmtrLiveRouter 目前给出"自由开车应走的轨序/停在哪等权威"，尚未接入 Vehicle 实际运动与任务执行器。
+- slice C 真实 -95 岔口"车实际经过对应轨"引擎内断言，仍需真实存档/运行环境。
