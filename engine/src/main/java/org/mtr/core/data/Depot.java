@@ -114,7 +114,8 @@ public final class Depot extends DepotSchema implements Utilities {
 	public void init() {
 		writePathCache();
 		savedRails.forEach(Siding::init); // Sidings not under a depot will be ignored, but it doesn't matter
-		generatePlatformDirectionsAndWriteDeparturesToSidings();
+		// MTR timetable auto-departure generation at load removed (auto rebuilt on Motion/tasks):
+		// nothing auto-dispatches anymore; explicit Depot.generateDepots stays for tools/tests.
 	}
 
 	/**
