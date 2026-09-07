@@ -113,3 +113,33 @@ MmtrTurnoutRoutingTests / MmtrLiveRouterTests / DevWorldTurnoutFlipTests）仍�
 2) MmtrMotionSnapshot 继续输出 (segment,offset)；服务端权威由 Motion Core 提供。
 3) 合成场区先验（出库→岔口按道岔换向→目标停稳），再接真实 dev 存档 -96 岔口"车实际沿该轨"。
 定义达成：运行中的车由 Motion Core 以 (segment+offset)+权威决策驱动，MTR 只作轨道图/几何来源；旧烘焙运动机制已删。
+---
+## 10. Vehicle 本体采纳 Motion Core —— 真实接线规约（以代码为准）
+
+### 10.1 现状路径构造链（实证）
+- Vehicle 运动 = vehicleExtraData.immutablePath（整条烘焙路径），Vehicle.simulate* 全沿它。
+- immutablePath 由 VehicleExtraData.create(...) -> createPathData() 拼自每股道三份缓存：
+  pathSidingToMainRoute(出库腿) + pathMainRoute(主线) + pathMainRouteToSiding(回库腿)，见 Siding.java:124/364/407
+  （new Vehicle(VehicleExtraData.create(areaId, id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute,
+   pathMainRouteToSiding, defaultPathData, repeatInfinitely, ...))）。
+- 这三份缓存由 Depot.generateRoute -> Siding.generateRoute -> SidingPathFinder 在生成期一次性烤死
+  （生成时按当时道岔态 disallow 未选支，之后车只沿结果跑）。
+
+### 10.2 接线目标（Vehicle 本体跑 Motion Core）
+把"路径来源"从生成期 SidingPathFinder 烘焙换成 Motion Core 运行时逐段权威路由：
+- 车辆运行状态改持 MmtrMotionWalker 的 (railHex, offsetM, speed)，每 tick 由 MmtrMotionDriver/advance 推进；
+  到节点按 MmtrNodeRouter 读当前道岔态(或任务目标)选下一段，不再有"发车前烤好整条 path"。
+- 几何/渲染/占用仍由真实 Rail 提供（MTR 只作轨道图/几何），不依赖整条 immutablePath 的下标累计距离。
+- 出库腿/换场/停站意图由任务(MOVE_TO/SERVE)下达，Motion Core 负责怎么走。
+
+### 10.3 落地切片（每步可编译 + Motion Core 测试可验）
+- T1：构造链切换。给 VehicleExtraData/路径来源加"MotionCore 轨序 -> 该段可运行的几何"，使能由 MmtrLiveRouter
+  产出的轨序生成一份 Vehicle 能沿其前进的运行时段序列（替代从三份缓存拼的整条烘焙）。
+- T2：Vehicle 加 decoupled 运行模式（manual/任务触发）：运动状态 = MmtrMotionWalker + speed，逐 tick 推进；
+  旧时刻表路径作为兼容基线保留直至删除（本目标无需并行，最终删旧）。
+- T3：渲染/占用按当前段几何（MmtrMotionSnapshot.ofWalker 已给出可渲染 (segment,offset,head)）。
+- T4：删除旧烘焙生成（Depot.generateRoute/Siding.generateRoute 三份缓存 & immutablePath 拼装）。
+
+### 10.4 验收
+一辆真实 Vehicle：出库 -> 到岔口按当前道岔态换向 -> 进目标股道/站台停稳，全程由 Motion Core 驱动；
+引擎内可见其 railProgress/占用沿被选真实轨前进；翻转 -96 岔口 -> 车实际换走另一轨；旧烘焙机制已删。
