@@ -74,7 +74,11 @@
 - 保留 MmtrMotionRouter.canReachSiding + Siding.hasPathToMainRoute / hasReturnFromMainRoute（仍被旧 relocation 当可达性门引用，下一步处理）。
 - 更新 MmtrJobSchedulerTests.motionRouterReachabilityBasics 与 DevWorldRouterProbeTests 去掉 buildLegPlan 断言。
 
-### 8.2 后续切片（按序，每步可验）
+### 8.2 切片进展
+- 已做 8.1 + 「跨股道自动移动先下线」(increment A)：MmtrJobScheduler 的 cross-side MOVE_TO 改为 fail-fast(离线)；删除 DevWorldRelocateTests / DevWorldRouterProbeTests（仅测该旧重生搬迁）。compile + Motion Core 确定性测试绿。
+- 下一增量(B)：删除调度器内 arrivalMergeConsist / relocateParkedConsist / relocatingTo 完成态机/字段，及 MmtrMotionRouter(canReachSiding) 与 Siding.hasPathToMainRoute/hasReturnFromMainRoute，清理 MmtrJobSchedulerTests 中跨侧用例。
+
+### 8.2b 后续切片（按序，每步可验）
 - 切片2：移除旧 relocation 的可达性门（MmtrMotionRouter.canReachSiding + Siding 的两条 has* 缓存判断），
   由 Motion Core 用真实轨道图的可达/路由（MmtrLiveRouter）取代；同时处理 MmtrJobScheduler 的
   arrivalMergeConsist / relocateParkedConsist 等旧"重生搬运"流程。

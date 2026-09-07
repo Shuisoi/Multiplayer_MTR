@@ -108,3 +108,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - 用户：A（独立 Motion Core 作为交付）+ 直接清理被 Motion Core 取代的旧系统、无需并行可用。
 - 已删：MmtrMotionRouter.MmtrMotionPlan/buildLegPlan + Siding.copy*Legs（死代码/仅测试用），
   并更新 MmtrJobSchedulerTests / DevWorldRouterProbeTests。engine compileJava/compileTestJava 通过。
+## 12. 清理切片 #2（跨股道自动移动先下线）
+- 决策：本阶段删除旧"重生"搬迁（relocation/跨股道 MOVE_TO/到达合并 make-up），跨股道自动移动先下线。
+- 已做：MmtrJobScheduler cross-side MOVE_TO -> fail-fast 离线；删除 DevWorldRelocateTests / DevWorldRouterProbeTests。
+  engine compile + Motion Core 确定性测试绿。

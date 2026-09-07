@@ -695,20 +695,13 @@ public final class MmtrJobScheduler {
 				instance.awaitingStart = true;
 				continue;
 			}
-			// Cross-side move: relocate to ANOTHER siding of the (same) depot and continue from there.
+			// Cross-side auto-move (relocation / arrival make-up to ANOTHER siding) is OFFLINE as of the
+			// Motion-Core cleanup: it was a "re-birth at destination", not a real drive. Cross-track moves
+			// will be re-implemented by Motion Core live driving (segment+offset + turnout authority).
 			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId != curSiding(instance)
 				&& findSiding(simulator, step.targetId) != null) {
-				if (findParkedOnSiding(simulator, step.targetId) != null) {
-					// Arrival make-up: another job's stock already parks on the target - merge it on arrival.
-					if (!arrivalMergeConsist(instance, simulator, step.targetId)) {
-						return; // merge failed the instance already
-					}
-				} else {
-					if (!relocateParkedConsist(instance, simulator, step.targetId, currentMillis)) {
-						return; // relocation failed the instance already
-					}
-				}
-				return; // continue on the next ticks from the target staging siding
+				fail(instance, "cross-track auto-move is offline (step " + step.stepId + " targets another siding " + step.targetId + ")");
+				return;
 			}
 			// Parked with a movement step next: first departure or re-departure after a return.
 			if (step.type == MmtrJobStep.StepType.MOVE_TO || step.type == MmtrJobStep.StepType.SERVE) {
