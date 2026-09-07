@@ -32,6 +32,11 @@ public final class MmtrPointRegistry {
 			branches.put(key(x, y, z, viaRailHex), branch & 1);
 		}
 
+		/** True when an operator explicitly set this turnout branch (distinguishes "0" from unset). */
+		public boolean contains(long x, long y, long z, String viaRailHex) {
+			return branches.containsKey(key(x, y, z, viaRailHex));
+		}
+
 		public int get(long x, long y, long z, String viaRailHex) {
 			return branches.getOrDefault(key(x, y, z, viaRailHex), 0);
 		}

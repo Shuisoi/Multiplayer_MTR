@@ -40,6 +40,8 @@ public final class SidingPathFinder<T extends AreaBase<T, U>, U extends SavedRai
 	public static final int AIRPLANE_SPEED = 300;
 	private static final int MAX_AIRPLANE_TURN_ARC = 128;
 
+	private final org.mtr.core.simulation.Simulator simulator;
+
 	public SidingPathFinder(Data data, U startSavedRail, W endSavedRail, int stopIndex) {
 		super(new PositionAndAngle(startSavedRail.getRandomPosition(), null), new PositionAndAngle(endSavedRail.getRandomPosition(), null));
 		transportMode = startSavedRail.getTransportMode();
@@ -49,15 +51,66 @@ public final class SidingPathFinder<T extends AreaBase<T, U>, U extends SavedRai
 		this.startSavedRail = startSavedRail;
 		this.endSavedRail = endSavedRail;
 		this.stopIndex = stopIndex;
+		simulator = data instanceof org.mtr.core.simulation.Simulator ? (org.mtr.core.simulation.Simulator) data : null;
 	}
 
 	@Override
-	protected ObjectArrayList<ConnectionDetails<PositionAndAngle>> getConnections(long elapsedTime, PositionAndAngle node, @Nullable Long previousRouteId) {
+	protected ObjectArrayList<ConnectionDetails<PositionAndAngle>> getConnections(long elapsedTime, PositionAndAngle node, @Nullable PositionAndAngle parentNode, @Nullable Long previousRouteId) {
 		final ObjectArrayList<ConnectionDetails<PositionAndAngle>> connections = new ObjectArrayList<>();
 		final Object2ObjectOpenHashMap<Position, Rail> railConnections = positionsToRail.get(node.position);
 
+		// Turnout (道岔) authority: if an operator set this (node, approach rail), the only usable
+		// continuation is the set branch - the path may not use the other branch. Unset turnouts are
+		// unconstrained (baseline behaviour unchanged until a branch is explicitly set).
+		@Nullable String disallowedRailHex = null;
+		if (railConnections != null && parentNode != null && simulator != null) {
+			final Rail viaRail = Data.tryGet(positionsToRail, parentNode.position, node.position);
+			if (viaRail != null && simulator.mmtrPointBranches.contains(node.position.getX(), node.position.getY(), node.position.getZ(), viaRail.getHexId())) {
+				final int branch = simulator.mmtrPointBranches.get(node.position.getX(), node.position.getY(), node.position.getZ(), viaRail.getHexId());
+				final ObjectArrayList<Rail> forward = new ObjectArrayList<>();
+				final ObjectArrayList<Position> forwardEnd = new ObjectArrayList<>();
+				final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<Rail> seen = new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>();
+				railConnections.forEach((rPos, rail) -> {
+					if (rail != viaRail && seen.add(rail)) {
+						forward.add(rail);
+						forwardEnd.add(rPos);
+					}
+				});
+				if (forward.size() >= 2) {
+					final double ax = node.position.getX() - parentNode.position.getX();
+					final double az = node.position.getZ() - parentNode.position.getZ();
+					final double[] cos = new double[forward.size()];
+					for (int i = 0; i < forward.size(); i++) {
+						final double bx = forwardEnd.get(i).getX() - node.position.getX();
+						final double bz = forwardEnd.get(i).getZ() - node.position.getZ();
+						final double la = Math.sqrt(ax * ax + az * az);
+						final double lb = Math.sqrt(bx * bx + bz * bz);
+						cos[i] = la == 0 || lb == 0 ? -2 : (ax * bx + az * bz) / (la * lb);
+					}
+					int b0 = 0;
+					for (int i = 1; i < cos.length; i++) {
+						if (cos[i] > cos[b0]) {
+							b0 = i;
+						}
+					}
+					int b1 = b0 == 0 ? 1 : 0;
+					for (int i = 0; i < cos.length; i++) {
+						if (i != b0 && cos[i] > cos[b1]) {
+							b1 = i;
+						}
+					}
+					// branch0 = straightest; branch1 = nearest diverging; disallow the branch NOT chosen.
+					disallowedRailHex = (branch == 0 ? forward.get(b1) : forward.get(b0)).getHexId();
+				}
+			}
+		}
+
 		if (railConnections != null) {
+			final String disallowed = disallowedRailHex;
 			railConnections.forEach((position, rail) -> {
+				if (rail.getHexId().equals(disallowed)) {
+					return;
+				}
 				final double speedLimit = rail.getSpeedLimitMetersPerMillisecond(node.position);
 				if (speedLimit > 0 && (node.angle == null || node.angle == rail.getStartAngle(node.position) || rail.canTurnBack())) {
 					connections.add(new ConnectionDetails<>(new PositionAndAngle(position, rail.getStartAngle(position).getOpposite()), Math.round(rail.railMath.getLength() / speedLimit), 0, 0));

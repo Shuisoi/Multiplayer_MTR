@@ -50,7 +50,12 @@ public abstract class PathFinder<T> {
 			long bestWaitingTime = 0;
 			long bestRouteId = 0;
 
-			for (final ConnectionDetails<T> connectionDetails : getConnections(elapsedTime, prevNode, prevConnectionDetails == null ? null : prevConnectionDetails.routeId)) {
+			// The node we arrived at {@code prevNode} from (null at the very first step). Subclasses can
+			// use this to learn which rail leads into the current node - needed to honour turnout (道岔)
+			// state per (node, approach rail).
+			final T parentNode = tempData.size() >= 2 ? tempData.get(tempData.size() - 2).node : null;
+
+			for (final ConnectionDetails<T> connectionDetails : getConnections(elapsedTime, prevNode, parentNode, prevConnectionDetails == null ? null : prevConnectionDetails.routeId)) {
 				final T thisNode = connectionDetails.node;
 				final long duration = connectionDetails.duration;
 				final long waitingTime = connectionDetails.waitingTime;
@@ -101,7 +106,7 @@ public abstract class PathFinder<T> {
 		return completed ? data : null;
 	}
 
-	protected abstract ObjectArrayList<ConnectionDetails<T>> getConnections(long elapsedTime, T data, @Nullable Long previousRouteId);
+	protected abstract ObjectArrayList<ConnectionDetails<T>> getConnections(long elapsedTime, T data, @Nullable T parentNode, @Nullable Long previousRouteId);
 
 	protected abstract long getWeightFromEndNode(T node);
 
