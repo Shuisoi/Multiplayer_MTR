@@ -306,4 +306,38 @@ public final class MmtrLiveRouterTests {
 		assertEquals(false, d.haltedAtAuthority(), "once the operator decides, the train proceeds");
 		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex(), "train crossed the fork onto the straight branch after the operator decided");
 	}
+
+	// --- 手动开: a person throttles/brakes the train; it advances by Motion Core and decides forks live
+
+	@Test
+	public void manualThrottleDrivesTrainAcrossFork() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), null);
+		for (int i = 0; i < 400 && !d.stopped(); i++) {
+			d.manualTick(100, true, false, 1e-6, 2e-6, 0.004); // ~1 m/s^2 throttle, 4 m/s cap
+		}
+		assertEquals(true, d.stopped(), "human throttle should drive the train to the end of the line");
+		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex(), "manual drive crossed the fork onto the straight branch");
+		assertEquals(false, d.haltedAtAuthority());
+	}
+
+	@Test
+	public void manualDriveStopsAtUnsetForkForDriverToDecide() {
+		final Net n = new Net();
+		final BranchStore store = new BranchStore();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), store, null);
+		for (int i = 0; i < 400 && !d.stopped(); i++) {
+			d.manualTick(100, true, false, 1e-6, 2e-6, 0.004);
+		}
+		assertEquals(true, d.haltedAtAuthority(), "manual train halts at the unset fork (自由开), driver decides next");
+		assertEquals(20, d.walker.offsetM(), 1e-6);
+
+		// The driver sets branch 0 and keeps driving the same train manually (drive regardless of rest).
+		store.set(n.node0.getX(), n.node0.getY(), n.node0.getZ(), n.rIn.getHexId(), 0);
+		for (int i = 0; i < 400; i++) {
+			d.manualTick(100, true, false, 1e-6, 2e-6, 0.004);
+		}
+		assertEquals(false, d.haltedAtAuthority(), "after the driver decides, the same train continues");
+		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex());
+	}
 }

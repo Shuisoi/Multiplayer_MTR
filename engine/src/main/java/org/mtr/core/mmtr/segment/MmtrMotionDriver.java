@@ -72,6 +72,30 @@ public final class MmtrMotionDriver {
 		}
 	}
 
+
+	/**
+	 * Manual driving (手动开): a human controls throttle/brake; the train accelerates/coasts/brakes and
+	 * advances by Motion Core (deciding each fork by the current turnout). It still halts at an unset
+	 * fork until the driver/任务 sets it. Speeds are m/ms; accelerations m/ms^2.
+	 */
+	public void manualTick(long dtMs, boolean throttle, boolean brake, double accelMps2, double decelMps2, double maxMetersPerMs) {
+		if (walker.atTarget() || walker.endOfLine()) {
+			speed = 0;
+			return;
+		}
+		if (brake) {
+			speed = Math.max(0, speed - decelMps2 * dtMs);
+		} else if (throttle) {
+			speed = Math.min(maxMetersPerMs, speed + accelMps2 * dtMs);
+		}
+		if (speed > 0) {
+			walker.advance(speed * dtMs);
+			if (walker.atTarget() || walker.haltedAtAuthority() || walker.endOfLine()) {
+				speed = 0;
+			}
+		}
+	}
+
 	/** Drive until rest or {@code maxTicks} elapsed at the given cruise; returns whether it came to rest. */
 	public boolean driveToRest(long dtMs, double cruiseMetersPerMillisecond, int maxTicks) {
 		for (int i = 0; i < maxTicks; i++) {

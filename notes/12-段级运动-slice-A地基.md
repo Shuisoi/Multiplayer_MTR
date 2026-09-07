@@ -154,3 +154,6 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - MmtrMotionDriver.tick()：不再因 haltedAtAuthority 直接停，每 tick 重试；仍无权威则停、设岔后同车继续。
 - 测试 generatedTrainFreelyDrivesAndOperatorDecidesAtFork：生成的车自由开 -> 到未设岔口停下等 -> operator 设 0 -> 同车继续走直。
   = 生成列车 + 随便开（到岔口你定）。
+## 23. 手动开（人控）：MmtrMotionDriver.manualTick(throttle,brake,...)
+- 人控制油门/刹车：加速/惰行/制动并把车沿 Motion Core 前进；到未设岔口停等、设岔后同一辆车继续手动开。
+- 测试 manualThrottleDrivesTrainAcrossFork / manualDriveStopsAtUnsetForkForDriverToDecide（绿）。
