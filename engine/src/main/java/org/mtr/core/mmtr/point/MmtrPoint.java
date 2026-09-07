@@ -134,10 +134,11 @@ public final class MmtrPoint {
 	 * the runtime walker and the run planner so every layer shares the SAME deterministic ordering.
 	 *
 	 * <p>Direction judgment (真实道岔=人字): a turnout's two arms never connect directly - from the
-	 * left arm a train can only leave through the stem (上), never across to the right arm. Any
-	 * candidate whose far end lies BEHIND the vehicle's heading (cos &lt; 0: turn-back rails and
-	 * obtuse cross-arm reaches) is excluded; a right-angle crossing/turn (cos = 0) and every forward
-	 * fan direction stay legal continuations.</p>
+	 * left arm a train can only leave through the stem (上), never across to the right arm. On a real
+	 * turnout the arms sit close to the stem, so the other arm lies nearly 180&deg; behind the
+	 * arrival heading and is excluded (cos &lt; -0.9). Wide drawn connectors (yard leads that fold
+	 * back at ~150&deg;, e.g. the real -96 branch 1 lead) and right-angle TEE/X crossing turns stay
+	 * legal continuations.</p>
 	 */
 	public static ObjectArrayList<MmtrPointLeg> computeOrderedLegs(Position node, Position entryEnd, Rail viaRail, Object2ObjectOpenHashMap<Position, Rail> neighbors) {
 		final ObjectArrayList<MmtrPointLeg> legs = new ObjectArrayList<>();
@@ -155,8 +156,8 @@ public final class MmtrPoint {
 				return; // degenerate geometry - not a usable continuation
 			}
 			final double cos = (dx * cx + dz * cz) / (la * lb);
-			if (cos < 0) {
-				return; // 人字道岔方向判断: turn-back / obtuse cross-arm candidates are unreachable
+			if (cos < -0.9) {
+				return; // 人字道岔方向判断: near-180 turn-back / cross-arm of a real turnout
 			}
 			final double cross = dx * cz - dz * cx;
 			final LegKind kind;

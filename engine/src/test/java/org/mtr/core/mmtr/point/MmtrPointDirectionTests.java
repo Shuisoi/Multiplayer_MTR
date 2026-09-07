@@ -166,9 +166,9 @@ public final class MmtrPointDirectionTests {
 		final Position node = new Position(0, 0, 0);
 		// 人字 wye: stem continues up-right; the two arms go back-down-left / back-down-right so the
 		// far end of the OTHER arm lies behind a vehicle arriving from one arm.
-		final Rail stem = through(node, new Position(16, 0, -12));
-		final Rail armA = through(new Position(-17, 0, 10), node);   // arrival side A
-		final Rail armB = through(new Position(-23, 0, -10), node);  // other arm (behind A's heading)
+		final Rail stem = through(node, new Position(0, 0, -20));
+		final Rail armA = through(new Position(-1, 0, 10), node);   // arrival side A (steep arm)
+		final Rail armB = through(new Position(1, 0, 10), node);    // other arm: nearly 180 deg behind A's heading
 		sim.rails.add(stem);
 		sim.rails.add(armA);
 		sim.rails.add(armB);
