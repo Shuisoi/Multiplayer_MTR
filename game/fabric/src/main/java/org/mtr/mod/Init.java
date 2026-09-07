@@ -255,7 +255,16 @@ public final class Init implements Utilities {
 			}
 		});
 
-		REGISTRY.eventRegistry.registerPlayerJoin((minecraftServer, serverPlayerEntity) -> updatePlayer(serverPlayerEntity, false));
+		REGISTRY.eventRegistry.registerPlayerJoin((minecraftServer, serverPlayerEntity) -> {
+			updatePlayer(serverPlayerEntity, false);
+			// 开发服自动 OP: the dev client re-randomises its offline name every launch, so a one-time
+			// RCON op never sticks - every player who joins this dev server is made an operator.
+			final net.minecraft.server.PlayerManager playerManager = minecraftServer.getPlayerManager().data;
+			final com.mojang.authlib.GameProfile profile = serverPlayerEntity.getGameProfile();
+			if (!playerManager.isOperator(profile)) {
+				playerManager.addToOperators(profile);
+			}
+		});
 		REGISTRY.eventRegistry.registerPlayerDisconnect((minecraftServer, serverPlayerEntity) -> RIDING_PLAYERS.remove(serverPlayerEntity.getUuid()));
 
 		// Finish registration
