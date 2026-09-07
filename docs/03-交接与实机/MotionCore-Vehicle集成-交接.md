@@ -14,8 +14,11 @@
 >    - slice-5（462c664，notes/18）：**无人自动运行 auto step-run**——武装停点即自动跑/停/开门，任务再武装自动续行；未设岔自动等、搬岔自动续（MmtrMotionAutoRunTests 2 例）。
 >    - slice-6（a937365，notes/19）：**MmtrRunPlanner 进路规划服务**——BFS 进路+沿途岔口预置（与 walker 同 cos 规则）+ walker 空间停点换算，MOVE_TO 底座（MmtrRunPlannerTests 3 例）。
 >    - slice-7（1956115，notes/20）：**任务驱动 motion 车闭环**——MmtrMissionControl AUTOPILOT 派发→planner+岔口预置进权威 store+auto 武装→平台轨精确停稳 AT_TARGET 门开→终态交回 idle（MmtrMotionMissionTests 2 例）。
+>    - slice-8（444d728，notes/22）：**运行中任务目标重定向**——walker live retarget，任务目标覆盖陈旧 operator / 未设岔上任务即权威；登轨停车、清除续行（MmtrMotionTaskTargetTests 2 例）。
+>    - slice-9（4f6ce8a，notes/23）：**任务自武装**——任何来源给 motion 车挂 AUTOPILOT 任务即自行 planner+auto 执行，不可行目标任务 FAILED+原因（MmtrMotionMissionTests 4 例）。
 > 3. **T4 收尾评估**：notes/21——旧烘焙自动生成面已全部删除（legacy create() 全仓 0 调用）；残余=存档兼容(writePathCache)/停场模板(defaultPathData)/归档接缝(spawnMmtrManualWithLegs，仅测试)，均有主、无需再删。
-> 4. **剩余（另立项）**：作业调度器(SERVE/MOVE_TO 宏)接 motion；行经段信号/限速（M2）；平台停点对齐；客户端渲染/镜像；实机人工确认清单（03 实机测试文档 §7）。验证纪律：每片全量零新增失败（现 243/0/2）。
+> 4. **验收证据映射**：notes/24——目标条款→提交/测试/文档逐条对应，全量 227→**247/0/2** 零新增失败。
+> 5. **剩余（另立项，不阻塞 L3/T4 验收）**：作业宏（consist-jobs 多步+COUPLE/UNCOUPLE）的 motion 版编排与作业车 motion 出生；行经段信号/限速（M2）；平台停点对齐；客户端渲染/镜像；实机人工确认清单（03 实机测试文档 §7）。验证纪律：每片全量零新增失败（现 247/0/2）。
 > 语言：文档中文；代码/提交信息英文。
 
 ---
