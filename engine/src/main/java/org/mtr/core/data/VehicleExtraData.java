@@ -378,38 +378,7 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 			manualToAutomaticTime, totalDistance, defaultPosition, vehicleCars, path);
 	}
 
-	public static VehicleExtraData create(
-		long depotId, long sidingId, double railLength, ObjectArrayList<VehicleCar> vehicleCars,
-		ObjectArrayList<PathData> pathSidingToMainRoute, ObjectArrayList<PathData> pathMainRoute, ObjectArrayList<PathData> pathMainRouteToSiding, PathData defaultPathData,
-		boolean repeatInfinitely, double acceleration, double deceleration, boolean isManualAllowed, double maxManualSpeed, long manualToAutomaticTime
-	) {
-		final double newRailLength = Siding.getRailLength(railLength);
-		final double newTotalVehicleLength = Siding.getTotalVehicleLength(vehicleCars);
-		final ObjectArrayList<PathData> path = createPathData(pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, repeatInfinitely, defaultPathData);
-		final long repeatIndex1 = pathSidingToMainRoute.size();
-		final long repeatIndex2 = repeatInfinitely ? repeatIndex1 + pathMainRoute.size() : 0;
-		final double newAcceleration = Siding.roundAcceleration(acceleration);
-		final double newDeceleration = Siding.roundAcceleration(deceleration);
-		final double totalDistance = path.isEmpty() ? 0 : (repeatInfinitely && repeatIndex2 < path.size() ? Utilities.getElement(path, (int) repeatIndex2).getStartDistance() : Utilities.getElement(path, -1).getEndDistance());
-		final double defaultPosition = (newRailLength + newTotalVehicleLength) / 2;
-		return new VehicleExtraData(depotId, sidingId, newRailLength, newTotalVehicleLength, repeatIndex1, repeatIndex2, newAcceleration, newDeceleration, isManualAllowed, Math.max(Utilities.kilometersPerHourToMetersPerMillisecond(1), maxManualSpeed), manualToAutomaticTime, totalDistance, defaultPosition, vehicleCars, path);
-	}
 
-	private static ObjectArrayList<PathData> createPathData(ObjectArrayList<PathData> pathSidingToMainRoute, ObjectArrayList<PathData> pathMainRoute, ObjectArrayList<PathData> pathMainRouteToSiding, boolean repeatInfinitely, PathData defaultPathData) {
-		final ObjectArrayList<PathData> tempPath = new ObjectArrayList<>();
-		if (pathSidingToMainRoute.isEmpty() || pathMainRoute.isEmpty() || !repeatInfinitely && pathMainRouteToSiding.isEmpty()) {
-			tempPath.add(defaultPathData);
-		} else {
-			tempPath.addAll(pathSidingToMainRoute);
-			tempPath.addAll(pathMainRoute);
-			if (repeatInfinitely) {
-				tempPath.add(new PathData(new PathData(new JsonReader(new JsonObject())), Utilities.getElement(pathMainRoute, -1).getEndDistance(), Double.MAX_VALUE));
-			} else {
-				tempPath.addAll(pathMainRouteToSiding);
-			}
-		}
-		return tempPath;
-	}
 
 	private static long getId(@Nullable NameColorDataBase data) {
 		return data == null ? 0 : data.getId();

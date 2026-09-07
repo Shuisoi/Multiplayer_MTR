@@ -87,10 +87,9 @@ public final class MmtrMultiplayerFoundationTests {
 		final Simulator simulator = createSimulator();
 		final ObjectArrayList<VehicleCar> vehicleCars = new ObjectArrayList<>();
 		vehicleCars.add(new VehicleCar("car_0", 10, 2, 100, 0, 5, 0.5, 0.5));
-		final ObjectArrayList<PathData> emptyPath = new ObjectArrayList<>();
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
-		final VehicleExtraData vehicleExtraData = VehicleExtraData.create(
-			0, 0, 10, vehicleCars, emptyPath, emptyPath, emptyPath, dummyPath, false, 0.000004, 0.000004, false, 0, 10000
+		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.000004, 0.000004, false, 0, 10000
 		);
 
 		final Vehicle serverVehicle = new Vehicle(vehicleExtraData, null, TransportMode.TRAIN, simulator);

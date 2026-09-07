@@ -119,7 +119,7 @@ public final class Siding extends SidingSchema implements Utilities {
 		generatePathDistancesAndTimeSegments();
 		if (area != null && defaultPathData != null) {
 			vehicleReaders.forEach(readerBase -> {
-				final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(), new ObjectArrayList<>(), new ObjectArrayList<>(), defaultPathData, false, acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, readerBase, data);
+				final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, readerBase, data);
 				vehicleIdMap.put(vehicle.getId(), vehicle);
 			});
 		}
@@ -302,7 +302,7 @@ public final class Siding extends SidingSchema implements Utilities {
 		// auto-dispatches a service train onto a timetable route.
 		if (defaultPathData != null && !vehicleCars.isEmpty() && spawnTrain && (getIsUnlimited() || vehicleIdMap.size() < getMaxVehicles())
 			&& (!mmtrManualSpawn || !mmtrSessionSpawned)) {
-			final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(), new ObjectArrayList<>(), new ObjectArrayList<>(), defaultPathData, false, acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+			final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 			vehicleIdMap.put(vehicle.getId(), vehicle);
 			if (mmtrManualSpawn) {
 				mmtrSessionSpawned = true;
@@ -345,7 +345,7 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 		vehicleIdMap.remove(parked.getId());
 		setVehicleCars(cars); // keep the template consistent with the rebuilt formation
-		final Vehicle rebuilt = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(), new ObjectArrayList<>(), new ObjectArrayList<>(), defaultPathData, false, acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		final Vehicle rebuilt = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicleIdMap.put(rebuilt.getId(), rebuilt);
 		return rebuilt;
 	}

@@ -20,10 +20,9 @@ public final class ArrivalResponseTests {
 		vehicleCars.add(new VehicleCar("car_0", 10, 2, 100, 0, 5, 0.5, 0.5));
 		vehicleCars.add(new VehicleCar("car_1", 10, 2, 100, 0, 5, 0.5, 0.5));
 
-		final ObjectArrayList<PathData> emptyPath = new ObjectArrayList<>();
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
-		final VehicleExtraData vehicleExtraData = VehicleExtraData.create(
-			0, 0, 10, vehicleCars, emptyPath, emptyPath, emptyPath, dummyPath, false, 0.1, 0.1, false, 0, 0
+		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.1, 0.1, false, 0, 0
 		);
 
 		final Simulator simulator = new Simulator("test", new String[]{"test"}, Paths.get("build/test-data-arrival"), false);
