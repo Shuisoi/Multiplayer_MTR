@@ -581,50 +581,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 			}
 		} else {
-			if (railProgress == pathData.getStartDistance()) {
-				// Stopped behind a node
-				final PathData currentPathData = Utilities.getElement(vehicleExtraData.immutablePath, currentIndex - 1);
-				final PathData nextPathData = Utilities.getElement(vehicleExtraData.immutablePath, vehicleExtraData.getRepeatIndex2() > 0 && currentIndex >= vehicleExtraData.getRepeatIndex2() ? vehicleExtraData.getRepeatIndex1() : currentIndex);
-				final boolean isOpposite = currentPathData != null && nextPathData != null && currentPathData.isOppositeRail(nextPathData);
-				final double nextStartDistance = nextPathData == null ? 0 : nextPathData.getStartDistance() + (isOpposite ? vehicleExtraData.getTotalVehicleLength() : 0);
-				final long totalDwellMillis = currentPathData == null ? 0 : currentPathData.getDwellTime();
-				final long doorCloseTime = Math.max(totalDwellMillis / 2, totalDwellMillis - DOOR_MOVE_TIME - DOOR_DELAY);
-
-				if (totalDwellMillis > 0 && elapsedDwellTime >= DOOR_DELAY && elapsedDwellTime < doorCloseTime) {
-					vehicleExtraData.openDoors();
-					lastMovementMillis = data.getCurrentMillis();
-				} else if (elapsedDwellTime >= doorCloseTime && railBlockedDistance(currentIndex, nextStartDistance, 0, vehiclePositions, true, false) < 0) {
-					if (doorCooldown == 0) {
-						railProgress = nextStartDistance;
-						if (isOpposite) {
-							reversed = !reversed;
-						}
-					}
-					startUp(departureIndex, sidingDepartureTime);
-				}
-
-				final long deviationAdjustment;
-				if (siding != null && elapsedDwellTime >= DOOR_DELAY + DOOR_MOVE_TIME && elapsedDwellTime < doorCloseTime && deviation != 0) {
-					if (deviation > 0) {
-						// If delayed
-						deviationAdjustment = Math.min(deviation, (doorCloseTime - elapsedDwellTime) * siding.getDelayedVehicleReduceDwellTimePercentage() / 100);
-						deviation = 0;
-					} else {
-						// If early
-						deviationAdjustment = siding.getEarlyVehicleIncreaseDwellTime() ? Math.max(deviation, -millisElapsed) : 0;
-						deviation -= deviationAdjustment;
-					}
-				} else {
-					deviationAdjustment = 0;
-				}
-
-				elapsedDwellTime = Math.min(elapsedDwellTime + millisElapsed + deviationAdjustment, totalDwellMillis);
-			} else {
-				// Stopped anywhere else
-				if (railBlockedDistance(currentIndex, railProgress, 0, vehiclePositions, true, false) < 0) {
-					startUp(departureIndex, sidingDepartureTime);
-				}
-			}
+			// MTR timetable/ATO auto driving removed (auto rebuilt on Motion/tasks): an unmanned
+			// consist stopped at a stop does not auto-dwell / open doors / auto-restart. It only resumes
+			// when a driver (ControlState / mmtrManualOverride) or a task/mission drives it.
 		}
 	}
 
