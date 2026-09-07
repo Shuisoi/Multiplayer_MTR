@@ -51,3 +51,20 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - slice A 地基（本轮）：MmtrNodeRouter/MmtrSegmentStep + 确定性翻转测试 = 已绿（BUILD SUCCESSFUL）。
 - 完整 slice A：自由开车在真实股道按段推进、经真实岔口由权威换向；现有确定性回归全绿。
 - slice C：-95 岔口引擎内 搬A走A / 搬B走B 用实际经过轨断言。
+
+## 5. 会话续轮 #2 成果（slice B/C 图层级权威路由证明，已验/已提交）
+- 新增 MmtrTurnoutRoutingTests（org.mtr.core.mmtr.point，绿，BUILD SUCCESSFUL）：
+  * 合成真实两岔世界：approach(-20,0,0)->node(0,0,0)，straight->(20,0,0)，diverge 45°->(20,0,12)。
+  * MmtrPointRegistry.discover 在真实 Rail 上发现该 (node, approach) 道岔：branch0=straight / branch1=diverge。
+  * 未设岔 + 无 task -> elect 返回 null（必须等 operator/task，绝不 auto）。
+  * operator 0 -> straight（搬A走A）、1 -> diverge（搬B走B）：翻转即换走哪条真实轨。
+  * task 指定 diverging 覆盖陈旧 operator 0；持久化 BranchStore 0/1 被 electFromStore 遵守。
+  * 仅两轨相接的通过节点 -> 不发现岔、单续向不要求权威（直行）。
+- 意义：把 MmtrNodeRouter 接到真实 discover/positionsToRail 上，证明"按道岔选下一段"在引擎图层面
+  端到端成立 = slice B/C 的权威路由已被确定性验证；后续 Vehicle 自由开只把该决策放进运行时的节点跨越点。
+
+## 6. 仍未做（诚实边界）
+- slice A 本体：把 running Vehicle 从 immutablePath 整段烘焙切到 (segment+offset) + 到节点才决策。
+  Vehicle.simulateMoving/simulateStopped/stoppingIndex/dwell/signal/turnback 深度依赖整条累计路径，
+  属 L3 级大改；本轮只把"决策模型 + 图层面权威路由"做出来并验绿，未触碰 Vehicle 核心。
+- slice C 真实 -95 岔口引擎内"车实际经过对应轨"断言（需把自由开接进一辆真实存档车 + run/saves 配置）。
