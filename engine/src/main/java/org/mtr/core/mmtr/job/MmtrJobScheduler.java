@@ -161,11 +161,51 @@ public final class MmtrJobScheduler {
 		instance.consumed = false;
 		instance.started = false;
 		instance.awaitingStart = true;
+		instance.autoDepartureKickLogged = false;
 		instance.spawnCars.clear();
 		instance.fleetCars.clear();
 		instance.nextCycleAtMs = 0;
 		instance.lastLoopResetAtMillis = currentMillis;
+		// A looping make-up job must re-arm its COUPLE source on every cycle, otherwise the source
+		// stays consumed and the next make-up fails with "already coupled into another job".
+		final JobInstance source = coupleTargetInstance(instance);
+		if (source != null && source != instance && source.consumed) {
+			source.state = JobState.PENDING;
+			source.stepIndex = 0;
+			source.vehicleId = 0;
+			source.curSidingId = 0;
+			source.relocatingTo = 0;
+			source.relocateWaitStartMillis = 0;
+			source.carsPlaced = false;
+			source.mergedPlaced = false;
+			source.consumed = false;
+			source.started = false;
+			source.awaitingStart = true;
+			source.autoDepartureKickLogged = false;
+			source.spawnCars.clear();
+			source.fleetCars.clear();
+			source.nextCycleAtMs = 0;
+			System.out.println("[MMTR-JOB] loop re-armed couple source " + source.job.jobId + " for " + instance.job.jobId);
+		}
 		System.out.println("[MMTR-JOB] loop " + instance.job.jobId + " cycle " + instance.cyclesDone + " restarted");
+	}
+
+	/** If the job starts with a COUPLE step, its referenced source job instance, else null. */
+	@Nullable
+	private JobInstance coupleTargetInstance(JobInstance instance) {
+		if (instance.job.steps.isEmpty() || instance.job.steps.get(0).type != MmtrJobStep.StepType.COUPLE) {
+			return null;
+		}
+		final String targetJobId = instance.job.steps.get(0).targetJobId;
+		if (targetJobId == null || targetJobId.isEmpty()) {
+			return null;
+		}
+		for (final MmtrConsistJob job : jobs) {
+			if (job.jobId.equals(targetJobId)) {
+				return instances.computeIfAbsent(targetJobId, key -> new JobInstance(job));
+			}
+		}
+		return null;
 	}
 
 	public int cyclesOf(String jobId) {
@@ -230,6 +270,18 @@ public final class MmtrJobScheduler {
 				case FAILED:
 					return;
 				case DONE:
+					// COUPLE is the job's only step: still spawn the merged consist so the yard
+					// shows the coupled stock (the job is done but the formation stays parked for
+					// later yard ops / subsequent jobs).
+					if (!instance.carsPlaced && !instance.spawnCars.isEmpty()) {
+						if (placeCars(simulator, instance)) {
+							instance.carsPlaced = true;
+							System.out.println("[MMTR-JOB] coupled stock parked from " + instance.job.jobId + " cars=" + instance.spawnCars.size());
+						} else {
+							fail(instance, "could not place coupled stock on siding");
+							return;
+						}
+					}
 					instance.state = JobState.DONE;
 					return;
 				default:
@@ -265,6 +317,7 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		instance.vehicleId = vehicle.getId();
+		instance.autoDepartureKickLogged = false;
 		markVisited(instance, curSiding(instance));
 		instance.startAbs = anchor + instance.job.startTimeOfDayMs;
 		instance.mode = vehicle.vehicleExtraData.getIsManualAllowed() ? Mode.MANUAL : Mode.AUTO;
@@ -534,15 +587,9 @@ public final class MmtrJobScheduler {
 		for (int i = 0; i < instance.fleetCars.size(); i++) {
 			(i <= cut ? head : tail).add(instance.fleetCars.get(i));
 		}
-		// Only a yard-final cut is supported: the head is re-created by manual surgery (yard stock) and
-		// cannot run further outbound legs yet (those need an engine-spawned formation, see COUPLE).
-		for (int i = instance.stepIndex + 1; i < instance.job.steps.size(); i++) {
-			final MmtrJobStep later = instance.job.steps.get(i);
-			if (later.type == MmtrJobStep.StepType.MOVE_TO || later.type == MmtrJobStep.StepType.SERVE) {
-				fail(instance, "UNCOUPLE followed by an outbound step is not supported yet (step " + step.stepId + ")");
-				return false;
-			}
-		}
+		// The rebuilt head may keep running the job: an outbound step after the cut makes the head
+		// depart on a service while the detached tail respawns as parked yard stock - the realistic
+		// "pull away and leave the tail behind" shunt sequence.
 		final ObjectArrayList<org.mtr.core.data.VehicleCar> headCars = toVehicleCars(head);
 		final ObjectArrayList<org.mtr.core.data.VehicleCar> tailCars = toVehicleCars(tail);
 		if (Siding.getTotalVehicleLength(tailCars) > yard.getRailLength()) {
@@ -672,6 +719,12 @@ public final class MmtrJobScheduler {
 					}
 				}
 			}
+			// AUTO: the engine's startUp no-ops while the spawn-time door cooldown is active, so a
+			// single call can leave a service permanently parked in the yard. Re-issue it every tick
+			// until the consist is actually on route.
+			if (!kickParkedAutoDeparture(instance, simulator)) {
+				return;
+			}
 			break;
 		}
 		if (instance.stepIndex >= instance.job.steps.size()) {
@@ -771,6 +824,35 @@ public final class MmtrJobScheduler {
 
 	// --- AUTO mode: engine ATO runs the generated service; steps track platform visits ---
 
+	/**
+	 * AUTO re-kick: while the current step is a main-line/platform move and the consist is still
+	 * parked at the yard (not yet on route), keep calling {@link Vehicle#startUp} so the spawn-time
+	 * door cooldown cannot strand the service. Yard cross-side relocations are excluded - they use
+	 * the relocate/rebuild path instead of a depot departure.
+	 */
+	private boolean kickParkedAutoDeparture(JobInstance instance, Simulator simulator) {
+		if (instance.mode != Mode.AUTO || instance.humanHold || !instance.started || instance.vehicleId == 0) {
+			return true;
+		}
+		final MmtrJobStep step = instance.stepIndex < instance.job.steps.size() ? instance.job.steps.get((int) instance.stepIndex) : null;
+		if (step == null || step.type != MmtrJobStep.StepType.MOVE_TO && step.type != MmtrJobStep.StepType.SERVE) {
+			return true;
+		}
+		if (findSiding(simulator, step.targetId) != null) {
+			return true; // yard cross-side moves use relocation, not a depot departure
+		}
+		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+		if (vehicle == null || vehicle.getIsOnRoute() || vehicle.isMoving()) {
+			return true;
+		}
+		if (!instance.autoDepartureKickLogged) {
+			instance.autoDepartureKickLogged = true;
+			System.out.println("[MMTR-JOB] auto re-kick " + instance.job.jobId + " vehicle=" + vehicle.getId() + " (parked, not yet on route)");
+		}
+		vehicle.startUp(0, instance.startAbs);
+		return true;
+	}
+
 	private boolean startAutoService(JobInstance instance, Simulator simulator) {
 		final Siding siding = findSiding(simulator, curSiding(instance));
 		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
@@ -840,6 +922,10 @@ public final class MmtrJobScheduler {
 		for (final MmtrCarSpec spec : spawn) {
 			cars.add(toVehicleCar(spec));
 		}
+		// MMTR: a leftover parked vehicle (e.g. spawned at boot from the siding's persisted template
+		// before this job ran, or a previous session's orphan) must not occupy the only parking slot
+		// and block the job formation. Drop unowned parked stock so the engine can spawn ours.
+		siding.clearParkedVehicles();
 		siding.setVehicleCars(cars);
 		return true;
 	}
@@ -890,6 +976,8 @@ public final class MmtrJobScheduler {
 		boolean started;
 		/** True when a parked consist may need a (re)departure (after a return or a yard op). */
 		boolean awaitingStart = true;
+		/** Log gate for the AUTO parked re-kick (reset per spawn/loop cycle). */
+		boolean autoDepartureKickLogged;
 		boolean paused;
 		boolean humanHold;
 		long relocatingTo;

@@ -28,6 +28,12 @@ public final class MmtrConsistTemplate implements SerializedDataBase {
 		id = readerBase.getString("id", "");
 		name = readerBase.getString("name", "");
 		readerBase.iterateReaderArray("cars", cars::clear, reader -> cars.add(new MmtrCarSpec(reader)));
+		for (final MmtrCarSpec car : cars) {
+			if (car.vehicleId == null || car.vehicleId.isBlank()) {
+				System.out.println("[MMTR-JOB] template " + id + " car has blank vehicleId - defaulting to m_train");
+				car.vehicleId = MmtrCarSpec.DEFAULT_VEHICLE_ID;
+			}
+		}
 	}
 
 	@Override

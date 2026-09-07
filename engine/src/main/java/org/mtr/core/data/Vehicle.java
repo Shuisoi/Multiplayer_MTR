@@ -191,7 +191,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (isClientside) {
 			log.warn("Vehicle#isCurrentlyManual should only be called on the server side!");
 		}
-		return !atoOverride && manualCooldown > 0;
+		// MMTR: while an operator / AI controller holds the explicit override the train stays manual
+		// - MTR's "manual-to-automatic" hand-back must not hijack an in-progress human (or future AI)
+		// drive. Release returns it to whatever the (empty) stock state implies.
+		return mmtrManualOverride || (!atoOverride && manualCooldown > 0);
 	}
 
 	/**
@@ -337,6 +340,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final BooleanBooleanImmutablePair containsDriverAndDoorOverride = vehicleExtraData.containsDriverAndDoorOverride();
 		manualCooldown = vehicleExtraData.getIsManualAllowed() && containsDriverAndDoorOverride.leftBoolean() ? vehicleExtraData.getManualToAutomaticTime() : Math.max(0, manualCooldown - millisElapsed);
 		doorCooldown = vehicleExtraData.getDoorMultiplier() > 0 || containsDriverAndDoorOverride.rightBoolean() ? DOOR_MOVE_TIME + DOOR_DELAY : Math.max(0, doorCooldown - millisElapsed);
+
+		// MMTR: an active operator / AI controller (explicit override) keeps the train in manual
+		// control - never let the stock ATO hand-back or auto platform-stopping take over mid-drive.
+		if (mmtrManualOverride) {
+			manualCooldown = Math.max(1, manualCooldown);
+			atoOverride = false;
+		}
 
 		if (getIsOnRoute()) {
 			if (vehicleExtraData.getRepeatIndex2() == 0 && railProgress >= vehicleExtraData.getTotalDistance() - (vehicleExtraData.getRailLength() - vehicleExtraData.getTotalVehicleLength()) / 2) {

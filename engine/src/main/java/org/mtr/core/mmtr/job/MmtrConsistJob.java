@@ -51,6 +51,16 @@ public final class MmtrConsistJob implements SerializedDataBase {
 		loop = readerBase.getBoolean("loop", false);
 		loopEveryMs = readerBase.getLong("loopEveryMs", 0);
 		readerBase.iterateReaderArray("cars", cars::clear, reader -> cars.add(new MmtrCarSpec(reader)));
+		// MMTR: a rolling-stock entry without a resolvable model id would spawn a consist the
+		// Minecraft client cannot render (CustomResourceLoader finds no resource -> invisible
+		// train). Default blank ids to the built-in train so raw API / legacy job files never
+		// silently produce invisible stock.
+		for (final MmtrCarSpec car : cars) {
+			if (car.vehicleId == null || car.vehicleId.isBlank()) {
+				System.out.println("[MMTR-JOB] job " + jobId + " car has blank vehicleId - defaulting to m_train");
+				car.vehicleId = MmtrCarSpec.DEFAULT_VEHICLE_ID;
+			}
+		}
 		readerBase.iterateReaderArray("steps", steps::clear, reader -> steps.add(new MmtrJobStep(reader)));
 	}
 

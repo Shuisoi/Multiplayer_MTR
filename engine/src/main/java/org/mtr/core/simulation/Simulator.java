@@ -85,6 +85,15 @@ public class Simulator extends Data implements Utilities {
 	public boolean mmtrJobsMode;
 	public org.mtr.core.mmtr.job.MmtrJobRegistry mmtrJobRegistry = new org.mtr.core.mmtr.job.MmtrJobRegistry();
 	private java.nio.file.Path mmtrJobsPath;
+	/**
+	 * Rolling-stock manifest (车辆生成表): declares which consist each depot siding must carry after
+	 * the explicit vehicle reset on every server restart. AI diagram steps are disabled by default;
+	 * the manifest + per-vehicle operations own the traffic.
+	 */
+	public org.mtr.core.mmtr.manifest.MmtrRollingStockManifest mmtrRollingStock = new org.mtr.core.mmtr.manifest.MmtrRollingStockManifest();
+	private java.nio.file.Path mmtrManifestPath;
+	/** AI diagram step execution (web consist jobs). Off by default; reserved for the future task layer. */
+	public boolean mmtrAiJobStepsEnabled;
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -204,6 +213,17 @@ public class Simulator extends Data implements Utilities {
 			log.warn("Failed to load MMTR consist-type policy for {}: {}", dimension, e.getMessage());
 		}
 
+		// MMTR: rolling-stock manifest (车辆生成表): read at restart, applied after the vehicle reset.
+		mmtrManifestPath = savePath.resolve("mmtr-rolling-stock.json");
+		try {
+			if (java.nio.file.Files.exists(mmtrManifestPath)) {
+				mmtrRollingStock = org.mtr.core.mmtr.manifest.MmtrRollingStockManifest.fromFile(mmtrManifestPath);
+				log.info("MMTR: loaded rolling-stock manifest for {} ({} depot(s), {} siding(s))", dimension, mmtrRollingStock.depots.size(), mmtrRollingStock.sidingEntryCount());
+			}
+		} catch (Exception e) {
+			log.warn("Failed to load MMTR rolling-stock manifest for {}: {}", dimension, e.getMessage());
+		}
+
 		// MMTR: web-authored consist jobs (replaces the depot timetable for mmtr-managed stock).
 		mmtrJobsPath = savePath.resolve("mmtr-jobs.json");
 		try {
@@ -227,6 +247,7 @@ public class Simulator extends Data implements Utilities {
 
 		if (!mmtrJobRegistry.jobs.isEmpty()) {
 			expandMmtrJobTemplates();
+			mmtrJobsMode = true; // jobs present => web orchestration owns the traffic
 			mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
 			log.info("MMTR: loaded {} consist job(s) for {}", mmtrJobRegistry.jobs.size(), dimension);
 		}
@@ -257,6 +278,11 @@ public class Simulator extends Data implements Utilities {
 
 		// Set the last simulated millis
 		setCurrentMillis(Utilities.getElement(new ObjectArrayList<>(settings), 0, new Settings(0)).getLastSimulationMillis());
+
+		// MMTR: explicit rolling-stock reset on restart - clear all trains, then generate per manifest.
+		if (!mmtrRollingStock.isEmpty()) {
+			mmtrResetAndApplyRollingStock();
+		}
 	}
 
 	/**
@@ -313,8 +339,112 @@ public class Simulator extends Data implements Utilities {
 		return mmtrJobRegistry;
 	}
 
+	/**
+	 * MMTR rolling-stock reset (车辆生成表 apply): drop every generated train - parked or en route -
+	 * on all sidings, clear stale templates, then install the manifest's consist on each declared
+	 * depot siding so the engine spawns exactly the configured rolling stock. Runs explicitly once
+	 * at startup and is callable on demand (operator reset). Job-mode dispatch stays disabled so the
+	 * generated trains simply wait for a human or an AI driver.
+	 *
+	 * @return number of sidings the manifest installed stock on
+	 */
+	public int mmtrResetAndApplyRollingStock() {
+		sidings.forEach(Siding::clearVehicles);
+		sidings.forEach(siding -> {
+			siding.setVehicleCars(new ObjectArrayList<>());
+			siding.mmtrManualSpawn = false;
+			siding.mmtrSessionSpawned = false;
+		});
+		int placed = 0;
+		for (final org.mtr.core.mmtr.manifest.MmtrManifestDepot depotEntry : mmtrRollingStock.depots) {
+			Depot depot = null;
+			for (final Depot candidate : depots) {
+				if (candidate.getId() == depotEntry.depotId) {
+					depot = candidate;
+					break;
+				}
+			}
+			if (depot == null) {
+				System.out.println("[MMTR-MFST] manifest depot " + depotEntry.depotId + " not found - skipped");
+				continue;
+			}
+			for (final org.mtr.core.mmtr.manifest.MmtrManifestSiding sidingEntry : depotEntry.sidings) {
+				if (sidingEntry.cars.isEmpty()) {
+					continue;
+				}
+				Siding siding = null;
+				for (final Siding candidate : depot.savedRails) {
+					if (candidate.getId() == sidingEntry.sidingId) {
+						siding = candidate;
+						break;
+					}
+				}
+				if (siding == null) {
+					System.out.println("[MMTR-MFST] manifest siding " + sidingEntry.sidingId + " not found in depot " + depotEntry.depotId + " - skipped");
+					continue;
+				}
+				final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = new ObjectArrayList<>();
+				for (final org.mtr.core.mmtr.job.MmtrCarSpec spec : sidingEntry.cars) {
+					cars.add(new org.mtr.core.data.VehicleCar(spec.vehicleId, spec.length, spec.width, spec.capacity, spec.bogie1Position, spec.bogie2Position, spec.couplingPadding1, spec.couplingPadding2));
+				}
+				if (Siding.getTotalVehicleLength(cars) > siding.getRailLength()) {
+					System.out.println("[MMTR-MFST] manifest consist on siding " + sidingEntry.sidingId + " does not fit (rail " + siding.getRailLength() + " m) - skipped");
+					continue;
+				}
+				siding.setVehicleCars(cars);
+				siding.mmtrManualSpawn = true;
+				siding.mmtrSessionSpawned = false;
+				placed++;
+			}
+		}
+		if (placed > 0) {
+			// Keep legacy depot auto-dispatch off so generated stock stays parked until operated.
+			mmtrJobsMode = true;
+		}
+		System.out.println("[MMTR-MFST] rolling-stock reset applied: " + placed + " siding(s) staged for spawn on " + dimension);
+		return placed;
+	}
+
+	public org.mtr.core.mmtr.manifest.MmtrRollingStockManifest getMmtrRollingStock() {
+		return mmtrRollingStock;
+	}
+
+	/**
+	 * MMTR session-level cleanup: remove every generated train (parked or en route) and clear every
+	 * siding template so nothing re-seeds. The rolling-stock manifest is untouched - it is applied
+	 * again on the next restart (explicit reset).
+	 */
+	public void mmtrClearAllVehicles() {
+		sidings.forEach(Siding::clearVehicles);
+		sidings.forEach(siding -> {
+			siding.setVehicleCars(new ObjectArrayList<>());
+			siding.mmtrManualSpawn = false;
+			siding.mmtrSessionSpawned = false;
+		});
+		System.out.println("[MMTR-MFST] cleared all vehicles + templates on " + dimension);
+	}
+
+	/**
+	 * MMTR vehicle-level operation: delete the train with the given world-unique vehicle id
+	 * wherever it stands (parked or en route). Generation (rolling-stock manifest) and deletion are
+	 * independent operations keyed by the spawned train's own id.
+	 *
+	 * @return whether a vehicle with that id existed and was removed
+	 */
+	public boolean deleteMmtrVehicle(long vehicleId) {
+		for (final Siding siding : sidings) {
+			if (siding.removeVehicleById(vehicleId)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private void persistMmtrJobs() {
 		expandMmtrJobTemplates();
+		if (!mmtrJobRegistry.jobs.isEmpty()) {
+			mmtrJobsMode = true;
+		}
 		if (mmtrJobsPath != null) {
 			mmtrJobRegistry.save(mmtrJobsPath);
 		}
@@ -654,9 +784,13 @@ public class Simulator extends Data implements Utilities {
 			}
 
 			jammedRouteIds.clear();
+			// MMTR: depot->main-route path legs must exist for ANY traffic (scheduled jobs or a human
+			// driving a manifest-generated train). Generate once per boot even when no job scheduler
+			// is attached (jobs disabled), so a manually-driven consist has the network to move on.
+			ensureMmtrDepotPaths();
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
-			if (mmtrJobScheduler != null) {
+			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
 			}
 			clients.forEach(client -> client.sendUpdates(this));

@@ -11,7 +11,10 @@ import org.mtr.core.serializer.WriterBase;
  */
 public final class MmtrCarSpec implements SerializedDataBase {
 
-	public String vehicleId = "";
+	/** Built-in MTR train used when an authoring path leaves the model id blank. */
+	public static final String DEFAULT_VEHICLE_ID = "m_train";
+
+	public String vehicleId = DEFAULT_VEHICLE_ID;
 	public double length;
 	public double width;
 	public long capacity;

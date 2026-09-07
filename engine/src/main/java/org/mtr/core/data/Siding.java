@@ -121,7 +121,7 @@ public final class Siding extends SidingSchema implements Utilities {
 		generatePathDistancesAndTimeSegments();
 		if (area != null && defaultPathData != null) {
 			vehicleReaders.forEach(readerBase -> {
-				final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, getIsManual(), maxManualSpeed, manualToAutomaticTime), this, readerBase, data);
+				final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, readerBase, data);
 				vehicleIdMap.put(vehicle.getId(), vehicle);
 			});
 		}
@@ -359,9 +359,13 @@ public final class Siding extends SidingSchema implements Utilities {
 			}
 		}
 
-		if (defaultPathData != null && !vehicleCars.isEmpty() && spawnTrain && (getIsUnlimited() || vehicleIdMap.size() < getMaxVehicles())) {
-			final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, getIsManual(), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		if (defaultPathData != null && !vehicleCars.isEmpty() && spawnTrain && (getIsUnlimited() || vehicleIdMap.size() < getMaxVehicles())
+			&& (!mmtrManualSpawn || !mmtrSessionSpawned)) {
+			final Vehicle vehicle = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 			vehicleIdMap.put(vehicle.getId(), vehicle);
+			if (mmtrManualSpawn) {
+				mmtrSessionSpawned = true;
+			}
 		}
 
 		if (!trainsToRemove.isEmpty()) {
@@ -400,7 +404,7 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 		vehicleIdMap.remove(parked.getId());
 		setVehicleCars(cars); // keep the template consistent with the rebuilt formation
-		final Vehicle rebuilt = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, getIsManual(), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		final Vehicle rebuilt = new Vehicle(VehicleExtraData.create(area.getId(), id, railLength, vehicleCars, pathSidingToMainRoute, pathMainRoute, pathMainRouteToSiding, defaultPathData, area.getRepeatInfinitely(), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicleIdMap.put(rebuilt.getId(), rebuilt);
 		return rebuilt;
 	}
@@ -412,6 +416,15 @@ public final class Siding extends SidingSchema implements Utilities {
 	 */
 	/** MMTR arrival make-up window: while true the siding tolerates up to two parked vehicles for one merge tick. */
 	public boolean mmtrFormationWindow;
+	/**
+	 * MMTR rolling-stock manifest: when true, vehicles generated on this siding are spawned
+	 * manual-allowed so a human (or, later, an AI peer) can drive them directly regardless of the
+	 * legacy depot manual/auto flag. Set during the manifest apply and cleared on a full reset.
+	 */
+	public boolean mmtrManualSpawn;
+	/** Manifest-managed: set once this siding has generated its one session train so the engine's
+	 * "keep one parked from template" respawn does not keep re-seeding a new train every departure. */
+	public boolean mmtrSessionSpawned;
 
 	public void clearParkedVehicles() {
 		final ObjectArraySet<Vehicle> toRemove = new ObjectArraySet<>();
@@ -421,6 +434,27 @@ public final class Siding extends SidingSchema implements Utilities {
 			}
 		});
 		toRemove.forEach(vehicle -> vehicleIdMap.remove(vehicle.getId()));
+	}
+
+	/**
+	 * MMTR vehicle-level operation: remove the train with the given world-unique vehicle id from
+	 * this siding, whether parked or on route. Returns whether it was found here.
+	 */
+	public boolean removeVehicleById(long vehicleId) {
+		final Vehicle vehicle = vehicleIdMap.get(vehicleId);
+		if (vehicle == null) {
+			return false;
+		}
+		// A parked vehicle is normally re-seeded from the siding template by the engine. Deleting a
+		// generated train is an explicit vehicle-level operation, so release the siding's generation
+		// slot too: the train stays gone for the session (the manifest is re-applied on next restart).
+		final boolean parked = !vehicle.getIsOnRoute();
+		vehicleIdMap.remove(vehicleId);
+		if (parked) {
+			vehicleCars.clear();
+		}
+		System.out.println("[MMTR-VEH] deleted vehicle " + vehicleId + " from siding " + id + " (" + name + ")" + (parked ? " (slot released)" : ""));
+		return true;
 	}
 
 	/** MMTR dynamic routing: whether this siding has a generated outbound leg to the main route. */

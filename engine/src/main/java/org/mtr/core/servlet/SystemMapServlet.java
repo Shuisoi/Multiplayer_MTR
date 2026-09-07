@@ -93,6 +93,55 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("ok", simulator.deleteMmtrJob(jobId));
 					yield result;
 				}
+				case "mmtr-rolling-stock" -> Utilities.getJsonObjectFromData(simulator.getMmtrRollingStock());
+				case "mmtr-manifest-reset" -> {
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", true);
+					result.addProperty("placedSidings", simulator.mmtrResetAndApplyRollingStock());
+					yield result;
+				}
+				case "mmtr-vehicle-op" -> {
+					final String op = jsonReader.getString("op", "");
+					final String rawVehicleId = jsonReader.getString("vehicleId", "").trim();
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("op", op);
+					if (op.equals("clear-all")) {
+						simulator.mmtrClearAllVehicles();
+						result.addProperty("ok", true);
+						yield result;
+					}
+					boolean ok = false;
+					if (rawVehicleId.isEmpty()) {
+						result.addProperty("ok", false);
+						result.addProperty("error", "vehicleId is required");
+					} else {
+						try {
+							final long vehicleId = Long.parseLong(rawVehicleId);
+							// Reserved vehicle-level task sheet (per-train 作业表) - future layer.
+							if (op.equals("delete")) {
+								ok = simulator.deleteMmtrVehicle(vehicleId);
+								if (!ok) {
+									result.addProperty("error", "no vehicle with id " + rawVehicleId);
+								}
+							} else {
+								result.addProperty("error", "unsupported op '" + op + "'");
+							}
+						} catch (NumberFormatException e) {
+							result.addProperty("error", "vehicleId must be numeric");
+						}
+					}
+					result.addProperty("ok", ok);
+					yield result;
+				}
+				case "mmtr-vehicle-task" -> {
+					// Reserved: assign a task sheet (作业表) to one generated train by vehicle id.
+					final String rawVehicleId = jsonReader.getString("vehicleId", "").trim();
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", true);
+					result.addProperty("reserved", true);
+					result.addProperty("message", "per-vehicle task sheets are reserved (vehicleId=" + rawVehicleId + ")");
+					yield result;
+				}
 				case "mmtr-job-states" -> {
 					final com.google.gson.JsonArray states = new com.google.gson.JsonArray();
 					final org.mtr.core.mmtr.job.MmtrJobScheduler scheduler = simulator.mmtrJobScheduler;
