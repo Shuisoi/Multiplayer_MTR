@@ -100,6 +100,10 @@ public class Simulator extends Data implements Utilities {
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
+	/** 硬默认 0 (option 3): real servers preset every turnout to operator branch 0. Engines tests keep
+	 * this false so authority/mission semantics stay synthetic; {@link org.mtr.core.Main} enables it. */
+	public boolean mmtrDefaultPointsZero;
+	private String mmtrPointDefaultsSignature = "";
 
 	/**
 	 * MMTR health watchdog: produces a periodic health summary (SimRail-style server health):
@@ -458,6 +462,48 @@ public class Simulator extends Data implements Utilities {
 		final ObjectArrayList<org.mtr.core.mmtr.line.MmtrLineDetector.MmtrLine> lines = org.mtr.core.mmtr.line.MmtrLineDetector.detect(this);
 		mmtrLinesCache = new Object[]{signature, lines};
 		return lines;
+	}
+
+	/**
+	 * Hard default 0: ensure every turnout (fork with 2+ legs) carries an explicit operator branch
+	 * 0. Runs on boot / whenever the rail set changes (rails-signature gated, so an operator clearing
+	 * a fork with ✕设 keeps it unset until the track changes or the server restarts).
+	 */
+	public void mmtrEnsurePointDefaults() {
+		if (!mmtrDefaultPointsZero) {
+			return;
+		}
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> hexes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+		for (final org.mtr.core.data.Rail rail : rails) {
+			hexes.add(rail.getHexId());
+		}
+		hexes.sort(null);
+		final StringBuilder sig = new StringBuilder().append(hexes.size()).append('|');
+		for (final String hex : hexes) {
+			sig.append(hex).append(',');
+		}
+		final String signature = sig.toString();
+		if (signature.equals(mmtrPointDefaultsSignature)) {
+			return;
+		}
+		mmtrPointDefaultsSignature = signature;
+		final java.util.Set<String> currentForks = new java.util.HashSet<>();
+		boolean changed = false;
+		for (final org.mtr.core.mmtr.point.MmtrPoint point : org.mtr.core.mmtr.point.MmtrPoint.discoverDirectionAware(this)) {
+			if (point.legs.size() < 2) {
+				continue;
+			}
+			currentForks.add(point.nodeX + "," + point.nodeY + "," + point.nodeZ + "|" + point.viaRailHex);
+			if (!mmtrPointBranches.contains(point.nodeX, point.nodeY, point.nodeZ, point.viaRailHex)) {
+				mmtrPointBranches.set(point.nodeX, point.nodeY, point.nodeZ, point.viaRailHex, 0);
+				changed = true;
+			}
+		}
+		// Prune stale operator rows (forks that disappeared with a rail change), then persist once.
+		changed |= mmtrPointBranches.branches.keySet().removeIf(key -> !currentForks.contains(key));
+		if (changed && mmtrPointsPath != null) {
+			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
+		}
 	}
 
 	/** Discover all turnouts (道岔) on the rail graph with the operator branch states applied. */
@@ -847,6 +893,7 @@ public class Simulator extends Data implements Utilities {
 			// Motion legs, not depot-generated route legs.
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
+			mmtrEnsurePointDefaults();
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
 			}

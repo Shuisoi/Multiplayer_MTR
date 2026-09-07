@@ -109,6 +109,8 @@ public class Main {
 		}
 
 		simulators = new ObjectImmutableList<>(tempSimulators);
+		// Real servers (engine Main hosts the live world): every turnout defaults to operator branch 0.
+		tempSimulators.forEach(simulator -> simulator.mmtrDefaultPointsZero = true);
 
 		if (webserverPort > 0) {
 			webserver = new Webserver(webserverPort);
