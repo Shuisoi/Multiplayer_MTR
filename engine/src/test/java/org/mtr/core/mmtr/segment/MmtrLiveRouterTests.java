@@ -220,4 +220,47 @@ public final class MmtrLiveRouterTests {
 		assertEquals(0, w.offsetM(), 1e-6);
 	}
 
+
+	// --- MmtrMotionDriver: Motion Core actually DRIVES a consist forward over ticks ---
+
+	@Test
+	public void driverDrivesAcrossForkOntoStraightBranch() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), null);
+		final boolean rest = d.driveToRest(1000, 0.004, 60); // ~4 m/s
+		assertEquals(true, rest, "driver should come to rest at end of line");
+		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex(), "consist drove through the fork onto the straight branch");
+		assertEquals(false, d.haltedAtAuthority());
+	}
+
+	@Test
+	public void driverDrivesOntoDivergeWhenFlipped() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch1(), null);
+		final boolean rest = d.driveToRest(1000, 0.004, 60);
+		assertEquals(true, rest);
+		assertEquals(n.rBeyondB.getHexId(), d.walker.railHex(), "flipped turnout -> driven consist crossed onto the diverging branch");
+	}
+
+	@Test
+	public void driverStopsAtUnsetForkAwaitingAuthority() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), new BranchStore(), null);
+		final boolean rest = d.driveToRest(1000, 0.004, 60);
+		assertEquals(true, rest);
+		assertEquals(true, d.haltedAtAuthority());
+		assertEquals(n.rIn.getHexId(), d.walker.railHex());
+		assertEquals(20, d.walker.offsetM(), 1e-6, "stopped at the far end of approach, before the unset fork");
+	}
+
+	@Test
+	public void driverStopsWhenTargetRailBoarded() {
+		final Net n = new Net();
+		final MmtrMotionDriver d = MmtrMotionDriver.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), n.rBeyondA.getHexId());
+		final boolean rest = d.driveToRest(1000, 0.004, 60);
+		assertEquals(true, rest);
+		assertEquals(true, d.atTarget());
+		assertEquals(n.rBeyondA.getHexId(), d.walker.railHex());
+	}
+
 }

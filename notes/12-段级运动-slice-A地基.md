@@ -122,3 +122,7 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
   我的清理无关；已删的 DevWorldRelocate/RouterProbe 属跨股道搬迁专属。确定性核心 + Motion Core（含真实 -96 翻转）
   全绿 => 清理未引入任何新增失败。
 - 待办：mmtr-job 子系统自身尚在建设中（红）；引擎 Vehicle 层预烘焙 path 换成 Motion Core（切片4）未做。
+## 15. 切片4 起步：MmtrMotionDriver（Motion Core 逐 tick 开车）
+- MmtrMotionDriver 在 MmtrMotionWalker 上做巡航纵向驱动：每 tick advance(speed*dt)，到无权威岔口/端点/目标轨制动至停。
+- 4 用例绿：branch0 -> 开过岔落到 rBeyondA；branch1 -> rBeyondB；未设岔停在 approach 远端(AWAITING)；目标轨 board -> atTarget 停。
+- 这是 Vehicle 后端调用以真正"逐 tick 把车开起来"的确定性核心。

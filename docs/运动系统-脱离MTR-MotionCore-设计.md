@@ -36,6 +36,7 @@
 | MmtrNodeRouter | .../segment/MmtrNodeRouter.java | 道岔权威节点决策：elect(单续向直行；task 命中优先；operator 0=straight/1=diverge；无权威真岔返回 null 绝不 auto) | MmtrSegmentMotionTests |
 | MmtrLiveRouter | .../segment/MmtrLiveRouter.java | 运行时逐节点路由：route(...)=沿真实 positionsToRail 走的轨序；integrate(...)=按距离推进返回 (segment,offset) | MmtrTurnoutRoutingTests、MmtrLiveRouterTests |
 | MmtrMotionWalker | .../segment/MmtrMotionWalker.java | 可续 (segment+offset) 逐 tick 引擎：持当前轨+偏移，advance(delta) 跨节点按权威选段；未设岔停在岔口 | MmtrLiveRouterTests (walk*) |
+| MmtrMotionDriver | .../segment/MmtrMotionDriver.java | 纵向驱动：每 tick 以 speed*dt 推进 walker，权威/端点/目标处制动至停；真正把车逐 tick 开起来 | MmtrLiveRouterTests (driver*) |
 | （真实轨发现） | .../point/MmtrPointRegistry | discover 在真实 Rail 上找 (节点,进向)->branch0/1；BranchStore 持久化 operator 0/1 | MmtrTurnoutRoutingTests |
 
 提交链：652507e -> 3e3e18a -> c9ec451 -> a434e84 -> 8c8c379 -> f6cec64 -> 6d3ccd5（本轮 + MmtrMotionWalker）。全部编译 + 测试绿。

@@ -1,0 +1,83 @@
+package org.mtr.core.mmtr.segment;
+
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.Data;
+import org.mtr.core.data.Position;
+import org.mtr.core.data.Rail;
+import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
+
+/**
+ * Longitudinal driver on top of {@link MmtrMotionWalker} — the piece that actually <b>runs</b> a
+ * consist forward tick by tick under Motion Core (M2-Core slice 4: the running train is driven by
+ * segment+offset + node authority, not by a pre-baked MTR path). Each tick advances the walker by
+ * {@code speed * dt}; the walker consumes only what the rail graph allows and stops advancing when
+ * it reaches an unset fork (awaiting authority), the end of the line, or the commanded target rail —
+ * at which point this driver brings the consist to rest. Speed/door logic of a full cab sits on top;
+ * this is the deterministic core a Vehicle backend calls.
+ */
+public final class MmtrMotionDriver {
+
+	public final MmtrMotionWalker walker;
+	/** Current forward speed, m/ms (engine internal units). */
+	private double speed;
+
+	private MmtrMotionDriver(MmtrMotionWalker walker) {
+		this.walker = walker;
+	}
+
+	public static MmtrMotionDriver start(Data data, Rail startRail, Position startAt, BranchStore branches, @Nullable String targetRailHex) {
+		return new MmtrMotionDriver(MmtrMotionWalker.start(data, startRail, startAt, branches, targetRailHex));
+	}
+
+	public double speed() {
+		return speed;
+	}
+
+	public boolean atTarget() {
+		return walker.atTarget();
+	}
+
+	public boolean haltedAtAuthority() {
+		return walker.haltedAtAuthority();
+	}
+
+	public boolean endOfLine() {
+		return walker.endOfLine();
+	}
+
+	/** True once the consist has come to rest because it can no longer advance (target / authority / end). */
+	public boolean stopped() {
+		return speed <= 0 && (walker.atTarget() || walker.haltedAtAuthority() || walker.endOfLine());
+	}
+
+	/**
+	 * Advance one tick at a commanded cruise (m/ms). The walker moves as far as the rail graph
+	 * actually allows; the moment it can no longer advance (authority halt / end of line / target
+	 * boarded) the driver brakes to rest.
+	 */
+	public void tick(long dtMs, double cruiseMetersPerMillisecond) {
+		if (walker.atTarget() || walker.haltedAtAuthority() || walker.endOfLine()) {
+			speed = 0;
+			return;
+		}
+		final double cruise = Math.max(0, cruiseMetersPerMillisecond);
+		speed = cruise;
+		walker.advance(cruise * dtMs);
+		if (walker.atTarget() || walker.haltedAtAuthority() || walker.endOfLine()) {
+			speed = 0;
+		}
+	}
+
+	/** Drive until rest or {@code maxTicks} elapsed at the given cruise; returns whether it came to rest. */
+	public boolean driveToRest(long dtMs, double cruiseMetersPerMillisecond, int maxTicks) {
+		for (int i = 0; i < maxTicks; i++) {
+			tick(dtMs, cruiseMetersPerMillisecond);
+			if (stopped()) {
+				return true;
+			}
+		}
+		return stopped();
+	}
+}
