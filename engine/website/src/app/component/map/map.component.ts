@@ -19,6 +19,8 @@ import {ClientsService} from "../../service/clients.service";
 import {MmtrTrainsService} from "../../service/mmtr-trains.service";
 import {MmtrPoint, MmtrPointsService} from "../../service/mmtr-points.service";
 import {MmtrTopologyService} from "../../service/mmtr-topology.service";
+import {MmtrLinesService} from "../../service/mmtr-lines.service";
+import {MmtrLayersService} from "../../service/mmtr-layers.service";
 import {TooltipModule} from "primeng/tooltip";
 import {NgOptimizedImage} from "@angular/common";
 import {TranslocoDirective} from "@jsverse/transloco";
@@ -62,6 +64,8 @@ export class MapComponent implements AfterViewInit {
 	private readonly mmtrTrainsService = inject(MmtrTrainsService);
 	readonly mmtrPointsService = inject(MmtrPointsService);
 	private readonly mmtrTopologyService = inject(MmtrTopologyService);
+	private readonly mmtrLinesService = inject(MmtrLinesService);
+	readonly mmtrLayersService = inject(MmtrLayersService);
 	private readonly themeService = inject(ThemeService);
 
 	readonly stationClicked = output<string>();
@@ -88,7 +92,11 @@ export class MapComponent implements AfterViewInit {
 	private clientPositions: Record<string, { x: number, y: number }> = {};
 
 	private railLayer: THREE.Group | undefined;
+	private readonly lineGroups = new Map<string, THREE.Group>();
 	private static readonly RAIL_Z_INDEX = 0;
+	/** Monochrome line styling: gray tiers + focus emphasis (black & white console). */
+	private static readonly LINE_GRAYS = [0xFFFFFF, 0xD4DAE0, 0xAEB6BE, 0x8B949C];
+	private static readonly LINE_NAMES = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"];
 
 	private readonly clientGroupsOnRouteRaw: {
 		clients: { id: string, name: string }[],
@@ -115,25 +123,104 @@ export class MapComponent implements AfterViewInit {
 
 	constructor() {
 		// P2: whenever the turnout feed refreshes (3s poll + after each write), reproject the fork
-		// markers and keep the open console row data current.
+		// markers and keep the open console row data current (hidden when the 道岔 layer is off).
 		effect(() => {
 			this.mmtrPointsService.points();
+			if (!this.mmtrLayersService.points()) {
+				this.pointMarkers.set([]);
+				this.selectedNodePoints.set([]);
+				return;
+			}
 			this.updatePointOverlays();
 		});
-		// P2 follow-up: draw the real rail topology underneath (scene clears rebuild from the signal).
+		// Rail topology + automatic lines: rebuilt whenever data or layer visibility changes.
 		effect(() => {
 			this.mmtrTopologyService.rails();
+			this.mmtrLinesService.lines();
+			this.mmtrLayersService.rails();
+			this.mmtrLayersService.linesLayer();
+			this.mmtrLayersService.visibleLines();
+			this.mmtrLayersService.focusedLine();
 			this.applyRailLayer();
 		});
 	}
 
 	/**
-	 * (Re)build the rail topology layer: one fat ROUND white edge per real rail (pure topology -
-	 * the rail's two real nodes connected straight, no curve sampling), with a dark halo pass
-	 * underneath that keeps the white readable on light themes too.
+	 * (Re)build the track layers of the management console:
+	 * <ul>
+	 *   <li>base layer (开关: 轨道): one fat ROUND white edge per real rail, pure topology, with a
+	 *       dark halo underneath for light-theme legibility;</li>
+	 *   <li>lines layer (开关: 线路): when automatic lines are available, every rail of a VISIBLE
+	 *       line is redrawn on top in its own monochrome gray tier (focused line = bold white);
+	 *       rails of hidden lines simply disappear from the lines view.</li>
+	 * </ul>
 	 */
 	private applyRailLayer() {
 		const rails = this.mmtrTopologyService.rails();
+		this.clearRailLayer();
+		if (rails.length === 0) {
+			return;
+		}
+		const group = new THREE.Group();
+		if (this.mmtrLayersService.rails()) {
+			for (const rail of rails) {
+				const geometry = new LineGeometry();
+				geometry.setPositions([
+					rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX,
+					rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX,
+				]);
+				const halo = new Line2(geometry, lineMaterialRailHalo);
+				halo.computeLineDistances();
+				const core = new Line2(geometry, lineMaterialRailCore);
+				core.computeLineDistances();
+				group.add(halo, core);
+			}
+		}
+		this.railLayer = group;
+		this.scene.add(this.railLayer);
+
+		// Lines overlay (grayscale tiers, redrawn over the base edges).
+		const lines = this.mmtrLinesService.lines();
+		this.clearLineLayers();
+		if (this.mmtrLayersService.linesLayer() && lines.length > 0) {
+			const visible = new Set(this.mmtrLayersService.visibleLines());
+			const focused = this.mmtrLayersService.focusedLine();
+			lines.forEach((line, index) => {
+				if (!visible.has(line.id)) {
+					return;
+				}
+				const isFocused = line.id === focused;
+				const gray = MapComponent.LINE_GRAYS[index % MapComponent.LINE_GRAYS.length];
+				const haloWidth = (isFocused ? 11 : 9) * SETTINGS.scale * devicePixelRatio;
+				const coreWidth = (isFocused ? 7 : 5) * SETTINGS.scale * devicePixelRatio;
+				const haloMat = new LineMaterial({color: 0x000000, linewidth: haloWidth, transparent: true, opacity: isFocused ? 0.7 : 0.45});
+				const coreMat = new LineMaterial({color: isFocused ? 0xFFFFFF : gray, linewidth: coreWidth, depthWrite: false});
+				const layerGroup = new THREE.Group();
+				for (const hex of line.rails) {
+					const rail = rails.find(candidate => candidate.hex === hex);
+					if (!rail) {
+						continue;
+					}
+					const geometry = new LineGeometry();
+					geometry.setPositions([
+						rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX + 1,
+						rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX + 1,
+					]);
+					const halo = new Line2(geometry, haloMat);
+					halo.computeLineDistances();
+					const core = new Line2(geometry, coreMat);
+					core.computeLineDistances();
+					layerGroup.add(halo, core);
+				}
+				if (layerGroup.children.length > 0) {
+					this.scene.add(layerGroup);
+					this.lineGroups.set(line.id, layerGroup);
+				}
+			});
+		}
+	}
+
+	private clearRailLayer() {
 		if (this.railLayer) {
 			this.railLayer.children.forEach(child => {
 				if ((child as unknown as Line2).isLine2) {
@@ -143,24 +230,18 @@ export class MapComponent implements AfterViewInit {
 			this.scene.remove(this.railLayer);
 			this.railLayer = undefined;
 		}
-		if (rails.length === 0) {
-			return;
-		}
-		const group = new THREE.Group();
-		for (const rail of rails) {
-			const geometry = new LineGeometry();
-			geometry.setPositions([
-				rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX,
-				rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX,
-			]);
-			const halo = new Line2(geometry, lineMaterialRailHalo);
-			halo.computeLineDistances();
-			const core = new Line2(geometry, lineMaterialRailCore);
-			core.computeLineDistances();
-			group.add(halo, core);
-		}
-		this.railLayer = group;
-		this.scene.add(this.railLayer);
+	}
+
+	private clearLineLayers() {
+		this.lineGroups.forEach(group => {
+			group.children.forEach(child => {
+				if ((child as unknown as Line2).isLine2) {
+					(child as unknown as Line2).geometry.dispose();
+				}
+			});
+			this.scene.remove(group);
+		});
+		this.lineGroups.clear();
 	}
 
 	/** Project the fork markers and the open console selection onto the current camera view. */

@@ -1,133 +1,67 @@
-import {ChangeDetectionStrategy, Component, CUSTOM_ELEMENTS_SCHEMA, inject} from "@angular/core";
+import {ChangeDetectionStrategy, Component, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, inject, signal} from "@angular/core";
+import {takeUntilDestroyed} from "@angular/core/rxjs-interop";
+import {interval} from "rxjs";
 import {MapComponent} from "./component/map/map.component";
-import {StationPanelComponent} from "./component/station-panel/station-panel.component";
-import {StationService} from "./service/station.service";
-import {DrawerComponent} from "./component/drawer/drawer.component";
-import {DirectionsComponent} from "./component/directions/directions.component";
-import {MainPanelComponent} from "./component/main-panel/main-panel.component";
-import {RouteKeyService} from "./service/route.service";
-import {RoutePanelComponent} from "./component/route-panel/route-panel.component";
-import {DirectionsService} from "./service/directions.service";
-import {ButtonModule} from "primeng/button";
-import {TooltipModule} from "primeng/tooltip";
-import {ClientService} from "./service/client.service";
-import {ClientPanelComponent} from "./component/client-panel/client-panel.component";
 import {MmtrOpsPanelComponent} from "./component/mmtr-ops-panel/mmtr-ops-panel.component";
-import {TranslocoDirective} from "@jsverse/transloco";
+import {MmtrLinesPanelComponent} from "./component/mmtr-lines-panel/mmtr-lines-panel.component";
+import {MmtrTrainsService} from "./service/mmtr-trains.service";
+import {MmtrPointsService} from "./service/mmtr-points.service";
+import {MmtrLinesService} from "./service/mmtr-lines.service";
+import {MmtrLayersService} from "./service/mmtr-layers.service";
+import {ThemeService} from "./service/theme.service";
 
+/**
+ * MMTR 运营台 (management console, 黑白极简): full-screen real-network map with automatic-line
+ * rendering and layer toggles, a status bar (fleet / turnouts / lines / clock) and a right-hand
+ * operations drawer (车队 · 任务 · 作业单). The original MTR station website chrome (search,
+ * departures, directions, station panels) is removed - this console is the server's operator UI.
+ */
 @Component({
 	selector: "app-root",
 	changeDetection: ChangeDetectionStrategy.OnPush,
 	imports: [
 		MapComponent,
-		ButtonModule,
-		TooltipModule,
-		TranslocoDirective,
-		StationPanelComponent,
-		DrawerComponent,
-		ClientPanelComponent,
-		DirectionsComponent,
-		MainPanelComponent,
-		RoutePanelComponent,
 		MmtrOpsPanelComponent,
+		MmtrLinesPanelComponent,
 	],
 	templateUrl: "./app.component.html",
 	styleUrl: "./app.component.scss",
 	schemas: [CUSTOM_ELEMENTS_SCHEMA],
 })
 export class AppComponent {
-	private readonly stationService = inject(StationService);
-	private readonly routeKeyService = inject(RouteKeyService);
-	private readonly clientService = inject(ClientService);
-	private readonly directionsService = inject(DirectionsService);
+	private readonly trainsService = inject(MmtrTrainsService);
+	private readonly pointsService = inject(MmtrPointsService);
+	private readonly linesService = inject(MmtrLinesService);
+	private readonly themeService = inject(ThemeService);
+	private readonly destroyRef = inject(DestroyRef);
 
+	readonly layersService = inject(MmtrLayersService);
+	protected readonly drawerOpen = signal(false);
+	protected readonly clock = signal("--:--:--");
 
-	getTitle() {
-		return document.title;
+	protected vehicles = () => this.trainsService.trains().length;
+	protected onRoute = () => this.trainsService.trains().filter(train => train.onRoute).length;
+	protected forks = () => this.pointsService.points().length;
+	protected manualPoints = () => this.pointsService.points().filter(point => point.manual >= 0).length;
+	protected lockedPoints = () => this.pointsService.points().filter(point => point.locked).length;
+	protected lineCount = () => this.linesService.lines().length;
+
+	constructor() {
+		// Monochrome console: the management view is dark (white strokes, gray tiers).
+		if (!this.themeService.isDarkTheme()) {
+			this.themeService.setTheme(true);
+		}
+		const updateClock = () => {
+			const now = new Date();
+			this.clock.set(
+				[now.getHours(), now.getMinutes(), now.getSeconds()].map(value => String(value).padStart(2, "0")).join(":"),
+			);
+		};
+		updateClock();
+		interval(1000).pipe(takeUntilDestroyed(this.destroyRef)).subscribe(updateClock);
 	}
 
-	onClickMain(sideMain: DrawerComponent, sideStation: DrawerComponent, sideClient: DrawerComponent, sideDirections: DrawerComponent, sideRoute: DrawerComponent) {
-		sideMain.open();
-		sideStation.close();
-		sideClient.close();
-		sideDirections.close();
-		sideRoute.close();
-		this.onCloseStation();
-		this.onCloseClient();
-		this.onCloseDirections();
-		this.onCloseRoute();
-	}
-
-	onClickStation(stationId: string, sideMain: DrawerComponent, sideStation: DrawerComponent, sideClient: DrawerComponent, sideDirections: DrawerComponent, sideRoute: DrawerComponent, zoomToStation: boolean) {
-		this.stationService.setStation(stationId, zoomToStation);
-		sideMain.close();
-		sideStation.open();
-		sideClient.close();
-		sideDirections.close();
-		sideRoute.close();
-		this.onCloseClient();
-		this.onCloseDirections();
-		this.onCloseRoute();
-	}
-
-	onClickRoute(routeKey: string, sideMain: DrawerComponent, sideStation: DrawerComponent, sideClient: DrawerComponent, sideDirections: DrawerComponent, sideRoute: DrawerComponent) {
-		this.routeKeyService.select(routeKey);
-		sideMain.close();
-		sideStation.close();
-		sideClient.close();
-		sideDirections.close();
-		sideRoute.open();
-		this.onCloseStation();
-		this.onCloseClient();
-		this.onCloseDirections();
-	}
-
-	onClickClient(clientId: string, sideMain: DrawerComponent, sideStation: DrawerComponent, sideClient: DrawerComponent, sideDirections: DrawerComponent, sideRoute: DrawerComponent) {
-		this.clientService.setClient(clientId);
-		sideMain.close();
-		sideStation.close();
-		sideClient.open();
-		sideDirections.close();
-		sideRoute.close();
-		this.onCloseStation();
-		this.onCloseRoute();
-		this.onCloseDirections();
-	}
-
-	onOpenDirections(directionsSelection: { stationDetails?: { stationId: string, isStartStation: boolean }, clientDetails?: { clientId: string, isStartClient: boolean } } | undefined, sideMain: DrawerComponent, sideStation: DrawerComponent, sideClient: DrawerComponent, sideDirections: DrawerComponent, sideRoute: DrawerComponent) {
-		this.directionsService.directionsPanelOpened.next(directionsSelection);
-		sideMain.close();
-		sideStation.close();
-		sideClient.close();
-		sideDirections.open();
-		sideRoute.close();
-		this.onCloseStation();
-		this.onCloseClient();
-		this.onCloseRoute();
-	}
-
-	onCloseStation() {
-		this.stationService.clear();
-	}
-
-	onCloseClient() {
-		this.clientService.clear();
-	}
-
-	onCloseDirections() {
-		this.directionsService.clear();
-	}
-
-	onCloseRoute() {
-		this.routeKeyService.clear();
-	}
-
-	onOpenMmtr(sideMain: DrawerComponent, sideMmtr: DrawerComponent) {
-		sideMain.close();
-		sideMmtr.open();
-		this.onCloseStation();
-		this.onCloseClient();
-		this.onCloseDirections();
-		this.onCloseRoute();
+	protected toggleDrawer() {
+		this.drawerOpen.set(!this.drawerOpen());
 	}
 }

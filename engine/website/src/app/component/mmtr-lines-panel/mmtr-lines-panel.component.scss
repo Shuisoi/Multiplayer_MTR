@@ -1,0 +1,107 @@
+.mmtr-lines-panel {
+	background: rgba(10, 12, 15, 0.92);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 6px;
+	color: #e8eaed;
+	font-size: 12px;
+	width: 260px;
+	overflow: hidden;
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+}
+
+.mmtr-lines-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.mmtr-lines-title {
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+.mmtr-lines-count {
+	color: #9aa1aa;
+	flex: 1;
+	text-align: right;
+	margin-right: 6px;
+}
+
+.mmtr-chip {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, 0.25);
+	color: #cfd5db;
+	border-radius: 3px;
+	font-size: 11px;
+	padding: 1px 6px;
+	cursor: pointer;
+}
+
+.mmtr-chip:hover {
+	border-color: #fff;
+	color: #fff;
+}
+
+.mmtr-lines-list {
+	max-height: 220px;
+	overflow-y: auto;
+}
+
+.mmtr-line-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 8px;
+	cursor: pointer;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.mmtr-line-row:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.mmtr-line-row.focused {
+	background: rgba(255, 255, 255, 0.16);
+}
+
+.mmtr-line-row.hidden .mmtr-line-id {
+	opacity: 0.35;
+	text-decoration: line-through;
+}
+
+.mmtr-line-toggle {
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: 1px solid #666;
+	background: transparent;
+	color: transparent;
+	font-size: 8px;
+	line-height: 1;
+	padding: 0;
+	cursor: pointer;
+	flex: none;
+}
+
+.mmtr-line-toggle.on {
+	background: #ffffff;
+	border-color: #ffffff;
+	color: #000;
+}
+
+.mmtr-line-id {
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	width: 34px;
+	flex: none;
+}
+
+.mmtr-line-meta {
+	color: #9aa1aa;
+	font-size: 11px;
+	flex: 1;
+	text-align: right;
+	white-space: nowrap;
+}

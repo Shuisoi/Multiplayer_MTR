@@ -1,49 +1,33 @@
-<ng-container *transloco="let t">
-	<app-drawer #sideMain [title]="getTitle()">
-		<app-main-panel
-				class="wrapper"
-				(stationClicked)="onClickStation($event, sideMain, sideStation, sideClient, sideDirections, sideRoute, true)"
-				(routeClicked)="onClickRoute($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"
-				(clientClicked)="onClickClient($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"
-				(directionsOpened)="onOpenDirections(undefined, sideMain, sideStation, sideClient, sideDirections, sideRoute)"/>
-	</app-drawer>
-
-	<app-drawer #sideStation [title]="t('station.title')" (closed)="onCloseStation()">
-		<app-station-panel
-				(stationClicked)="onClickStation($event, sideMain, sideStation, sideClient, sideDirections, sideRoute, true)"
-				(routeClicked)="onClickRoute($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"
-				(directionsOpened)="onOpenDirections($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"/>
-	</app-drawer>
-
-	<app-drawer #sideClient [title]="t('client.title')" (closed)="onCloseClient()">
-		<app-client-panel
-				(stationClicked)="onClickStation($event, sideMain, sideStation, sideClient, sideDirections, sideRoute, true)"
-				(routeClicked)="onClickRoute($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"
-				(directionsOpened)="onOpenDirections($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"/>
-	</app-drawer>
-
-	<app-drawer #sideDirections [title]="t('common.directions')" (closed)="onCloseDirections()">
-		<app-directions/>
-	</app-drawer>
-
-	<app-drawer #sideMmtr [title]="'MMTR 任务面板 / Ops'" (closed)="onCloseRoute()">
-		<app-mmtr-ops-panel/>
-	</app-drawer>
-
-	<app-drawer #sideRoute [title]="t('route.title')" (closed)="onCloseRoute()">
-		<app-route-panel
-				(stationClicked)="onClickStation($event, sideMain, sideStation, sideClient, sideDirections, sideRoute, true)"
-				(routeClicked)="onClickRoute($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"/>
-	</app-drawer>
-
-	<app-map
-			(stationClicked)="onClickStation($event, sideMain, sideStation, sideClient, sideDirections, sideRoute, false)"
-			(clientClicked)="onClickClient($event, sideMain, sideStation, sideClient, sideDirections, sideRoute)"/>
-	<button pButton class="button-corner button-corner-mmtr" [rounded]="true" [text]="true" [raised]="true" size="large" (click)="onOpenMmtr(sideMain, sideMmtr)" [pTooltip]="'MMTR Ops'" tooltipPosition="left">
-		<iconify-icon icon="mdi:train-car" aria-hidden="true"></iconify-icon>
-	</button>
-
-	<button pButton class="button-corner" [rounded]="true" [text]="true" [raised]="true" size="large" (click)="onClickMain(sideMain, sideStation, sideClient, sideDirections, sideRoute)" [pTooltip]="t('common.menu')" tooltipPosition="left">
-		<iconify-icon icon="mdi:menu" aria-hidden="true"></iconify-icon>
-	</button>
-</ng-container>
+<div class="mmtr-console">
+	<header class="mmtr-topbar">
+		<div class="mmtr-brand">MMTR<span class="mmtr-brand-sub">运营台</span></div>
+		<div class="mmtr-status">
+			<span class="mmtr-stat">车辆 <b>{{ vehicles() }}</b></span>
+			<span class="mmtr-stat">运行 <b>{{ onRoute() }}</b></span>
+			<span class="mmtr-stat">岔口 <b>{{ forks() }}</b></span>
+			<span class="mmtr-stat">人工 <b>{{ manualPoints() }}</b></span>
+			<span class="mmtr-stat" [class.mmtr-alert]="lockedPoints() > 0">锁定 <b>{{ lockedPoints() }}</b></span>
+			<span class="mmtr-stat">线路 <b>{{ lineCount() }}</b></span>
+			<span class="mmtr-clock">{{ clock() }}</span>
+		</div>
+		<button class="mmtr-ops-toggle" [class.open]="drawerOpen()" (click)="toggleDrawer()">
+			{{ drawerOpen() ? "收起运营 ✕" : "运营面板 ≡" }}
+		</button>
+	</header>
+	<div class="mmtr-main">
+		<div class="mmtr-map">
+			<app-map/>
+		</div>
+		<div class="mmtr-map-overlays">
+			<div class="mmtr-layer-chips">
+				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>
+				<button class="mmtr-chip" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">线路</button>
+				<button class="mmtr-chip" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">道岔</button>
+			</div>
+			<app-mmtr-lines-panel/>
+		</div>
+		<aside class="mmtr-drawer" [class.open]="drawerOpen()">
+			<app-mmtr-ops-panel/>
+		</aside>
+	</div>
+</div>
