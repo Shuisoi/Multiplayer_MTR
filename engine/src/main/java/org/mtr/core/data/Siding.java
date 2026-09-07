@@ -753,15 +753,9 @@ public final class Siding extends SidingSchema implements Utilities {
 	 * Should only be called after a path is generated, whether successful or not.
 	 */
 	private void finishGeneratingPath(boolean failed) {
-		if (failed && area != null) {
-			area.sidingPathGenerationFailed();
-		}
 		if (sidingPathFinderSidingToMainRoute.isEmpty() && sidingPathFinderMainRouteToSiding.isEmpty()) {
 			writePathCache();
 			generatePathDistancesAndTimeSegments();
-			if (area != null) {
-				area.finishGeneratingPath(id);
-			}
 		}
 	}
 

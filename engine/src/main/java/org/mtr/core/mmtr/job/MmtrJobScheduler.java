@@ -223,8 +223,7 @@ public final class MmtrJobScheduler {
 	}
 
 	public void tick(long currentMillis, Simulator simulator) {
-		simulator.ensureMmtrDepotPaths();
-		if (anchor == Long.MIN_VALUE) {
+			if (anchor == Long.MIN_VALUE) {
 			anchor = currentMillis;
 		}
 		final long dayTime = (currentMillis - anchor) % Utilities.MILLIS_PER_DAY;

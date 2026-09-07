@@ -178,32 +178,8 @@ public final class OperationProcessor {
 			case NEARBY_STATIONS -> new NearbyAreasRequest<Station, Platform>(jsonReader).query(simulator, simulator.stations);
 			case NEARBY_DEPOTS -> new NearbyAreasRequest<Depot, Siding>(jsonReader).query(simulator, simulator.depots);
 			case RAILS -> new RailsRequest(jsonReader).query(simulator);
-			case GENERATE_BY_DEPOT_IDS -> {
-				new DepotOperationByIds(jsonReader).generate(simulator);
-				yield null;
-			}
-			case GENERATE_BY_DEPOT_NAME -> {
-				new DepotOperationByName(jsonReader).generate(simulator);
-				yield null;
-			}
 			case GENERATE_BY_LIFT -> {
 				new GenerateByLift(jsonReader, simulator).generate();
-				yield null;
-			}
-			case CLEAR_BY_DEPOT_IDS -> {
-				new DepotOperationByIds(jsonReader).clear(simulator);
-				yield null;
-			}
-			case CLEAR_BY_DEPOT_NAME -> {
-				new DepotOperationByName(jsonReader).clear(simulator);
-				yield null;
-			}
-			case INSTANT_DEPLOY_BY_DEPOT_IDS -> {
-				new DepotOperationByIds(jsonReader).instantDeploy(simulator);
-				yield null;
-			}
-			case INSTANT_DEPLOY_BY_DEPOT_NAME -> {
-				new DepotOperationByName(jsonReader).instantDeploy(simulator);
 				yield null;
 			}
 			default -> null;

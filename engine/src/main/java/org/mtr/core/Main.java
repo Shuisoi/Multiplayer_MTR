@@ -214,13 +214,6 @@ public class Main {
 						return;
 					}
 					case "save", "save-all" -> save();
-					case "generate", "regenerate" -> {
-						final StringBuilder generateKey = new StringBuilder();
-						for (int i = 1; i < input.length; i++) {
-							generateKey.append(input[i]).append(" ");
-						}
-						simulators.forEach(simulator -> Depot.generateDepotsByName(simulator, generateKey.toString()));
-					}
 					default -> log.info("Unknown command \"{}\"", input[0]);
 				}
 			} catch (Exception e) {

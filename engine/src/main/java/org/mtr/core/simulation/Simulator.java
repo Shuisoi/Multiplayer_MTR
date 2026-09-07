@@ -495,35 +495,6 @@ public class Simulator extends Data implements Utilities {
 		}
 	}
 
-	/**
-	 * MMTR job mode: on first scheduler tick regenerate depot path caches that the loaded save may
-	 * not carry yet (freshly built sidings have no outbound/return legs until the depot graph is
-	 * generated). Spawning/route planning then works the same as in a fully generated world.
-	 */
-	public void ensureMmtrDepotPaths() {
-		if (mmtrDepotPathsGenerated) {
-			return;
-		}
-		mmtrDepotPathsGenerated = true;
-		if (!mmtrJobsMode || depots.isEmpty()) {
-			return;
-		}
-		boolean needsGeneration = false;
-		for (final Depot depot : depots) {
-			for (final Siding siding : depot.savedRails) {
-				if (!siding.hasPathToMainRoute() && !siding.hasReturnFromMainRoute()) {
-					needsGeneration = true;
-					break;
-				}
-			}
-			if (needsGeneration) {
-				break;
-			}
-		}
-		if (needsGeneration) {
-			Depot.generateDepots(this, new ObjectArrayList<>(depots));
-		}
-	}
 
 	public void save() {
 		autoSave = true;
@@ -603,7 +574,6 @@ public class Simulator extends Data implements Utilities {
 		this.gameMillisPerDay = gameMillisPerDay;
 		this.isTimeMoving = isTimeMoving;
 		lastSetGameMillisMidnight = getCurrentMillis() - gameMillis;
-		depots.forEach(Depot::generatePlatformDirectionsAndWriteDeparturesToSidings);
 	}
 
 	/**
@@ -811,10 +781,8 @@ public class Simulator extends Data implements Utilities {
 			}
 
 			jammedRouteIds.clear();
-			// MMTR: depot->main-route path legs must exist for ANY traffic (scheduled jobs or a human
-			// driving a manifest-generated train). Generate once per boot even when no job scheduler
-			// is attached (jobs disabled), so a manually-driven consist has the network to move on.
-			ensureMmtrDepotPaths();
+			// MTR depot path auto-generation removed (auto rebuilt on Motion/tasks): stock runs on
+			// Motion legs, not depot-generated route legs.
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
