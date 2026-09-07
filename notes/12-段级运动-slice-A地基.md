@@ -130,3 +130,6 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - DevWorldMotionWalkTests：在真实 dev 存档沿 -96 via 轨开一列车到 (-96,-60,76)：
   未设岔停在节点(offset=len)；BranchStore 0 -> 实际跨上 branch0 直向真实轨(atTarget)；1 -> 跨上 branch1 分叉真实轨。
   = "车实际沿该轨"在 Motion Core 驱动层成立。
+## 17. 切片4 增量回归证据
+- 全量 gradlew test：245 completed / 13 failed / 2 skipped（新增 MmtrMotionDriver 4 用例 + DevWorldMotionWalk 1 用例，全绿）；
+  13 失败仍全为既有 mmtr-job 子系统（最初基线即红）=> 切片4 增量为纯新增绿、无新增失败。
