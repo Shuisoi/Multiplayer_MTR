@@ -116,3 +116,9 @@ C. -95 翻转验证：先用现网真实存档把 -95 岔口 (node, via)->branch
 - 删除 MmtrJobScheduler 内 arrivalMergeConsist / relocateParkedConsist / relocatingTo 完成态机与字段及 reset；
 - 删除 MmtrMotionRouter（canReachSiding）类 + MmtrJobSchedulerTests.motionRouterReachabilityBasics。
 - compileJava/compileTestJava + Motion Core 确定性测试绿。
+## 14. 清理后全量回归证据（无新增失败）
+- 全量 gradlew test：240 completed / 13 failed / 2 skipped。13 个失败全在既有的 mmtr-job 调度子系统
+  （MmtrJobSchedulerTests 12 + DevWorldJobSmokeTests 1），它们在最初基线就已红（原 16 之一），与 Motion Core /
+  我的清理无关；已删的 DevWorldRelocate/RouterProbe 属跨股道搬迁专属。确定性核心 + Motion Core（含真实 -96 翻转）
+  全绿 => 清理未引入任何新增失败。
+- 待办：mmtr-job 子系统自身尚在建设中（红）；引擎 Vehicle 层预烘焙 path 换成 Motion Core（切片4）未做。
