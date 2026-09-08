@@ -137,5 +137,71 @@
 				</div>
 			}
 		}
+		<p-divider/>
+		<div class="mmtr-section-title">指令输入栏 / Command</div>
+		<div class="mmtr-cmd-row">
+			<input class="mmtr-cmd-input" [value]="cmdInput()" (input)="onCmdInput($event)" (keydown)="onCommandKey($event)" placeholder="/signals scan  ·  /signal bind x y z railHex  ·  help" autocomplete="off"/>
+			<button type="button" class="mmtr-dispatch-btn" (click)="runCommand()">执行</button>
+		</div>
+		@if (commandLog().length > 0) {
+			<div class="mmtr-cmd-log">
+				@for (line of commandLog(); track $index) {
+					<div class="mmtr-cmd-line" [class.mmtr-cmd-in]="line.startsWith('>')">{{ line }}</div>
+				}
+			</div>
+		}
+		<p-divider/>
+		<div class="mmtr-section-title">信号机管理 / Wayside Signals</div>
+		@if (signalFeedback()) {
+			<div class="mmtr-feedback">{{ signalFeedback() }}</div>
+		}
+		<div class="mmtr-sig-form">
+			<input class="mmtr-sig-num" [value]="sigX()" (input)="onSigKeyInput($event, 'x')" placeholder="x"/>
+			<input class="mmtr-sig-num" [value]="sigY()" (input)="onSigKeyInput($event, 'y')" placeholder="y"/>
+			<input class="mmtr-sig-num" [value]="sigZ()" (input)="onSigKeyInput($event, 'z')" placeholder="z"/>
+			<input class="mmtr-sig-num" [value]="sigAngle()" (input)="onSigKeyInput($event, 'angle')" placeholder="朝向角度"/>
+			<select class="mmtr-sig-aspects" [value]="sigAspects()" (change)="onSigKeyInput($event, 'aspects')">
+				<option value="2">2灯</option>
+				<option value="3">3灯</option>
+				<option value="4">4灯</option>
+			</select>
+			<select class="mmtr-sig-target" [value]="sigTarget()" (change)="onSigTarget($event)">
+				<option value="">AUTO（自动推断）</option>
+				@for (rail of signalRails(); track rail.hex) {
+					<option [value]="rail.hex">{{ rail.label }}</option>
+				}
+			</select>
+			<button type="button" class="mmtr-dispatch-btn" (click)="registerSignal()">登记/覆盖</button>
+		</div>
+		@if (signalLoading()) {
+			<p-progressSpinner styleClass="w-3rem h-3rem"/>
+		} @else if (managedSignals().length === 0) {
+			<div class="mmtr-empty">暂无登记信号机 —— 用上方表单登记，或执行 /signals scan（fabric 执行器接入后）</div>
+		} @else {
+			<table class="mmtr-sched-table">
+				<thead>
+					<tr>
+						<th>坐标</th>
+						<th>角度</th>
+						<th>灯数</th>
+						<th>模式/读取</th>
+						<th>当前</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					@for (sig of managedSignals(); track sig.key) {
+						<tr>
+							<td>({{ sig.x }}, {{ sig.y }}, {{ sig.z }})</td>
+							<td>{{ sig.angle }}°</td>
+							<td>{{ sig.aspects }} 灯</td>
+							<td>{{ sig.mode }}<span class="mmtr-muted"> · {{ sig.target ? sig.target.slice(0, 14) + "…" : "无" }}</span></td>
+							<td><span class="mmtr-sig-dot" [style.background]="aspectColor(sig.aspect)"></span>{{ sig.aspect || "—" }}</td>
+							<td><button type="button" class="mmtr-dispatch-btn" (click)="removeSignal(sig)">删除</button></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
 	</div>
 }

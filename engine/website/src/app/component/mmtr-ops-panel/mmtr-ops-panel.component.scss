@@ -163,3 +163,13 @@
 .mmtr-sched-current td {
 	background: color-mix(in srgb, #f6c343 12%, transparent);
 }
+.mmtr-cmd-row{display:flex;gap:.4rem;margin:.3rem 0}
+.mmtr-cmd-input{flex:1;min-width:0;background:color-mix(in srgb,var(--background-color) 80%,transparent);border:1px solid var(--p-content-border-color);border-radius:4px;color:var(--p-text-color);padding:2px 8px;font-size:.72rem}
+.mmtr-cmd-log{background:color-mix(in srgb,var(--background-color) 80%,transparent);border:1px solid var(--p-content-border-color);border-radius:4px;padding:4px 8px;font-size:.66rem;max-height:140px;overflow-y:auto;line-height:1.5}
+.mmtr-cmd-line{white-space:pre-wrap;word-break:break-all;color:var(--p-text-muted-color)}
+.mmtr-cmd-in{color:var(--p-text-color)}
+.mmtr-sig-form{display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;margin:.3rem 0}
+.mmtr-sig-num{width:64px;background:color-mix(in srgb,var(--background-color) 80%,transparent);border:1px solid var(--p-content-border-color);border-radius:4px;color:var(--p-text-color);padding:1px 6px;font-size:.68rem}
+.mmtr-sig-aspects,.mmtr-sig-target{max-width:230px;background:color-mix(in srgb,var(--background-color) 80%,transparent);border:1px solid var(--p-content-border-color);border-radius:4px;color:var(--p-text-color);font-size:.68rem;padding:1px 4px}
+.mmtr-sig-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.mmtr-sched-table td .mmtr-muted{font-size:.62rem}

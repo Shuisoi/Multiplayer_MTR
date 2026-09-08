@@ -4,6 +4,7 @@ import {DividerModule} from "primeng/divider";
 import {MmtrTrainsService, MmtrTrainState} from "../../service/mmtr-trains.service";
 import {MmtrConsistJob, MmtrJobStateSummary, MmtrJobsService} from "../../service/mmtr-jobs.service";
 import {MmtrScheduleService} from "../../service/mmtr-schedule.service";
+import {MmtrSignalsService} from "../../service/mmtr-signals.service";
 import {MmtrJobEditorComponent} from "../mmtr-job-editor/mmtr-job-editor.component";
 
 const JOB_STATE_TEXT: Record<string, string> = {
@@ -43,6 +44,77 @@ export class MmtrOpsPanelComponent {
 
 	protected readonly scheduleJobs = this.mmtrScheduleService.jobs;
 	protected readonly scheduleLoading = this.mmtrScheduleService.loading;
+
+	// --- Wayside signals + OP command input (指令栏/信号机管理) ---
+	private readonly mmtrSignalsService = inject(MmtrSignalsService);
+	protected readonly managedSignals = this.mmtrSignalsService.signals;
+	protected readonly signalRails = this.mmtrSignalsService.rails;
+	protected readonly signalFeedback = this.mmtrSignalsService.feedback;
+	protected readonly commandLog = this.mmtrSignalsService.commandLog;
+	protected readonly signalLoading = this.mmtrSignalsService.loading;
+	protected readonly cmdInput = signal("");
+	protected readonly sigX = signal("0");
+	protected readonly sigY = signal("-60");
+	protected readonly sigZ = signal("0");
+	protected readonly sigAngle = signal("0");
+	protected readonly sigAspects = signal("2");
+	protected readonly sigTarget = signal("");
+
+	protected runCommand() {
+		this.mmtrSignalsService.runCommand(this.cmdInput());
+		this.cmdInput.set("");
+	}
+
+	protected onCmdInput(event: Event) {
+		this.cmdInput.set((event.target as HTMLInputElement).value);
+	}
+
+	protected onCommandKey(event: KeyboardEvent) {
+		if (event.key === "Enter") {
+			this.runCommand();
+		}
+	}
+
+	protected onSigKeyInput(event: Event, field: "x" | "y" | "z" | "angle" | "aspects") {
+		const value = (event.target as HTMLInputElement).value;
+		if (field === "x") this.sigX.set(value);
+		if (field === "y") this.sigY.set(value);
+		if (field === "z") this.sigZ.set(value);
+		if (field === "angle") this.sigAngle.set(value);
+		if (field === "aspects") this.sigAspects.set(value);
+	}
+
+	protected onSigTarget(event: Event) {
+		this.sigTarget.set((event.target as HTMLSelectElement).value);
+	}
+
+	protected registerSignal() {
+		const x = Number(this.sigX());
+		const y = Number(this.sigY());
+		const z = Number(this.sigZ());
+		const angle = Number(this.sigAngle());
+		const aspects = Number(this.sigAspects()) || 2;
+		const target = this.sigTarget();
+		if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(angle)) {
+			this.mmtrSignalsService.setFeedback("✗ 坐标/角度需为数字");
+			return;
+		}
+		this.mmtrSignalsService.setSignal(x, y, z, angle, aspects, target);
+	}
+
+	protected removeSignal(entry: {x: number, y: number, z: number}) {
+		this.mmtrSignalsService.removeSignal(entry.x, entry.y, entry.z);
+	}
+
+	protected aspectColor(aspect: string): string {
+		switch (aspect) {
+			case "RED": return "#ff4d4f";
+			case "SINGLE_YELLOW": return "#ffb300";
+			case "DOUBLE_YELLOW": return "#ffe082";
+			case "GREEN": return "#3df59a";
+			default: return "#9aa0a6";
+		}
+	}
 
 	/** undefined = list view; otherwise the job being edited in the inline editor. */
 	protected readonly editingJob = signal<MmtrConsistJob | undefined>(undefined);
