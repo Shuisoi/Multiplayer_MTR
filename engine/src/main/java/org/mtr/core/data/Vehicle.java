@@ -122,6 +122,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private double mmtrMotionStopTargetM = -1;
 	private boolean mmtrMotionStoppedAtTarget;
 	private boolean mmtrMotionStopOpenDoors;
+	/**
+	 * Signal S1: nearest stop point forced by external occupancy ahead of this motion vehicle,
+	 * in walker distance space (m); {@code Double.MAX_VALUE} = no occupancy constraint. Re-computed
+	 * every server tick from the shared vehiclePositions occupancy trees BEFORE the run integrates.
+	 */
+	private double mmtrBlockStopM = Double.MAX_VALUE;
+	/**
+	 * Signal S1: this vehicle is parked at its occupancy stop point (blocked by an occupied rail
+	 * ahead). Traction is suppressed while it stands; the flag clears automatically once the block
+	 * stop disappears (the rail ahead emptied), resuming auto runs / manual control.
+	 */
+	private boolean mmtrBlockedWaiting;
 	/** applyMmtrControl() sequence; a changed sequence while stopped at a target = the driver's continue. */
 	private int mmtrControlApplySeq;
 	private int mmtrMotionArrivalControlSeq = -1;
@@ -174,6 +186,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * MMTR: how long a mission stays AT_TARGET (dwell for passengers) before completing.
 	 */
 	private static final long MMTR_MISSION_DWELL_MILLIS = 5000;
+	/**
+	 * Signal S1: stop margin in front of an external occupancy face (tail of a same-direction train
+	 * or head of an oncoming one), m, in walker distance space.
+	 */
+	private static final double MMTR_BLOCK_TAIL_GAP_M = 2.0;
+	/**
+	 * Signal S1: when the next rail (block) is externally occupied the vehicle stops AT the current
+	 * rail's end node without crossing it; advance is capped epsilon short of the node so the walker
+	 * never boards the occupied rail while the block service still holds it.
+	 */
+	private static final double MMTR_BLOCK_NODE_EPS_M = 0.001;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -797,6 +820,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final boolean braking = overridden && (control.getBrakeNotch() > 0 || control.isEmergency());
 		final boolean stopTargetActive = mmtrMotionStopTargetM >= 0;
 
+		// Signal S1: re-derive the occupancy stop every tick from the shared occupancy trees (server
+		// authority). The effective stop of this tick is the nearer of the armed stop target and the
+		// occupancy block stop. While parked AT the block stop the waiting flag clears itself only
+		// once that stop moves past the head / disappears - auto runs then resume to their target and
+		// manual drivers regain traction.
+		mmtrBlockStopM = computeMmtrBlockStopM(vehiclePositions);
+		final double brakeTargetM = Math.min(stopTargetActive ? mmtrMotionStopTargetM : Double.MAX_VALUE, mmtrBlockStopM);
+		if (mmtrBlockedWaiting && brakeTargetM - mmtrMotionWalker.distanceM() > 1e-3) {
+			mmtrBlockedWaiting = false;
+			System.out.println("[MMTR-SIG] occupancy block cleared - " + (stopTargetActive ? "auto resumes to stop target " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0 + "m" : "manual control resumes"));
+		}
+
 		// Stopped exactly at the armed stop target: hold there. Doors stay open when the stop asked
 		// for it; a FRESH control application (driver pushes again / task re-commands) closes the
 		// doors and starts the next run from the same spot.
@@ -824,18 +859,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 		vehicleExtraData.closeDoors();
 		final double previousSpeed = speed;
+		final double remainingToBrake = brakeTargetM < Double.MAX_VALUE / 2 ? brakeTargetM - mmtrMotionWalker.distanceM() : Double.MAX_VALUE;
+		final boolean brakeTargetActive = brakeTargetM < Double.MAX_VALUE / 2;
 		// Unmanned auto run: drives itself toward the armed stop target while no cab override is held.
-		final boolean autoActive = mmtrMotionAuto && !mmtrManualOverride && stopTargetActive && !mmtrMotionStoppedAtTarget && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() > 1e-6;
+		final boolean autoActive = mmtrMotionAuto && !mmtrManualOverride && stopTargetActive && !mmtrMotionStoppedAtTarget && !mmtrBlockedWaiting && remainingToBrake > 1e-6;
 		final int autoNotch = mmtrConsistType != null ? Math.max(1, Math.min(4, mmtrConsistType.getPowerNotches())) : 4;
-		final double remainingToStop = stopTargetActive ? mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() : Double.MAX_VALUE;
-		final boolean autoBraking = stopTargetActive && speed > 0 && remainingToStop > 0 && remainingToStop < 0.5 * speed * speed / Math.max(mmtrMotionServiceDecelPerMs(), 1e-12);
+		// Service-brake envelope against the EFFECTIVE stop (armed stop target or the occupancy block
+		// stop, whichever is nearer). Occupancy braking overrides a driver's own traction but the
+		// driver's own braking (incl. emergency) stays stronger and takes over the branch below.
+		final boolean autoBraking = brakeTargetActive && !(overridden && braking) && speed > 0 && remainingToBrake > 0 && remainingToBrake < 0.5 * speed * speed / Math.max(mmtrMotionServiceDecelPerMs(), 1e-12);
 
 		double integratedDistance = 0;
-		if (autoBraking) {
-			// Service-brake to an exact rest at the armed stop target (constant-decel law; the trailing
+		if (mmtrBlockedWaiting) {
+			// Parked exactly at the occupancy stop point: traction is suppressed (never creep into
+			// the occupied rail); the flag clears at the top of a later tick once the block opens.
+			speed = 0;
+		} else if (autoBraking) {
+			// Service-brake to an exact rest at the effective stop (constant-decel law; the trailing
 			// clamp below trims the last sub-tick remainder). Driver traction is overridden inside the
 			// braking envelope, like an ATO stop; the driver's own emergency brake stays stronger.
-			final double brakeDelta = Math.min(0.5 * speed * speed / Math.max(remainingToStop, 1e-3), mmtrMotionServiceDecelPerMs()) * millisElapsed;
+			final double brakeDelta = Math.min(0.5 * speed * speed / Math.max(remainingToBrake, 1e-3), mmtrMotionServiceDecelPerMs()) * millisElapsed;
 			speed = Math.max(0, speed - brakeDelta);
 			integratedDistance = speed > 0 ? speed * millisElapsed : 0;
 		} else if ((overridden || autoActive) && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
@@ -884,13 +927,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			integratedDistance = speed * millisElapsed;
 		}
 
-		if (stopTargetActive && !mmtrMotionStoppedAtTarget) {
-			final double remaining = mmtrMotionStopTargetM - mmtrMotionWalker.distanceM();
+		if (brakeTargetActive && !mmtrMotionStoppedAtTarget) {
+			final double remaining = brakeTargetM - mmtrMotionWalker.distanceM();
 			if (remaining <= 1e-6) {
 				integratedDistance = 0;
 				speed = 0;
 			} else if (integratedDistance > remaining) {
-				integratedDistance = remaining; // land exactly on the armed stop target
+				integratedDistance = remaining; // land exactly on the effective stop (target or block)
 			}
 		}
 
@@ -909,6 +952,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (stopTargetActive && railProgress >= mmtrMotionStopTargetM - 1e-6) {
 				speed = 0;
 				mmtrMotionArriveAtStopTarget();
+			} else if (mmtrBlockStopM < Double.MAX_VALUE / 2 && railProgress >= mmtrBlockStopM - 1e-6) {
+				// Arrived exactly at the occupancy stop (rail ahead occupied): rest and wait for it
+				// to clear - not a terminal state, never opens doors, never reports a task arrival.
+				speed = 0;
+				if (!mmtrBlockedWaiting) {
+					mmtrBlockedWaiting = true;
+					System.out.println("[MMTR-SIG] motion stopped at occupancy block " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (rail ahead occupied, waiting)");
+				}
 			} else if (consumed < integratedDistance - 1e-9) {
 				speed = 0;
 				if (previousSpeed > 1e-9) {
@@ -924,12 +975,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				lastMovementMillis = data.getCurrentMillis();
 				System.out.println("[MMTR-DRV] motion seg=" + mmtrMotionWalker.railHex() + " offset=" + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + " dist=" + Math.round(consumed * 1000.0) / 1000.0 + " speed=" + speed);
 			}
-		} else if (stopTargetActive && speed == 0 && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
-			mmtrMotionArriveAtStopTarget();
+		} else if (speed == 0 && brakeTargetActive && brakeTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
+			if (stopTargetActive && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
+				mmtrMotionArriveAtStopTarget();
+			} else if (!mmtrBlockedWaiting) {
+				// Already resting exactly at the occupancy stop (e.g. the advance was clamped to zero
+				// because the block point was reached inside this tick): enter the waiting state.
+				mmtrBlockedWaiting = true;
+				System.out.println("[MMTR-SIG] motion resting at occupancy block " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (rail ahead occupied, waiting)");
+			}
 		}
 
 		if (!isClientside) {
-			final int displayPower = overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
+			final int displayPower = mmtrBlockedWaiting ? 0 : overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
 			vehicleExtraData.setPowerLevel(displayPower);
 			vehicleExtraData.setSpeedTarget(speed);
 			updateMmtrSyncFields();
@@ -1089,6 +1147,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrMotionLegs.clear();
 		mmtrProtection = false;
 		mmtrProtectionLockRemaining = 0;
+		mmtrBlockStopM = Double.MAX_VALUE;
+		mmtrBlockedWaiting = false;
 		atoOverride = false;
 		vehicleExtraData.closeDoors();
 		departureIndex = -1;
@@ -1811,6 +1871,63 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final PositionAndTiltAngle positionAndTiltAngle1 = getPositionAndTiltAngle(value1, overrideY);
 		final PositionAndTiltAngle positionAndTiltAngle2 = getPositionAndTiltAngle(value2, overrideY);
 		return positionAndTiltAngle1 == null || positionAndTiltAngle2 == null ? new BogiePosition(new PositionAndTiltAngle(new Vector(value1, 0, 0), 0), new PositionAndTiltAngle(new Vector(value2, 0, 0), 0)) : new BogiePosition(positionAndTiltAngle1, positionAndTiltAngle2);
+	}
+
+	/**
+	 * Signal S1: nearest stop point (m, walker distance space) forced by OTHER vehicles' occupancy
+	 * ahead of this motion vehicle, or {@code Double.MAX_VALUE} when nothing blocks. Two rules:
+	 * (1) on the CURRENT rail the closest external occupancy face inside the window from the head to
+	 * the rail end stops the vehicle {@code MMTR_BLOCK_TAIL_GAP_M} short of that face (exact-interval
+	 * following - works for a same-direction tail ahead and for an oncoming head alike);
+	 * (2) if the NEXT rail (the one the walker would elect after this rail - pure look-ahead, no
+	 * crossing side effects) carries ANY external occupancy, the vehicle stops at this rail's end
+	 * node (one occupied rail = one closed block, AWS-style section interlocking; the epsilon keeps
+	 * the walker from boarding the occupied rail). Queries read the same shared occupancy trees the
+	 * legacy path branch uses, keyed by the ordered rail endpoints.
+	 */
+	private double computeMmtrBlockStopM(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		if (mmtrMotionWalker == null || vehiclePositions == null || mmtrMotionLegs.isEmpty()) {
+			return Double.MAX_VALUE;
+		}
+		double stop = Double.MAX_VALUE;
+		// (1) external occupancy face on the current rail, from the head up to the end of the rail
+		final int index = indexInMmtrMotionLegs(railProgress);
+		final PathData segment = mmtrMotionLegs.get(index);
+		if (railProgress < segment.getEndDistance() - 1e-9) {
+			final DoubleDoubleImmutablePair bounds = getBlockedBounds(segment, railProgress, segment.getEndDistance());
+			for (int i = 0; i < vehiclePositions.size(); i++) {
+				final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), segment.getOrderedPosition1(), segment.getOrderedPosition2());
+				if (vehiclePosition != null) {
+					final double overlap = vehiclePosition.getClosestOverlap(bounds.leftDouble(), bounds.rightDouble(), segment.reversePositions, id);
+					if (overlap >= 0) {
+						stop = Math.min(stop, railProgress + Math.max(0, overlap - MMTR_BLOCK_TAIL_GAP_M));
+					}
+				}
+			}
+		}
+		// (2) next rail occupied = the block is closed: stop epsilon short of this rail's end node
+		final Rail nextRail = mmtrMotionWalker.peekNextRail();
+		if (nextRail != null && hasExternalOccupancy(nextRail, vehiclePositions)) {
+			final double toNode = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+			stop = Math.min(stop, mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M));
+		}
+		return stop;
+	}
+
+	/** True when any OTHER vehicle occupies any part of {@code rail} (whole-rail block check). */
+	private boolean hasExternalOccupancy(Rail rail, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		final Position position1 = rail.getPosition1();
+		final Position position2 = rail.getPosition2();
+		final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;
+		final Position orderedPosition2 = orderedPosition1 == position1 ? position2 : position1;
+		final double length = rail.railMath.getLength();
+		for (int i = 0; i < vehiclePositions.size(); i++) {
+			final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), orderedPosition1, orderedPosition2);
+			if (vehiclePosition != null && vehiclePosition.getClosestOverlap(0, length, false, id) >= 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static DoubleDoubleImmutablePair getBlockedBounds(PathData pathData, double lowerRailProgress, double upperRailProgress) {

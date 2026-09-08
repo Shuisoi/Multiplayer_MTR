@@ -82,6 +82,11 @@ public final class MmtrMotionWalker {
 		return rail.getHexId();
 	}
 
+	/** The rail the walker currently stands on. */
+	public Rail currentRail() {
+		return rail;
+	}
+
 	public double offsetM() {
 		return offsetM;
 	}
@@ -109,6 +114,37 @@ public final class MmtrMotionWalker {
 	/** Length of the current rail, m. */
 	public double currentRailLengthM() {
 		return rail.railMath.getLength();
+	}
+
+	/**
+	 * Signal S1: pure look-ahead — predicts which rail {@link #advance(double)} would elect if the
+	 * walker consumed the whole remaining current rail right now and crossed its ahead node
+	 * (operator > auto grant > task target > single continuation; never auto). Returns {@code null}
+	 * when the walker would NOT board a next rail: end of line (no neighbours / no continuation) or
+	 * a halt at an unset fork. No state is changed — no crossing record, no authority release, no
+	 * legs. Must stay in sync with the node logic inside {@link #advance} (the S1 blocking test
+	 * {@code peekNextRailPredictsFollowingAdvanceElect} locks that contract).
+	 */
+	public @Nullable Rail peekNextRail() {
+		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(ahead);
+		if (neighbors == null) {
+			return null;
+		}
+		final ObjectArrayList<Rail> forwardRails = new ObjectArrayList<>();
+		final ObjectArrayList<Position> forwardEnds = new ObjectArrayList<>();
+		for (final Object2ObjectOpenHashMap.Entry<Position, Rail> e : neighbors.object2ObjectEntrySet()) {
+			if (e.getValue() != rail) {
+				forwardRails.add(e.getValue());
+				forwardEnds.add(e.getKey());
+			}
+		}
+		if (forwardRails.isEmpty()) {
+			return null;
+		} else if (forwardRails.size() == 1) {
+			return forwardRails.get(0);
+		} else {
+			return electAtFork(forwardRails, forwardEnds);
+		}
 	}
 
 	/**
