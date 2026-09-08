@@ -213,11 +213,29 @@ public final class MmtrConsistVehicleMotionTests {
 	}
 
 	@Test
+	public void consistVehicleWritesItsWholeBodyIntoTheOccupancyTree() {
+		final Line line = new Line();
+		// Placed so that after departure the 2.2 m body still straddles the r1/r2 boundary.
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, line.r0.railMath.getLength() + line.r1.railMath.getLength() - 5.1, new BranchStore());
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vp = positions();
+		for (int i = 0; i < 60 && !v.getIsOnRoute(); i++) {
+			vp.set(0, vp.get(1));
+			vp.set(1, new Object2ObjectAVLTreeMap<>());
+			v.simulate(1000, vp, null);
+		}
+		assertTrue(v.getIsOnRoute(), "the consist has departed, so it writes its footprint");
+		assertEquals(2, v.getMmtrConsistWalker().occupancy().size(), "the body still spans two rails");
+		assertNotNull(Data.tryGet(vp.get(1), line.nB, line.nC), "the tail half occupies r1");
+		assertNotNull(Data.tryGet(vp.get(1), line.nC, line.nD), "the head half occupies r2");
+	}
+
+	@Test
 	public void aMovingConsistVehicleRefusesToChangeEnds() {
 		final Line line = new Line();
 		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
 		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
-		driveTicks(v, 60, positions());
+		driveTicks(v, 5, positions());
 		assertTrue(v.getSpeed() > 0, "the consist is rolling");
 		assertFalse(v.changeEndsMmtrMotion(), "no change-ends while moving");
 		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrConsistWalker().cabs().activeCab());

@@ -1154,6 +1154,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrMotionLegCount = mmtrMotionWalker.legCount();
 			}
 			railProgress = mmtrMotionWalker.distanceM();
+			// B7.2b: the consist mirror path is anchored to railProgress, so it must follow every tick
+			// (the legacy leg shadow only changes when a new rail is boarded).
+			if (mmtrMotionWalker instanceof MmtrConsistWalker) {
+				refreshMmtrMotionLegs();
+			}
 			final double consumed = railProgress - before;
 			if (stopTargetActive && railProgress >= mmtrMotionStopTargetM - 1e-6) {
 				speed = 0;
@@ -1951,7 +1956,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
 					break;
 				}
-				if (index > 0) {
+				// B7.2c: a consist body legitimately starts on the first mirrored leg (its tail sits
+				// there), so the legacy "skip the first leg" guard must not apply to it.
+				if (index > 0 || mmtrMotionWalker instanceof MmtrConsistWalker) {
 					final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
 					if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
 						final Position position1 = pathData.getOrderedPosition1();
