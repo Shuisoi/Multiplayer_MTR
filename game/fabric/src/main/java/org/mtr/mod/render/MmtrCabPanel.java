@@ -40,6 +40,12 @@ public final class MmtrCabPanel {
 	private static final int UNIT_COLOR = 0xFF8FA6B8;
 	/** Backing plate behind the readout (near-black, slightly translucent). */
 	private static final int BACKGROUND_COLOR = 0xE6000000;
+	/**
+	 * Extra roll of the readout inside the dashboard plane, in degrees. The modelled face's own
+	 * "right" edge does not necessarily run the way text should read, so this is dialled in once per
+	 * model convention (90 = text runs across the car instead of along it).
+	 */
+	private static final double PANEL_ROLL_DEGREES = 90;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
@@ -160,7 +166,7 @@ public final class MmtrCabPanel {
 		final double roll = -Math.atan2(
 				right.x() * mappedUpX + right.y() * mappedUpY + right.z() * mappedUpZ,
 				right.x() * mappedRightX + right.z() * mappedRightZ
-		);
+		) + Math.toRadians(PANEL_ROLL_DEGREES);
 
 		return new double[]{Math.toDegrees(yaw), Math.toDegrees(pitch), Math.toDegrees(roll)};
 	}
