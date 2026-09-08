@@ -1405,6 +1405,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!mmtrMotionWalker.changeEnds(speed == 0)) {
 			return false;
 		}
+		// B7.5: everything the armed run holds - the en-route fork requests, the planned fork ops and
+		// their distances, the flip point and the stop target - was computed for the OLD direction of
+		// travel and is meaningless now. Drop it; the mission self-arm path (mmtrMissionTick) re-plans
+		// from the new leading end, and a manual driver simply continues by hand.
+		releaseMmtrPointRequests();
+		mmtrMotionPlan = null;
+		mmtrMotionFlipDone = true;
+		mmtrMotionAuto = false;
+		mmtrMotionStopTargetM = -1;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrMotionStopOpenDoors = false;
+		mmtrMotionArrivalControlSeq = -1;
+		mmtrRunStopTarget = -1;
 		// B7.2b: the mirror path is oriented by the manned cab, so re-publish it (same rails, opposite
 		// order, anchored to the same railProgress) - the client re-renders the consist in place.
 		syncMmtrConsistMirror();
