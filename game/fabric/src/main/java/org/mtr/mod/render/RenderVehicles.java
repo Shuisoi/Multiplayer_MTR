@@ -219,6 +219,9 @@ public class RenderVehicles implements IGui {
 							vehicleResource.queue(storedMatrixTransformations, vehicle, carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), absoluteVehicleCarPositionAndRotation.light, openDoorways.isEmpty());
 						}
 
+						// MMTR B7.6e: 2D cab panel on the model's mmtr_hud face
+						MmtrCabPanel.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), vehicleCarRenderingPositionAndRotation);
+
 						vehicleResource.iterateModels(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), (modelIndex, model) -> {
 							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, openDoorways, fromResourcePackCreator);
 
