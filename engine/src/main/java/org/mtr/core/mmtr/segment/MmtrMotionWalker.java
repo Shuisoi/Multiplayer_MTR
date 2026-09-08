@@ -277,9 +277,12 @@ public final class MmtrMotionWalker {
 		// (straight > left > right > other, cosine inside a kind - MmtrPoint), not by raw cosine
 		// over map iteration. The operator branch (persisted 0/1 - or any leg index for multi-leg
 		// junctions) and the task target are resolved against that ordering, so T junctions pick
-		// left=0/right=1, crossings keep the straight as leg 0 and ordering never flips.
+		// left=0/right=1, crossings keep the straight as leg 0 and ordering never flips. An
+		// authoritative junction table (进向表) for (node, via) overrides the geometry entirely.
 		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(ahead);
-		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = neighbors == null ? new ObjectArrayList<>() : org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(ahead, enteredFrom, rail, neighbors);
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> declared = data instanceof final org.mtr.core.simulation.Simulator simulator
+			? simulator.mmtrJunctionLegs.get(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId()) : null;
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = neighbors == null ? new ObjectArrayList<>() : org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(ahead, enteredFrom, rail, neighbors, declared);
 		if (legs.isEmpty()) {
 			return null;
 		}

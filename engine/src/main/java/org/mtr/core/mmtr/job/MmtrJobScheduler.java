@@ -142,6 +142,14 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		markVisited(instance, instance.job.sidingId);
+		// A returned consist rests on its yard siding with its motion state still flagged "on
+		// route" (it drove there, it did not respawn there), so clearParkedVehicles never removes
+		// it and the next spawn would share the rail with it. Delete the old consist physically
+		// wherever it stands (yard or, for a FAILED round, anywhere on the network) so the next
+		// cycle starts from a clean siding with one fresh parked spawn.
+		if (instance.vehicleId != 0) {
+			simulator.deleteMmtrVehicle(instance.vehicleId);
+		}
 		for (final Long sidingId : instance.visitedSidings) {
 			final Siding siding = findSiding(simulator, sidingId);
 			if (siding != null) {
@@ -671,18 +679,55 @@ public final class MmtrJobScheduler {
 			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding (step " + step.stepId + ")");
 			return;
 		}
-		final MmtrMission mission = new MmtrMission(vehicle.getId(), step.type == MmtrJobStep.StepType.SERVE ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER, instance.job.sidingId, 0, simulator.getCurrentMillis());
+		if (step.type == MmtrJobStep.StepType.SERVE) {
+			// Passenger dwell is part of the PASSENGER arrival mission: the SERVE step is a dwell
+			// gate at the platform - advanceManual completes it once the consist rests there.
+			return;
+		}
+		final long targetId = step.targetId;
+		if (targetId == 0) {
+			fail(instance, "step " + step.stepId + " needs an explicit platform/siding target for a Motion-Core drive");
+			return;
+		}
+		// PASSENGER when the step serves a platform (doors + dwell at the stop), MANEUVER for a
+		// plain relocation (yard return). Motion-mode missions self-arm every tick (route plan,
+		// turnout grants, stop target), so no legacy autopilot seam is engaged for them.
+		final MmtrMission.Kind kind = isPlatform(simulator, targetId) ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER;
+		final MmtrMission mission = new MmtrMission(vehicle.getId(), kind, instance.job.sidingId, targetId, simulator.getCurrentMillis());
 		if (!vehicle.setMmtrMission(mission)) {
 			fail(instance, "could not attach mission for step " + step.stepId);
 			return;
 		}
-		vehicle.engageMissionAutopilot();
+		System.out.println("[MMTR-JOB] manual step " + step.stepId + " -> " + kind + " target " + targetId + " vehicle=" + vehicle.getId());
+		if (!vehicle.isMmtrMotion()) {
+			vehicle.engageMissionAutopilot();
+		}
+	}
+
+	private static boolean isPlatform(Simulator simulator, long targetId) {
+		final boolean[] found = {false};
+		simulator.platforms.forEach(platform -> {
+			if (platform.getId() == targetId) {
+				found[0] = true;
+			}
+		});
+		return found[0];
 	}
 
 	private void advanceManual(JobInstance instance, Simulator simulator) {
 		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
 		if (vehicle == null) {
 			fail(instance, "consist vanished mid-job");
+			return;
+		}
+		final MmtrJobStep step = instance.stepIndex < instance.job.steps.size() ? instance.job.steps.get((int) instance.stepIndex) : null;
+		if (step != null && step.type == MmtrJobStep.StepType.SERVE) {
+			// Dwell gate: the consist completed its passenger arrival (doors cycled); the step
+			// closes once it rests at the target platform.
+			if (!vehicle.isMoving() && vehicle.vehicleExtraData.getThisPlatformId() == step.targetId) {
+				System.out.println("[MMTR-JOB] SERVE done at platform " + step.targetId);
+				instance.stepIndex++;
+			}
 			return;
 		}
 		final MmtrMission mission = vehicle.getMmtrMission();
@@ -806,6 +851,11 @@ public final class MmtrJobScheduler {
 		// and block the job formation. Drop unowned parked stock so the engine can spawn ours.
 		siding.clearParkedVehicles();
 		siding.setVehicleCars(cars);
+		// Arm the siding's manual spawn (the same flag the rolling-stock manifest sets): without it
+		// the engine's siding tick never generates the parked consist, so a loop-restarted job dies
+		// with "stock never spawned on siding".
+		siding.mmtrManualSpawn = true;
+		siding.mmtrSessionSpawned = false;
 		return true;
 	}
 

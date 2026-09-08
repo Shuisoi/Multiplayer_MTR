@@ -264,7 +264,8 @@ public final class MmtrRunPlanner {
 		if (neighbors == null || incoming == null || desired == null) {
 			return -1;
 		}
-		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(forkNode, approachNode, incoming, neighbors);
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(forkNode, approachNode, incoming, neighbors,
+			sim.mmtrJunctionLegs.get(forkNode.getX(), forkNode.getY(), forkNode.getZ(), incoming.getHexId()));
 		for (int i = 0; i < legs.size(); i++) {
 			if (legs.get(i).railHex.equals(desired.getHexId())) {
 				return i;

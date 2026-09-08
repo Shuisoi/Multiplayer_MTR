@@ -97,6 +97,9 @@ public class Simulator extends Data implements Utilities {
 	/** Operator-set turnout (道岔) branch states, persisted to mmtr-points.json. */
 	public org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore mmtrPointBranches = new org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore();
 	private java.nio.file.Path mmtrPointsPath;
+	/** Authoritative junction leg tables (进向表): (node, via) -> ordered continuation rails. */
+	public final org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.LegsStore mmtrJunctionLegs = new org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.LegsStore();
+	private java.nio.file.Path mmtrJunctionLegsPath;
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
@@ -238,6 +241,12 @@ public class Simulator extends Data implements Utilities {
 		mmtrPointsPath = savePath.resolve("mmtr-points.json");
 		mmtrPointBranches = org.mtr.core.mmtr.point.MmtrPointRegistry.loadBranches(mmtrPointsPath);
 
+		// MMTR: authoritative junction leg tables (进向表) - human/tool authored continuations per
+		// (node, via rail). They override geometric auto-detection wherever they exist.
+		mmtrJunctionLegsPath = savePath.resolve("mmtr-junction-legs.json");
+		final org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.LegsStore loadedLegs = org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.load(mmtrJunctionLegsPath);
+		loadedLegs.legs.forEach(mmtrJunctionLegs.legs::put);
+
 		// MMTR: web-authored consist jobs (replaces the depot timetable for mmtr-managed stock).
 		mmtrJobsPath = savePath.resolve("mmtr-jobs.json");
 		try {
@@ -262,6 +271,7 @@ public class Simulator extends Data implements Utilities {
 		if (!mmtrJobRegistry.jobs.isEmpty()) {
 			expandMmtrJobTemplates();
 			mmtrJobsMode = true; // jobs present => web orchestration owns the traffic
+			mmtrAiJobStepsEnabled = true; // scheduler ticks when consist jobs are loaded
 			mmtrJobScheduler = org.mtr.core.mmtr.job.MmtrJobScheduler.create(mmtrJobRegistry.jobs);
 			log.info("MMTR: loaded {} consist job(s) for {}", mmtrJobRegistry.jobs.size(), dimension);
 		}
@@ -552,9 +562,39 @@ public class Simulator extends Data implements Utilities {
 		return true;
 	}
 
+	/** Persist the operator branch store to mmtr-points.json (batch clear before a mission arm). */
+	public void persistMmtrPointBranches() {
+		if (mmtrPointsPath != null) {
+			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
+		}
+	}
+
 	// --- P3 turnout authority machine interface (multi-level control) ---
 
 	/** Auto logic requests a leg of an en-route turnout (approach locking). Returns GRANTED/QUEUED. */
+	/**
+	 * MMTR: upsert one authoritative junction leg table entry (进向表) for (node, via rail).
+	 * Empty {@code legHexes} removes the entry (geometry auto-detection takes over again).
+	 * @return whether the table changed
+	 */
+	public boolean mmtrJunctionLegsUpsert(long x, long y, long z, String viaRailHex, it.unimi.dsi.fastutil.objects.ObjectArrayList<String> legHexes) {
+		final boolean changed;
+		if (legHexes == null || legHexes.isEmpty()) {
+			changed = mmtrJunctionLegs.legs.remove(x + "," + y + "," + z + "|" + viaRailHex) != null;
+		} else {
+			final String key = x + "," + y + "," + z + "|" + viaRailHex;
+			final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> prev = mmtrJunctionLegs.legs.get(key);
+			changed = prev == null || !prev.equals(legHexes);
+			if (changed) {
+				mmtrJunctionLegs.legs.put(key, new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(legHexes));
+			}
+		}
+		if (changed && mmtrJunctionLegsPath != null) {
+			org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.save(mmtrJunctionLegsPath, mmtrJunctionLegs.legs);
+		}
+		return changed;
+	}
+
 	public org.mtr.core.mmtr.point.MmtrPointAuthority.Result mmtrPointRequest(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis) {
 		final org.mtr.core.mmtr.point.MmtrPointAuthority.Result result = mmtrPointAuthority.request(x, y, z, viaRailHex, owner, leg, untilMillis);
 		System.out.println("[MMTR-PT] req " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex + " leg " + leg + " -> " + result);
@@ -604,6 +644,7 @@ public class Simulator extends Data implements Utilities {
 		expandMmtrJobTemplates();
 		if (!mmtrJobRegistry.jobs.isEmpty()) {
 			mmtrJobsMode = true;
+			mmtrAiJobStepsEnabled = true; // scheduler ticks as soon as consist jobs exist
 		}
 		if (mmtrJobsPath != null) {
 			mmtrJobRegistry.save(mmtrJobsPath);

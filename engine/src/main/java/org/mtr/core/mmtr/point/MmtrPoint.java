@@ -115,7 +115,8 @@ public final class MmtrPoint {
 		final ObjectArrayList<MmtrPoint> out = new ObjectArrayList<>();
 		sim.positionsToRail.forEach((node, neighbors) -> {
 			neighbors.forEach((entryEnd, viaRail) -> {
-				final ObjectArrayList<MmtrPointLeg> legs = computeOrderedLegs(node, entryEnd, viaRail, neighbors);
+				final ObjectArrayList<MmtrPointLeg> legs = computeOrderedLegs(node, entryEnd, viaRail, neighbors,
+					sim.mmtrJunctionLegs.get(node.getX(), node.getY(), node.getZ(), viaRail.getHexId()));
 				if (!legs.isEmpty()) {
 					out.add(new MmtrPoint(node.getX(), node.getY(), node.getZ(), viaRail.getHexId(), legs));
 				}
@@ -124,11 +125,6 @@ public final class MmtrPoint {
 		return out;
 	}
 
-	/**
-	 * Continuations of {@code viaRail} at {@code node} for a train arriving from {@code entryEnd}
-	 * (the approach rail's far end): distinct neighbour rails excluding the approach rail, each
-	 * classified by the angle between the approach direction and the candidate direction.
-	 */
 	/**
 	 * Ordered continuations of {@code viaRail} at {@code node} arriving from {@code entryEnd}: used by
 	 * the runtime walker and the run planner so every layer shares the SAME deterministic ordering.
@@ -139,9 +135,58 @@ public final class MmtrPoint {
 	 * arrival heading and is excluded (cos &lt; -0.9). Wide drawn connectors (yard leads that fold
 	 * back at ~150&deg;, e.g. the real -96 branch 1 lead) and right-angle TEE/X crossing turns stay
 	 * legal continuations.</p>
+	 *
+	 * <p>Authoritative junction tables (进向表, {@code MmtrJunctionLegsRegistry}) OVERRIDE this
+	 * geometric judgement: when the simulator stores an explicit leg list for (node, via), those
+	 * rails ARE the continuations - in exactly that order - regardless of how they are drawn (that
+	 * is how tight balloon turnbacks / terminal 掉头 leads are declared). Geometry only fills the
+	 * gap for junctions nobody has declared.</p>
 	 */
 	public static ObjectArrayList<MmtrPointLeg> computeOrderedLegs(Position node, Position entryEnd, Rail viaRail, Object2ObjectOpenHashMap<Position, Rail> neighbors) {
+		return computeOrderedLegs(node, entryEnd, viaRail, neighbors, null);
+	}
+
+	/** {@link #computeOrderedLegs(Position, Position, Rail, Object2ObjectOpenHashMap)} with an optional
+	 * authoritative declared-leg override for (node, via) - see {@code MmtrJunctionLegsRegistry}. */
+	public static ObjectArrayList<MmtrPointLeg> computeOrderedLegs(Position node, Position entryEnd, Rail viaRail, Object2ObjectOpenHashMap<Position, Rail> neighbors, @org.jspecify.annotations.Nullable ObjectArrayList<String> declaredLegs) {
 		final ObjectArrayList<MmtrPointLeg> legs = new ObjectArrayList<>();
+		if (declaredLegs != null && !declaredLegs.isEmpty()) {
+			// Authoritative junction table: the listed rails are the continuations in table order.
+			// The leg kind is still classified geometrically for display; order and membership come
+			// from the table, so 180-degree 掉头 leads stay selectable by plan/authority.
+			for (final String hex : declaredLegs) {
+				if (hex.equals(viaRail.getHexId())) {
+					continue;
+				}
+				final Position[] farFound = {null};
+				neighbors.forEach((farEnd, rail) -> {
+					if (farFound[0] == null && rail.getHexId().equals(hex)) {
+						farFound[0] = farEnd;
+					}
+				});
+				if (farFound[0] == null) {
+					continue; // declared rail not connected at this node - drop silently
+				}
+				final double dx = node.getX() - entryEnd.getX();
+				final double dz = node.getZ() - entryEnd.getZ();
+				final double la = Math.sqrt(dx * dx + dz * dz);
+				final double cx = farFound[0].getX() - node.getX();
+				final double cz = farFound[0].getZ() - node.getZ();
+				final double lb = Math.sqrt(cx * cx + cz * cz);
+				final double cos = la == 0 || lb == 0 ? 0 : (dx * cx + dz * cz) / (la * lb);
+				final double cross = dx * cz - dz * cx;
+				final LegKind kind;
+				if (cos >= COS_STRAIGHT) {
+					kind = LegKind.STRAIGHT;
+				} else if (Math.abs(cos) < COS_TURN) {
+					kind = cross >= 0 ? LegKind.LEFT : LegKind.RIGHT;
+				} else {
+					kind = LegKind.OTHER;
+				}
+				legs.add(new MmtrPointLeg(hex, farFound[0].getX(), farFound[0].getY(), farFound[0].getZ(), kind, cos));
+			}
+			return legs;
+		}
 		final double dx = node.getX() - entryEnd.getX();
 		final double dz = node.getZ() - entryEnd.getZ();
 		final double la = Math.sqrt(dx * dx + dz * dz);
