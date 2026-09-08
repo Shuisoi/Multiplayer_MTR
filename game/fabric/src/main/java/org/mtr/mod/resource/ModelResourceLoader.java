@@ -6,6 +6,7 @@ import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.mapper.OptimizedModel;
+import org.mtr.mod.Init;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -34,12 +35,21 @@ public final class ModelResourceLoader {
 					null, true, flipTextureV
 			));
 		} else {
-			return new Object2ObjectAVLTreeMap<>(OptimizedModel.ObjModel.loadModel(
-					resourceProvider.get(CustomResourceTools.formatIdentifierWithDefault(modelResource, "obj")),
-					mtlString -> resourceProvider.get(CustomResourceTools.getResourceFromSamePath(modelResource, mtlString, "mtl")),
+			// Temporary diagnostic: an empty or wrong-length content here explains "no geometry" later.
+			final String objContent = resourceProvider.get(CustomResourceTools.formatIdentifierWithDefault(modelResource, "obj"));
+			final int[] mtlLength = {0};
+			final Object2ObjectAVLTreeMap<String, OptimizedModel.ObjModel> models = new Object2ObjectAVLTreeMap<>(OptimizedModel.ObjModel.loadModel(
+					objContent,
+					mtlString -> {
+						final String mtlContent = resourceProvider.get(CustomResourceTools.getResourceFromSamePath(modelResource, mtlString, "mtl"));
+						mtlLength[0] = mtlContent.length();
+						return mtlContent;
+					},
 					textureString -> StringUtils.isEmpty(textureString) ? OptimizedModelWrapper.WHITE_TEXTURE : StringUtils.equals(textureString, "default.png") ? textureId : CustomResourceTools.getResourceFromSamePath(modelResource, textureString, "png"),
 					null, true, flipTextureV
 			));
+			Init.LOGGER.info("[MMTR-DBG] loading model {}: obj={} chars, mtl={} chars, groups={}", modelResource, objContent.length(), mtlLength[0], models.keySet());
+			return models;
 		}
 	}
 

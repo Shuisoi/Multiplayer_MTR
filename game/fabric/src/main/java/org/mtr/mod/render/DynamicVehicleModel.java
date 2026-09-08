@@ -75,7 +75,10 @@ public final class DynamicVehicleModel extends EntityModelExtension<EntityAbstra
 		modelProperties.addPartsIfEmpty(nameToObjModels.keySet());
 		this.texture = texture;
 		this.modelProperties = modelProperties;
+		// Temporary diagnostic: MTR keys the OBJ geometry by group name, so a mismatch between the
+		// parsed group names and the part names in properties_<id>.json silently yields no geometry.
 		modelProperties.iterateParts(modelPropertiesPart -> modelPropertiesPart.writeCache(nameToObjModels, positionDefinitions, objModelsForPartConditionAndRenderStage, objModelsForPartConditionAndRenderStageDoorsClosed, modelProperties.getModelYOffset()));
+		Init.LOGGER.info("[MMTR-DBG] model {} objGroups={} renderConditions={} doorsClosedConditions={}", id, nameToObjModels.keySet(), objModelsForPartConditionAndRenderStage.size(), objModelsForPartConditionAndRenderStageDoorsClosed.size());
 		testDoors(id);
 	}
 
