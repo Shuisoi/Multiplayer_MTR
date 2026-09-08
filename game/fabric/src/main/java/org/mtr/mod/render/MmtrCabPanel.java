@@ -46,11 +46,10 @@ public final class MmtrCabPanel {
 	 */
 	private static final double PANEL_ROLL_DEGREES = 180;
 	/**
-	 * Flip the panel 180 degrees about its own up axis. Left false: the text is then drawn on the
-	 * same side the dashboard face points at, so the driver reads it head on instead of through the
-	 * back of the plane (which looks mirrored).
+	 * Flip the panel 180 degrees about its own up axis (the modelled face points away from the
+	 * driver, so the readout has to be drawn on the other side of the plane).
 	 */
-	private static final boolean PANEL_FLIP_FACING = false;
+	private static final boolean PANEL_FLIP_FACING = true;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
