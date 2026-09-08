@@ -184,30 +184,49 @@ public final class MmtrConsistBody {
 		return out;
 	}
 
-	/** The spine leg containing {@code arcM}, or {@code null} when the arc lies outside the spine. */
-	public @Nullable SpineLeg legAtArcM(double arcM) {
+	/** Arc position of the start of spine leg {@code index}. */
+	public double legStartArcM(int index) {
+		double arc = 0;
+		for (int i = 0; i < index && i < spine.size(); i++) {
+			arc += spine.get(i).lengthM();
+		}
+		return arc;
+	}
+
+	/**
+	 * Index of the spine leg containing {@code arcM}, or {@code -1} when the arc lies outside the
+	 * spine. At an exact leg boundary the answer is ambiguous (the arc is the end of one leg and the
+	 * start of the next): {@code preferLater} resolves it — true picks the leg that starts there,
+	 * false the one that ends there. Callers use this to name the rail a moving end is on.
+	 */
+	public int legIndexAtArcM(double arcM, boolean preferLater) {
 		double legStart = 0;
-		for (final SpineLeg leg : spine) {
-			final double legEnd = legStart + leg.lengthM();
+		for (int i = 0; i < spine.size(); i++) {
+			final double legEnd = legStart + spine.get(i).lengthM();
 			if (arcM >= legStart - EPSILON_M && arcM <= legEnd + EPSILON_M) {
-				return leg;
+				if (preferLater && Math.abs(arcM - legEnd) <= EPSILON_M && i + 1 < spine.size()) {
+					return i + 1;
+				}
+				if (!preferLater && Math.abs(arcM - legStart) <= EPSILON_M && i > 0) {
+					return i - 1;
+				}
+				return i;
 			}
 			legStart = legEnd;
 		}
-		return null;
+		return -1;
+	}
+
+	/** The spine leg containing {@code arcM} (earlier leg wins at a boundary), or {@code null}. */
+	public @Nullable SpineLeg legAtArcM(double arcM) {
+		final int index = legIndexAtArcM(arcM, false);
+		return index < 0 ? null : spine.get(index);
 	}
 
 	/** Offset within the leg containing {@code arcM}, in that leg's own coordinate. */
 	public double legOffsetM(double arcM) {
-		double legStart = 0;
-		for (final SpineLeg leg : spine) {
-			final double legEnd = legStart + leg.lengthM();
-			if (arcM >= legStart - EPSILON_M && arcM <= legEnd + EPSILON_M) {
-				return Math.max(0, Math.min(leg.lengthM(), arcM - legStart));
-			}
-			legStart = legEnd;
-		}
-		return 0;
+		final int index = legIndexAtArcM(arcM, false);
+		return index < 0 ? 0 : Math.max(0, Math.min(spine.get(index).lengthM(), arcM - legStartArcM(index)));
 	}
 
 	/**

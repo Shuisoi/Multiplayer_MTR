@@ -52,10 +52,9 @@ public final class MmtrConsistSignalView {
 		if (!walker.cabs().isManned()) {
 			return 0;
 		}
-		final double arcM = walker.frontArcM();
-		final SpineLeg leg = walker.spineLegAtArcM(arcM);
-		final Rail rail = walker.railAtArcM(arcM);
-		if (leg == null || rail == null) {
+		final SpineLeg leg = walker.leadingLeg();
+		final Rail rail = walker.railForLeg(leg);
+		if (rail == null) {
 			return 0;
 		}
 		final double metersPerMillisecond = rail.getSpeedLimitMetersPerMillisecond(leg.entryNode());

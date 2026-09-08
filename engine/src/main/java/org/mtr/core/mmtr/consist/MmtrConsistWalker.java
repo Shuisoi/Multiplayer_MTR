@@ -45,6 +45,8 @@ public final class MmtrConsistWalker {
 	private double distanceM;
 	private boolean haltedAtAuthority;
 	private boolean endOfLine;
+	/** The leading end has boarded {@link #targetRailHex} and the run rests there (task arrival). */
+	private boolean atTarget;
 	/**
 	 * B5 rear-clear: a point the consist's front has crossed but whose hold must survive until the
 	 * <em>rear</em> has cleared it. Keyed by the cumulative distance at which that happens, so it
@@ -101,7 +103,9 @@ public final class MmtrConsistWalker {
 		} catch (final IllegalArgumentException | IllegalStateException e) {
 			return null;
 		}
-		return new MmtrConsistWalker(data, store, body, targetRailHex);
+		final MmtrConsistWalker walker = new MmtrConsistWalker(data, store, body, targetRailHex);
+		walker.atTarget = targetRailHex != null && targetRailHex.equals(startRail.getHexId());
+		return walker;
 	}
 
 	public MmtrConsistBody body() {
@@ -127,6 +131,78 @@ public final class MmtrConsistWalker {
 
 	public void setTargetRailHex(@Nullable String targetRailHex) {
 		this.targetRailHex = targetRailHex;
+		if (targetRailHex == null || !targetRailHex.equals(leadingRailHex())) {
+			atTarget = false; // retargeting away from the boarded rail resumes the run
+		}
+	}
+
+	/** Whether the leading end has boarded the task target rail (the run rests there). */
+	public boolean atTarget() {
+		return atTarget;
+	}
+
+	/** Rail the leading end stands on (the rail a driver/signal layer reads), or {@code null} when unmanned. */
+	public @Nullable Rail currentRail() {
+		return cabs.isManned() ? data.railIdMap.get(leadingLeg().railHex()) : null;
+	}
+
+	/** Hex of {@link #currentRail()}. */
+	public @Nullable String currentRailHex() {
+		return leadingRailHex();
+	}
+
+	/** Length of the rail the leading end stands on, m. */
+	public double currentRailLengthM() {
+		final SpineLeg leg = leadingLeg();
+		return leg.lengthM();
+	}
+
+	/** Offset of the leading end within its rail, m. */
+	public double offsetM() {
+		return cabs.isManned() ? frontOffsetM() : 0;
+	}
+
+	/** Node the leading end is moving away from (the entry node of its current rail). */
+	public @Nullable Position enteredFromPosition() {
+		return leadingLeg().entryNode();
+	}
+
+	/** Node the leading end is moving toward (the exit node of its current rail). */
+	public @Nullable Position aheadNode() {
+		return leadingLeg().exitNode();
+	}
+
+	/**
+	 * Signal S1/S2 look-ahead: the rail the consist would continue onto after the one its leading
+	 * end is on, without changing any state (no election is consumed, no authority touched). Returns
+	 * {@code null} when the consist would halt (unset fork) or the line ends there.
+	 *
+	 * <p>If the spine already reaches past the leading rail the answer is simply the next spine leg;
+	 * otherwise the same {@link MmtrForkElection} the advance uses is consulted, so the prediction and
+	 * the real election cannot disagree.</p>
+	 */
+	public @Nullable Rail peekNextRail() {
+		if (!cabs.isManned()) {
+			return null;
+		}
+		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final SpineLeg lead = leadingLeg();
+		final int index = legIndex(lead);
+		final int nextIndex = towardB ? index + 1 : index - 1;
+		if (index >= 0 && nextIndex >= 0 && nextIndex < body.legCount()) {
+			return data.railIdMap.get(body.leg(nextIndex).railHex());
+		}
+		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB, pointAuthority, pointOwner);
+		return next == null ? null : data.railIdMap.get(next.railHex());
+	}
+
+	private int legIndex(SpineLeg leg) {
+		for (int i = 0; i < body.legCount(); i++) {
+			if (body.leg(i) == leg) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/**
@@ -208,12 +284,12 @@ public final class MmtrConsistWalker {
 	 */
 	public boolean advance(double deltaM) {
 		haltedAtAuthority = false;
-		if (!cabs.isManned() || deltaM <= EPSILON_M) {
+		if (!cabs.isManned() || deltaM <= EPSILON_M || atTarget) {
 			return false;
 		}
 		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
 		double remaining = deltaM;
-		while (remaining > EPSILON_M && !haltedAtAuthority && !endOfLine) {
+		while (remaining > EPSILON_M && !haltedAtAuthority && !endOfLine && !atTarget) {
 			final double space = towardB ? body.spineLengthM() - body.bEndArcM() : body.aEndArcM();
 			if (space <= EPSILON_M) {
 				if (!extendSpine(towardB)) {
@@ -230,6 +306,9 @@ public final class MmtrConsistWalker {
 			remaining -= step;
 			body.trimOutsideLegs();
 			releaseClearedPoints();
+			if (targetRailHex != null && targetRailHex.equals(leadingLeg().railHex())) {
+				atTarget = true; // the leading end has boarded the task target: rest here
+			}
 		}
 		return remaining < deltaM - EPSILON_M;
 	}
@@ -276,6 +355,11 @@ public final class MmtrConsistWalker {
 		return leg == null ? null : data.railIdMap.get(leg.railHex());
 	}
 
+	/** The rail behind a spine leg. */
+	public @Nullable Rail railForLeg(SpineLeg leg) {
+		return data.railIdMap.get(leg.railHex());
+	}
+
 	/** The spine leg containing {@code arcM}. */
 	public @Nullable SpineLeg spineLegAtArcM(double arcM) {
 		return body.legAtArcM(arcM);
@@ -304,14 +388,36 @@ public final class MmtrConsistWalker {
 		return out;
 	}
 
-	private SpineLeg leadingLeg() {
-		final SpineLeg leg = body.legAtArcM(leadingArcM());
-		return leg == null ? body.leg(cabs.travelsToward(MmtrCabState.End.B) ? body.legCount() - 1 : 0) : leg;
+	private int leadingLegIndex() {
+		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final int index = body.legIndexAtArcM(leadingArcM(), towardB);
+		return index >= 0 ? index : (towardB ? body.legCount() - 1 : 0);
 	}
 
-	private SpineLeg trailingLeg() {
-		final SpineLeg leg = body.legAtArcM(trailingArcM());
-		return leg == null ? body.leg(cabs.travelsToward(MmtrCabState.End.B) ? 0 : body.legCount() - 1) : leg;
+	private int trailingLegIndex() {
+		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final int index = body.legIndexAtArcM(trailingArcM(), !towardB);
+		return index >= 0 ? index : (towardB ? 0 : body.legCount() - 1);
+	}
+
+	/** The spine leg the leading face is on (at a boundary: the leg it is entering). */
+	public SpineLeg leadingLeg() {
+		return body.leg(leadingLegIndex());
+	}
+
+	/** The spine leg the trailing face is on (at a boundary: the leg it is leaving). */
+	public SpineLeg trailingLeg() {
+		return body.leg(trailingLegIndex());
+	}
+
+	/** Offset of the leading face within {@link #leadingLeg()}, m. */
+	public double frontOffsetM() {
+		return leadingArcM() - body.legStartArcM(leadingLegIndex());
+	}
+
+	/** Offset of the trailing face within {@link #trailingLeg()}, m. */
+	public double rearOffsetM() {
+		return trailingArcM() - body.legStartArcM(trailingLegIndex());
 	}
 
 	/**
@@ -339,6 +445,11 @@ public final class MmtrConsistWalker {
 			body.appendLeg(next);
 		} else {
 			body.prependLeg(next);
+		}
+		if (targetRailHex != null && targetRailHex.equals(next.railHex())) {
+			// The leading end has just reached the task target rail: rest exactly at its entry
+			// (offset 0), like the single-point walker did.
+			atTarget = true;
 		}
 		return true;
 	}

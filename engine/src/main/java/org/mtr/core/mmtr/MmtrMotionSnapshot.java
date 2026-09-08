@@ -160,28 +160,25 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		out.moving = walker.cabs().isManned() && !walker.haltedAtAuthority() && !walker.endOfLine();
 		out.cars = walker.body().carCount();
 		out.segmentLengthM = walker.body().spineLengthM();
-		final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg frontLeg = walker.spineLegAtArcM(walker.frontArcM());
-		if (frontLeg != null) {
-			out.segStartX = frontLeg.entryNode().getX();
-			out.segStartZ = frontLeg.entryNode().getZ();
-			out.segEndX = frontLeg.exitNode().getX();
-			out.segEndZ = frontLeg.exitNode().getZ();
-			out.segmentReversed = frontLeg.entryNode().compareTo(frontLeg.exitNode()) > 0;
-			out.segmentOffsetM = Math.max(0, walker.offsetAtArcM(walker.frontArcM()));
-		}
-		worldAt(walker, walker.frontArcM(), true, out);
-		worldAt(walker, walker.rearArcM(), false, out);
+		final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg frontLeg = walker.leadingLeg();
+		out.segStartX = frontLeg.entryNode().getX();
+		out.segStartZ = frontLeg.entryNode().getZ();
+		out.segEndX = frontLeg.exitNode().getX();
+		out.segEndZ = frontLeg.exitNode().getZ();
+		out.segmentReversed = frontLeg.entryNode().compareTo(frontLeg.exitNode()) > 0;
+		out.segmentOffsetM = Math.max(0, walker.frontOffsetM());
+		worldAt(walker, walker.leadingLeg(), walker.frontOffsetM(), true, out);
+		worldAt(walker, walker.trailingLeg(), walker.rearOffsetM(), false, out);
 		return out;
 	}
 
-	private static void worldAt(org.mtr.core.mmtr.consist.MmtrConsistWalker walker, double arcM, boolean front, MmtrMotionSnapshot out) {
-		final org.mtr.core.data.Rail rail = walker.railAtArcM(arcM);
-		final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg leg = walker.spineLegAtArcM(arcM);
-		if (rail == null || leg == null) {
+	private static void worldAt(org.mtr.core.mmtr.consist.MmtrConsistWalker walker, org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg leg, double offsetM, boolean front, MmtrMotionSnapshot out) {
+		final org.mtr.core.data.Rail rail = walker.railForLeg(leg);
+		if (rail == null) {
 			return;
 		}
 		final boolean reverse = leg.entryNode().compareTo(leg.exitNode()) > 0;
-		final org.mtr.core.tool.Vector vector = rail.railMath.getPosition(walker.offsetAtArcM(arcM), reverse);
+		final org.mtr.core.tool.Vector vector = rail.railMath.getPosition(offsetM, reverse);
 		if (front) {
 			out.frontX = vector.x();
 			out.frontZ = vector.z();
