@@ -37,6 +37,9 @@ public final class VehicleResource extends VehicleResourceSchema {
 	private final Int2ObjectAVLTreeMap<Int2ObjectAVLTreeMap<ObjectArrayList<VehicleModel>>> allModels = new Int2ObjectAVLTreeMap<>();
 	private final Int2ObjectAVLTreeMap<Int2ObjectAVLTreeMap<CachedResource<CachedResource<CachedResource<VehicleResourceCacheHolder>>>>> cachedVehicleResource = new Int2ObjectAVLTreeMap<>();
 
+	/** Throttle for the temporary "is any geometry actually submitted" diagnostic. */
+	private static long mmtrLastQueueLogMillis = 0;
+
 	private static final boolean[][] CHRISTMAS_LIGHT_STAGES = {
 			{true, false, false, false},
 			{false, true, false, false},
@@ -516,6 +519,18 @@ public final class VehicleResource extends VehicleResourceSchema {
 	}
 
 	private static void queue(Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light, boolean noOpenDoorways) {
+		final long nowMillis = System.currentTimeMillis();
+		if (nowMillis - mmtrLastQueueLogMillis > 2000) {
+			mmtrLastQueueLogMillis = nowMillis;
+			int withGeometry = 0;
+			for (final OptimizedModelWrapper optimizedModelWrapper : optimizedModels.values()) {
+				if (optimizedModelWrapper.optimizedModel != null) {
+					withGeometry++;
+				}
+			}
+			final var cars = vehicle.getVehicleCarsAndPositions();
+			Init.LOGGER.info("[MMTR-DBG] vehicle queue: {}/{} part conditions have optimized geometry, doorsClosed={}, model={}", withGeometry, optimizedModels.size(), noOpenDoorways, cars.isEmpty() ? "-" : cars.get(0).left().getVehicleId());
+		}
 		optimizedModels.forEach((partCondition, optimizedModel) -> {
 			if (matchesCondition(vehicle, partCondition, noOpenDoorways)) {
 				MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
