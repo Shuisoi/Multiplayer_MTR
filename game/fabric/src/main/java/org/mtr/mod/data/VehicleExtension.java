@@ -27,7 +27,7 @@ import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
 import org.mtr.mod.packet.PacketTurnOnBlockEntity;
-import org.mtr.mod.render.DrivingGuiRenderer;
+import org.mtr.mod.render.MmtrCabHudRenderer;
 import org.mtr.mod.resource.VehicleResource;
 
 import javax.annotation.Nullable;
@@ -211,7 +211,7 @@ public class VehicleExtension extends Vehicle implements Utilities {
 				}));
 			}
 
-			DrivingGuiRenderer.setVehicle(this);
+			MmtrCabHudRenderer.setVehicle(this);
 		}
 
 		// Check for sensors

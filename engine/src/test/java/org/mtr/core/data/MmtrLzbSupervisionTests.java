@@ -121,6 +121,7 @@ public final class MmtrLzbSupervisionTests {
 		boolean crossed = false;
 		boolean targetBecame40 = false;
 		boolean cabDataOnA = false;
+		boolean mirrorMatchesOnA = false;
 		for (int i = 0; i < 2000 && !(crossed && v.getSpeed() == 0 && v.getMmtrMotionWalker().endOfLine()); i++) {
 			n.tick();
 			final double speed = v.getSpeed();
@@ -133,6 +134,14 @@ public final class MmtrLzbSupervisionTests {
 				if (v.getMmtrLzbTargetKmh() == 40 && v.getMmtrLzbTargetDistanceM() > 0) {
 					targetBecame40 = true;
 				}
+				// HUD-2 data plane: the mirrored fields (what the client cab reads) must equal the
+				// live supervision values the train is enforced against.
+				if (v.isMmtrLzbSupervisingFromSync() && v.getMmtrLzbCeilingKmhFromSync() == v.getMmtrLzbCeilingKmh()
+					&& v.getMmtrLzbTargetKmhFromSync() == v.getMmtrLzbTargetKmh()
+					&& Math.abs(v.getMmtrLzbTargetDistanceMFromSync() - v.getMmtrLzbTargetDistanceM()) < 1e-6
+					&& v.getMmtrSpeedLimitKmhFromSync() == v.getMmtrCurrentSpeedLimitKmh()) {
+					mirrorMatchesOnA = true;
+				}
 			} else if (n.bRail.getHexId().equals(v.getMmtrMotionWalker().railHex())) {
 				if (!crossed) {
 					crossed = true;
@@ -143,6 +152,7 @@ public final class MmtrLzbSupervisionTests {
 		}
 		assertTrue(cabDataOnA, "cab reports the 120 km/h LZB ceiling on the 120 rail");
 		assertTrue(targetBecame40, "cab target drops to 40 with a distance before the slower rail");
+		assertTrue(mirrorMatchesOnA, "HUD mirror fields track the live LZB supervision values");
 		assertTrue(crossed, "manual train crossed onto the slower AWS rail");
 		assertTrue(maxOnA > kmh(115), "driver pushed hard on the 120 rail, max=" + maxOnA * 3600.0 + " km/h");
 		assertTrue(maxOnA <= kmh(120) + 1e-6, "LZB ceiling enforced: never exceeded 120 on the 120 rail, max=" + maxOnA * 3600.0 + " km/h");

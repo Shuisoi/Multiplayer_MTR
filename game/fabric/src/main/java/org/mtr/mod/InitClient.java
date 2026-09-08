@@ -456,7 +456,7 @@ public final class InitClient {
 
 		REGISTRY_CLIENT.eventRegistryClient.registerResourceReloadEvent(CustomResourceLoader::reload);
 
-		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(DrivingGuiRenderer::render);
+		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(MmtrCabHudRenderer::render);
 
 		Config.init(MinecraftClient.getInstance().getRunDirectoryMapped());
 
