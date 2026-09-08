@@ -56,8 +56,26 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 	public static MmtrMotionSnapshot from(org.mtr.core.data.Siding siding, Vehicle vehicle) {
 		// MMTR (L3): a live Motion-Core run vehicle reports its decoupled (segment, offset) state
 		// straight from the walker — no baked path is involved.
-		final org.mtr.core.mmtr.segment.MmtrMotionWalker walker = vehicle.getMmtrMotionWalker();
-		if (walker != null) {
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition position = vehicle.getMmtrMotionWalker();
+		if (position instanceof final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker) {
+			// B7.2a: consist-body vehicles report both ends + the manned cab (no 180° flip on 换端).
+			final MmtrMotionSnapshot out = ofConsistWalker(consistWalker);
+			out.vehicleId = String.valueOf(vehicle.getId());
+			out.sidingId = String.valueOf(siding == null ? 0 : siding.getId());
+			out.sidingName = siding == null ? "" : siding.getName();
+			out.cars = vehicle.vehicleExtraData.immutableVehicleCars.size();
+			out.speedKmh = Math.round(vehicle.getSpeed() * 3600000.0) / 1000.0;
+			out.moving = vehicle.getSpeed() > 0;
+			out.onRoute = vehicle.getIsOnRoute();
+			out.doorsOpen = vehicle.vehicleExtraData.getDoorMultiplier() > 0;
+			out.platformId = String.valueOf(vehicle.vehicleExtraData.getThisPlatformId());
+			final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+			if (mission != null) {
+				out.mission = mission.getKind().name() + "/" + mission.getState().name() + "/" + mission.getExecutor().name();
+			}
+			return out;
+		}
+		if (position instanceof final org.mtr.core.mmtr.segment.MmtrMotionWalker walker) {
 			final MmtrMotionSnapshot out = ofWalker(walker);
 			out.vehicleId = String.valueOf(vehicle.getId());
 			out.sidingId = String.valueOf(siding == null ? 0 : siding.getId());

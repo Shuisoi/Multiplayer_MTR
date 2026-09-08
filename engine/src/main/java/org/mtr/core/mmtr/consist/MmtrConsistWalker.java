@@ -30,7 +30,7 @@ import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
  * direction decoupled), I3 (cumulative distance never decreases; travel is always toward the manned
  * cab's facing, so the consist can never run backwards).</p>
  */
-public final class MmtrConsistWalker {
+public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMotionPosition {
 
 	public static final double EPSILON_M = 1e-9;
 
@@ -370,11 +370,9 @@ public final class MmtrConsistWalker {
 		return body.legOffsetM(arcM);
 	}
 
-	/**
-	 * The body spine as engine path data, always in A-end -&gt; B-end order. This is the payload a
+	/** The body spine as engine path data, always in A-end -&gt; B-end order. This is the payload a
 	 * client mirror should replay: 换端 does not change it at all, which is what stops the rendered
-	 * consist from flipping 180° when the crew changes ends.
-	 */
+	 * consist from flipping 180° when the crew changes ends. */
 	public ObjectArrayList<org.mtr.core.data.PathData> buildPathData() {
 		final ObjectArrayList<org.mtr.core.data.PathData> out = new ObjectArrayList<>();
 		for (int i = 0; i < body.legCount(); i++) {
@@ -386,6 +384,33 @@ public final class MmtrConsistWalker {
 		}
 		org.mtr.core.path.SidingPathFinder.generatePathDataDistances(out, 0);
 		return out;
+	}
+
+	/** {@link org.mtr.core.mmtr.segment.MmtrMotionPosition#buildLegs()} — the A→B spine. */
+	@Override
+	public ObjectArrayList<org.mtr.core.data.PathData> buildLegs() {
+		return buildPathData();
+	}
+
+	/** {@link org.mtr.core.mmtr.segment.MmtrMotionPosition#railHex()} — the leading rail's hex. */
+	@Override
+	public @Nullable String railHex() {
+		return leadingRailHex();
+	}
+
+	/** {@link org.mtr.core.mmtr.segment.MmtrMotionPosition#legCount()}. */
+	@Override
+	public int legCount() {
+		return body.legCount();
+	}
+
+	/**
+	 * {@link org.mtr.core.mmtr.segment.MmtrMotionPosition#drainCrossedPointKeys()}: the consist walker
+	 * releases its own holds on rear-clear (B5), so there is nothing for the vehicle to drain.
+	 */
+	@Override
+	public ObjectArrayList<String> drainCrossedPointKeys() {
+		return new ObjectArrayList<>();
 	}
 
 	private int leadingLegIndex() {

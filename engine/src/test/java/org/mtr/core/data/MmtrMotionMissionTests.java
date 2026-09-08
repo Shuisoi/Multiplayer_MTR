@@ -110,7 +110,7 @@ public final class MmtrMotionMissionTests {
 	public void passengerMissionDrivesMotionVehicleToPlatformAndHoldsUntilTerminal() {
 		final Net n = new Net();
 		final Vehicle v = n.spawn();
-		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = v.getMmtrMotionWalker();
 		assertNotNull(walker, "motion walker");
 		final double expectedStop = walker.distanceM()
 			+ (n.yardRail.railMath.getLength() - walker.offsetM())
@@ -175,7 +175,7 @@ public final class MmtrMotionMissionTests {
 	public void plainMissionAssignmentSelfArmsAndRunsWithoutControlOp() {
 		final Net n = new Net();
 		final Vehicle v = n.spawn();
-		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = v.getMmtrMotionWalker();
 		final double expectedStop = walker.distanceM()
 			+ (n.yardRail.railMath.getLength() - walker.offsetM())
 			+ n.rX.railMath.getLength()

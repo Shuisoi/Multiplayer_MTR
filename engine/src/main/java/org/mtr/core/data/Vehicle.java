@@ -22,6 +22,9 @@ import org.mtr.core.mmtr.MmtrProtection;
 import org.mtr.core.mmtr.MmtrRegime;
 import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.mmtr.MmtrSupport;
+import org.mtr.core.mmtr.consist.MmtrCabState;
+import org.mtr.core.mmtr.consist.MmtrConsistWalker;
+import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
@@ -110,7 +113,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * shadow (cumulative PathData) that the legacy render/occupancy helpers walk. Clientside mirrors
 	 * never engage this mode (they keep replaying the synced legacy path).
 	 */
-	private @Nullable MmtrMotionWalker mmtrMotionWalker;
+	private @Nullable MmtrMotionPosition mmtrMotionWalker;
 	/** Motion-mode leg shadow: cumulative PathData list, refreshed when the walker boards a new rail. */
 	private final ObjectArrayList<PathData> mmtrMotionLegs = new ObjectArrayList<>();
 	/** Walker leg count at the last shadow refresh (detects newly boarded rails). */
@@ -1195,7 +1198,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!mmtrMotionFlipDone && speed == 0 && mmtrMotionPlan != null && !mmtrMotionPlan.flipRailHex.isEmpty()
 			&& mmtrMotionWalker != null && mmtrMotionWalker.railHex().equals(mmtrMotionPlan.flipRailHex)
 			&& mmtrMotionWalker.distanceM() >= mmtrMotionPlan.flipCumulativeM - 1e-3) {
-			if (mmtrMotionWalker.flipDirection()) {
+			if (mmtrMotionWalker.changeEnds(speed == 0)) {
 				mmtrMotionFlipDone = true;
 				mmtrMotionLegCount = mmtrMotionWalker.legCount();
 				refreshMmtrMotionLegs();
@@ -1300,10 +1303,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return mmtrMotionWalker != null;
 	}
 
-	/** @return the live Motion-Core walker when this vehicle runs in motion mode, else {@code null}. */
+	/** @return the live Motion-Core positional source when this vehicle runs in motion mode, else {@code null}. */
 	@Nullable
-	public MmtrMotionWalker getMmtrMotionWalker() {
+	public MmtrMotionPosition getMmtrMotionWalker() {
 		return mmtrMotionWalker;
+	}
+
+	/** @return the consist-body walker when this vehicle runs on the B-series consist model, else {@code null}. */
+	@Nullable
+	public MmtrConsistWalker getMmtrConsistWalker() {
+		return mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker ? consistWalker : null;
 	}
 
 	/**
@@ -1364,6 +1373,34 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * rail the consist stands on. Clientside mirrors must never engage this mode.
 	 */
 	public void engageMmtrMotion(@Nullable MmtrMotionWalker walker) {
+		engageMmtrMotionPosition(walker);
+	}
+
+	/**
+	 * B7.2a (加性): engage the consist-body motion model. The train is a {@code MmtrConsistWalker}
+	 * (double-ended body + manned cab); the vehicle ticks it exactly like the legacy walker because
+	 * both implement {@link org.mtr.core.mmtr.segment.MmtrMotionPosition}. The engine inserts the key
+	 * (system key) so the consist can move; a real driver path replaces this in B7.6.
+	 */
+	public void engageMmtrConsistMotion(MmtrConsistWalker walker, MmtrCabState.Cab cab) {
+		if (walker != null && cab != MmtrCabState.Cab.NONE) {
+			walker.insertKey(cab, true, true);
+		}
+		engageMmtrMotionPosition(walker);
+	}
+
+	/**
+	 * 换端 (change ends) for a motion vehicle: legal only at a stand, and only on the consist model
+	 * (the legacy walker has no cab). The train does not move — see the B-series design invariants.
+	 */
+	public boolean changeEndsMmtrMotion() {
+		if (isClientside || mmtrMotionWalker == null) {
+			return false;
+		}
+		return mmtrMotionWalker.changeEnds(speed == 0);
+	}
+
+	private void engageMmtrMotionPosition(@Nullable MmtrMotionPosition walker) {
 		if (isClientside) {
 			log.warn("Vehicle#engageMmtrMotion is server-side only; ignoring on clientside mirror");
 			return;

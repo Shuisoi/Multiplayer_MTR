@@ -7,7 +7,6 @@ import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
 import org.mtr.core.data.Vehicle;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
-import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.simulation.Simulator;
 
 /**
@@ -85,7 +84,7 @@ public final class MmtrRunPlanner {
 	private static Plan planToRailForward(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
 		final Plan plan = new Plan();
 		plan.targetRailHex = targetRailHex;
-		final MmtrMotionWalker walker = vehicle.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
 		if (walker == null) {
 			plan.reason = "vehicle is not in live Motion-Core mode";
 			return plan;
@@ -232,7 +231,7 @@ public final class MmtrRunPlanner {
 	private static Plan planToRailViaDeadEndFlip(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
 		final Plan plan = new Plan();
 		plan.targetRailHex = targetRailHex;
-		final MmtrMotionWalker walker = vehicle.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
 		if (walker == null) {
 			plan.reason = "flip: vehicle is not in live Motion-Core mode";
 			return plan;

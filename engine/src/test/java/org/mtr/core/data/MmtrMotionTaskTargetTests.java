@@ -94,7 +94,7 @@ public final class MmtrMotionTaskTargetTests {
 		// The operator has preset 0 = straight; the task redirects to the diverging rail mid-run.
 		n.store.set(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId(), 0);
 		final Vehicle v = n.spawnManual();
-		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = v.getMmtrMotionWalker();
 		final double midYard = walker.distanceM() + (n.yardRail.railMath.getLength() - walker.offsetM()) * 0.5;
 
 		boolean retargeted = false;
@@ -123,7 +123,7 @@ public final class MmtrMotionTaskTargetTests {
 		final Net n = new Net();
 		n.store.set(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId(), 0);
 		final Vehicle v = n.spawnManual();
-		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = v.getMmtrMotionWalker();
 		final double midYard = walker.distanceM() + (n.yardRail.railMath.getLength() - walker.offsetM()) * 0.5;
 
 		boolean retargeted = false;
@@ -151,7 +151,7 @@ public final class MmtrMotionTaskTargetTests {
 	public void taskTargetIsTheAuthorityOnAnUnsetFork() {
 		final Net n = new Net();
 		final Vehicle v = n.spawnManual();
-		final MmtrMotionWalker walker = v.getMmtrMotionWalker();
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = v.getMmtrMotionWalker();
 		assertFalse(walker.atTarget(), "no task target yet");
 		// Arm the task target right away (no operator anywhere): the unset fork must NOT block the
 		// vehicle once the task says where to go.

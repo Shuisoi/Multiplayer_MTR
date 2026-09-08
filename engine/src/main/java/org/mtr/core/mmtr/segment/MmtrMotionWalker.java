@@ -19,7 +19,7 @@ import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
  * distance; the walker updates the (segment, offset) state in place. This is what lets a running
  * consist be driven by Motion Core instead of a pre-baked MTR path.
  */
-public final class MmtrMotionWalker {
+public final class MmtrMotionWalker implements MmtrMotionPosition {
 
 	public final Data data;
 	private final BranchStore branches;
@@ -207,7 +207,7 @@ public final class MmtrMotionWalker {
 	 * they are reached. Any part of the distance that cannot be covered (unset fork, end of line)
 	 * is left unconsumed and the walker stops there.
 	 */
-	public void advance(double deltaM) {
+	public boolean advance(double deltaM) {
 		// A halt at an unset fork is a "waiting for the operator/任务 to decide", not terminal: a fresh
 		// advance() re-attempts the node (自由开). End-of-line / target stay terminal.
 		haltedAtAuthority = false;
@@ -218,7 +218,7 @@ public final class MmtrMotionWalker {
 			if (remaining < toNode) {
 				offsetM += remaining;
 				distanceM += remaining;
-				return;
+				return true;
 			}
 			remaining -= toNode;
 			offsetM = len; // reached the ahead node
@@ -227,7 +227,7 @@ public final class MmtrMotionWalker {
 			final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(ahead);
 			if (neighbors == null) {
 				endOfLine = true;
-				return;
+				break;
 			}
 			final ObjectArrayList<Rail> forwardRails = new ObjectArrayList<>();
 			final ObjectArrayList<Position> forwardEnds = new ObjectArrayList<>();
@@ -241,14 +241,14 @@ public final class MmtrMotionWalker {
 			final Rail next;
 			if (forwardRails.isEmpty()) {
 				endOfLine = true;
-				return;
+				break;
 			} else if (forwardRails.size() == 1) {
 				next = forwardRails.get(0);
 			} else {
 				next = electAtFork(forwardRails, forwardEnds);
 				if (next == null) {
 					haltedAtAuthority = true;
-					return;
+					break;
 				}
 				// The train has crossed the fork node onto the elected continuation: its authority
 				// hold (if any) is consumed and the queue advances (over-release is a no-op).
@@ -267,9 +267,10 @@ public final class MmtrMotionWalker {
 			}
 			if (rail.getHexId().equals(targetRailHex)) {
 				atTarget = true;
-				return;
+				break;
 			}
 		}
+		return remaining < deltaM;
 	}
 
 	private @Nullable Rail electAtFork(ObjectArrayList<Rail> forwardRails, ObjectArrayList<Position> forwardEnds) {
@@ -322,5 +323,16 @@ public final class MmtrMotionWalker {
 		atTarget = false;
 		legs.add(new PathData(rail, 0L, 0L, 0, deadEnd, entry));
 		return true;
+	}
+
+	/**
+	 * {@link MmtrMotionPosition#changeEnds(boolean)}: the legacy walker has no cab model, so this is
+	 * exactly the old terminal {@link #flipDirection()}. The caller passes {@code trainStopped} because
+	 * it owns the speed gate; a false value is ignored here for source compatibility, never to allow a
+	 * moving flip.
+	 */
+	@Override
+	public boolean changeEnds(boolean trainStopped) {
+		return flipDirection();
 	}
 }
