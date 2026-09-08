@@ -2,9 +2,11 @@ package org.mtr.mod.render;
 
 import org.mtr.core.tool.Vector;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.Vector3d;
 import org.mtr.mapping.mapper.GraphicsHolder;
+import org.mtr.mod.Init;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
@@ -35,6 +37,9 @@ public final class MmtrCabPanel {
 	private static final int TEXT_COLOR = 0xFFE8F4FF;
 	private static final int UNIT_COLOR = 0xFF8FA6B8;
 
+	/** Model IDs already reported as having no anchors, so the log is written once per model. */
+	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
+
 	/**
 	 * Called once per visible car by {@link RenderVehicles}.
 	 *
@@ -46,6 +51,9 @@ public final class MmtrCabPanel {
 	public static void render(VehicleExtension vehicle, int carNumber, String vehicleId, PositionAndRotation carPositionAndRotation) {
 		final ObjectArrayList<Anchor> anchors = MmtrVehicleAnchors.get(vehicleId);
 		if (anchors.isEmpty()) {
+			if (MISSING_ANCHORS_LOGGED.add(vehicleId)) {
+				Init.LOGGER.info("[MMTR] model {} has no mmtr_anchors_{}.json in the loaded resource packs, so no cab panel", vehicleId, vehicleId);
+			}
 			return;
 		}
 
