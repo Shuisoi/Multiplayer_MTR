@@ -2,6 +2,7 @@ package org.mtr.mod.render.panel;
 
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.NativeImage;
@@ -26,6 +27,9 @@ public final class MmtrPanelTexture {
 
 	private static final long EXPIRY_MILLIS = 10_000;
 	private static final Map<String, MmtrPanelTexture> CACHE = new Object2ObjectOpenHashMap<>();
+	/** B7.6e diagnostics: dump the first rasterised panel of each texture to run/mmtr-panel-debug. */
+	private static final boolean DEBUG_DUMP = true;
+	private static final ObjectOpenHashSet<String> DUMPED = new ObjectOpenHashSet<>();
 
 	private final Identifier identifier;
 	private final NativeImageBackedTexture texture;
@@ -71,6 +75,11 @@ public final class MmtrPanelTexture {
 		final NativeImage image = canvas.toNativeImage();
 		texture.setImage(image);
 		texture.upload();
+		if (DEBUG_DUMP && DUMPED.add(identifier.toString())) {
+			final java.io.File file = new java.io.File("mmtr-panel-debug/" + sanitise(identifier.toString()) + ".png");
+			final boolean written = canvas.writePng(file);
+			Init.LOGGER.info("[MMTR-DBG] panel {} image={}x{} texture={} png={} ({})", identifier, image.getWidth(), image.getHeight(), texture.getGlId(), file.getAbsolutePath(), written ? "written" : "FAILED");
+		}
 		canvas.dispose();
 		this.signature = signature;
 		expiryTime = System.currentTimeMillis() + EXPIRY_MILLIS;

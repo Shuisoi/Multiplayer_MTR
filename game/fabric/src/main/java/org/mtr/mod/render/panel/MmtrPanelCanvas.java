@@ -250,6 +250,22 @@ public final class MmtrPanelCanvas {
 		image.flush();
 	}
 
+	/**
+	 * Debug helper: writes the surface as a PNG so a panel can be inspected outside the game (and
+	 * compared against what the client actually uploads). Returns false when the write failed.
+	 */
+	public boolean writePng(java.io.File file) {
+		try {
+			final java.io.File parent = file.getParentFile();
+			if (parent != null) {
+				parent.mkdirs();
+			}
+			return javax.imageio.ImageIO.write(image, "png", file);
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
 	// ---- helpers ---------------------------------------------------------------------------------
 
 	private double px(double metres) {

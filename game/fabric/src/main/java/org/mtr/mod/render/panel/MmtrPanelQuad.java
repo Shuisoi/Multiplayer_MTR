@@ -1,9 +1,11 @@
 package org.mtr.mod.render.panel;
 
 import org.mtr.core.tool.Vector;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.mtr.mapping.holder.Direction;
 import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.mapper.GraphicsHolder;
+import org.mtr.mod.Init;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
 import org.mtr.mod.data.IGui;
@@ -34,6 +36,8 @@ public final class MmtrPanelQuad {
 
 	/** Lift the plane off the modelled face so it does not z-fight with the dashboard geometry. */
 	private static final float SURFACE_OFFSET_M = 0.005F;
+	/** Panels already described in the log, so the geometry is reported once per texture. */
+	private static final ObjectOpenHashSet<String> DEBUG_LOGGED = new ObjectOpenHashSet<>();
 
 	public static void draw(Identifier texture, Anchor anchor, StoredMatrixTransformations carTransform, double widthM, double heightM) {
 		if (texture == null || widthM <= 0 || heightM <= 0) {
@@ -46,6 +50,21 @@ public final class MmtrPanelQuad {
 		final Vector right = cross(up, normal).normalize();
 		final double halfWidthM = widthM / 2;
 		final double halfHeightM = heightM / 2;
+
+		if (DEBUG_LOGGED.add(texture.toString())) {
+			Init.LOGGER.info("[MMTR-DBG] panel {} anchor={} modelPos={} modelNormal={} modelUp={} modelRight={} (model space = OBJ file space (x, -y, -z))",
+					texture, anchor.name, format(position), format(normal), format(up), format(right));
+			for (final int side : new int[]{1, -1}) {
+				final Vector sideNormal = scale(normal, side);
+				Init.LOGGER.info("[MMTR-DBG]   side {} yaw={} pitch={} roll={} flipU={} offset={}",
+						side,
+						round(Math.toDegrees(Math.atan2(sideNormal.x(), sideNormal.z()))),
+						round(Math.toDegrees(Math.asin(clamp(-up.y())))),
+						round(Math.toDegrees(Math.atan2(up.x(), up.y()))),
+						anchor.panelFlipU != (side < 0),
+						SURFACE_OFFSET_M);
+			}
+		}
 
 		for (final int side : new int[]{1, -1}) {
 			// The back copy is the same frame rotated 180 degrees about its own up axis: right and
@@ -71,10 +90,22 @@ public final class MmtrPanelQuad {
 
 			MainRenderer.scheduleRender(texture, false, QueuedRenderLayer.LIGHT_2, (graphicsHolder, offset) -> {
 				transformations.transform(graphicsHolder, offset);
+				// The corners are given bottom-left, bottom-right, top-right, top-left. That order is
+				// the OPPOSITE of what IDrawing.drawTexture's rectangle overload produces, and it is
+				// deliberate: MTR's rectangle overload winds the quad so that its front face points at
+				// local -Z, while this panel offsets the quad along local +Z to lift it off the modelled
+				// face. With the default winding the visible copy would be the one pushed INTO the
+				// dashboard (Minecraft culls back faces and RenderLayer.getText keeps culling enabled),
+				// which is exactly how the panel ends up hidden behind its own dashboard.
+				final float uLeft = flipU ? 1 : 0;
+				final float uRight = flipU ? 0 : 1;
 				IDrawing.drawTexture(
 						graphicsHolder,
-						0, 0, 0, (float) widthM, (float) heightM, 0,
-						flipU ? 1 : 0, 0, flipU ? 0 : 1, 1,
+						0, 0, 0,
+						(float) widthM, 0, 0,
+						(float) widthM, (float) heightM, 0,
+						0, (float) heightM, 0,
+						uLeft, 1, uRight, 0,
 						Direction.UP, IGui.ARGB_WHITE, GraphicsHolder.getDefaultLight()
 				);
 				graphicsHolder.pop();
@@ -110,5 +141,13 @@ public final class MmtrPanelQuad {
 
 	private static double clamp(double value) {
 		return Math.max(-1, Math.min(1, value));
+	}
+
+	private static String format(Vector vector) {
+		return String.format("(%.4f, %.4f, %.4f)", vector.x(), vector.y(), vector.z());
+	}
+
+	private static String round(double value) {
+		return String.format("%.2f", value);
 	}
 }
