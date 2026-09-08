@@ -155,6 +155,26 @@ public final class MmtrConsistWalkerApiTests {
 	}
 
 	@Test
+	public void mirrorLegsRunTailToHeadAndAnchorTheHeadAtDistanceM() {
+		final Line line = new Line();
+		final MmtrConsistWalker walker = onLine(line, 2);
+		walker.advance(1);
+		final ObjectArrayList<org.mtr.core.data.PathData> legs = walker.buildMirrorLegs();
+		assertFalse(legs.get(0).reversePositions, "CAB_A drives toward B, so the tail (A end) starts the path in rail order");
+		final org.mtr.core.data.PathData headLeg = legs.get(legs.size() - 1);
+		assertEquals(walker.distanceM(), headLeg.getStartDistance() + walker.frontOffsetM(), 1e-6, "the leading face anchors at railProgress");
+
+		// 换端 re-orders the path (same rails, opposite direction) and keeps the same anchoring.
+		assertTrue(walker.changeEnds(true));
+		final ObjectArrayList<org.mtr.core.data.PathData> flipped = walker.buildMirrorLegs();
+		assertEquals(legs.size(), flipped.size());
+		assertTrue(flipped.get(0).reversePositions, "now the B end is the tail, so the path runs against the rails");
+		final org.mtr.core.data.PathData flippedHead = flipped.get(flipped.size() - 1);
+		assertEquals(walker.distanceM(), flippedHead.getStartDistance() + walker.mirrorHeadOffsetM(), 1e-6);
+		assertEquals(walker.body().spineLengthM() - walker.body().aEndArcM(), walker.mirrorHeadArcM(), 1e-6, "with the A end leading, the head arc is measured from the B side");
+	}
+
+	@Test
 	public void accessorsDescribeTheLeadingLeg() {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = onLine(line, line.l0() - 6);

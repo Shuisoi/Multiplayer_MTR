@@ -1397,7 +1397,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (isClientside || mmtrMotionWalker == null) {
 			return false;
 		}
-		return mmtrMotionWalker.changeEnds(speed == 0);
+		if (!mmtrMotionWalker.changeEnds(speed == 0)) {
+			return false;
+		}
+		// B7.2b: the mirror path is oriented by the manned cab, so re-publish it (same rails, opposite
+		// order, anchored to the same railProgress) - the client re-renders the consist in place.
+		syncMmtrConsistMirror();
+		return true;
+	}
+
+	/**
+	 * B7.2b: keep the mirrored motion payload consistent with the consist body — path order (tail →
+	 * head), the {@code reversed} car-list flag and the synced VED path. No-op for the legacy walker.
+	 */
+	private void syncMmtrConsistMirror() {
+		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
+			reversed = consistWalker.mirrorReversed();
+			mmtrMotionLegCount = consistWalker.legCount();
+			refreshMmtrMotionLegs();
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
 	}
 
 	private void engageMmtrMotionPosition(@Nullable MmtrMotionPosition walker) {
@@ -1438,6 +1457,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			refreshMmtrMotionLegs();
 			mmtrMotionLegCount = walker.legCount();
 			railProgress = walker.distanceM();
+			syncMmtrConsistMirror();
 		}
 	}
 
@@ -1445,7 +1465,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * into the synced VED path / run fields so client VehicleUpdates carry the rails this vehicle runs on. */
 	private void refreshMmtrMotionLegs() {
 		mmtrMotionLegs.clear();
-		if (mmtrMotionWalker != null) {
+		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
+			// B7.2b: tail -> head, anchored so the leading face sits exactly at railProgress (distanceM).
+			mmtrMotionLegs.addAll(consistWalker.buildMirrorLegs());
+		} else if (mmtrMotionWalker != null) {
 			mmtrMotionLegs.addAll(mmtrMotionWalker.buildLegs());
 		}
 		vehicleExtraData.mmtrSetSyncPath(mmtrMotionLegs);

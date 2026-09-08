@@ -185,6 +185,34 @@ public final class MmtrConsistVehicleMotionTests {
 	}
 
 	@Test
+	public void changeEndsRendersEveryCarInTheSameWorldPlace() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 5, positions());
+		v.applyMmtrControl(new ControlState().setBrakeNotch(8).setReverser(1));
+		driveTicks(v, 200, positions());
+		assertEquals(0, v.getSpeed(), 1e-9, "at rest before the crew changes ends");
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> before = v.getVehicleCarsAndPositions();
+		assertTrue(v.changeEndsMmtrMotion());
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> after = v.getVehicleCarsAndPositions();
+		assertEquals(before.size(), after.size());
+		for (int i = 0; i < before.size(); i++) {
+			final ObjectArrayList<Vehicle.BogiePosition> beforeBogies = before.get(i).right();
+			final ObjectArrayList<Vehicle.BogiePosition> afterBogies = after.get(i).right();
+			assertEquals(beforeBogies.size(), afterBogies.size());
+			for (int j = 0; j < beforeBogies.size(); j++) {
+				final var beforePosition = beforeBogies.get(j).positionAndTiltAngle1().position();
+				final var afterPosition = afterBogies.get(j).positionAndTiltAngle1().position();
+				// 1 cm tolerance: the rail curve is parameterised per direction, so the same physical
+				// point resolved along a reversed path differs by a sub-millimetre rounding, not by a move.
+				assertEquals(beforePosition.x(), afterPosition.x(), 0.01, "car " + i + " bogie " + j + " must not move in x");
+				assertEquals(beforePosition.z(), afterPosition.z(), 0.01, "car " + i + " bogie " + j + " must not move in z");
+			}
+		}
+	}
+
+	@Test
 	public void aMovingConsistVehicleRefusesToChangeEnds() {
 		final Line line = new Line();
 		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());

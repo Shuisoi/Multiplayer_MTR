@@ -392,6 +392,59 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		return buildPathData();
 	}
 
+	/**
+	 * B7.2b: the mirror path a client must replay — the body spine oriented <strong>tail → head</strong>
+	 * (the direction of travel) with its cumulative distances anchored so the leading face lands exactly
+	 * at {@link #distanceM()}. That anchoring is what keeps the whole vehicle pipeline (railProgress,
+	 * car placement, occupancy footprint, stop targets) in one coordinate space, while the rail order
+	 * follows the manned cab: after 换端 the path is re-ordered, but every car stays on the same rail at
+	 * the same offset, so the rendered consist does not turn around.
+	 */
+	public ObjectArrayList<org.mtr.core.data.PathData> buildMirrorLegs() {
+		final ObjectArrayList<org.mtr.core.data.PathData> out = new ObjectArrayList<>();
+		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		if (towardB) {
+			for (int i = 0; i < body.legCount(); i++) {
+				addLeg(out, body.leg(i), true);
+			}
+		} else {
+			for (int i = body.legCount() - 1; i >= 0; i--) {
+				addLeg(out, body.leg(i), false);
+			}
+		}
+		org.mtr.core.path.SidingPathFinder.generatePathDataDistances(out, distanceM - mirrorHeadArcM());
+		return out;
+	}
+
+	/** Distance of the leading face along {@link #buildMirrorLegs()}, m. */
+	public double mirrorHeadArcM() {
+		return cabs.travelsToward(MmtrCabState.End.B) ? body.bEndArcM() : body.spineLengthM() - body.aEndArcM();
+	}
+
+	/** Offset of the leading face within the last mirror leg (measured from that leg's start). */
+	public double mirrorHeadOffsetM() {
+		final SpineLeg leg = leadingLeg();
+		return cabs.travelsToward(MmtrCabState.End.B) ? frontOffsetM() : leg.lengthM() - frontOffsetM();
+	}
+
+	/**
+	 * Whether the client must render the car list backwards: true when the A-end car is at the rear,
+	 * i.e. when the B end leads (CAB_A manned). Mirrored as {@code Vehicle.reversed}.
+	 */
+	public boolean mirrorReversed() {
+		return cabs.travelsToward(MmtrCabState.End.B);
+	}
+
+	private void addLeg(ObjectArrayList<org.mtr.core.data.PathData> out, SpineLeg leg, boolean tailToHead) {
+		final Rail rail = data.railIdMap.get(leg.railHex());
+		if (rail == null) {
+			return;
+		}
+		out.add(tailToHead
+			? new org.mtr.core.data.PathData(rail, 0L, 0L, 0, leg.entryNode(), leg.exitNode())
+			: new org.mtr.core.data.PathData(rail, 0L, 0L, 0, leg.exitNode(), leg.entryNode()));
+	}
+
 	/** {@link org.mtr.core.mmtr.segment.MmtrMotionPosition#railHex()} — the leading rail's hex. */
 	@Override
 	public @Nullable String railHex() {
