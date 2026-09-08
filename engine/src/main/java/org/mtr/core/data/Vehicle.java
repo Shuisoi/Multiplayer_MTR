@@ -154,8 +154,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** P3: en-route forks still ahead of this vehicle (not yet crossed); refreshed while armed so a
 	 * crossed fork is never re-requested (its hold was already released at the crossing). */
 	private final ObjectArrayList<String[]> mmtrPendingPointOps = new ObjectArrayList<>();
+	/** Turnout authority request/refresh window. */
 	private static final long MMTR_POINT_REQUEST_MILLIS = 10L * MILLIS_PER_MINUTE;
-	/**
+	/** Approach-locking window (m): forks are only requested once the head is within this distance -
+	 * a following train never pre-occupies the points the leading train still needs (英铁 approach
+	 * locking); sized to cover the braking approach of the slowest local band. */
+	private static final double MMTR_APPROACH_LOCK_METERS = 120.0;/**
 	 * MMTR (L3): unmanned auto run (task/ATO foundation). While armed and a stop target is active,
 	 * the vehicle drives itself (cruise at the auto notch, service-brake envelope to the exact stop
 	 * target, doors per the stop request) without any driver override; arming the NEXT stop target
@@ -401,13 +405,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			vehicleExtraData.mmtrMarkSyncDirty();
 		}
 
-		// P3: while an auto mission run is armed, refresh the turnout grant/queue windows of the
-		// STILL-PENDING (not yet crossed) forks every tick so a slow run or a long lock wait never
-		// lets the requests expire mid-route; crossed forks were released at the crossing and must
-		// not be re-requested.
+		// P3: while an auto mission run is armed, replenish the forks that just entered the
+		// approach window (英铁 approach locking: a point is only requested once the train is near
+		// it, so a following train never pre-occupies the forks the leading train still needs),
+		// then refresh the grant/queue windows of the pending forks every tick so a slow run or a
+		// long lock wait never lets the requests expire mid-route; crossed forks were released at
+		// the crossing and must not be re-requested.
 		if (motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && mmtrMotionAuto && !mission.isTerminal()
-			&& data instanceof final Simulator simulator && !mmtrPointOwner.isEmpty() && !mmtrPendingPointOps.isEmpty()) {
-			MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+			&& data instanceof final Simulator simulator && !mmtrPointOwner.isEmpty()) {
+			replenishForkRequests(simulator);
+			if (!mmtrPendingPointOps.isEmpty()) {
+				MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+			}
 		}
 	}
 
@@ -458,7 +467,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public boolean armMmtrPointRun(Simulator simulator, MmtrRunPlanner.Plan plan) {
 		mmtrMotionPlan = plan;
 		mmtrPendingPointOps.clear();
-		for (final String[] op : plan.forkOps) {
+		// Approach locking (英铁): only forks inside the approach window are requested now; forks
+		// further ahead join the pending set via replenishForkRequests as the run approaches them,
+		// so a following train never occupies the points the leading train still needs.
+		final double distanceNow = mmtrMotionWalker == null ? 0 : mmtrMotionWalker.distanceM();
+		for (int j = 0; j < plan.forkOps.size(); j++) {
+			final String[] op = plan.forkOps.get(j);
+			final double forkAbsM = j < plan.forkMeters.size() ? plan.forkMeters.get(j) : Double.NaN;
+			final double remainingM = forkAbsM - distanceNow;
+			if (remainingM <= 0 || remainingM > MMTR_APPROACH_LOCK_METERS) {
+				continue; // already crossed or not yet in the approach window
+			}
 			mmtrPendingPointOps.add(op.clone());
 		}
 		// The walker elects operator branches (道岔人工位) BEFORE authority grants, and the engine
@@ -476,7 +495,41 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker != null) {
 			mmtrMotionWalker.setPointAuthority(authority, owner);
 		}
-		return MmtrRunPlanner.requestForkOps(plan, authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+		return MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+	}
+
+	/**
+	 * P3 (approach locking): while the auto run is armed, add the plan forks that just entered the
+	 * approach window to the pending request set (idempotent - never re-adds, crossed forks are
+	 * drained separately). Far forks are deliberately NOT requested: the leading train must get
+	 * the point first when it arrives.
+	 */
+	private void replenishForkRequests(Simulator simulator) {
+		if (mmtrMotionPlan == null || mmtrMotionWalker == null || mmtrMotionPlan.forkOps.isEmpty()) {
+			return;
+		}
+		final double distanceNow = mmtrMotionWalker.distanceM();
+		for (int j = 0; j < mmtrMotionPlan.forkOps.size(); j++) {
+			final String[] op = mmtrMotionPlan.forkOps.get(j);
+			final double forkAbsM = j < mmtrMotionPlan.forkMeters.size() ? mmtrMotionPlan.forkMeters.get(j) : Double.NaN;
+			final double remainingM = forkAbsM - distanceNow;
+			if (remainingM <= 0 || remainingM > MMTR_APPROACH_LOCK_METERS) {
+				continue; // already crossed (drained) or not yet in the approach window
+			}
+			if (pendingContainsFork(op)) {
+				continue;
+			}
+			mmtrPendingPointOps.add(op.clone());
+		}
+	}
+
+	private boolean pendingContainsFork(String[] op) {
+		for (final String[] p : mmtrPendingPointOps) {
+			if (p[0].equals(op[0]) && p[1].equals(op[1]) && p[2].equals(op[2]) && p[3].equals(op[3])) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Drop crossed forks from the pending request set (their holds were released at the crossing). */

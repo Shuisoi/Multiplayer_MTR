@@ -40,6 +40,9 @@ public final class MmtrRunPlanner {
 		public final ObjectArrayList<Position> nodes = new ObjectArrayList<>();
 		/** Turnout operator settings: {nodeX, nodeY, nodeZ, viaHex, op} for every en-route fork. */
 		public final ObjectArrayList<String[]> forkOps = new ObjectArrayList<>();
+		/** Absolute walker-space distance of every {@link #forkOps} entry (parallel, same index) -
+		 * the approach-locking layer requests a fork only once the train is near it. */
+		public final ObjectArrayList<Double> forkMeters = new ObjectArrayList<>();
 		/** Cumulative stop distance in the vehicle's walker space (head rests there). */
 		public double stopCumulativeM = -1;
 		public String targetRailHex = "";
@@ -158,6 +161,9 @@ public final class MmtrRunPlanner {
 		}
 
 		// Turnout decisions at every node that has >= 2 forward rails (excluding the incoming rail).
+		// Each fork records its absolute walker-space distance (parallel with forkOps) so the
+		// approach-locking layer can request it only when the train is actually near it.
+		double cumulM = fromCurrentToStartNode;
 		for (int i = 0; i + 1 < plan.nodes.size(); i++) {
 			final Position node = plan.nodes.get(i);
 			final Position approach = i == 0 ? walker.enteredFromPosition() : plan.nodes.get(i - 1);
@@ -175,6 +181,13 @@ public final class MmtrRunPlanner {
 					return plan;
 				}
 				plan.forkOps.add(new String[]{String.valueOf(node.getX()), String.valueOf(node.getY()), String.valueOf(node.getZ()), incoming.getHexId(), String.valueOf(op)});
+				plan.forkMeters.add(walker.distanceM() + cumulM);
+			}
+			// Advance the cumulative distance over the segment nodes[i] -> nodes[i+1].
+			final Position nextNode = plan.nodes.get(i + 1);
+			final Rail segmentRail = nextNode.equals(farEnd) ? target : prev.get(nextNode) == null ? null : prev.get(nextNode).rail;
+			if (segmentRail != null) {
+				cumulM += segmentRail.railMath.getLength();
 			}
 		}
 		plan.feasible = true;
