@@ -74,6 +74,8 @@ public final class Siding extends SidingSchema implements Utilities {
 	public static final double MIN_ACCELERATION = 1D / 2500000;
 	private static final Random RANDOM = new Random();
 	private static final String KEY_VEHICLES = "vehicles";
+	/** Rate limit for the per-vehicle simulation failure report. */
+	private static long mmtrLastSimulateErrorMillis;
 	public Siding(Position position1, Position position2, double railLength, TransportMode transportMode, Data data) {
 		super(getRailLength(railLength), position1, position2, transportMode, data);
 		vehicleReaders = ObjectImmutableList.of();
@@ -270,7 +272,19 @@ public final class Siding extends SidingSchema implements Utilities {
 
 		final ObjectArraySet<Vehicle> trainsToRemove = new ObjectArraySet<>();
 		for (final Vehicle vehicle : vehicleIdMap.values()) {
-			vehicle.simulate(millisElapsed, vehiclePositions, vehicleTimesAlongRoute);
+			try {
+				vehicle.simulate(millisElapsed, vehiclePositions, vehicleTimesAlongRoute);
+			} catch (Exception e) {
+				// One broken vehicle must not take the whole simulation (and with it every client's
+				// vehicle and rail data) down with it: log at most once a second and keep going.
+				final long now = System.currentTimeMillis();
+				if (now - mmtrLastSimulateErrorMillis > 1000) {
+					mmtrLastSimulateErrorMillis = now;
+					System.out.println("[MMTR-SIM] vehicle " + vehicle.getId() + " failed to simulate: " + e);
+					e.printStackTrace(System.out);
+				}
+				continue;
+			}
 
 			if (vehicle.closeToDepot()) {
 				spawnTrain = false;

@@ -232,6 +232,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private static final int MMTR_AWS_WARN = 1;
 	/** Signal S3 (AWS) warning state machine: acknowledged - the yellow/black indicator stays up until the restriction clears. */
 	private static final int MMTR_AWS_ACKED = 2;
+	/** Last reported "waiting for turnout authority" target, so the per-tick retry does not repeat it. */
+	private static String mmtrLastTurnoutWaitLog = "";
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -456,10 +458,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!armMmtrPointRun(simulator, plan)) {
 			// Feasible but a fork is operator-locked or held by another train: the mission stays
 			// ASSIGNED and this self-arm retries every tick until the grants land (operator unlock
-			// / the other train's release); nothing auto-elects around a busy point.
-			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " waiting for turnout authority on rail " + plan.targetRailHex);
+			// / the other train's release); nothing auto-elects around a busy point. Report the wait
+			// once per target instead of once per tick.
+			final String waitingKey = mission.getKind() + ":" + plan.targetRailHex;
+			if (!waitingKey.equals(mmtrLastTurnoutWaitLog)) {
+				mmtrLastTurnoutWaitLog = waitingKey;
+				System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " waiting for turnout authority on rail " + plan.targetRailHex);
+			}
 			return;
 		}
+		mmtrLastTurnoutWaitLog = "";
 		setMmtrMotionAuto(true);
 		setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
 		System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
@@ -2251,7 +2259,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker == null) {
 			return 0;
 		}
-		return mmtrMotionWalker.currentRail().getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.enteredFromPosition());
+		// MmtrMotionPosition.currentRail() is @Nullable: the consist walker reports no rail while no
+		// cab is manned (a parked train with no key inserted) and a legacy walker has none before it
+		// boards one. Both are normal states, so "no current rail" means "no limit to read" rather
+		// than a crash - an NPE here aborts the whole Simulator.tick, which is what blanked every
+		// vehicle and rail on the client.
+		final Rail currentRail = mmtrMotionWalker.currentRail();
+		if (currentRail == null) {
+			return 0;
+		}
+		return currentRail.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.enteredFromPosition());
 	}
 
 	/** Signal S2: current per-segment rail speed limit in km/h (0 = not running / unreachable). */

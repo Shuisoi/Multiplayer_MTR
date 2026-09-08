@@ -75,11 +75,20 @@ public final class MmtrRunPlanner {
 		}
 		final Plan viaFlip = planToRailViaDeadEndFlip(sim, vehicle, targetRailHex, stopFraction);
 		if (viaFlip.feasible) {
-			System.out.println("[MMTR-RUN] planned via 尽头换向 flip @" + Math.round(viaFlip.flipCumulativeM) + "m (rail " + viaFlip.flipRailHex + ") - " + forward.reason);
+			// A mission that cannot arm retries every tick, so only report a CHANGE of plan: the old
+			// unconditional print flooded the log at thousands of lines a second.
+			final String message = "planned via 尽头换向 flip @" + Math.round(viaFlip.flipCumulativeM) + "m (rail " + viaFlip.flipRailHex + ") - " + forward.reason;
+			if (!message.equals(mmtrLastFlipPlanLog)) {
+				mmtrLastFlipPlanLog = message;
+				System.out.println("[MMTR-RUN] " + message);
+			}
 			return viaFlip;
 		}
 		return forward;
 	}
+
+	/** Last reported flip plan, so a retry loop does not repeat it. */
+	private static String mmtrLastFlipPlanLog = "";
 
 	private static Plan planToRailForward(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
 		final Plan plan = new Plan();
