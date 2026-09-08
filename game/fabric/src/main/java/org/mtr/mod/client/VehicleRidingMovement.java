@@ -89,13 +89,18 @@ public class VehicleRidingMovement {
 		}
 
 		final boolean isHoldingDriverKeyNew = driverKey != null;
-		pressingAccelerateTicks = isHoldingDriverKeyNew && driverKey.canDrive && KeyBindings.TRAIN_ACCELERATE.isPressed() ? pressingAccelerateTicks + 1 : 0;
-		pressingBrakeTicks = isHoldingDriverKeyNew && driverKey.canDrive && KeyBindings.TRAIN_BRAKE.isPressed() ? pressingBrakeTicks + 1 : 0;
-		pressingDoorsTicks = isHoldingDriverKeyNew && driverKey.canOpenDoors && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingDoorsTicks + 1 : 0;
-		pressingAtoTicks = isHoldingDriverKeyNew && driverKey.canDrive && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingAtoTicks + 1 : 0;
+		// MMTR: the driver key still grants control, but the permission seam can grant it as well, so
+		// boarding a cab no longer requires holding the creative/depot key.
+		final ClientPlayerEntity permissionPlayer = minecraftClient.getPlayerMapped();
+		final boolean canDrive = isHoldingDriverKeyNew && driverKey.canDrive || ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId);
+		final boolean canOpenDoors = isHoldingDriverKeyNew && driverKey.canOpenDoors || ridingVehicleId != 0 && MmtrCabPermissions.canOpenDoors(permissionPlayer, ridingVehicleId);
+		pressingAccelerateTicks = canDrive && KeyBindings.TRAIN_ACCELERATE.isPressed() ? pressingAccelerateTicks + 1 : 0;
+		pressingBrakeTicks = canDrive && KeyBindings.TRAIN_BRAKE.isPressed() ? pressingBrakeTicks + 1 : 0;
+		pressingDoorsTicks = canOpenDoors && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingDoorsTicks + 1 : 0;
+		pressingAtoTicks = canDrive && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingAtoTicks + 1 : 0;
 
 		// MMTR separated throttle/brake controls (rising-edge per press)
-		if (isHoldingDriverKeyNew && driverKey.canDrive && ridingVehicleId != 0) {
+		if (canDrive && ridingVehicleId != 0) {
 			boolean changed = false;
 			final boolean throttleUp = KeyBindings.TRAIN_ACCELERATE.isPressed();
 			if (throttleUp && !prevThrottleUp && mmtrThrottleNotch < MAX_MMTR_THROTTLE_NOTCH) { mmtrThrottleNotch++; changed = true; }

@@ -8,6 +8,7 @@ import org.mtr.mapping.holder.Camera;
 import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.Text;
+import org.mtr.mapping.mapper.OptimizedRenderer;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.InitClient;
@@ -22,7 +23,7 @@ import javax.annotation.Nullable;
 import java.util.stream.Collectors;
 
 /**
- * B7.6d: the "look at a cab door and press F" interaction (design §3.6.4).
+ * B7.6d: the "look at a cab door and press G" interaction (design §3.6.4).
  *
  * <p>The crew walks into the train like any passenger, walks to the cab door, looks at it and presses
  * the cab key. The door is found through the {@code mmtr_cabdoor_<cab>_<n>} anchors of the model
@@ -107,11 +108,20 @@ public final class MmtrCabInteraction {
 		String nearestId = "-";
 		String nearestModels = "-";
 		String nearestCarPosition = "-";
+		boolean nearestRayTracing = false;
+		int rayTracingCars = 0;
 		for (final VehicleExtension vehicle : vehicles) {
+			final boolean[] rayTracing = vehicle.persistentVehicleData.rayTracing;
+			for (int i = 0; i < rayTracing.length; i++) {
+				if (rayTracing[i]) {
+					rayTracingCars++;
+				}
+			}
 			final double distance = Math.sqrt(Math.max(0, nearestCarDistanceSquared(vehicle, player.getX(), player.getY(), player.getZ())));
 			if (nearest < 0 || distance < nearest) {
 				nearest = distance;
 				nearestId = String.valueOf(vehicle.getId());
+				nearestRayTracing = rayTracing.length > 0 && rayTracing[0];
 				final StringBuilder models = new StringBuilder();
 				for (final var car : vehicle.getVehicleCarsAndPositions()) {
 					if (models.length() > 0) {
@@ -127,7 +137,7 @@ public final class MmtrCabInteraction {
 				nearestModels = models.toString();
 			}
 		}
-		Init.LOGGER.info("[MMTR-DBG] client vehicles={} nearest={} distance={} models=[{}] carPos=({}) player=({}, {}, {})", vehicles.size(), nearestId, nearest < 0 ? "-" : String.format("%.1f", nearest), nearestModels, nearestCarPosition, String.format("%.1f", player.getX()), String.format("%.1f", player.getY()), String.format("%.1f", player.getZ()));
+		Init.LOGGER.info("[MMTR-DBG] client vehicles={} rayTracingCars={} optimizedRendering={} nearest={} distance={} models=[{}] carPos=({}) rayTracing={} player=({}, {}, {})", vehicles.size(), rayTracingCars, OptimizedRenderer.hasOptimizedRendering(), nearestId, nearest < 0 ? "-" : String.format("%.1f", nearest), nearestModels, nearestCarPosition, nearestRayTracing, String.format("%.1f", player.getX()), String.format("%.1f", player.getY()), String.format("%.1f", player.getZ()));
 	}
 
 	private static void handle(ClientPlayerEntity player, @Nullable AimTarget target) {
@@ -163,6 +173,10 @@ public final class MmtrCabInteraction {
 	}
 
 	private static void enterCab(ClientPlayerEntity player, AimTarget target) {
+		if (!MmtrCabPermissions.canBoard(player, target.vehicle.getId())) {
+			player.sendMessage(new Text(TextHelper.literal("没有进入该驾驶室的权限 / not authorised").data), true);
+			return;
+		}
 		final int cab = target.cab;
 		final String cabName = cab == 2 ? "CAB_B" : "CAB_A";
 		final boolean changing = heldCab != 0 && heldCab != cab;
@@ -204,10 +218,9 @@ public final class MmtrCabInteraction {
 		final int carNumber = Math.max(0, Math.min(cars.size() - 1, base + view.modelCar));
 		final PositionAndRotation carRotation = cars.get(carNumber).rotation;
 
-		// The driver looks out of the cab: along -Z for a cab at the A end, along +Z for a cab that
-		// was mirrored into the B end of a single-cab model.
-		final double zSign = view.mirrored ? 1 : -1;
-		final Vector forward = new Vector(0, 0, zSign).rotateX(carRotation.pitch).rotateY(carRotation.yaw);
+		// The driver faces the direction the dashboard faces away from (car-local, taken from the
+		// anchor normal), so the view stays correct whichever end of the model the cab sits at.
+		final Vector forward = new Vector(view.forwardX, 0, view.forwardZ).rotateX(carRotation.pitch).rotateY(carRotation.yaw);
 		final double yawDegrees = Math.toDegrees(Math.atan2(-forward.x(), forward.z()));
 
 		VehicleRidingMovement.mmtrPlaceRiding(
@@ -225,11 +238,11 @@ public final class MmtrCabInteraction {
 	}
 
 	private static String enterPrompt(int cab) {
-		return cab == 2 ? "按 F 进入 2 号驾驶室 / press F — cab 2" : "按 F 进入 1 号驾驶室 / press F — cab 1";
+		return cab == 2 ? "按 G 进入 2 号驾驶室 / press G — cab 2" : "按 G 进入 1 号驾驶室 / press G — cab 1";
 	}
 
 	/** Shown instead of the entry prompt when the crew already holds that cab. */
-	private static final String KEY_OUT_PROMPT = "按 F 拔出钥匙 / press F — key out";
+	private static final String KEY_OUT_PROMPT = "按 G 拔出钥匙 / press G — key out";
 
 	@Nullable
 	private static AimTarget findAimTarget() {

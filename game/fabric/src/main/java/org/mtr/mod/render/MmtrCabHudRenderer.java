@@ -7,6 +7,7 @@ import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.Window;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mapping.mapper.GuiDrawing;
+import org.mtr.mod.client.MmtrCabPermissions;
 import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
@@ -53,7 +54,8 @@ public final class MmtrCabHudRenderer {
 		if (vehicle == null || minecraftClient.getCurrentScreenMapped() != null && !minecraftClient.getCurrentScreenMapped().getTitle().data.toString().contains("chat_screen.title")) {
 			return;
 		}
-		if (VehicleRidingMovement.getValidHoldingKey(vehicle.vehicleExtraData.getDepotId()) == null) {
+		// MMTR: the console is no longer tied to holding a driver key; the permission seam decides.
+		if (!MmtrCabPermissions.canViewConsole(minecraftClient.getPlayerMapped(), vehicle.getId())) {
 			return;
 		}
 		final VehicleExtraData extraData = vehicle.vehicleExtraData;

@@ -100,14 +100,19 @@ public final class MmtrVehicleAnchors {
 		public final double x;
 		public final double y;
 		public final double z;
+		/** Horizontal direction the driver looks at, derived from the dashboard normal. */
+		public final double forwardX;
+		public final double forwardZ;
 		/** True when this was derived by mirroring a single-cab model into the B end. */
 		public final boolean mirrored;
 
-		private CabView(int modelCar, double x, double y, double z, boolean mirrored) {
+		private CabView(int modelCar, double x, double y, double z, double forwardX, double forwardZ, boolean mirrored) {
 			this.modelCar = modelCar;
 			this.x = x;
 			this.y = y;
 			this.z = z;
+			this.forwardX = forwardX;
+			this.forwardZ = forwardZ;
 			this.mirrored = mirrored;
 		}
 	}
@@ -189,7 +194,8 @@ public final class MmtrVehicleAnchors {
 		final Anchor hud = findHud(anchors, effectiveDoor.car);
 		final Anchor seat = findSeat(anchors, cab);
 		if (seat != null) {
-			return new CabView(seat.car, seat.position.x(), seat.position.y(), zSign * seat.position.z(), mirrored);
+			// A seat anchor's normal is the direction of travel; mirroring only flips the Z component.
+			return new CabView(seat.car, seat.position.x(), seat.position.y(), zSign * seat.position.z(), seat.normal.x(), zSign * seat.normal.z(), mirrored);
 		}
 
 		final double sillY = effectiveDoor.heightM > 0.05 ? effectiveDoor.position.y() - effectiveDoor.heightM / 2 : DEFAULT_FLOOR_M;
@@ -198,7 +204,7 @@ public final class MmtrVehicleAnchors {
 
 		// The dashboard normal points at the driver, so walking along its horizontal part moves the
 		// seat backwards into the cab. A face without a usable horizontal normal falls back to +Z.
-		double backX = hud == null ? 0 : hud.normal.x() * zSign;
+		double backX = hud == null ? 0 : hud.normal.x();
 		double backZ = hud == null ? 1 : hud.normal.z() * zSign;
 		final double backLength = Math.sqrt(backX * backX + backZ * backZ);
 		if (backLength < 1.0E-4) {
@@ -209,11 +215,14 @@ public final class MmtrVehicleAnchors {
 			backZ /= backLength;
 		}
 
+		// The driver faces the opposite way the dashboard normal points (it points at them).
 		return new CabView(
 				effectiveDoor.car,
 				baseX + backX * EYE_BACK_M,
 				sillY + FLOOR_TOP_OFFSET_M,
 				baseZ + backZ * EYE_BACK_M,
+				-backX,
+				-backZ,
 				mirrored
 		);
 	}
