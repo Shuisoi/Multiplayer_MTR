@@ -38,8 +38,8 @@ public final class MmtrCabPanel {
 
 	private static final int TEXT_COLOR = 0xFFFFFFFF;
 	private static final int UNIT_COLOR = 0xFFD2E6F7;
-	/** Backing plate behind the readout (near-black, slightly translucent). */
-	private static final int BACKGROUND_COLOR = 0xE6000000;
+	/** Backing plate behind the readout (opaque near-black screen). */
+	private static final int BACKGROUND_COLOR = 0xFF05080C;
 	/**
 	 * Extra roll of the readout inside the dashboard plane, in degrees (dialled in once per model
 	 * convention; 0 means the modelled "right" edge already runs the way text should read).
@@ -142,7 +142,10 @@ public final class MmtrCabPanel {
 			});
 			backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(0, 0, SURFACE_OFFSET_M * 0.5F));
 
-			MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolder, offset) -> {
+			// LIGHT (opaque) and not LIGHT_TRANSLUCENT: the translucent bucket is flushed at the very
+			// end of the frame, after the text has already been drawn, which painted the plate over
+			// the readout. MTR's own signs use the same opaque layer for their backing plates.
+			MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT, (graphicsHolder, offset) -> {
 				backgroundTransformations.transform(graphicsHolder, offset);
 				IDrawing.drawTexture(graphicsHolder, -halfWidth, -halfHeight, 0, halfWidth, halfHeight, 0, Direction.UP, BACKGROUND_COLOR, GraphicsHolder.getDefaultLight());
 				graphicsHolder.pop();
