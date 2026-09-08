@@ -387,11 +387,17 @@ public final class SystemMapServlet extends ServletBase {
 				if (consistWalker != null) {
 					train.addProperty("activeCab", consistWalker.cabs().activeCab().name());
 					train.addProperty("cabManned", consistWalker.cabs().isManned());
-				}
-				final Vehicle.PositionAndTiltAngle head = vehicle.getHeadPositionAndTiltAngle();
-				if (head != null) {
-					train.addProperty("headX", Math.round(head.position().x() * 100.0) / 100.0);
-					train.addProperty("headZ", Math.round(head.position().z() * 100.0) / 100.0);
+					// B7.6: a consist body has no legacy head position - report the leading face, which
+					// is what the map draws the train marker at (and what the driver is looking along).
+					final org.mtr.core.mmtr.MmtrMotionSnapshot consistSnapshot = org.mtr.core.mmtr.MmtrMotionSnapshot.ofConsistWalker(consistWalker);
+					train.addProperty("headX", Math.round(consistSnapshot.frontX * 100.0) / 100.0);
+					train.addProperty("headZ", Math.round(consistSnapshot.frontZ * 100.0) / 100.0);
+				} else {
+					final Vehicle.PositionAndTiltAngle head = vehicle.getHeadPositionAndTiltAngle();
+					if (head != null) {
+						train.addProperty("headX", Math.round(head.position().x() * 100.0) / 100.0);
+						train.addProperty("headZ", Math.round(head.position().z() * 100.0) / 100.0);
+					}
 				}
 				final MmtrMission mission = vehicle.getMmtrMission();
 				if (mission != null) {

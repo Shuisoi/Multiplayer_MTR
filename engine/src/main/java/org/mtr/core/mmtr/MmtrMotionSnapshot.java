@@ -187,6 +187,10 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		out.segmentOffsetM = Math.max(0, walker.frontOffsetM());
 		worldAt(walker, walker.leadingLeg(), walker.frontOffsetM(), true, out);
 		worldAt(walker, walker.trailingLeg(), walker.rearOffsetM(), false, out);
+		// The legacy head fields still describe "the end the train leads with" for consumers that have
+		// not moved to front/rear yet (the web map's train marker, for one).
+		out.headX = out.frontX;
+		out.headZ = out.frontZ;
 		return out;
 	}
 
