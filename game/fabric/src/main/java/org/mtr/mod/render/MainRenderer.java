@@ -105,6 +105,8 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			DynamicTextureCache.instance.tick();
 			// Tick the riding cool down (dismount player if they are no longer riding a vehicle) and store the player offset cache
 			VehicleRidingMovement.tick();
+			// B7.6c: the "press F to enter/leave the cab" interaction.
+			org.mtr.mod.client.MmtrCabInteraction.tick();
 			ArrivalsCacheClient.INSTANCE.tick();
 		}
 
