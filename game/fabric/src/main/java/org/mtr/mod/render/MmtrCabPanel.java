@@ -41,11 +41,15 @@ public final class MmtrCabPanel {
 	/** Backing plate behind the readout (near-black, slightly translucent). */
 	private static final int BACKGROUND_COLOR = 0xE6000000;
 	/**
-	 * Extra roll of the readout inside the dashboard plane, in degrees. The modelled face's own
-	 * "right" edge does not necessarily run the way text should read, so this is dialled in once per
-	 * model convention (90 = text runs across the car instead of along it).
+	 * Extra roll of the readout inside the dashboard plane, in degrees (dialled in once per model
+	 * convention; 0 means the modelled "right" edge already runs the way text should read).
 	 */
-	private static final double PANEL_ROLL_DEGREES = 90;
+	private static final double PANEL_ROLL_DEGREES = 0;
+	/**
+	 * Flip the panel 180 degrees about its own up axis. Used when the modelled face's normal points
+	 * away from the driver, so the readout ends up on the outward side of the dashboard plane.
+	 */
+	private static final boolean PANEL_FLIP_FACING = true;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
@@ -150,7 +154,10 @@ public final class MmtrCabPanel {
 	 * made in the reverse order and a roll about the face normal is applied last.
 	 */
 	private static double[] basisDegrees(Anchor anchor) {
-		final Vector normal = toModelSpace(anchor.fileNormal).normalize();
+		// A 180 degree turn about the face's up axis flips which side the readout faces while keeping
+		// the frame right-handed (so the glyphs stay readable, not mirrored).
+		final double facingSign = PANEL_FLIP_FACING ? -1 : 1;
+		final Vector normal = scaleXZ(toModelSpace(anchor.fileNormal).normalize(), facingSign);
 		final double pitch = Math.asin(Math.max(-1, Math.min(1, normal.y())));
 		final double yaw = Math.atan2(normal.x(), normal.z());
 
@@ -162,7 +169,7 @@ public final class MmtrCabPanel {
 		final double mappedUpY = Math.cos(pitch);
 		final double mappedUpZ = -Math.sin(pitch) * Math.cos(yaw);
 
-		final Vector right = toModelSpace(anchor.fileRight).normalize();
+		final Vector right = scaleXZ(toModelSpace(anchor.fileRight).normalize(), facingSign);
 		final double roll = -Math.atan2(
 				right.x() * mappedUpX + right.y() * mappedUpY + right.z() * mappedUpZ,
 				right.x() * mappedRightX + right.z() * mappedRightZ
@@ -179,6 +186,11 @@ public final class MmtrCabPanel {
 	 */
 	private static Vector toModelSpace(Vector fileVector) {
 		return new Vector(fileVector.x(), -fileVector.y(), -fileVector.z());
+	}
+
+	/** Negates the horizontal components of a direction, i.e. rotates it 180 degrees about Y. */
+	private static Vector scaleXZ(Vector vector, double sign) {
+		return new Vector(vector.x() * sign, vector.y(), vector.z() * sign);
 	}
 
 	/** Index of a consist car inside its own model (a model can be used several times). */
