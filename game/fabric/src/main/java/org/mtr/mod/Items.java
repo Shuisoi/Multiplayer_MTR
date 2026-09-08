@@ -24,6 +24,7 @@ public final class Items {
 		GUARD_KEY = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "guard_key"), itemSettings -> new Item(new ItemDepotDriverKey(itemSettings.maxCount(1), false, true, false, 0xB6FFB6)));
 		CREATIVE_DRIVER_KEY = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "creative_driver_key"), itemSettings -> new Item(new ItemCreativeDriverKey(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
 		BOAT_NODE = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "boat_node"), itemSettings -> new Item(new PlaceableOnWaterItemExtension(Blocks.BOAT_NODE.get(), itemSettings)), CreativeModeTabs.CORE);
+		SIGNAL_BINDER = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "signal_binder"), itemSettings -> new Item(new ItemMmtrSignalBinder(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
 
 		// Doors
 		APG_DOOR = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "apg_door"), itemSettings -> new Item(new ItemPSDAPGBase(ItemPSDAPGBase.EnumPSDAPGItem.PSD_APG_DOOR, ItemPSDAPGBase.EnumPSDAPGType.APG, itemSettings)), CreativeModeTabs.RAILWAY_FACILITIES);
@@ -196,6 +197,7 @@ public final class Items {
 	public static final ItemRegistryObject RAIL_CONNECTOR_TURN_BACK;
 	public static final ItemRegistryObject RAIL_REMOVER;
 	public static final ItemRegistryObject RAILWAY_DASHBOARD;
+	public static final ItemRegistryObject SIGNAL_BINDER;
 	public static final ItemRegistryObject SIGNAL_CONNECTOR_BLACK;
 	public static final ItemRegistryObject SIGNAL_CONNECTOR_BLUE;
 	public static final ItemRegistryObject SIGNAL_CONNECTOR_BROWN;
