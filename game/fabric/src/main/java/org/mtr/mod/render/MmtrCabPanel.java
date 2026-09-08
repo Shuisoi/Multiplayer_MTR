@@ -45,11 +45,6 @@ public final class MmtrCabPanel {
 	 * convention; 0 means the modelled "right" edge already runs the way text should read).
 	 */
 	private static final double PANEL_ROLL_DEGREES = 180;
-	/**
-	 * Flip the panel 180 degrees about its own up axis (the modelled face points away from the
-	 * driver, so the readout has to be drawn on the other side of the plane).
-	 */
-	private static final boolean PANEL_FLIP_FACING = true;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
@@ -92,71 +87,77 @@ public final class MmtrCabPanel {
 
 		// Speed comes from the client's vehicle mirror (same source as the screen HUD).
 		final String speedText = String.valueOf((int) Math.round(vehicle.getSpeed() * 3600));
-		final float numberHeightM = (float) Math.max(0.08, hud.heightM * 0.62);
-		final float unitHeightM = (float) Math.max(0.04, hud.heightM * 0.22);
+		final float numberHeightM = (float) Math.max(0.08, hud.heightM * 0.70);
+		final float unitHeightM = (float) Math.max(0.04, hud.heightM * 0.26);
 		// drawStringWithFont works in font units (a line is IGui.LINE_HEIGHT = 10 units), so the
 		// scale that makes a glyph numberHeightM tall is TEXT_HEIGHT / height.
 		final float numberScale = (float) (IGui.TEXT_HEIGHT / numberHeightM);
 		final float unitScale = (float) (IGui.TEXT_HEIGHT / unitHeightM);
 		final float maxWidthM = (float) (hud.widthM * 0.92);
-		final double[] basisDegrees = basisDegrees(hud);
-
-		final StoredMatrixTransformations storedMatrixTransformations = modelTransformations.copy();
-		storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(toModelSpace(hud.filePosition).x(), toModelSpace(hud.filePosition).y(), toModelSpace(hud.filePosition).z()));
-		storedMatrixTransformations.add(graphicsHolder -> {
-			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
-			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
-			graphicsHolder.rotateZDegrees((float) basisDegrees[2]);
-		});
-		storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(0, 0, SURFACE_OFFSET_M));
-
-		MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
-			storedMatrixTransformations.transform(graphicsHolder, offset);
-			IDrawing.drawStringWithFont(
-					graphicsHolder, speedText,
-					IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER,
-					0, (float) (hud.heightM * 0.12),
-					maxWidthM, (float) (hud.heightM * 0.72),
-					numberScale, TEXT_COLOR, false, GraphicsHolder.getDefaultLight(), null
-			);
-			IDrawing.drawStringWithFont(
-					graphicsHolder, "km/h",
-					IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER,
-					0, (float) (-hud.heightM * 0.30),
-					maxWidthM, (float) (hud.heightM * 0.28),
-					unitScale, UNIT_COLOR, false, GraphicsHolder.getDefaultLight(), null
-			);
-			graphicsHolder.pop();
-		});
-
-		// Black backing plate so the readout stays legible against a bright interior. Drawn as a
-		// white-texture quad in the same face-aligned space, slightly behind the text.
-		final StoredMatrixTransformations backgroundTransformations = modelTransformations.copy();
-		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(toModelSpace(hud.filePosition).x(), toModelSpace(hud.filePosition).y(), toModelSpace(hud.filePosition).z()));
-		backgroundTransformations.add(graphicsHolder -> {
-			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
-			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
-			graphicsHolder.rotateZDegrees((float) basisDegrees[2]);
-		});
-		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(0, 0, SURFACE_OFFSET_M * 0.5F));
 		final float halfWidth = (float) (hud.widthM / 2);
 		final float halfHeight = (float) (hud.heightM / 2);
-		MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolder, offset) -> {
-			backgroundTransformations.transform(graphicsHolder, offset);
-			IDrawing.drawTexture(graphicsHolder, -halfWidth, -halfHeight, 0, halfWidth, halfHeight, 0, Direction.UP, BACKGROUND_COLOR, GraphicsHolder.getDefaultLight());
-			graphicsHolder.pop();
-		});
+		final Vector hudPosition = toModelSpace(hud.filePosition);
+
+		// Draw the readout on BOTH sides of the modelled face, each pushed out along its own normal.
+		// Which side the modelled face's normal points at is easy to get wrong (and a flip also flips
+		// the offset), and a one-sided panel then ends up buried inside the dashboard - invisible from
+		// the driver's seat while still visible from outside. Two back-to-back copies cannot fail.
+		for (final int facingSign : new int[]{1, -1}) {
+			final double[] basisDegrees = basisDegrees(hud, facingSign);
+
+			final StoredMatrixTransformations textTransformations = modelTransformations.copy();
+			textTransformations.add(graphicsHolder -> graphicsHolder.translate(hudPosition.x(), hudPosition.y(), hudPosition.z()));
+			textTransformations.add(graphicsHolder -> {
+				graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
+				graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
+				graphicsHolder.rotateZDegrees((float) basisDegrees[2]);
+			});
+			textTransformations.add(graphicsHolder -> graphicsHolder.translate(0, 0, SURFACE_OFFSET_M));
+
+			MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
+				textTransformations.transform(graphicsHolder, offset);
+				IDrawing.drawStringWithFont(
+						graphicsHolder, speedText,
+						IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER,
+						0, (float) (hud.heightM * 0.12),
+						maxWidthM, (float) (hud.heightM * 0.72),
+						numberScale, TEXT_COLOR, false, GraphicsHolder.getDefaultLight(), null
+				);
+				IDrawing.drawStringWithFont(
+						graphicsHolder, "km/h",
+						IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER,
+						0, (float) (-hud.heightM * 0.30),
+						maxWidthM, (float) (hud.heightM * 0.28),
+						unitScale, UNIT_COLOR, false, GraphicsHolder.getDefaultLight(), null
+				);
+				graphicsHolder.pop();
+			});
+
+			final StoredMatrixTransformations backgroundTransformations = modelTransformations.copy();
+			backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(hudPosition.x(), hudPosition.y(), hudPosition.z()));
+			backgroundTransformations.add(graphicsHolder -> {
+				graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
+				graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
+				graphicsHolder.rotateZDegrees((float) basisDegrees[2]);
+			});
+			backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(0, 0, SURFACE_OFFSET_M * 0.5F));
+
+			MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolder, offset) -> {
+				backgroundTransformations.transform(graphicsHolder, offset);
+				IDrawing.drawTexture(graphicsHolder, -halfWidth, -halfHeight, 0, halfWidth, halfHeight, 0, Direction.UP, BACKGROUND_COLOR, GraphicsHolder.getDefaultLight());
+				graphicsHolder.pop();
+			});
+		}
 	}
 
 	/**
 	 * Euler angles that rotate the text plane (its +X to the right, +Y up, +Z out of the screen) onto
 	 * the anchor's face in the model space. MTR rotates vertices by X first, then Y, so the calls are
 	 * made in the reverse order and a roll about the face normal is applied last.
+	 *
+	 * @param facingSign {@code 1} for the modelled normal, {@code -1} for the opposite side
 	 */
-	private static double[] basisDegrees(Anchor anchor) {
-		// A 180 degree turn about the face's up axis flips which side the readout faces while keeping
-		// the frame right-handed (so the glyphs stay readable, not mirrored).
-		final double facingSign = PANEL_FLIP_FACING ? -1 : 1;
+	private static double[] basisDegrees(Anchor anchor, int facingSign) {
 		final Vector normal = scaleXZ(toModelSpace(anchor.fileNormal).normalize(), facingSign);
 		final double pitch = Math.asin(Math.max(-1, Math.min(1, normal.y())));
 		final double yaw = Math.atan2(normal.x(), normal.z());
