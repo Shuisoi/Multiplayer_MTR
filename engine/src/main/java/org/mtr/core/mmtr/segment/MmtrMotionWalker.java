@@ -273,64 +273,12 @@ public final class MmtrMotionWalker {
 	}
 
 	private @Nullable Rail electAtFork(ObjectArrayList<Rail> forwardRails, ObjectArrayList<Position> forwardEnds) {
-		// P1/P3: continuations are ordered deterministically per approach direction
-		// (straight > left > right > other, cosine inside a kind - MmtrPoint), not by raw cosine
-		// over map iteration. The operator branch (persisted 0/1 - or any leg index for multi-leg
-		// junctions) and the task target are resolved against that ordering, so T junctions pick
-		// left=0/right=1, crossings keep the straight as leg 0 and ordering never flips. An
-		// authoritative junction table (进向表) for (node, via) overrides the geometry entirely.
-		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(ahead);
-		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> declared = data instanceof final org.mtr.core.simulation.Simulator simulator
-			? simulator.mmtrJunctionLegs.get(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId()) : null;
-		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs = neighbors == null ? new ObjectArrayList<>() : org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(ahead, enteredFrom, rail, neighbors, declared);
-		if (legs.isEmpty()) {
-			return null;
-		}
-		Rail chosen = null;
-		final long px = ahead.getX();
-		final long py = ahead.getY();
-		final long pz = ahead.getZ();
-		final String viaHex = rail.getHexId();
-		// Decision order (design R2): manual operator > explicit auto grant > legacy task target >
-		// single continuation; nothing auto-elects a two+-leg fork without one of the first three.
-		if (branches.contains(px, py, pz, viaHex)) {
-			// Manual operator (point-op / legacy preset): highest priority, never auto.
-			final int operator = branches.get(px, py, pz, viaHex);
-			if (operator >= 0 && operator < legs.size()) {
-				chosen = findRailByHex(forwardRails, legs.get(operator).railHex);
-			}
-		}
-		if (chosen == null && pointAuthority != null && pointAuthorityOwner != null) {
-			// Explicit auto grant for THIS owner at its ordered-leg index (authority expiry-checked).
-			if (pointAuthority.isGrantedTo(px, py, pz, viaHex, pointAuthorityOwner)) {
-				final int granted = pointAuthority.grantedLeg(px, py, pz, viaHex);
-				if (granted >= 0 && granted < legs.size()) {
-					chosen = findRailByHex(forwardRails, legs.get(granted).railHex);
-				}
-			}
-		}
-		if (chosen == null && targetRailHex != null) {
-			// Legacy live task target: legacy ops steering hint, used only when no manual/grant holds.
-			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : legs) {
-				if (leg.railHex.equals(targetRailHex)) {
-					chosen = findRailByHex(forwardRails, leg.railHex);
-					break;
-				}
-			}
-		}
-		if (chosen == null && legs.size() == 1) {
-			chosen = findRailByHex(forwardRails, legs.get(0).railHex); // single continuation never needs authority
-		}
-		return chosen;
-	}
-
-	private static Rail findRailByHex(ObjectArrayList<Rail> forwardRails, String hex) {
-		for (final Rail forwardRail : forwardRails) {
-			if (forwardRail.getHexId().equals(hex)) {
-				return forwardRail;
-			}
-		}
-		return null;
+		// P1/P3: the ordered-leg election (operator > auto grant > task target > single continuation)
+		// now lives in MmtrForkElection so the consist-body walker (B3) shares one implementation.
+		// Continuations are ordered deterministically per approach direction (straight > left > right
+		// > other, MmtrPoint); an authoritative junction table (进向表) for (node, via) overrides the
+		// geometry entirely.
+		return org.mtr.core.mmtr.point.MmtrForkElection.elect(data, branches, pointAuthority, pointAuthorityOwner, targetRailHex, ahead, enteredFrom, rail);
 	}
 
 	private @Nullable Position otherEnd(Position at, Rail rail) {
