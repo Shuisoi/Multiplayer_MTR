@@ -9,6 +9,7 @@ import org.mtr.core.data.Rail;
 import org.mtr.core.mmtr.consist.MmtrConsistBody.OccupiedSegment;
 import org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg;
 import org.mtr.core.mmtr.point.MmtrForkElection;
+import org.mtr.core.mmtr.point.MmtrPointAuthority;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 
 /**
@@ -38,10 +39,21 @@ public final class MmtrConsistWalker {
 	private final MmtrConsistBody body;
 	private final MmtrCabState cabs = new MmtrCabState();
 	private @Nullable String targetRailHex;
+	private @Nullable MmtrPointAuthority pointAuthority;
+	private String pointOwner = "";
 	/** Cumulative distance actually consumed, m — monotone for the life of the walker (I3). */
 	private double distanceM;
 	private boolean haltedAtAuthority;
 	private boolean endOfLine;
+	/**
+	 * B5 rear-clear: a point the consist's front has crossed but whose hold must survive until the
+	 * <em>rear</em> has cleared it. Keyed by the cumulative distance at which that happens, so it
+	 * survives spine trimming (arc coordinates shift, cumulative distance does not).
+	 */
+	private final ObjectArrayList<PendingRelease> pendingReleases = new ObjectArrayList<>();
+
+	private record PendingRelease(long x, long y, long z, String viaRailHex, double rearClearsAtDistanceM) {
+	}
 
 	private MmtrConsistWalker(Data data, BranchStore branches, MmtrConsistBody body, @Nullable String targetRailHex) {
 		this.data = data;
@@ -77,7 +89,7 @@ public final class MmtrConsistWalker {
 			bodyLengthM += carLengthM;
 		}
 		while (spineLengthM(spine) < aEndOffsetM + bodyLengthM - EPSILON_M) {
-			final SpineLeg next = electNextSpineLeg(data, store, targetRailHex, spine.get(spine.size() - 1), true);
+			final SpineLeg next = electNextSpineLeg(data, store, targetRailHex, spine.get(spine.size() - 1), true, null, "");
 			if (next == null) {
 				return null;
 			}
@@ -115,6 +127,34 @@ public final class MmtrConsistWalker {
 
 	public void setTargetRailHex(@Nullable String targetRailHex) {
 		this.targetRailHex = targetRailHex;
+	}
+
+	/**
+	 * B5: wire this walker into the turnout authority under {@code owner} (vehicle/mission id). While
+	 * wired, an unset fork with a grant for this owner is crossed at the granted ordered-leg index,
+	 * and a crossed point is released only once the consist's <strong>rear</strong> has cleared it
+	 * (rear-clear) instead of the moment the front crosses — a long consist must not free the point
+	 * while its own tail is still standing on it.
+	 */
+	public void setPointAuthority(@Nullable MmtrPointAuthority authority, @Nullable String owner) {
+		pointAuthority = authority;
+		pointOwner = owner == null ? "" : owner;
+		if (authority == null) {
+			pendingReleases.clear();
+		}
+	}
+
+	/** Points whose front has crossed but whose rear has not yet cleared (diagnostics/tests). */
+	public int pendingReleaseCount() {
+		return pendingReleases.size();
+	}
+
+	/** Terminal teardown: drop every point this owner holds or queued for. */
+	public void releaseAllPoints() {
+		pendingReleases.clear();
+		if (pointAuthority != null && !pointOwner.isEmpty()) {
+			pointAuthority.releaseAll(pointOwner);
+		}
 	}
 
 	public boolean insertKey(MmtrCabState.Cab cab, boolean trainStopped, boolean driverAtCab) {
@@ -189,8 +229,27 @@ public final class MmtrConsistWalker {
 			distanceM += step;
 			remaining -= step;
 			body.trimOutsideLegs();
+			releaseClearedPoints();
 		}
 		return remaining < deltaM - EPSILON_M;
+	}
+
+	/**
+	 * B5 rear-clear: release every crossed point whose rear has now cleared it. The threshold is the
+	 * cumulative distance at the crossing plus the consist length, i.e. exactly when the trailing face
+	 * passes the node.
+	 */
+	private void releaseClearedPoints() {
+		if (pointAuthority == null || pointOwner.isEmpty() || pendingReleases.isEmpty()) {
+			return;
+		}
+		pendingReleases.removeIf(pending -> {
+			if (distanceM + EPSILON_M < pending.rearClearsAtDistanceM()) {
+				return false;
+			}
+			pointAuthority.passed(pending.x(), pending.y(), pending.z(), pending.viaRailHex(), pointOwner);
+			return true;
+		});
 	}
 
 	private double leadingArcM() {
@@ -262,10 +321,10 @@ public final class MmtrConsistWalker {
 	 */
 	private boolean extendSpine(boolean towardB) {
 		final SpineLeg lead = towardB ? body.leg(body.legCount() - 1) : body.leg(0);
-		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB);
+		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB, pointAuthority, pointOwner);
+		final Position node = towardB ? lead.exitNode() : lead.entryNode();
 		if (next == null) {
 			final Rail viaRail = data.railIdMap.get(lead.railHex());
-			final Position node = towardB ? lead.exitNode() : lead.entryNode();
 			if (viaRail != null && MmtrForkElection.hasContinuation(data, node, viaRail)) {
 				haltedAtAuthority = true;
 			} else {
@@ -273,6 +332,9 @@ public final class MmtrConsistWalker {
 			}
 			return false;
 		}
+		// B5: the front has just crossed this node; the point's hold (if we hold it) survives until the
+		// rear clears the node, i.e. after another consist-length of travel.
+		pendingReleases.add(new PendingRelease(node.getX(), node.getY(), node.getZ(), lead.railHex(), distanceM + body.lengthM()));
 		if (towardB) {
 			body.appendLeg(next);
 		} else {
@@ -282,14 +344,14 @@ public final class MmtrConsistWalker {
 	}
 
 	/** Elect the next spine leg beyond {@code lead} in the given direction; {@code null} = halt/end. */
-	private static @Nullable SpineLeg electNextSpineLeg(Data data, BranchStore branches, @Nullable String targetRailHex, SpineLeg lead, boolean towardB) {
+	private static @Nullable SpineLeg electNextSpineLeg(Data data, BranchStore branches, @Nullable String targetRailHex, SpineLeg lead, boolean towardB, @Nullable MmtrPointAuthority authority, String owner) {
 		final Position node = towardB ? lead.exitNode() : lead.entryNode();
 		final Position cameFrom = towardB ? lead.entryNode() : lead.exitNode();
 		final Rail viaRail = data.railIdMap.get(lead.railHex());
 		if (viaRail == null) {
 			return null;
 		}
-		final Rail next = MmtrForkElection.elect(data, branches, null, null, targetRailHex, node, cameFrom, viaRail);
+		final Rail next = MmtrForkElection.elect(data, branches, authority, owner.isEmpty() ? null : owner, targetRailHex, node, cameFrom, viaRail);
 		if (next == null) {
 			return null;
 		}
