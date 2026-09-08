@@ -345,4 +345,34 @@ public final class MmtrMotionWalker {
 		}
 		return null;
 	}
+
+	/**
+	 * MMTR 尽头换向 (terminal flip / 换端): the consist has come to rest at the dead end of its
+	 * current rail (its {@link #aheadNode()} has no continuation - {@link #endOfLine()}), and now
+	 * changes ends: the walker turns around on the SAME rail and will run back toward the entry
+	 * node. A return leg (dead end -&gt; entry) is appended to the motion path so the vehicle keeps
+	 * driving "forward" into the reversed run; {@link #distanceM()} keeps accumulating monotonically
+	 * (the flip itself adds no distance - the return leg re-covers the same rail).
+	 * @return whether the flip was legal (only at a true dead end with the head exactly at the far
+	 * node); {@code false} leaves the walker untouched.
+	 */
+	public boolean flipDirection() {
+		if (ahead == null || enteredFrom == null) {
+			return false;
+		}
+		final double len = rail.railMath.getLength();
+		if (len <= 0 || offsetM < len - 1e-3) {
+			// The head must already rest at (within 1 mm of) the far node of the rail.
+			return false;
+		}
+		final Position deadEnd = ahead;
+		final Position entry = enteredFrom;
+		enteredFrom = deadEnd;
+		ahead = entry;
+		offsetM = 0;
+		endOfLine = false;
+		atTarget = false;
+		legs.add(new PathData(rail, 0L, 0L, 0, deadEnd, entry));
+		return true;
+	}
 }

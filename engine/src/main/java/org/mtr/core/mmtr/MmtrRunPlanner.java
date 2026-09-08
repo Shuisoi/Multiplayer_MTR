@@ -46,6 +46,14 @@ public final class MmtrRunPlanner {
 		/** Cumulative stop distance in the vehicle's walker space (head rests there). */
 		public double stopCumulativeM = -1;
 		public String targetRailHex = "";
+		/**
+		 * 尽头换向 (terminal flip): absolute walker distance at which the run reaches the dead end
+		 * of {@link #flipRailHex} - the vehicle stops there and changes ends (换端) before the plan
+		 * continues to {@link #stopCumulativeM}. {@code -1} = the plan needs no flip.
+		 */
+		public double flipCumulativeM = -1;
+		/** Hex of the dead-end rail the run must flip (换端) at; empty when no flip is planned. */
+		public String flipRailHex = "";
 	}
 
 	private MmtrRunPlanner() {
@@ -56,8 +64,25 @@ public final class MmtrRunPlanner {
 	 * target rail's length from its entry end (1.0 = its far end). Infeasible when the vehicle is not
 	 * in motion mode, the target rail is missing/unreachable, a needed turnout branch is not the
 	 * walker's branch0/1 choice, or the stop lies at/before the vehicle's current position.
+	 *
+	 * <p>When the straight-ahead plan is infeasible (target requires reversing 掉头), a second
+	 * attempt plans the run through a terminal flip (尽头换向): forward to the dead end of the
+	 * single-continuation corridor ahead, change ends there, run back and continue to the target.</p>
 	 */
 	public static Plan planToRail(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
+		final Plan forward = planToRailForward(sim, vehicle, targetRailHex, stopFraction);
+		if (forward.feasible) {
+			return forward;
+		}
+		final Plan viaFlip = planToRailViaDeadEndFlip(sim, vehicle, targetRailHex, stopFraction);
+		if (viaFlip.feasible) {
+			System.out.println("[MMTR-RUN] planned via 尽头换向 flip @" + Math.round(viaFlip.flipCumulativeM) + "m (rail " + viaFlip.flipRailHex + ") - " + forward.reason);
+			return viaFlip;
+		}
+		return forward;
+	}
+
+	private static Plan planToRailForward(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
 		final Plan plan = new Plan();
 		plan.targetRailHex = targetRailHex;
 		final MmtrMotionWalker walker = vehicle.getMmtrMotionWalker();
@@ -185,6 +210,201 @@ public final class MmtrRunPlanner {
 			}
 			// Advance the cumulative distance over the segment nodes[i] -> nodes[i+1].
 			final Position nextNode = plan.nodes.get(i + 1);
+			final Rail segmentRail = nextNode.equals(farEnd) ? target : prev.get(nextNode) == null ? null : prev.get(nextNode).rail;
+			if (segmentRail != null) {
+				cumulM += segmentRail.railMath.getLength();
+			}
+		}
+		plan.feasible = true;
+		plan.reason = "ok";
+		return plan;
+	}
+
+	/**
+	 * 尽头换向 fallback (real-junction 人字 rule): when the direct forward plan is infeasible the
+	 * train can still reach a target behind it by driving to the dead end of the single-continuation
+	 * corridor ahead (a real turnout cannot fold 180° at the crossing - only the near-straight arm
+	 * is drivable), stopping there, changing ends (换端), and running back out. Produces a plan with
+	 * {@code flipCumulativeM}/{@code flipRailHex} set; the vehicle flips once its head rests exactly
+	 * at that dead end. Multi-rail corridors / corridors whose far end is not a dead end are refused
+	 * (v1) with a reason.
+	 */
+	private static Plan planToRailViaDeadEndFlip(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
+		final Plan plan = new Plan();
+		plan.targetRailHex = targetRailHex;
+		final MmtrMotionWalker walker = vehicle.getMmtrMotionWalker();
+		if (walker == null) {
+			plan.reason = "flip: vehicle is not in live Motion-Core mode";
+			return plan;
+		}
+		final Rail target = findRail(sim, targetRailHex);
+		final Rail currentRail = findRail(sim, walker.railHex());
+		if (target == null || currentRail == null) {
+			plan.reason = target == null ? "flip: target rail " + targetRailHex + " not found" : "flip: current rail not found";
+			return plan;
+		}
+		final Position[] targetEnds = railEndpoints(sim, target);
+		if (targetEnds[0] == null || targetEnds[1] == null) {
+			plan.reason = "flip: target rail endpoints not in graph";
+			return plan;
+		}
+		if (currentRail == target) {
+			plan.reason = "flip: target is the rail the vehicle is already on";
+			return plan;
+		}
+		final Position startNode = walker.aheadNode();
+		final Position entryEnd = walker.enteredFromPosition();
+		if (startNode == null || entryEnd == null) {
+			plan.reason = "flip: walker has no ahead/entry node";
+			return plan;
+		}
+		final double nowM = walker.distanceM();
+		final double remM = Math.max(0, currentRail.railMath.getLength() - walker.offsetM());
+
+		// Resolve the flip corridor: where the train is heading, only the near-straight continuation
+		// (legs) is drivable. A single continuation that ends in a true dead end is the flip rail.
+		final Object2ObjectOpenHashMap<Position, Rail> startNeighbors = sim.positionsToRail.get(startNode);
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legsHere = startNeighbors == null || startNeighbors.isEmpty()
+			? new ObjectArrayList<>()
+			: org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(startNode, entryEnd, currentRail, startNeighbors,
+				sim.mmtrJunctionLegs.get(startNode.getX(), startNode.getY(), startNode.getZ(), currentRail.getHexId()));
+		final Rail flipRail;
+		final Position deadEnd;
+		final Position flipEntry;
+		final double toFlipEndM;
+		if (startNeighbors == null || startNeighbors.isEmpty() || legsHere.isEmpty()) {
+			// The current rail itself dead-ends at its far node.
+			flipRail = currentRail;
+			deadEnd = startNode;
+			flipEntry = entryEnd;
+			toFlipEndM = remM;
+		} else if (legsHere.size() == 1) {
+			flipRail = findRail(sim, legsHere.get(0).railHex);
+			if (flipRail == null) {
+				plan.reason = "flip: corridor rail not in graph";
+				return plan;
+			}
+			if (flipRail == target) {
+				plan.reason = "flip: target rail is the flip-corridor rail itself";
+				return plan;
+			}
+			final Position far = otherEndOf(sim, startNode, flipRail);
+			if (far == null) {
+				plan.reason = "flip: corridor rail endpoint missing";
+				return plan;
+			}
+			deadEnd = far;
+			flipEntry = startNode;
+			toFlipEndM = remM + flipRail.railMath.getLength();
+		} else {
+			plan.reason = "flip: the corridor ahead forks (>=2 continuations) before any dead end - set a 进向表 entry or split the run";
+			return plan;
+		}
+
+		// The far end of the flip rail must be a true dead end (nothing else joins it).
+		final Object2ObjectOpenHashMap<Position, Rail> deadNeighbors = sim.positionsToRail.get(deadEnd);
+		final boolean[] onlyFlipRail = {false};
+		if (deadNeighbors != null && !deadNeighbors.isEmpty()) {
+			deadNeighbors.forEach((other, rail) -> onlyFlipRail[0] = rail == flipRail);
+		}
+		if (deadNeighbors == null || deadNeighbors.size() != 1 || !onlyFlipRail[0]) {
+			plan.reason = "flip: the far end of rail " + flipRail.getHexId() + " is not a dead end";
+			return plan;
+		}
+
+		final double flipAtM = nowM + toFlipEndM;
+		final double backM = flipRail.railMath.getLength();
+
+		// After the flip the train runs the flip rail back to its entry and continues from there.
+		// BFS from the entry node to the target, never re-entering the flip rail (it is the dead
+		// end behind the train).
+		final Object2ObjectOpenHashMap<Position, NodeRec> prev = new Object2ObjectOpenHashMap<>();
+		final ObjectArrayList<Position> queue = new ObjectArrayList<>();
+		queue.add(flipEntry);
+		prev.put(flipEntry, new NodeRec(null, null));
+		Position entry = null;
+		while (!queue.isEmpty()) {
+			final Position node = queue.remove(0);
+			if (node.equals(targetEnds[0]) || node.equals(targetEnds[1])) {
+				entry = node;
+				break;
+			}
+			final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(node);
+			if (neighbors == null) {
+				continue;
+			}
+			neighbors.forEach((other, rail) -> {
+				if (rail == flipRail) {
+					return; // the flip rail only leads back into the dead end
+				}
+				if (!prev.containsKey(other)) {
+					prev.put(other, new NodeRec(node, rail));
+					queue.add(other);
+				}
+			});
+		}
+		if (entry == null) {
+			plan.reason = "flip: target rail " + targetRailHex + " is not reachable after the terminal flip";
+			return plan;
+		}
+		final Position farEnd = entry.equals(targetEnds[0]) ? targetEnds[1] : targetEnds[0];
+		Position cursor = entry;
+		final ObjectArrayList<Position> reversed = new ObjectArrayList<>();
+		while (cursor != null) {
+			reversed.add(cursor);
+			final NodeRec rec = prev.get(cursor);
+			cursor = rec == null || rec.from == null ? null : rec.from;
+		}
+		final ObjectArrayList<Position> chain = new ObjectArrayList<>();
+		for (int i = reversed.size() - 1; i >= 0; i--) {
+			chain.add(reversed.get(i));
+		}
+		chain.add(farEnd);
+
+		// Cumulative metres after the flip: back along the flip rail to its entry, then the BFS chain.
+		double plannedM = 0;
+		for (int i = 1; i < chain.size(); i++) {
+			final NodeRec rec = prev.get(chain.get(i));
+			final Rail rail = chain.get(i).equals(farEnd) ? target : rec == null ? null : rec.rail;
+			if (rail == null) {
+				plan.reason = "flip: route reconstruction failed";
+				return plan;
+			}
+			plannedM += rail.railMath.getLength();
+		}
+		final double clamp = Math.max(0.0, Math.min(1.0, stopFraction));
+		final double stopAbs = flipAtM + backM + plannedM - (1.0 - clamp) * target.railMath.getLength();
+		if (stopAbs <= flipAtM + 1e-6) {
+			plan.reason = "flip: stop would lie at or behind the flip point";
+			return plan;
+		}
+		plan.stopCumulativeM = stopAbs;
+		plan.flipCumulativeM = flipAtM;
+		plan.flipRailHex = flipRail.getHexId();
+
+		// Turnout decisions after the flip, in the same ordering the walker will elect at runtime
+		// (approach node of the flip rail = the dead end).
+		double cumulM = backM;
+		for (int i = 0; i + 1 < chain.size(); i++) {
+			final Position node = chain.get(i);
+			final Position approach = i == 0 ? deadEnd : chain.get(i - 1);
+			final Rail incoming = i == 0 ? flipRail : (prev.get(chain.get(i)) == null ? flipRail : prev.get(chain.get(i)).rail);
+			final Rail desired = chain.get(i + 1).equals(farEnd) ? target : prev.get(chain.get(i + 1)) == null ? null : prev.get(chain.get(i + 1)).rail;
+			if (desired == null) {
+				plan.reason = "flip: fork reconstruction failed";
+				return plan;
+			}
+			final ObjectArrayList<Rail> forwards = forwardRails(sim, node, incoming);
+			if (forwards.size() >= 2) {
+				final int op = branchOperator(sim, approach, node, incoming, forwards, desired);
+				if (op < 0) {
+					plan.reason = "flip: after the flip the turnout at the corridor entry requires a branch outside the walker's choice";
+					return plan;
+				}
+				plan.forkOps.add(new String[]{String.valueOf(node.getX()), String.valueOf(node.getY()), String.valueOf(node.getZ()), incoming.getHexId(), String.valueOf(op)});
+				plan.forkMeters.add(flipAtM + cumulM);
+			}
+			final Position nextNode = chain.get(i + 1);
 			final Rail segmentRail = nextNode.equals(farEnd) ? target : prev.get(nextNode) == null ? null : prev.get(nextNode).rail;
 			if (segmentRail != null) {
 				cumulM += segmentRail.railMath.getLength();

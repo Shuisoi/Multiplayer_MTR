@@ -149,6 +149,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** P3: the plan whose en-route forks this vehicle requested through the turnout authority
 	 * (refreshed every tick while the mission run is armed); null when no auto plan is active. */
 	private MmtrRunPlanner.Plan mmtrMotionPlan;
+	/** 尽头换向 (terminal flip): whether the armed plan's dead-end flip already happened. Plans
+	 * without a flip point are born "done"; armMmtrPointRun resets it when the new plan flips. */
+	private boolean mmtrMotionFlipDone = true;
 	/** P3: authority owner key of this vehicle's requests (mission runs), reset on release. */
 	private String mmtrPointOwner = "";
 	/** P3: en-route forks still ahead of this vehicle (not yet crossed); refreshed while armed so a
@@ -401,6 +404,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrMotionStopOpenDoors = false;
 			mmtrMotionArrivalControlSeq = -1;
 			mmtrRunStopTarget = -1;
+			mmtrMotionFlipDone = true;
 			vehicleExtraData.closeDoors();
 			vehicleExtraData.mmtrMarkSyncDirty();
 		}
@@ -466,6 +470,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	public boolean armMmtrPointRun(Simulator simulator, MmtrRunPlanner.Plan plan) {
 		mmtrMotionPlan = plan;
+		mmtrMotionFlipDone = plan.flipRailHex.isEmpty();
 		mmtrPendingPointOps.clear();
 		// Approach locking (英铁): only forks inside the approach window are requested now; forks
 		// further ahead join the pending set via replenishForkRequests as the run approaches them,
@@ -931,7 +936,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// once that stop moves past the head / disappears - auto runs then resume to their target and
 		// manual drivers regain traction.
 		mmtrBlockStopM = computeMmtrBlockStopM(vehiclePositions);
-		final double brakeTargetM = Math.min(stopTargetActive ? mmtrMotionStopTargetM : Double.MAX_VALUE, mmtrBlockStopM);
+		// 尽头换向: while a planned dead-end flip is still pending, the dead end itself is a brake
+		// target (the train must come to rest there before changing ends); it leaves the brake set
+		// the moment the flip has happened, so the run accelerates away toward the real stop target.
+		final double planFlipM = !mmtrMotionFlipDone && mmtrMotionPlan != null && !mmtrMotionPlan.flipRailHex.isEmpty() ? mmtrMotionPlan.flipCumulativeM : Double.MAX_VALUE;
+		final double brakeTargetM = Math.min(Math.min(stopTargetActive ? mmtrMotionStopTargetM : Double.MAX_VALUE, mmtrBlockStopM), planFlipM);
 		if (mmtrBlockedWaiting && brakeTargetM - mmtrMotionWalker.distanceM() > 1e-3) {
 			mmtrBlockedWaiting = false;
 			System.out.println("[MMTR-SIG] occupancy block cleared - " + (stopTargetActive ? "auto resumes to stop target " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0 + "m" : "manual control resumes"));
@@ -1180,6 +1189,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 
+		// 尽头换向 (terminal flip): the armed plan turns the run around at the dead end of the flip
+		// rail. Once the walker has come to rest exactly there (head at the rail's far node), change
+		// ends and let the auto run continue back out to the real stop target.
+		if (!mmtrMotionFlipDone && speed == 0 && mmtrMotionPlan != null && !mmtrMotionPlan.flipRailHex.isEmpty()
+			&& mmtrMotionWalker != null && mmtrMotionWalker.railHex().equals(mmtrMotionPlan.flipRailHex)
+			&& mmtrMotionWalker.distanceM() >= mmtrMotionPlan.flipCumulativeM - 1e-3) {
+			if (mmtrMotionWalker.flipDirection()) {
+				mmtrMotionFlipDone = true;
+				mmtrMotionLegCount = mmtrMotionWalker.legCount();
+				refreshMmtrMotionLegs();
+				mmtrBlockedWaiting = false;
+				System.out.println("[MMTR-DRV] flip 换端 at dead end of " + mmtrMotionWalker.railHex() + " - continuing to stop target " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0 + "m");
+			} else {
+				System.out.println("[MMTR-DRV] planned flip on " + mmtrMotionPlan.flipRailHex + " but the walker is not at its dead end");
+				mmtrMotionFlipDone = true; // do not retry forever; the run is stopped and observable
+			}
+		}
+
 		if (!isClientside) {
 			final int displayPower = mmtrProtection ? MmtrSupport.LEGACY_EMERGENCY_POWER_LEVEL : mmtrBlockedWaiting ? 0 : overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
 			vehicleExtraData.setPowerLevel(displayPower);
@@ -1362,6 +1389,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrMotionStoppedAtTarget = false;
 		mmtrMotionStopOpenDoors = false;
 		mmtrMotionArrivalControlSeq = -1;
+		mmtrMotionPlan = null;
+		mmtrMotionFlipDone = true;
 		if (walker == null) {
 			railProgress = vehicleExtraData.getDefaultPosition();
 			mmtrMotionMirror = false;
