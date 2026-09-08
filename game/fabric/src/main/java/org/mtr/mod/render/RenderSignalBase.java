@@ -91,23 +91,20 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 					}
 				}
 
-				// If filters are empty, render all signal states, including node states
-				// If filters are not empty, only render the signal state of the selected colors, even if the colors don't exist
-				final int occupiedAspect;
-				if (filterColors.isEmpty()) {
-					// MMTR real aspects from the occupancy chain ahead (replaces MTR's
-					// release-cooldown pseudo yellows): red = protected rail occupied, single yellow =
-					// the next rail occupied, double yellow (4-aspect heads only) = two rails ahead
-					// occupied; clear = green.
-					occupiedAspect = switch (aspectState.mmtrChainDepth) {
-						case 1 -> 1;
-						case 2 -> 2;
-						case 3 -> aspects >= 4 ? 3 : 2;
-						default -> 0;
-					};
-				} else {
-					occupiedAspect = entity.getActualAspect(aspectState.occupiedColors.intStream().anyMatch(filterColors::contains), isBackSide);
-				}
+				// MMTR real aspects from the occupancy chain ahead (replaces MTR's release-cooldown
+				// pseudo yellows AND its per-color matching): red = protected rail occupied, single
+				// yellow = the next rail occupied, double yellow (4-aspect heads only) = two rails
+				// ahead occupied; clear = green. The MMTR rail signal colors are unique per rail, so
+				// the legacy 16-colour checkbox filter can never match them - applying it would make
+				// a configured light ignore occupancy entirely. The light ALWAYS renders the MMTR
+				// chain of the rail it protects; the checkbox colours only affect the debug colour
+				// strip above (visible while holding a rail tool).
+				final int occupiedAspect = switch (aspectState.mmtrChainDepth) {
+					case 1 -> 1;
+					case 2 -> 2;
+					case 3 -> aspects >= 4 ? 3 : 2;
+					default -> 0;
+				};
 				render(storedMatrixTransformationsNew, entity, tickDelta, occupiedAspect, isBackSide);
 
 				if (occupiedAspect > 0 && occupiedAspect < aspects) {
