@@ -348,6 +348,12 @@ public final class SystemMapServlet extends ServletBase {
 				train.addProperty("speedKmh", Math.round(vehicle.getSpeed() * 3600000.0) / 1000.0);
 				train.addProperty("railProgressM", Math.round(vehicle.getRailProgress() * 100.0) / 100.0);
 				train.addProperty("doorsOpen", vehicle.vehicleExtraData.getDoorMultiplier() > 0);
+				// B7.7: which cab is manned (B-series consist body) - the ops console shows it.
+				final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker = vehicle.getMmtrConsistWalker();
+				if (consistWalker != null) {
+					train.addProperty("activeCab", consistWalker.cabs().activeCab().name());
+					train.addProperty("cabManned", consistWalker.cabs().isManned());
+				}
 				final Vehicle.PositionAndTiltAngle head = vehicle.getHeadPositionAndTiltAngle();
 				if (head != null) {
 					train.addProperty("headX", Math.round(head.position().x() * 100.0) / 100.0);

@@ -28,6 +28,9 @@ export interface MmtrTrainState {
 	speedKmh: number;
 	railProgressM: number;
 	doorsOpen: boolean;
+	/** B-series consist body: which cab is manned ("CAB_A" / "CAB_B" / "NONE") - omitted for legacy vehicles. */
+	activeCab?: string;
+	cabManned?: boolean;
 	headX?: number;
 	headZ?: number;
 	mission?: MmtrMissionState;

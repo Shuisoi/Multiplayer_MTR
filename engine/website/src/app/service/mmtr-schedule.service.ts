@@ -96,6 +96,7 @@ export class MmtrScheduleService {
 			case "DRIVE_TO_SIDING": return "开往股道";
 			case "STATION_SERVICE": return "停站作业";
 			case "DRIVE_TURNBACK": return "折返掉头";
+			case "CHANGE_ENDS": return "换端";
 			case "DRIVE_TO_CONSIST": return "连挂走行";
 			case "FREIGHT_WORK": return "货运作业";
 			case "COUPLE": return "连挂";

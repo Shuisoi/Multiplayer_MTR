@@ -24,6 +24,9 @@
 					</div>
 					<div class="mmtr-badges">
 						<span class="mmtr-badge" [class.on-route]="train.onRoute" [class.parked]="!train.onRoute">{{ statusLabel(train) }}</span>
+						@if (train.cabManned) {
+							<span class="mmtr-badge">{{ cabLabel(train) }}</span>
+						}
 						@if (train.mission && !train.mission!.failureReason) {
 							<span class="mmtr-badge mission">{{ allActive().includes(train) ? "任务中" : "已结束" }}</span>
 						} @else if (train.mission?.failureReason) {

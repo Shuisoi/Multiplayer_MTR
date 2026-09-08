@@ -138,6 +138,11 @@ export class MmtrOpsPanelComponent {
 		return "库内";
 	}
 
+	/** B7.7: which cab the crew is in — the leading end follows the manned cab. */
+	protected cabLabel(train: MmtrTrainState): string {
+		return train.activeCab === "CAB_A" ? "驾驶室 1（A 端）" : train.activeCab === "CAB_B" ? "驾驶室 2（B 端）" : "无人";
+	}
+
 	/** Dispatch a parked manual train to the terminal of its current path (MANEUVER). */
 	protected dispatch(train: MmtrTrainState) {
 		this.mmtrTrainsService.dispatch(train.vehicleId, "MANEUVER");
