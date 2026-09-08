@@ -47,12 +47,18 @@ public final class MmtrCabPanel {
 	/**
 	 * Called once per visible car by {@link RenderVehicles}.
 	 *
-	 * @param vehicle                  the vehicle being rendered
-	 * @param carNumber                the car index inside the consist
-	 * @param vehicleId                the model ID of that car
-	 * @param carPositionAndRotation   the car transform currently used to draw the model
+	 * <p>The panel is drawn in the same space MTR draws the model and its own display text in (the
+	 * model space with its 180 degree Y flip), using the very transform the car geometry uses, and
+	 * with the anchor's raw OBJ coordinates. That keeps the text upright and on the modelled face
+	 * instead of guessing how MTR's text space is oriented.</p>
+	 *
+	 * @param vehicle                 the vehicle being rendered
+	 * @param carNumber               the car index inside the consist
+	 * @param vehicleId               the model ID of that car
+	 * @param carPositionAndRotation  the car transform, used for the distance gate only
+	 * @param modelTransformations    the stored transform the car model itself is drawn with
 	 */
-	public static void render(VehicleExtension vehicle, int carNumber, String vehicleId, PositionAndRotation carPositionAndRotation) {
+	public static void render(VehicleExtension vehicle, int carNumber, String vehicleId, PositionAndRotation carPositionAndRotation, StoredMatrixTransformations modelTransformations) {
 		final ObjectArrayList<Anchor> anchors = MmtrVehicleAnchors.get(vehicleId);
 		if (anchors.isEmpty()) {
 			if (MISSING_ANCHORS_LOGGED.add(vehicleId)) {
@@ -85,16 +91,8 @@ public final class MmtrCabPanel {
 		final float maxWidthM = (float) (hud.widthM * 0.92);
 		final double[] basisDegrees = basisDegrees(hud);
 
-		final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations(
-				carPositionAndRotation.position.x(),
-				carPositionAndRotation.position.y(),
-				carPositionAndRotation.position.z()
-		);
-		storedMatrixTransformations.add(graphicsHolder -> {
-			graphicsHolder.rotateYRadians((float) carPositionAndRotation.yaw);
-			graphicsHolder.rotateXRadians((float) carPositionAndRotation.pitch);
-		});
-		storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.position.x(), hud.position.y(), hud.position.z()));
+		final StoredMatrixTransformations storedMatrixTransformations = modelTransformations.copy();
+		storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.filePosition.x(), hud.filePosition.y(), hud.filePosition.z()));
 		storedMatrixTransformations.add(graphicsHolder -> {
 			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
 			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
@@ -123,16 +121,8 @@ public final class MmtrCabPanel {
 
 		// Black backing plate so the readout stays legible against a bright interior. Drawn as a
 		// white-texture quad in the same face-aligned space, slightly behind the text.
-		final StoredMatrixTransformations backgroundTransformations = new StoredMatrixTransformations(
-				carPositionAndRotation.position.x(),
-				carPositionAndRotation.position.y(),
-				carPositionAndRotation.position.z()
-		);
-		backgroundTransformations.add(graphicsHolder -> {
-			graphicsHolder.rotateYRadians((float) carPositionAndRotation.yaw);
-			graphicsHolder.rotateXRadians((float) carPositionAndRotation.pitch);
-		});
-		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.position.x(), hud.position.y(), hud.position.z()));
+		final StoredMatrixTransformations backgroundTransformations = modelTransformations.copy();
+		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.filePosition.x(), hud.filePosition.y(), hud.filePosition.z()));
 		backgroundTransformations.add(graphicsHolder -> {
 			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
 			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
@@ -150,11 +140,11 @@ public final class MmtrCabPanel {
 
 	/**
 	 * Euler angles that rotate the text plane (its +X to the right, +Y up, +Z out of the screen) onto
-	 * the anchor's face. MTR rotates vertices by X first, then Y, so the calls are made in the reverse
-	 * order and a roll about the face normal is applied last.
+	 * the anchor's face in the model space. MTR rotates vertices by X first, then Y, so the calls are
+	 * made in the reverse order and a roll about the face normal is applied last.
 	 */
 	private static double[] basisDegrees(Anchor anchor) {
-		final Vector normal = anchor.normal.normalize();
+		final Vector normal = anchor.fileNormal.normalize();
 		final double pitch = Math.asin(Math.max(-1, Math.min(1, normal.y())));
 		final double yaw = Math.atan2(normal.x(), normal.z());
 
@@ -166,7 +156,7 @@ public final class MmtrCabPanel {
 		final double mappedUpY = Math.cos(pitch);
 		final double mappedUpZ = -Math.sin(pitch) * Math.cos(yaw);
 
-		final Vector right = anchor.right.normalize();
+		final Vector right = anchor.fileRight.normalize();
 		final double roll = -Math.atan2(
 				right.x() * mappedUpX + right.y() * mappedUpY + right.z() * mappedUpZ,
 				right.x() * mappedRightX + right.z() * mappedRightZ

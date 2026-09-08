@@ -63,6 +63,10 @@ public final class MmtrVehicleAnchors {
 	/**
 	 * One named face of the model. {@code car} is the car index inside the vehicle model, and
 	 * {@code cab} is the 1-based cab number for cab anchors ({@code 0} when not cab specific).
+	 *
+	 * <p>{@code position/normal/up/right} are in MTR's riding space (used to place the player and to
+	 * aim at a door); {@code filePosition/fileNormal/fileUp/fileRight} are the raw OBJ coordinates,
+	 * which is the space MTR renders the model geometry and its display text in.</p>
 	 */
 	public static final class Anchor {
 
@@ -74,6 +78,10 @@ public final class MmtrVehicleAnchors {
 		public final Vector normal;
 		public final Vector up;
 		public final Vector right;
+		public final Vector filePosition;
+		public final Vector fileNormal;
+		public final Vector fileUp;
+		public final Vector fileRight;
 		public final double widthM;
 		public final double heightM;
 
@@ -82,10 +90,14 @@ public final class MmtrVehicleAnchors {
 			this.kind = kind;
 			this.cab = cab;
 			this.car = car;
-			this.position = position;
-			this.normal = normal;
-			this.up = up;
-			this.right = right;
+			this.filePosition = position;
+			this.fileNormal = normal;
+			this.fileUp = up;
+			this.fileRight = right;
+			this.position = toRidingSpace(position);
+			this.normal = toRidingSpace(normal);
+			this.up = toRidingSpace(up);
+			this.right = toRidingSpace(right);
 			this.widthM = widthM;
 			this.heightM = heightM;
 		}
@@ -195,7 +207,11 @@ public final class MmtrVehicleAnchors {
 		final Anchor seat = findSeat(anchors, cab);
 		if (seat != null) {
 			// A seat anchor's normal is the direction of travel; mirroring only flips the Z component.
-			return new CabView(seat.car, seat.position.x(), seat.position.y(), zSign * seat.position.z(), seat.normal.x(), zSign * seat.normal.z(), mirrored);
+			// The Y is taken from the door sill: MTR snaps the rider onto the floor every tick and
+			// drops them entirely when the placed Y is more than a block above the floor, so a seat
+			// modelled at eye height would make the crew fall out of the train.
+			final double seatFloorY = effectiveDoor.heightM > 0.05 ? effectiveDoor.position.y() - effectiveDoor.heightM / 2 : DEFAULT_FLOOR_M;
+			return new CabView(seat.car, seat.position.x(), seatFloorY + FLOOR_TOP_OFFSET_M, zSign * seat.position.z(), seat.normal.x(), zSign * seat.normal.z(), mirrored);
 		}
 
 		final double sillY = effectiveDoor.heightM > 0.05 ? effectiveDoor.position.y() - effectiveDoor.heightM / 2 : DEFAULT_FLOOR_M;
@@ -276,10 +292,10 @@ public final class MmtrVehicleAnchors {
 						parseKind(getString(object, "kind", "")),
 						getInt(object, "cab", 0),
 						getInt(object, "car", 0),
-						toRidingSpace(getVector(object, "x", "y", "z")),
-						toRidingSpace(getVector(object, "normal")),
-						toRidingSpace(getVector(object, "up")),
-						toRidingSpace(getVector(object, "right")),
+						getVector(object, "x", "y", "z"),
+						getVector(object, "normal"),
+						getVector(object, "up"),
+						getVector(object, "right"),
 						getDouble(object, "widthM", 0),
 						getDouble(object, "heightM", 0)
 				));
