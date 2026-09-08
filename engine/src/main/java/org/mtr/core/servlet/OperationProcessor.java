@@ -72,6 +72,10 @@ public final class OperationProcessor {
 	 */
 	public static final String MMTR_DISPATCH = "mmtr_dispatch";
 	/**
+	 * MMTR: wayside signal command (register a placed light / covered bind to a node-rail).
+	 */
+	public static final String MMTR_SIGNALS = "mmtr_signals";
+	/**
 	 * Press a hall-call button on a lift.
 	 */
 	public static final String PRESS_LIFT = "press_lift";
@@ -169,6 +173,10 @@ public final class OperationProcessor {
 			}
 			case MMTR_DISPATCH -> {
 				new org.mtr.core.operation.MmtrMissionControl(jsonReader).dispatch(simulator);
+				yield null;
+			}
+			case MMTR_SIGNALS -> {
+				new org.mtr.core.operation.MmtrSignalsOp(jsonReader).apply(simulator);
 				yield null;
 			}
 			case PRESS_LIFT -> {
