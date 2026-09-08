@@ -28,6 +28,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 	private double throttleAxis;
 	private double brakeAxis;
 	private boolean emergency;
+	private boolean acknowledge;
 	private @Nullable UUID driverUuid;
 
 	public MmtrDriveControl(long vehicleId, ControlState state) {
@@ -42,6 +43,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		this.throttleAxis = state.getThrottleAxis();
 		this.brakeAxis = state.getBrakeAxis();
 		this.emergency = state.isEmergency();
+		this.acknowledge = state.isAcknowledge();
 		this.driverUuid = driverUuid;
 	}
 
@@ -58,6 +60,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		throttleAxis = readerBase.getDouble("throttleAxis", 0);
 		brakeAxis = readerBase.getDouble("brakeAxis", 0);
 		emergency = readerBase.getBoolean("emergency", false);
+		acknowledge = readerBase.getBoolean("acknowledge", false);
 		final String driverUuidString = readerBase.getString("driverUuid", "");
 		driverUuid = driverUuidString.isEmpty() ? null : UUID.fromString(driverUuidString);
 	}
@@ -65,7 +68,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 	public void apply(Simulator simulator) {
 		final ControlState state = new ControlState()
 			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setReverser(reverser)
-			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency);
+			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency).setAcknowledge(acknowledge);
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
 			if (vehicle.getId() == vehicleId && vehicle.canTakeMmtrControl(driverUuid)) {
 				vehicle.applyMmtrControl(state, driverUuid);
@@ -82,6 +85,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		writerBase.writeDouble("throttleAxis", throttleAxis);
 		writerBase.writeDouble("brakeAxis", brakeAxis);
 		writerBase.writeBoolean("emergency", emergency);
+		writerBase.writeBoolean("acknowledge", acknowledge);
 		writerBase.writeString("driverUuid", driverUuid == null ? "" : driverUuid.toString());
 	}
 }

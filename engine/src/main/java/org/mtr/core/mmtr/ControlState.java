@@ -18,6 +18,8 @@ public final class ControlState {
 	private double brakeAxis;
 	private boolean emergency;
 	private int sourceMask;
+	/** Signal S3 (AWS): 司机确认（acknowledge）按键意图——点按上升沿语义，警示 WARN 时生效。 */
+	private boolean acknowledge;
 
 	public ControlState() {
 	}
@@ -33,6 +35,7 @@ public final class ControlState {
 	public double getBrakeAxis() { return brakeAxis; }
 	public boolean isEmergency() { return emergency; }
 	public int getSourceMask() { return sourceMask; }
+	public boolean isAcknowledge() { return acknowledge; }
 
 	public ControlState setThrottleNotch(int value) { this.throttleNotch = value; return this; }
 	public ControlState setBrakeNotch(int value) { this.brakeNotch = value; return this; }
@@ -41,6 +44,7 @@ public final class ControlState {
 	public ControlState setBrakeAxis(double value) { this.brakeAxis = clamp01(value); return this; }
 	public ControlState setEmergency(boolean value) { this.emergency = value; return this; }
 	public ControlState setSourceMask(int value) { this.sourceMask = value; return this; }
+	public ControlState setAcknowledge(boolean value) { this.acknowledge = value; return this; }
 
 	/** Keyboard relative step: keep the value inside [0, max]. */
 	public void stepThrottle(int delta, int max) { this.throttleNotch = clamp(this.throttleNotch + delta, 0, max); }
@@ -59,6 +63,7 @@ public final class ControlState {
 		copy.brakeAxis = brakeAxis;
 		copy.emergency = emergency;
 		copy.sourceMask = sourceMask;
+		copy.acknowledge = acknowledge;
 		return copy;
 	}
 

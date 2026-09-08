@@ -135,6 +135,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * stop disappears (the rail ahead emptied), resuming auto runs / manual control.
 	 */
 	private boolean mmtrBlockedWaiting;
+	/** Signal S3 (AWS): warning state machine state (MMTR_AWS_*). Only live manual driving on AWS-band rails. */
+	private int mmtrAwsState = MMTR_AWS_NONE;
+	/** Signal S3 (AWS): tick time accumulated while the warning is unacknowledged (window check). */
+	private long mmtrAwsWarnElapsedMillis;
+	/** Signal S3 (AWS): an acknowledgement intent arrived via {@link #applyMmtrControl} (point-press semantics). */
+	private boolean mmtrAwsAckQueued;
 	/** applyMmtrControl() sequence; a changed sequence while stopped at a target = the driver's continue. */
 	private int mmtrControlApplySeq;
 	private int mmtrMotionArrivalControlSeq = -1;
@@ -198,6 +204,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * never boards the occupied rail while the block service still holds it.
 	 */
 	private static final double MMTR_BLOCK_NODE_EPS_M = 0.001;
+	/**
+	 * Signal S3 (AWS): the warning triggers while the train runs inside this lead distance of a
+	 * restricted boundary (occupied rail ahead / a slower rail to be braced for). Real AWS magnets
+	 * sit ~200 yd (183 m) before the signal; the engine keeps the lead small so short test rails
+	 * still exercise the state machine (constant, tunable).
+	 */
+	private static final double MMTR_AWS_TRIGGER_LEAD_M = 75.0;
+	/**
+	 * Signal S3 (AWS): driver acknowledgement window before an unacknowledged warning becomes a
+	 * SPAD emergency stop (UK AWS: 2.5-3 s; counted in vehicle tick time so tests stay clock-free).
+	 */
+	private static final long MMTR_AWS_ACK_WINDOW_MILLIS = 3000;
+	/** Signal S3 (AWS) warning state machine: no warning active. */
+	private static final int MMTR_AWS_NONE = 0;
+	/** Signal S3 (AWS) warning state machine: warning sounding, awaiting driver acknowledgement. */
+	private static final int MMTR_AWS_WARN = 1;
+	/** Signal S3 (AWS) warning state machine: acknowledged - the yellow/black indicator stays up until the restriction clears. */
+	private static final int MMTR_AWS_ACKED = 2;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -858,6 +882,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 
+		// Signal S3 (AWS): live manual driving on AWS-band rails gets the point-style warning state
+		// machine (restricted boundary ahead -> WARN -> acknowledge / SPAD). Runs before the drive
+		// chain so a fresh SPAD suppresses traction this very tick.
+		tickMmtrAwsWarning(millisElapsed);
+
 		vehicleExtraData.closeDoors();
 		final double previousSpeed = speed;
 		final double remainingToBrake = brakeTargetM < Double.MAX_VALUE / 2 ? brakeTargetM - mmtrMotionWalker.distanceM() : Double.MAX_VALUE;
@@ -877,7 +906,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 		double integratedDistance = 0;
 		final boolean airBrakeConsist = mmtrConsistType != null && mmtrConsistType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
-		if (mmtrBlockedWaiting) {
+		if (mmtrProtection) {
+			// Signal S3: motion-mode SPAD execution (unacknowledged AWS warning / overrun). Emergency
+			// brake overrides any traction; the 10 s lock countdown lives in simulate().
+			final double emergencyPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getEmergencyDecelerationMps2()) : vehicleExtraData.getDeceleration() * 2e-3;
+			speed = Math.max(0, speed - emergencyPerMs * millisElapsed);
+			integratedDistance = speed * millisElapsed;
+		} else if (mmtrBlockedWaiting) {
 			// Parked exactly at the occupancy stop point: traction is suppressed (never creep into
 			// the occupied rail); the flag clears at the top of a later tick once the block opens.
 			speed = 0;
@@ -1026,7 +1061,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 
 		if (!isClientside) {
-			final int displayPower = mmtrBlockedWaiting ? 0 : overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
+			final int displayPower = mmtrProtection ? MmtrSupport.LEGACY_EMERGENCY_POWER_LEVEL : mmtrBlockedWaiting ? 0 : overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
 			vehicleExtraData.setPowerLevel(displayPower);
 			vehicleExtraData.setSpeedTarget(speed);
 			updateMmtrSyncFields();
@@ -1083,6 +1118,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		mmtrDriverUuid = driverUuid;
 		mmtrManualOverride = true;
+		// Signal S3 (AWS): a driver acknowledgement press is a one-shot intent - queue it for the
+		// warning state machine and clear it from the stored control state (no repeat semantics).
+		if (mmtrActiveControl.isAcknowledge()) {
+			mmtrAwsAckQueued = true;
+			mmtrActiveControl.setAcknowledge(false);
+		}
 		if (!wasOverride && driverUuid != null) {
 			System.out.println("[MMTR-DRV] driver=" + driverUuid + " engaged override T" + controlState.getThrottleNotch() + " B" + controlState.getBrakeNotch() + " R" + controlState.getReverser());
 		}
@@ -1188,6 +1229,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrProtectionLockRemaining = 0;
 		mmtrBlockStopM = Double.MAX_VALUE;
 		mmtrBlockedWaiting = false;
+		mmtrAwsState = MMTR_AWS_NONE;
+		mmtrAwsWarnElapsedMillis = 0;
+		mmtrAwsAckQueued = false;
 		atoOverride = false;
 		vehicleExtraData.closeDoors();
 		departureIndex = -1;
@@ -1941,6 +1985,86 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	public MmtrRegime getMmtrRegime() {
 		return MmtrRegime.fromSpeedLimitKmh(getMmtrCurrentSpeedLimitKmh());
+	}
+
+	/** Signal S3 (AWS): an unacknowledged point warning is currently active (HUD/display read). */
+	public boolean isMmtrAwsWarningPending() {
+		return mmtrAwsState == MMTR_AWS_WARN;
+	}
+
+	/** Signal S3 (AWS): the last warning was acknowledged - the indicator stays up until the restriction clears. */
+	public boolean isMmtrAwsWarningAcknowledged() {
+		return mmtrAwsState == MMTR_AWS_ACKED;
+	}
+
+	/**
+	 * Signal S3 (AWS): per-tick warning state machine for LIVE manual driving on AWS-band rails
+	 * (≤ 100 km/h; auto runs drive themselves and need no driver warning). A "restricted boundary"
+	 * is an occupied rail ahead (block stop) or a slower rail to be braced for; while the train
+	 * runs inside the trigger lead of that boundary the warning sounds (WARN). The driver's
+	 * acknowledgement (ControlState.acknowledge, one-shot) moves the machine to ACKED - the
+	 * yellow/black indicator stays up until the restriction clears. An unacknowledged warning that
+	 * outlives the window while the train is STILL MOVING becomes a SPAD emergency stop through the
+	 * existing protection channel (10 s lock, mirrored); once parked (occupancy wait) the warning
+	 * holds without re-timing - no punishment for an already-safe stand.
+	 */
+	private void tickMmtrAwsWarning(long millisElapsed) {
+		if (mmtrMotionWalker == null || mmtrAwsState == MMTR_AWS_NONE && !mmtrManualOverride) {
+			return;
+		}
+		final boolean awsBand = getMmtrRegime() == MmtrRegime.AWS;
+		final boolean liveManual = mmtrManualOverride && speed > 1e-9;
+		if (!awsBand || !mmtrManualOverride || mmtrProtection) {
+			if (mmtrAwsState != MMTR_AWS_NONE && !mmtrProtection) {
+				mmtrAwsState = MMTR_AWS_NONE;
+				mmtrAwsWarnElapsedMillis = 0;
+				mmtrAwsAckQueued = false;
+				System.out.println("[MMTR-AWS] warning cleared (band/driver left)");
+			}
+			return;
+		}
+		// Restricted boundary ahead: nearest of the occupancy block stop and a slower next rail.
+		double boundaryM = mmtrBlockStopM < Double.MAX_VALUE / 2 ? mmtrBlockStopM : Double.MAX_VALUE;
+		final Rail nextRailAws = mmtrMotionWalker.peekNextRail();
+		if (nextRailAws != null) {
+			final double nextLimitMms = nextRailAws.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
+			final double currentLimitMms = mmtrCurrentRailLimitPerMs();
+			if (nextLimitMms > 0 && nextLimitMms < currentLimitMms - 1e-12) {
+				boundaryM = Math.min(boundaryM, mmtrMotionWalker.distanceM() + mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM());
+			}
+		}
+		final boolean restricted = boundaryM < Double.MAX_VALUE / 2 && boundaryM - mmtrMotionWalker.distanceM() <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
+		if (!restricted) {
+			if (mmtrAwsState != MMTR_AWS_NONE) {
+				mmtrAwsState = MMTR_AWS_NONE;
+				mmtrAwsWarnElapsedMillis = 0;
+				mmtrAwsAckQueued = false;
+				System.out.println("[MMTR-AWS] warning cleared (restriction gone)");
+			}
+			return;
+		}
+		if (mmtrAwsState == MMTR_AWS_NONE) {
+			mmtrAwsState = MMTR_AWS_WARN;
+			mmtrAwsWarnElapsedMillis = 0;
+			System.out.println("[MMTR-AWS] warning on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.distanceM() * 10.0) / 10.0 + "m - restricted boundary at " + Math.round(boundaryM * 10.0) / 10.0 + "m");
+			return; // the acknowledgement window starts counting on the NEXT tick
+		}
+		if (mmtrAwsAckQueued) {
+			mmtrAwsAckQueued = false;
+			if (mmtrAwsState == MMTR_AWS_WARN) {
+				mmtrAwsState = MMTR_AWS_ACKED;
+				System.out.println("[MMTR-AWS] acknowledged");
+			}
+		} else if (mmtrAwsState == MMTR_AWS_WARN) {
+			mmtrAwsWarnElapsedMillis += millisElapsed;
+			if (mmtrAwsWarnElapsedMillis >= MMTR_AWS_ACK_WINDOW_MILLIS && liveManual) {
+				// Unacknowledged and still moving: SPAD through the existing emergency channel.
+				mmtrProtection = true;
+				mmtrProtectionLockRemaining = MMTR_PROTECTION_LOCK_MS;
+				mmtrAwsState = MMTR_AWS_ACKED;
+				System.out.println("[MMTR-AWS] unacknowledged warning - SPAD emergency engaged");
+			}
+		}
 	}
 
 	/**
