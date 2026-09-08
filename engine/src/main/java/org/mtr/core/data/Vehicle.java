@@ -1444,6 +1444,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrPipePressure = airBrakeController.getPipePressure();
 			mmtrBrakeCylinderPressure = airBrakeController.getBrakeCylinderPressure();
 		}
+		// Signal display fields (HUD): AWS warning state, occupancy hold and the current per-rail
+		// directional speed limit follow the live internal state into the mirror payload.
+		mmtrAwsWarningPending = mmtrAwsState == MMTR_AWS_WARN;
+		mmtrAwsWarningAcknowledged = mmtrAwsState == MMTR_AWS_ACKED;
+		mmtrBlockHeld = mmtrBlockedWaiting;
+		mmtrSpeedLimitKmh = Math.round(mmtrCurrentRailLimitPerMs() * 3600.0);
 	}
 
 	/** Server-side: (re)evaluate overrun/SPAD protection ahead of the {@code stoppingPoint}. */
@@ -1470,6 +1476,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public int getMmtrReverserFromSync() { return (int) mmtrReverser; }
 	public boolean isMmtrProtectionFromSync() { return mmtrProtection; }
 	public boolean isMmtrEmergencyFromSync() { return mmtrEmergency; }
+	/** Signal S3 (AWS): an unacknowledged point warning is mirrored (client HUD). */
+	public boolean isMmtrAwsWarningPendingFromSync() { return mmtrAwsWarningPending; }
+	/** Signal S3 (AWS): the acknowledged-warning indicator state is mirrored (client HUD). */
+	public boolean isMmtrAwsWarningAcknowledgedFromSync() { return mmtrAwsWarningAcknowledged; }
+	/** Signal S1: the vehicle is parked at an occupancy block stop (client HUD). */
+	public boolean isMmtrBlockHeldFromSync() { return mmtrBlockHeld; }
+	/** Signal S2: current per-rail directional speed limit in km/h, mirrored (client HUD); 0 = legacy run. */
+	public long getMmtrSpeedLimitKmhFromSync() { return mmtrSpeedLimitKmh; }
 
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
 		// Tracks the distance

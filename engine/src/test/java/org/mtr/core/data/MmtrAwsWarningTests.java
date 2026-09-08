@@ -147,6 +147,10 @@ public final class MmtrAwsWarningTests {
 		assertTrue(warnTicks >= 3, "the warning window (3 s) elapsed before the SPAD, ticks=" + warnTicks);
 		assertFalse(v.isMmtrAwsWarningPending(), "SPAD resolves the unacknowledged warning");
 		assertTrue(v.isMmtrAwsWarningAcknowledged(), "state machine lands in acknowledged (post-SPAD)");
+		// Mirror fields carry the same state to the client HUD.
+		assertFalse(v.isMmtrAwsWarningPendingFromSync(), "mirror pending follows the internal state");
+		assertTrue(v.isMmtrAwsWarningAcknowledgedFromSync(), "mirror acknowledged follows the internal state");
+		assertEquals(40, v.getMmtrSpeedLimitKmhFromSync(), "mirror carries the current rail limit (km/h)");
 		assertTrue(n.aRail.getHexId().equals(v.getMmtrMotionWalker().railHex()) || n.yRail.getHexId().equals(v.getMmtrMotionWalker().railHex()),
 			"SPAD happened before the train could board the occupied rail B, rail=" + v.getMmtrMotionWalker().railHex());
 	}
@@ -174,13 +178,18 @@ public final class MmtrAwsWarningTests {
 			if (v.isMmtrProtectionFromSync()) {
 				spad = true;
 			}
-			stoppedAtBoundary = acked && v.getSpeed() == 0 && n.aRail.getHexId().equals(v.getMmtrMotionWalker().railHex()) && v.getRailProgress() > 140.0;
+			// The occupancy-hold state (mirrored) marks the true boundary stand: the train rests at
+			// the A/B node only once the S1 waiting state engaged (rest may precede it by one tick).
+			stoppedAtBoundary = acked && v.isMmtrBlockHeldFromSync() && v.getSpeed() == 0 && n.aRail.getHexId().equals(v.getMmtrMotionWalker().railHex()) && v.getRailProgress() > 140.0;
 		}
 		assertTrue(acked, "warning engaged and was acknowledged");
 		assertFalse(spad, "acknowledged warning never SPADs");
 		assertTrue(v.isMmtrAwsWarningAcknowledged(), "indicator stays acknowledged");
+		assertTrue(v.isMmtrAwsWarningAcknowledgedFromSync(), "mirror acknowledged follows the internal state");
+		assertEquals(40, v.getMmtrSpeedLimitKmhFromSync(), "mirror carries the AWS rail limit");
 		assertTrue(stoppedAtBoundary, "the S1 occupancy stop holds the train at the A/B node, rail=" + v.getMmtrMotionWalker().railHex() + " progress=" + v.getRailProgress());
 		assertEquals(n.aRail.getHexId(), v.getMmtrMotionWalker().railHex(), "never boarded the occupied B rail");
+		assertTrue(v.isMmtrBlockHeldFromSync(), "mirror carries the occupancy-hold state for the HUD");
 		// While the restriction persists, the acknowledged warning does not re-time into another SPAD.
 		for (int i = 0; i < 30; i++) {
 			n.tickWithOccupiedB();

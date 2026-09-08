@@ -164,6 +164,22 @@
 		"mmtrRunStopTarget": {
 			"type": "number",
 			"default": -1
+		},
+		"mmtrAwsWarningPending": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrAwsWarningAcknowledged": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrBlockHeld": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrSpeedLimitKmh": {
+			"type": "integer",
+			"default": 0
 		}
 	}
 }
