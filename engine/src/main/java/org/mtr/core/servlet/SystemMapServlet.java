@@ -210,7 +210,14 @@ public final class SystemMapServlet extends ServletBase {
 					final String op = jsonReader.getString("op", "set");
 					final String target = jsonReader.getString("target", "");
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
-					result.addProperty("ok", simulator.mmtrSignalOp((int) x, (int) y, (int) z, angle, aspects, op, target));
+					if (op.equals("set") && target.isEmpty() && jsonReader.has("nodeX") && jsonReader.has("nodeY") && jsonReader.has("nodeZ")) {
+						// Game-side bind tool upload: infer the read rail from the clicked node +
+						// the light facing (covered bind), register BOUND.
+						result.addProperty("ok", simulator.mmtrSignalBindAtNode((int) x, (int) y, (int) z, angle, aspects,
+							jsonReader.getLong("nodeX", 0), jsonReader.getLong("nodeY", 0), jsonReader.getLong("nodeZ", 0)));
+					} else {
+						result.addProperty("ok", simulator.mmtrSignalOp((int) x, (int) y, (int) z, angle, aspects, op, target));
+					}
 					yield result;
 				}
 				case "mmtr-point-op" -> {

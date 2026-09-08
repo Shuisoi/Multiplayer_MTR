@@ -44,6 +44,18 @@ import java.util.function.Function;
 public class Main {
 
 	private final ObjectImmutableList<Simulator> simulators;
+
+	/** The simulator of the given world/dimension id, or null (game-side executor lookup). */
+	@org.jspecify.annotations.Nullable
+	public Simulator getSimulator(String dimensionId) {
+		for (final Simulator simulator : simulators) {
+			if (simulator.dimension.equals(dimensionId)) {
+				return simulator;
+			}
+		}
+		return null;
+	}
+
 	@Nullable
 	private final Webserver webserver;
 	@Nullable

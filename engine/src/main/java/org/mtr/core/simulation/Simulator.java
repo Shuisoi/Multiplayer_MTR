@@ -663,6 +663,39 @@ public class Simulator extends Data implements Utilities {
 		return changed;
 	}
 
+	/**
+	 * Covered bind helper (游戏侧工具/扫描上行): given the light position/angle and a clicked
+	 * rail node, choose the rail leaving that node whose heading best matches the light's facing
+	 * (MTR angle semantics: 0=E, 90=S(+z); the light faces the rail it reads with a 90 degree
+	 * offset applied by the renderer), then register the light BOUND to that rail.
+	 * @return whether a matching rail was found and the light registered
+	 */
+	public boolean mmtrSignalBindAtNode(int x, int y, int z, float angle, int aspects, long nodeX, long nodeY, long nodeZ) {
+		final org.mtr.core.data.Position node = new org.mtr.core.data.Position(nodeX, nodeY, nodeZ);
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<org.mtr.core.data.Position, org.mtr.core.data.Rail> neighbours = positionsToRail.get(node);
+		if (neighbours == null || neighbours.isEmpty()) {
+			return false;
+		}
+		final double want = Math.toRadians(angle + 90.0);
+		final double[] best = {Double.MAX_VALUE};
+		final String[] bestHex = {null};
+		neighbours.forEach((far, rail) -> {
+			final double bearing = Math.atan2(far.getZ() - node.getZ(), far.getX() - node.getX());
+			double diff = bearing - want;
+			while (diff > Math.PI) {
+				diff -= 2 * Math.PI;
+			}
+			while (diff < -Math.PI) {
+				diff += 2 * Math.PI;
+			}
+			if (Math.abs(diff) < best[0]) {
+				best[0] = Math.abs(diff);
+				bestHex[0] = rail.getHexId();
+			}
+		});
+		return bestHex[0] != null && mmtrSignalOp(x, y, z, angle, aspects, "set", bestHex[0]);
+	}
+
 	public org.mtr.core.mmtr.point.MmtrPointAuthority.Result mmtrPointRequest(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis) {
 		final org.mtr.core.mmtr.point.MmtrPointAuthority.Result result = mmtrPointAuthority.request(x, y, z, viaRailHex, owner, leg, untilMillis);
 		System.out.println("[MMTR-PT] req " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex + " leg " + leg + " -> " + result);
