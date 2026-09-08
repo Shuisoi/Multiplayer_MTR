@@ -32,6 +32,19 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 	public boolean doorsOpen;
 	public String platformId = "";
 	public String mission = "";
+	/**
+	 * B4 (consist body): the two ends of the physical train in world space. A client must place the
+	 * cars along rear -&gt; front and never rotate the model: 换端 only relabels which end is the
+	 * front, it does not move either end.
+	 */
+	public double frontX;
+	public double frontZ;
+	public double rearX;
+	public double rearZ;
+	/** Which cab the driver is in ("CAB_A" / "CAB_B" / "NONE"); decides the direction of travel. */
+	public String activeCab = "NONE";
+	/** Whether a key is inserted at all (an unmanned consist cannot move). */
+	public boolean cabManned;
 
 	public MmtrMotionSnapshot() {
 	}
@@ -134,6 +147,50 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		return out;
 	}
 
+	/**
+	 * B4: build the decoupled motion snapshot from the consist-body walker. Unlike
+	 * {@link #ofWalker(MmtrMotionWalker)} — which reports the single point that made 换端 look like a
+	 * 180° turn — this carries both physical ends plus the manned cab, and the segment field is the
+	 * body's own segment with a truthful {@code segmentReversed}.
+	 */
+	public static MmtrMotionSnapshot ofConsistWalker(org.mtr.core.mmtr.consist.MmtrConsistWalker walker) {
+		final MmtrMotionSnapshot out = new MmtrMotionSnapshot();
+		out.activeCab = walker.cabs().activeCab().name();
+		out.cabManned = walker.cabs().isManned();
+		out.moving = walker.cabs().isManned() && !walker.haltedAtAuthority() && !walker.endOfLine();
+		out.cars = walker.body().carCount();
+		out.segmentLengthM = walker.body().spineLengthM();
+		final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg frontLeg = walker.spineLegAtArcM(walker.frontArcM());
+		if (frontLeg != null) {
+			out.segStartX = frontLeg.entryNode().getX();
+			out.segStartZ = frontLeg.entryNode().getZ();
+			out.segEndX = frontLeg.exitNode().getX();
+			out.segEndZ = frontLeg.exitNode().getZ();
+			out.segmentReversed = frontLeg.entryNode().compareTo(frontLeg.exitNode()) > 0;
+			out.segmentOffsetM = Math.max(0, walker.offsetAtArcM(walker.frontArcM()));
+		}
+		worldAt(walker, walker.frontArcM(), true, out);
+		worldAt(walker, walker.rearArcM(), false, out);
+		return out;
+	}
+
+	private static void worldAt(org.mtr.core.mmtr.consist.MmtrConsistWalker walker, double arcM, boolean front, MmtrMotionSnapshot out) {
+		final org.mtr.core.data.Rail rail = walker.railAtArcM(arcM);
+		final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg leg = walker.spineLegAtArcM(arcM);
+		if (rail == null || leg == null) {
+			return;
+		}
+		final boolean reverse = leg.entryNode().compareTo(leg.exitNode()) > 0;
+		final org.mtr.core.tool.Vector vector = rail.railMath.getPosition(walker.offsetAtArcM(arcM), reverse);
+		if (front) {
+			out.frontX = vector.x();
+			out.frontZ = vector.z();
+		} else {
+			out.rearX = vector.x();
+			out.rearZ = vector.z();
+		}
+	}
+
 	@Override
 	public void updateData(ReaderBase readerBase) {
 		vehicleId = readerBase.getString("vehicleId", "");
@@ -155,6 +212,12 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		doorsOpen = readerBase.getBoolean("doorsOpen", false);
 		platformId = readerBase.getString("platformId", "");
 		mission = readerBase.getString("mission", "");
+		frontX = readerBase.getDouble("frontX", 0);
+		frontZ = readerBase.getDouble("frontZ", 0);
+		rearX = readerBase.getDouble("rearX", 0);
+		rearZ = readerBase.getDouble("rearZ", 0);
+		activeCab = readerBase.getString("activeCab", "NONE");
+		cabManned = readerBase.getBoolean("cabManned", false);
 	}
 
 	@Override
@@ -178,5 +241,11 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		writerBase.writeBoolean("doorsOpen", doorsOpen);
 		writerBase.writeString("platformId", platformId);
 		writerBase.writeString("mission", mission);
+		writerBase.writeDouble("frontX", frontX);
+		writerBase.writeDouble("frontZ", frontZ);
+		writerBase.writeDouble("rearX", rearX);
+		writerBase.writeDouble("rearZ", rearZ);
+		writerBase.writeString("activeCab", activeCab);
+		writerBase.writeBoolean("cabManned", cabManned);
 	}
 }

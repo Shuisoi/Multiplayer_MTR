@@ -201,6 +201,50 @@ public final class MmtrConsistWalker {
 		return cabs.travelsToward(MmtrCabState.End.B) ? body.aEndArcM() : body.bEndArcM();
 	}
 
+	/** Arc position of the leading (front) face; equals the A end when no cab is manned. */
+	public double frontArcM() {
+		return leadingArcM();
+	}
+
+	/** Arc position of the trailing (rear) face; equals the B end when no cab is manned. */
+	public double rearArcM() {
+		return trailingArcM();
+	}
+
+	/** The rail containing {@code arcM} of the body spine, or {@code null} when outside it. */
+	public @Nullable Rail railAtArcM(double arcM) {
+		final SpineLeg leg = body.legAtArcM(arcM);
+		return leg == null ? null : data.railIdMap.get(leg.railHex());
+	}
+
+	/** The spine leg containing {@code arcM}. */
+	public @Nullable SpineLeg spineLegAtArcM(double arcM) {
+		return body.legAtArcM(arcM);
+	}
+
+	/** Offset of {@code arcM} within its spine leg, measured from the leg's entry node. */
+	public double offsetAtArcM(double arcM) {
+		return body.legOffsetM(arcM);
+	}
+
+	/**
+	 * The body spine as engine path data, always in A-end -&gt; B-end order. This is the payload a
+	 * client mirror should replay: 换端 does not change it at all, which is what stops the rendered
+	 * consist from flipping 180° when the crew changes ends.
+	 */
+	public ObjectArrayList<org.mtr.core.data.PathData> buildPathData() {
+		final ObjectArrayList<org.mtr.core.data.PathData> out = new ObjectArrayList<>();
+		for (int i = 0; i < body.legCount(); i++) {
+			final SpineLeg leg = body.leg(i);
+			final Rail rail = data.railIdMap.get(leg.railHex());
+			if (rail != null) {
+				out.add(new org.mtr.core.data.PathData(rail, 0L, 0L, 0, leg.entryNode(), leg.exitNode()));
+			}
+		}
+		org.mtr.core.path.SidingPathFinder.generatePathDataDistances(out, 0);
+		return out;
+	}
+
 	private SpineLeg leadingLeg() {
 		final SpineLeg leg = body.legAtArcM(leadingArcM());
 		return leg == null ? body.leg(cabs.travelsToward(MmtrCabState.End.B) ? body.legCount() - 1 : 0) : leg;
