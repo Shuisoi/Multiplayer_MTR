@@ -79,16 +79,16 @@ public final class MmtrConsistSignalViewTests {
 		final TwoBands bands = new TwoBands();
 		final MmtrConsistWalker walker = spanningWalker(bands);
 		walker.insertKey(Cab.CAB_A, true, true);
-		// CAB_A faces A->B: the B end leads, i.e. the 160 km/h rail -> LZB.
-		assertEquals(bands.r1.getHexId(), MmtrConsistSignalView.mannedCabRailHex(walker));
-		assertEquals(160, MmtrConsistSignalView.mannedCabSpeedLimitKmh(walker), 1e-6);
-		assertEquals(MmtrRegime.LZB, MmtrConsistSignalView.regime(walker));
-
-		// The crew changes ends: the A end leads, so the 80 km/h rail is now the cab's rail -> AWS.
-		assertTrue(walker.changeEnds(true));
+		// CAB_A leads with the A end, i.e. the 80 km/h rail -> AWS.
 		assertEquals(bands.r0.getHexId(), MmtrConsistSignalView.mannedCabRailHex(walker));
 		assertEquals(80, MmtrConsistSignalView.mannedCabSpeedLimitKmh(walker), 1e-6);
 		assertEquals(MmtrRegime.AWS, MmtrConsistSignalView.regime(walker));
+
+		// The crew changes ends: the B end leads, so the 160 km/h rail is now the cab's rail -> LZB.
+		assertTrue(walker.changeEnds(true));
+		assertEquals(bands.r1.getHexId(), MmtrConsistSignalView.mannedCabRailHex(walker));
+		assertEquals(160, MmtrConsistSignalView.mannedCabSpeedLimitKmh(walker), 1e-6);
+		assertEquals(MmtrRegime.LZB, MmtrConsistSignalView.regime(walker));
 	}
 
 	@Test

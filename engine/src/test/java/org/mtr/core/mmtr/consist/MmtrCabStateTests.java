@@ -65,18 +65,18 @@ public final class MmtrCabStateTests {
 	@Test
 	public void theMannedCabDecidesWhichEndLeads() {
 		final MmtrCabState state = new MmtrCabState();
-		// CAB_A sits at the A end and faces A -> B, so it drives toward the B end: B leads.
+		// CAB_A sits at the A end and its driver faces outward past that end, so A leads.
 		assertTrue(state.insertKey(Cab.CAB_A, true, true));
-		assertEquals(End.B, state.leadingEnd());
-		assertEquals(End.A, state.trailingEnd());
-		assertTrue(state.travelsToward(End.B));
-		assertFalse(state.travelsToward(End.A));
-		// After 换端 the other cab leads, and nothing else about the consist changed.
-		assertTrue(state.changeEnds(true));
 		assertEquals(End.A, state.leadingEnd());
 		assertEquals(End.B, state.trailingEnd());
 		assertTrue(state.travelsToward(End.A));
-		assertEquals(Cab.CAB_B, MmtrCabState.cabFor(End.A));
-		assertEquals(Cab.CAB_A, MmtrCabState.cabFor(End.B));
+		assertFalse(state.travelsToward(End.B));
+		// After 换端 the other cab leads, and nothing else about the consist changed.
+		assertTrue(state.changeEnds(true));
+		assertEquals(End.B, state.leadingEnd());
+		assertEquals(End.A, state.trailingEnd());
+		assertTrue(state.travelsToward(End.B));
+		assertEquals(Cab.CAB_A, MmtrCabState.cabFor(End.A));
+		assertEquals(Cab.CAB_B, MmtrCabState.cabFor(End.B));
 	}
 }

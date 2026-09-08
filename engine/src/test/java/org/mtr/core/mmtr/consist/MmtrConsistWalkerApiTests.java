@@ -83,7 +83,7 @@ public final class MmtrConsistWalkerApiTests {
 	private static MmtrConsistWalker onLine(Line line, double aEndOffsetM) {
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(line.sim, new BranchStore(), line.r0, line.nA, aEndOffsetM, new double[]{4}, null);
 		assertNotNull(walker);
-		assertTrue(walker.insertKey(Cab.CAB_A, true, true));
+		walker.insertKey(Cab.CAB_B, true, true);
 		return walker;
 	}
 
@@ -103,7 +103,7 @@ public final class MmtrConsistWalkerApiTests {
 		final Fork fork = new Fork();
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(fork.sim, new BranchStore(), fork.rIn, fork.nIn, fork.lIn() - 8, new double[]{4}, null);
 		assertNotNull(walker);
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		assertNull(walker.peekNextRail(), "an unset fork predicts no continuation");
 		assertTrue(walker.advance(100));
 		assertTrue(walker.haltedAtAuthority(), "and the real advance halts exactly as predicted");
@@ -115,7 +115,7 @@ public final class MmtrConsistWalkerApiTests {
 		final MmtrPointAuthority authority = new MmtrPointAuthority(() -> 0L);
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(fork.sim, new BranchStore(), fork.rIn, fork.nIn, fork.lIn() - 8, new double[]{4}, null);
 		assertNotNull(walker);
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		walker.setPointAuthority(authority, OWNER);
 		assertEquals(MmtrPointAuthority.Result.GRANTED, authority.request(fork.node0.getX(), fork.node0.getY(), fork.node0.getZ(), fork.rIn.getHexId(), OWNER, 1, WINDOW));
 		assertEquals(fork.rDiverge.getHexId(), walker.peekNextRail().getHexId(), "the look-ahead reads the granted leg");
@@ -129,7 +129,7 @@ public final class MmtrConsistWalkerApiTests {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(line.sim, new BranchStore(), line.r0, line.nA, 2, new double[]{4}, line.r2.getHexId());
 		assertNotNull(walker);
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		assertFalse(walker.atTarget());
 		assertTrue(walker.advance(1000));
 		assertTrue(walker.atTarget(), "the run rests once the leading end boards the target rail");
@@ -144,7 +144,7 @@ public final class MmtrConsistWalkerApiTests {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(line.sim, new BranchStore(), line.r0, line.nA, 2, new double[]{4}, line.r2.getHexId());
 		assertNotNull(walker);
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		assertTrue(walker.advance(1000));
 		assertTrue(walker.atTarget());
 		final double arrived = walker.distanceM();
@@ -160,7 +160,7 @@ public final class MmtrConsistWalkerApiTests {
 		final MmtrConsistWalker walker = onLine(line, 2);
 		walker.advance(1);
 		final ObjectArrayList<org.mtr.core.data.PathData> legs = walker.buildMirrorLegs();
-		assertFalse(legs.get(0).reversePositions, "CAB_A drives toward B, so the tail (A end) starts the path in rail order");
+		assertFalse(legs.get(0).reversePositions, "CAB_B drives toward B, so the tail (A end) starts the path in rail order");
 		final org.mtr.core.data.PathData headLeg = legs.get(legs.size() - 1);
 		assertEquals(walker.distanceM(), headLeg.getStartDistance() + walker.frontOffsetM(), 1e-6, "the leading face anchors at railProgress");
 
@@ -168,7 +168,7 @@ public final class MmtrConsistWalkerApiTests {
 		assertTrue(walker.changeEnds(true));
 		final ObjectArrayList<org.mtr.core.data.PathData> flipped = walker.buildMirrorLegs();
 		assertEquals(legs.size(), flipped.size());
-		assertTrue(flipped.get(0).reversePositions, "now the B end is the tail, so the path runs against the rails");
+		assertTrue(flipped.get(0).reversePositions, "now the A end leads, so the B end is the tail and the path runs against the rails");
 		final org.mtr.core.data.PathData flippedHead = flipped.get(flipped.size() - 1);
 		assertEquals(walker.distanceM(), flippedHead.getStartDistance() + walker.mirrorHeadOffsetM(), 1e-6);
 		assertEquals(walker.body().spineLengthM() - walker.body().aEndArcM(), walker.mirrorHeadArcM(), 1e-6, "with the A end leading, the head arc is measured from the B side");

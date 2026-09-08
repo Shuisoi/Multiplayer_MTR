@@ -30,9 +30,9 @@ public final class MmtrCabState {
 	public enum Cab {
 		/** No cab manned (no key inserted). */
 		NONE,
-		/** The cab at the consist's A end; it faces A -&gt; B, so a manned CAB_A drives toward the B end. */
+		/** The cab at the consist's A end; its driver faces outward past the A end, so it leads with A. */
 		CAB_A,
-		/** The cab at the consist's B end; it faces B -&gt; A, so a manned CAB_B drives toward the A end. */
+		/** The cab at the consist's B end; its driver faces outward past the B end, so it leads with B. */
 		CAB_B
 	}
 
@@ -86,11 +86,19 @@ public final class MmtrCabState {
 		return true;
 	}
 
-	/** The consist end that leads (the front) while the current cab is manned; {@code null} = unmanned. */
+	/**
+	 * The consist end that leads (the front) while the current cab is manned; {@code null} = unmanned.
+	 *
+	 * <p>Physical rule: a cab sits at one <em>end</em> of the consist and its driver looks
+	 * <strong>outward</strong> past that end, so driving from it makes that same end lead. The A-end
+	 * cab therefore leads with the A end, the B-end cab with the B end. (An earlier version had this
+	 * inverted, which made a driver in the A-end cab move the train tail-first — exactly the reverse
+	 * running the project forbids.)</p>
+	 */
 	public @Nullable End leadingEnd() {
 		return switch (activeCab) {
-			case CAB_A -> End.B;
-			case CAB_B -> End.A;
+			case CAB_A -> End.A;
+			case CAB_B -> End.B;
 			case NONE -> null;
 		};
 	}
@@ -98,8 +106,8 @@ public final class MmtrCabState {
 	/** The consist end that trails (the rear) while the current cab is manned; {@code null} = unmanned. */
 	public @Nullable End trailingEnd() {
 		return switch (activeCab) {
-			case CAB_A -> End.A;
-			case CAB_B -> End.B;
+			case CAB_A -> End.B;
+			case CAB_B -> End.A;
 			case NONE -> null;
 		};
 	}
@@ -111,6 +119,6 @@ public final class MmtrCabState {
 
 	/** The cab that must be manned to drive toward {@code end}. */
 	public static Cab cabFor(End end) {
-		return end == End.B ? Cab.CAB_A : Cab.CAB_B;
+		return end == End.A ? Cab.CAB_A : Cab.CAB_B;
 	}
 }

@@ -59,7 +59,7 @@ public final class MmtrConsistRearClearTests {
 		MmtrConsistWalker walkerWithAuthority(MmtrPointAuthority authority) {
 			final MmtrConsistWalker walker = MmtrConsistWalker.place(sim, new BranchStore(), rIn, nIn, lIn() - 8, new double[]{6}, null);
 			assertNotNull(walker, "a 6 m consist fits on rIn with its front 2 m before the fork");
-			assertTrue(walker.insertKey(Cab.CAB_A, true, true));
+			assertTrue(walker.insertKey(Cab.CAB_B, true, true));
 			walker.setPointAuthority(authority, OWNER);
 			return walker;
 		}

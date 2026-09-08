@@ -71,16 +71,16 @@ public final class MmtrConsistSnapshotTests {
 		rig.walker.insertKey(Cab.CAB_A, true, true);
 		final MmtrMotionSnapshot snapshot = MmtrMotionSnapshot.ofConsistWalker(rig.walker);
 		// A end 14 m into r0, B end 10 m into r1 (the body spans both rails).
-		final double expectedRearX = rig.line.r0.railMath.getPosition(rig.line.l0() - 6, false).x();
-		final double expectedFrontX = rig.line.r1.railMath.getPosition(10, false).x();
-		assertEquals(expectedRearX, snapshot.rearX, 1e-6, "rear end sits on r0");
-		assertEquals(expectedFrontX, snapshot.frontX, 1e-6, "the manned A-end cab drives toward the B end, so the B end leads");
+		final double expectedFrontX = rig.line.r0.railMath.getPosition(rig.line.l0() - 6, false).x();
+		final double expectedRearX = rig.line.r1.railMath.getPosition(10, false).x();
+		assertEquals(expectedFrontX, snapshot.frontX, 1e-6, "the manned A-end cab leads with the A end, which sits on r0");
+		assertEquals(expectedRearX, snapshot.rearX, 1e-6, "the B end trails on r1");
 		assertEquals("CAB_A", snapshot.activeCab);
 		assertTrue(snapshot.cabManned);
 		assertTrue(snapshot.moving);
 		assertEquals(2, snapshot.cars);
-		assertEquals(10, snapshot.segmentOffsetM, 1e-6);
-		assertFalse(snapshot.segmentReversed, "r1 runs from nB to nC, i.e. with its own direction");
+		assertEquals(rig.line.l0() - 6, snapshot.segmentOffsetM, 1e-6);
+		assertFalse(snapshot.segmentReversed, "r0 runs from nA to nB, i.e. with its own direction");
 	}
 
 	@Test

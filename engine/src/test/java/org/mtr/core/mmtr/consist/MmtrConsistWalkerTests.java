@@ -109,7 +109,7 @@ public final class MmtrConsistWalkerTests {
 	public void advanceSlidesTheWholeBodyAndGrowsTheSpineAhead() {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = placedOnLine(line, line.l0() - 6, new double[]{8, 8});
-		assertTrue(walker.insertKey(Cab.CAB_A, true, true), "the driver takes the A-end cab: travel toward the B end");
+		assertTrue(walker.insertKey(Cab.CAB_B, true, true), "the driver takes the B-end cab: travel toward the B end");
 		assertTrue(walker.advance(15));
 		assertEquals(15, walker.distanceM(), 1e-6);
 		// The body needed r2 before it could finish the run, and r0 is now fully behind it: trimmed.
@@ -131,7 +131,7 @@ public final class MmtrConsistWalkerTests {
 	public void changeEndsMovesNothing() {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = placedOnLine(line, line.l0() - 6, new double[]{8, 8});
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		walker.advance(15);
 		final double aEnd = walker.body().aEndArcM();
 		final double bEnd = walker.body().bEndArcM();
@@ -139,7 +139,7 @@ public final class MmtrConsistWalkerTests {
 		final int legs = walker.body().legCount();
 		final ObjectArrayList<OccupiedSegment> occupancy = walker.occupancy();
 		final double distance = walker.distanceM();
-		assertEquals(MmtrCabState.End.B, walker.cabs().leadingEnd(), "the A-end cab drives toward the B end");
+		assertEquals(MmtrCabState.End.B, walker.cabs().leadingEnd(), "the B-end cab leads with the B end");
 
 		assertTrue(walker.changeEnds(true), "the crew changes ends while the train stands");
 
@@ -163,7 +163,7 @@ public final class MmtrConsistWalkerTests {
 	public void afterChangeEndsTheConsistRunsTheOtherWayAndDistanceStillGrows() {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = placedOnLine(line, line.l0() - 6, new double[]{8, 8});
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		walker.advance(15);
 		final double distanceBefore = walker.distanceM();
 		assertTrue(walker.changeEnds(true));
@@ -201,7 +201,7 @@ public final class MmtrConsistWalkerTests {
 		final BranchStore store = new BranchStore();
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(fork.sim, store, fork.rIn, fork.nIn, 2, new double[]{4}, null);
 		assertNotNull(walker);
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		assertTrue(walker.advance(1000), "it moves up to the fork");
 		assertTrue(walker.haltedAtAuthority(), "an unset fork is never auto-elected");
 		assertFalse(walker.endOfLine());
@@ -219,7 +219,7 @@ public final class MmtrConsistWalkerTests {
 		final Line line = new Line();
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(line.sim, new BranchStore(), line.r2, line.nC, line.l2() - 8, new double[]{4}, null);
 		assertNotNull(walker);
-		walker.insertKey(Cab.CAB_A, true, true);
+		walker.insertKey(Cab.CAB_B, true, true);
 		assertTrue(walker.advance(1000));
 		assertTrue(walker.endOfLine(), "r2 ends at nD with nothing beyond");
 		assertEquals(4, walker.distanceM(), 1e-6, "it consumed the 4 m left before the buffer");
