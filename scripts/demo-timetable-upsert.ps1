@@ -32,7 +32,7 @@ $stops = @(
 	'8821945135290913670'   # station 10 (x=-155 face)
 )
 
-$car = @{ vehicleId = 'hst'; length = 15.0; width = 5.0; capacity = 400; bogie1Position = -5.0; bogie2Position = 5.0; couplingPadding1 = 0.0; couplingPadding2 = 0.0 }
+$car = @{ vehicleId = 'hst_h'; length = 15.0; width = 5.0; capacity = 400; bogie1Position = -5.0; bogie2Position = 5.0; couplingPadding1 = 0.0; couplingPadding2 = 0.0 }
 
 function Post-Json($endpoint, $body) {
 	$json = $body | ConvertTo-Json -Depth 12 -Compress
