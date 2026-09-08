@@ -8,6 +8,7 @@ import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.BlockEntityRenderer;
 import org.mtr.mapping.mapper.GraphicsHolder;
@@ -92,7 +93,21 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 
 				// If filters are empty, render all signal states, including node states
 				// If filters are not empty, only render the signal state of the selected colors, even if the colors don't exist
-				final int occupiedAspect = entity.getActualAspect(filterColors.isEmpty() && aspectState.nodeBlocked || aspectState.occupiedColors.intStream().anyMatch(color -> filterColors.isEmpty() || filterColors.contains(color)), isBackSide);
+				final int occupiedAspect;
+				if (filterColors.isEmpty()) {
+					// MMTR real aspects from the occupancy chain ahead (replaces MTR's
+					// release-cooldown pseudo yellows): red = protected rail occupied, single yellow =
+					// the next rail occupied, double yellow (4-aspect heads only) = two rails ahead
+					// occupied; clear = green.
+					occupiedAspect = switch (aspectState.mmtrChainDepth) {
+						case 1 -> 1;
+						case 2 -> 2;
+						case 3 -> aspects >= 4 ? 3 : 2;
+						default -> 0;
+					};
+				} else {
+					occupiedAspect = entity.getActualAspect(aspectState.occupiedColors.intStream().anyMatch(filterColors::contains), isBackSide);
+				}
 				render(storedMatrixTransformationsNew, entity, tickDelta, occupiedAspect, isBackSide);
 
 				if (occupiedAspect > 0 && occupiedAspect < aspects) {
@@ -140,7 +155,7 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 		});
 
 		Collections.sort(detectedColors);
-		return new AspectState(detectedColors, occupiedColors, blocked[0], railIds);
+		return new AspectState(detectedColors, occupiedColors, blocked[0], railIds, mmtrChainDepth(minecraftClientData, startPosition, railIds));
 	}
 
 	@Nullable
@@ -169,12 +184,84 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 		private final IntAVLTreeSet occupiedColors;
 		private final boolean nodeBlocked;
 		private final ObjectArrayList<String> railIds;
+		/**
+		 * MMTR real-aspect depth: 1 = the protected rail itself is occupied (red); 2 = the next
+		 * rail(s) along the travel direction are occupied (single yellow); 3 = the rail after that
+		 * (double yellow on a 4-aspect head); 0 = clear ahead. Computed from the authoritative
+		 * per-rail blocked states instead of MTR's release-cooldown pseudo yellows.
+		 */
+		public final int mmtrChainDepth;
 
-		private AspectState(IntArrayList detectedColors, IntAVLTreeSet occupiedColors, boolean nodeBlocked, ObjectArrayList<String> railIds) {
+		private AspectState(IntArrayList detectedColors, IntAVLTreeSet occupiedColors, boolean nodeBlocked, ObjectArrayList<String> railIds, int mmtrChainDepth) {
 			this.detectedColors = detectedColors;
 			this.occupiedColors = occupiedColors;
 			this.nodeBlocked = nodeBlocked;
 			this.railIds = railIds;
+			this.mmtrChainDepth = mmtrChainDepth;
 		}
+	}
+
+	/**
+	 * MMTR: how far along the travel direction the nearest occupied rail sits, counted from the
+	 * protected rail(s) found at {@code nodePos}: 1 = protected occupied, 2 = one rail beyond,
+	 * 3 = two rails beyond, 0 = clear. Blocked = locally simulated occupancy OR the authoritative
+	 * server per-rail signal-color holds. Continuations keep the travel direction (dot > 0, no
+	 * turn-backs); at a fork every branch is considered (conservative worst case - a precise
+	 * route-locked aspect needs the S5 interlocking).
+	 */
+	private static int mmtrChainDepth(MinecraftClientData data, Position nodePos, ObjectArrayList<String> protectedHexes) {
+		final java.util.function.Predicate<String> blocked = hex -> data.blockedRailIds.contains(hex)
+			|| !data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).isEmpty();
+		final ObjectArrayList<ObjectObjectImmutablePair<String, Position>> level = new ObjectArrayList<>();
+		protectedHexes.forEach(hex -> level.add(new ObjectObjectImmutablePair<>(hex, nodePos)));
+		for (int depth = 1; depth <= 3; depth++) {
+			if (level.stream().anyMatch(entry -> blocked.test(entry.left()))) {
+				return depth;
+			}
+			if (depth == 3) {
+				break;
+			}
+			final ObjectArrayList<ObjectObjectImmutablePair<String, Position>> nextLevel = new ObjectArrayList<>();
+			for (final ObjectObjectImmutablePair<String, Position> entry : level) {
+				final Position far = mmtrFarEnd(data, entry.right(), entry.left());
+				if (far == null) {
+					continue;
+				}
+				final Object2ObjectOpenHashMap<Position, org.mtr.core.data.Rail> neighbours = data.positionsToRail.get(far);
+				if (neighbours == null) {
+					continue;
+				}
+				neighbours.forEach((otherEnd, rail) -> {
+					if (!rail.getHexId().equals(entry.left())) {
+						// Continue only in the travel direction (dot product with the incoming heading).
+						final double dot = (otherEnd.getX() - far.getX()) * (far.getX() - entry.right().getX()) + (otherEnd.getZ() - far.getZ()) * (far.getZ() - entry.right().getZ());
+						if (dot > 0) {
+							nextLevel.add(new ObjectObjectImmutablePair<>(rail.getHexId(), far));
+						}
+					}
+				});
+			}
+			if (nextLevel.isEmpty()) {
+				break;
+			}
+			level.clear();
+			level.addAll(nextLevel);
+		}
+		return 0;
+	}
+
+	/** The far endpoint of the rail {@code hex} that the train enters from {@code nodePos}. */
+	@Nullable
+	private static Position mmtrFarEnd(MinecraftClientData data, Position nodePos, String hex) {
+		final Position[] found = {null};
+		final Object2ObjectOpenHashMap<Position, org.mtr.core.data.Rail> neighbours = data.positionsToRail.get(nodePos);
+		if (neighbours != null) {
+			neighbours.forEach((endPosition, rail) -> {
+				if (rail.getHexId().equals(hex)) {
+					found[0] = endPosition;
+				}
+			});
+		}
+		return found[0];
 	}
 }
