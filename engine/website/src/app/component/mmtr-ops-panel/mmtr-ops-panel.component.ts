@@ -3,6 +3,7 @@ import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {DividerModule} from "primeng/divider";
 import {MmtrTrainsService, MmtrTrainState} from "../../service/mmtr-trains.service";
 import {MmtrConsistJob, MmtrJobStateSummary, MmtrJobsService} from "../../service/mmtr-jobs.service";
+import {MmtrScheduleService} from "../../service/mmtr-schedule.service";
 import {MmtrJobEditorComponent} from "../mmtr-job-editor/mmtr-job-editor.component";
 
 const JOB_STATE_TEXT: Record<string, string> = {
@@ -27,6 +28,7 @@ const JOB_STATE_TEXT: Record<string, string> = {
 export class MmtrOpsPanelComponent {
 	private readonly mmtrTrainsService = inject(MmtrTrainsService);
 	private readonly mmtrJobsService = inject(MmtrJobsService);
+	private readonly mmtrScheduleService = inject(MmtrScheduleService);
 
 	protected readonly trains = this.mmtrTrainsService.trains;
 	protected readonly sidings = this.mmtrTrainsService.sidings;
@@ -38,6 +40,9 @@ export class MmtrOpsPanelComponent {
 	protected readonly jobReferences = this.mmtrJobsService.references;
 	protected readonly jobsLoading = this.mmtrJobsService.loading;
 	protected readonly jobsFeedback = this.mmtrJobsService.writeFeedback;
+
+	protected readonly scheduleJobs = this.mmtrScheduleService.jobs;
+	protected readonly scheduleLoading = this.mmtrScheduleService.loading;
 
 	/** undefined = list view; otherwise the job being edited in the inline editor. */
 	protected readonly editingJob = signal<MmtrConsistJob | undefined>(undefined);
@@ -151,5 +156,39 @@ export class MmtrOpsPanelComponent {
 			parts.push(`股道 ${job.sidingId}`);
 		}
 		return parts.join(" · ");
+	}
+
+	// --- Task-sheet timetable (任务单时间表) helpers ---
+
+	protected scheduleTimeLabel(ms: number): string {
+		return MmtrScheduleService.timeLabel(ms);
+	}
+
+	protected scheduleTaskLabel(kind: string): string {
+		return MmtrScheduleService.taskLabel(kind);
+	}
+
+	/** Human target label: station name for platforms / depot·name for sidings, else short id. */
+	protected scheduleTargetLabel(kind: string, id: string): string {
+		if (!id || id === "0") {
+			return "-";
+		}
+		if (kind === "PLATFORM") {
+			const platform = this.jobReferences().platforms.find(ref => ref.id === id);
+			if (platform) {
+				return platform.stationName ? `站 ${platform.stationName}` : `站台 ${id}`;
+			}
+		}
+		if (kind === "SIDING") {
+			const siding = this.jobReferences().sidings.find(ref => ref.id === id);
+			if (siding) {
+				return `${siding.depotName || "车场"}·${siding.name}`;
+			}
+		}
+		return id.length > 10 ? `…${id.slice(-8)}` : id;
+	}
+
+	protected scheduleStateText(state: string): string {
+		return JOB_STATE_TEXT[state] ?? state;
 	}
 }

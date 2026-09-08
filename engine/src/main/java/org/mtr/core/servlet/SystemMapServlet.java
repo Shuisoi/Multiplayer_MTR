@@ -58,6 +58,7 @@ public final class SystemMapServlet extends ServletBase {
 					yield result;
 				}
 				case "mmtr-jobs" -> Utilities.getJsonObjectFromData(simulator.getMmtrJobRegistry());
+				case "mmtr-schedule" -> getMmtrSchedule(simulator);
 				case "mmtr-job-references" -> getMmtrJobReferences(simulator);
 				case "mmtr-job-op" -> {
 					final String jobId = jsonReader.getString("jobId", "");
@@ -649,6 +650,89 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
 		root.add("snapshots", snapshots);
 		return root;
+	}
+
+	/**
+	 * Task-sheet timetable feed (任务单时间表): every consist job rendered as one row per task
+	 * (step) with its kind, target, planned time and a per-step state derived from the scheduler
+	 * (DONE for finished steps, RUNNING for the current one, FAILED on a dead job, PENDING after).
+	 */
+	private static JsonObject getMmtrSchedule(Simulator simulator) {
+		final org.mtr.core.mmtr.job.MmtrJobScheduler scheduler = simulator.mmtrJobScheduler;
+		final com.google.gson.JsonArray jobs = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.job.MmtrConsistJob job : simulator.getMmtrJobRegistry().jobs) {
+			final com.google.gson.JsonObject jobJson = new com.google.gson.JsonObject();
+			jobJson.addProperty("jobId", job.jobId);
+			jobJson.addProperty("depotId", String.valueOf(job.depotId));
+			jobJson.addProperty("sidingId", String.valueOf(job.sidingId));
+			jobJson.addProperty("startTimeOfDayMs", job.startTimeOfDayMs);
+			jobJson.addProperty("loop", job.loop);
+			final String jobState = scheduler == null ? null : scheduler.stateOf(job.jobId) == null ? null : scheduler.stateOf(job.jobId).name();
+			jobJson.addProperty("state", jobState == null ? "PENDING" : jobState);
+			final int currentStep = scheduler == null ? -1 : scheduler.stepIndexOf(job.jobId);
+			jobJson.addProperty("currentStep", currentStep);
+			final String failure = scheduler == null ? null : scheduler.failureOf(job.jobId);
+			if (failure != null) {
+				jobJson.addProperty("failure", failure);
+			}
+			final com.google.gson.JsonArray rows = new com.google.gson.JsonArray();
+			for (int i = 0; i < job.steps.size(); i++) {
+				final org.mtr.core.mmtr.job.MmtrJobStep step = job.steps.get(i);
+				final com.google.gson.JsonObject row = new com.google.gson.JsonObject();
+				row.addProperty("stepIndex", i);
+				row.addProperty("stepId", step.stepId);
+				row.addProperty("type", step.type.name());
+				final boolean isPlatform = step.type != org.mtr.core.mmtr.job.MmtrJobStep.StepType.COUPLE && step.type != org.mtr.core.mmtr.job.MmtrJobStep.StepType.UNCOUPLE && isPlatform(simulator, step.targetId);
+				row.addProperty("taskKind", taskKindOf(step, isPlatform));
+				row.addProperty("targetKind", step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.COUPLE || step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.UNCOUPLE ? "" : isPlatform ? "PLATFORM" : "SIDING");
+				row.addProperty("targetId", String.valueOf(step.targetId));
+				row.addProperty("plannedMs", step.dueTimeOfDayMs);
+				if (step.note != null && !step.note.isEmpty()) {
+					row.addProperty("note", step.note);
+				}
+				row.addProperty("state", stepState(jobState, currentStep, i));
+				rows.add(row);
+			}
+			jobJson.add("rows", rows);
+			jobs.add(jobJson);
+		}
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("jobs", jobs);
+		root.addProperty("currentTime", System.currentTimeMillis());
+		return root;
+	}
+
+	/** Task-kind label of a step for the timetable (job step → task mapping, same as MmtrTaskFactory). */
+	private static String taskKindOf(org.mtr.core.mmtr.job.MmtrJobStep step, boolean isPlatform) {
+		return switch (step.type) {
+			case MOVE_TO -> isPlatform ? "DRIVE_TO_PLATFORM" : "DRIVE_TO_SIDING";
+			case SERVE -> "STATION_SERVICE";
+			case COUPLE -> "COUPLE";
+			case UNCOUPLE -> "UNCOUPLE";
+		};
+	}
+
+	private static String stepState(String jobState, int currentStep, int stepIndex) {
+		if (jobState == null || jobState.equals("PENDING") || currentStep < 0) {
+			return "PENDING";
+		}
+		return switch (jobState) {
+			case "RUNNING" -> stepIndex < currentStep ? "DONE" : stepIndex == currentStep ? "RUNNING" : "PENDING";
+			case "DONE" -> "DONE";
+			case "FAILED" -> stepIndex < currentStep ? "DONE" : stepIndex == currentStep ? "FAILED" : "PENDING";
+			default -> "PENDING";
+		};
+	}
+
+	/** Whether the given world-object id is a platform (the timetable target-kind split). */
+	private static boolean isPlatform(Simulator simulator, long targetId) {
+		final boolean[] found = {false};
+		simulator.platforms.forEach(platform -> {
+			if (platform.getId() == targetId) {
+				found[0] = true;
+			}
+		});
+		return found[0];
 	}
 
 	/** Job-editor pickers: in-game depots / sidings / platforms (decimal id strings + display names). */

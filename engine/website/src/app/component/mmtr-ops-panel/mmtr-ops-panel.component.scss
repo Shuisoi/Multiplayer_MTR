@@ -130,3 +130,36 @@
 .mmtr-section-head .mmtr-section-title {
 	margin: 0;
 }
+.mmtr-sched-job {
+	margin: 0.4rem 0;
+}
+.mmtr-sched-head {
+	background: color-mix(in srgb, var(--background-color) 70%, transparent);
+	border-radius: 6px 6px 0 0;
+}
+.mmtr-sched-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.7rem;
+	margin-top: 2px;
+}
+.mmtr-sched-table th,
+.mmtr-sched-table td {
+	text-align: left;
+	padding: 2px 8px;
+	border-bottom: 1px solid color-mix(in srgb, var(--p-content-border-color) 55%, transparent);
+	white-space: nowrap;
+}
+.mmtr-sched-table th {
+	color: var(--p-text-muted-color);
+	font-weight: 500;
+}
+.mmtr-sched-idx {
+	color: var(--p-text-muted-color);
+}
+.mmtr-sched-time {
+	font-variant-numeric: tabular-nums;
+}
+.mmtr-sched-current td {
+	background: color-mix(in srgb, #f6c343 12%, transparent);
+}

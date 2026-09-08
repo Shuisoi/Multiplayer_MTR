@@ -89,5 +89,53 @@
 			}
 			<div class="mmtr-empty">信号/道岔层：预留（自动道岔/信号按任务求值将在此显示）</div>
 		}
+		<p-divider/>
+		<div class="mmtr-section-title">任务单时间表 / Task Timetable</div>
+		@if (scheduleLoading()) {
+			<p-progressSpinner styleClass="w-3rem h-3rem"/>
+		} @else if (scheduleJobs().length === 0) {
+			<div class="mmtr-empty">暂无作业单时间表 —— 创建作业单后此处按任务显示时刻表</div>
+		} @else {
+			@for (job of scheduleJobs(); track job.jobId) {
+				<div class="mmtr-sched-job">
+					<div class="mmtr-row mmtr-job-row mmtr-sched-head">
+						<div class="mmtr-row-main">
+							<div class="mmtr-name">{{ job.jobId }}<span class="mmtr-muted"> · 发车 {{ scheduleTimeLabel(job.startTimeOfDayMs) }} · {{ job.rows.length }} 项</span></div>
+							@if (job.failure) {
+								<div class="mmtr-sub failed-text">{{ job.failure }}</div>
+							}
+						</div>
+						<div class="mmtr-badges">
+							<span class="mmtr-badge" [class]="jobStateClass(job.state)">{{ scheduleStateText(job.state) }}</span>
+							@if (job.loop) {
+								<span class="mmtr-badge parked">循环</span>
+							}
+						</div>
+					</div>
+					<table class="mmtr-sched-table">
+						<thead>
+							<tr>
+								<th class="mmtr-sched-idx">#</th>
+								<th>任务</th>
+								<th>地点</th>
+								<th class="mmtr-sched-time">计划</th>
+								<th>状态</th>
+							</tr>
+						</thead>
+						<tbody>
+							@for (row of job.rows; track row.stepIndex) {
+								<tr [class.mmtr-sched-current]="job.state === 'RUNNING' && row.stepIndex === job.currentStep">
+									<td class="mmtr-sched-idx">{{ row.stepIndex + 1 }}</td>
+									<td>{{ scheduleTaskLabel(row.taskKind) }}</td>
+									<td>{{ scheduleTargetLabel(row.targetKind, row.targetId) }}</td>
+									<td class="mmtr-sched-time">{{ scheduleTimeLabel(row.plannedMs) }}</td>
+									<td><span class="mmtr-badge" [class]="jobStateClass(row.state)">{{ scheduleStateText(row.state) }}</span></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		}
 	</div>
 }
