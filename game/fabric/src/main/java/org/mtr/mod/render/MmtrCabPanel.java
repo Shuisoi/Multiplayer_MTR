@@ -36,20 +36,21 @@ public final class MmtrCabPanel {
 	/** Lift the plane off the modelled face so it does not z-fight with the dashboard. */
 	private static final float SURFACE_OFFSET_M = 0.005F;
 
-	private static final int TEXT_COLOR = 0xFFE8F4FF;
-	private static final int UNIT_COLOR = 0xFF8FA6B8;
+	private static final int TEXT_COLOR = 0xFFFFFFFF;
+	private static final int UNIT_COLOR = 0xFFD2E6F7;
 	/** Backing plate behind the readout (near-black, slightly translucent). */
 	private static final int BACKGROUND_COLOR = 0xE6000000;
 	/**
 	 * Extra roll of the readout inside the dashboard plane, in degrees (dialled in once per model
 	 * convention; 0 means the modelled "right" edge already runs the way text should read).
 	 */
-	private static final double PANEL_ROLL_DEGREES = 0;
+	private static final double PANEL_ROLL_DEGREES = 180;
 	/**
-	 * Flip the panel 180 degrees about its own up axis. Used when the modelled face's normal points
-	 * away from the driver, so the readout ends up on the outward side of the dashboard plane.
+	 * Flip the panel 180 degrees about its own up axis. Left false: the text is then drawn on the
+	 * same side the dashboard face points at, so the driver reads it head on instead of through the
+	 * back of the plane (which looks mirrored).
 	 */
-	private static final boolean PANEL_FLIP_FACING = true;
+	private static final boolean PANEL_FLIP_FACING = false;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
