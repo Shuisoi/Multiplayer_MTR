@@ -18,6 +18,7 @@ import org.mtr.mod.Init;
 import org.mtr.mod.client.*;
 import org.mtr.mod.config.Config;
 import org.mtr.mod.data.IGui;
+import org.mtr.mod.render.panel.MmtrCabDashboard;
 import org.mtr.mod.resource.Interpolation;
 import org.mtr.mod.resource.VehicleResource;
 import org.mtr.mod.resource.VehicleResourceCache;
@@ -226,8 +227,8 @@ public class RenderVehicles implements IGui {
 							vehicleResource.queue(storedMatrixTransformations, vehicle, carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), absoluteVehicleCarPositionAndRotation.light, openDoorways.isEmpty());
 						}
 
-						// MMTR B7.6e: 2D cab panel on the model's mmtr_hud face (drawn in model space)
-						MmtrCabPanel.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), vehicleCarRenderingPositionAndRotation, storedMatrixTransformations);
+						// MMTR B7.6e: 2D cab panel on the model's mmtr_hud face (one texture, one quad)
+						MmtrCabDashboard.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations);
 
 						vehicleResource.iterateModels(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), (modelIndex, model) -> {
 							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, openDoorways, fromResourcePackCreator);

@@ -84,8 +84,12 @@ public final class MmtrVehicleAnchors {
 		public final Vector fileRight;
 		public final double widthM;
 		public final double heightM;
+		/** Mirrors the panel's texture horizontally, for faces whose authored "right" edge reads the other way. */
+		public final boolean panelFlipU;
+		/** Texture resolution of the 2D panel drawn on this face, in pixels per block; 0 = client default. */
+		public final int panelPxPerMetre;
 
-		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM) {
+		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre) {
 			this.name = name;
 			this.kind = kind;
 			this.cab = cab;
@@ -100,6 +104,8 @@ public final class MmtrVehicleAnchors {
 			this.right = toRidingSpace(right);
 			this.widthM = widthM;
 			this.heightM = heightM;
+			this.panelFlipU = panelFlipU;
+			this.panelPxPerMetre = panelPxPerMetre;
 		}
 	}
 
@@ -297,7 +303,9 @@ public final class MmtrVehicleAnchors {
 						getVector(object, "up"),
 						getVector(object, "right"),
 						getDouble(object, "widthM", 0),
-						getDouble(object, "heightM", 0)
+						getDouble(object, "heightM", 0),
+						getBoolean(object, "panelFlipU", false),
+						getInt(object, "panelPxPerMetre", 0)
 				));
 			}
 		} catch (Exception e) {
@@ -348,6 +356,11 @@ public final class MmtrVehicleAnchors {
 	private static double getDouble(JsonObject object, String key, double fallback) {
 		final JsonElement element = object.get(key);
 		return element == null || element.isJsonNull() ? fallback : element.getAsDouble();
+	}
+
+	private static boolean getBoolean(JsonObject object, String key, boolean fallback) {
+		final JsonElement element = object.get(key);
+		return element == null || element.isJsonNull() ? fallback : element.getAsBoolean();
 	}
 
 	private static Vector getVector(JsonObject object, String key) {

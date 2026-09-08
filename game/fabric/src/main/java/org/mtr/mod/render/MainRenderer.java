@@ -18,6 +18,7 @@ import org.mtr.mod.data.ArrivalsCacheClient;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.entity.EntityRendering;
 import org.mtr.mod.generated.lang.TranslationProvider;
+import org.mtr.mod.render.panel.MmtrPanelTexture;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -103,6 +104,8 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			lastRenderedMillis = InitClient.getGameMillis();
 			WORKER_THREAD.start();
 			DynamicTextureCache.instance.tick();
+			// B7.6e: release cab panel textures that stopped being drawn
+			MmtrPanelTexture.tick();
 			// Tick the riding cool down (dismount player if they are no longer riding a vehicle) and store the player offset cache
 			VehicleRidingMovement.tick();
 			// B7.6c: the "press F to enter/leave the cab" interaction.

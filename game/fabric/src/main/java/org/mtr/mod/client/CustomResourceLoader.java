@@ -11,6 +11,8 @@ import org.mtr.mapping.mapper.ResourceManagerHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.Keys;
 import org.mtr.mod.config.Config;
+import org.mtr.mod.render.panel.MmtrPanelFont;
+import org.mtr.mod.render.panel.MmtrPanelTexture;
 import org.mtr.mod.resource.*;
 
 import java.io.InputStream;
@@ -85,6 +87,10 @@ public class CustomResourceLoader {
 		LIFTS.clear();
 		LIFTS_CACHE.clear();
 		DynamicTextureCache.instance.reload();
+		// B7.6e: the cab panels cache the parsed anchors, the loaded fonts and their textures
+		MmtrVehicleAnchors.clearCache();
+		MmtrPanelFont.reset();
+		MmtrPanelTexture.clear();
 		TEST_DURATION = 0;
 
 		final ObjectArrayList<SignResource> defaultSigns = new ObjectArrayList<>();
