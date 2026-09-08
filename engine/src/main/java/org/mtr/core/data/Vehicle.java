@@ -232,8 +232,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private static final int MMTR_AWS_WARN = 1;
 	/** Signal S3 (AWS) warning state machine: acknowledged - the yellow/black indicator stays up until the restriction clears. */
 	private static final int MMTR_AWS_ACKED = 2;
-	/** Last reported "waiting for turnout authority" target, so the per-tick retry does not repeat it. */
-	private static String mmtrLastTurnoutWaitLog = "";
+	/** Minimum gap between two "waiting for turnout authority" reports, ms. */
+	private static final long MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS = 5000;
+	private static long mmtrLastTurnoutWaitLogMillis;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -459,15 +460,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// Feasible but a fork is operator-locked or held by another train: the mission stays
 			// ASSIGNED and this self-arm retries every tick until the grants land (operator unlock
 			// / the other train's release); nothing auto-elects around a busy point. Report the wait
-			// once per target instead of once per tick.
-			final String waitingKey = mission.getKind() + ":" + plan.targetRailHex;
-			if (!waitingKey.equals(mmtrLastTurnoutWaitLog)) {
-				mmtrLastTurnoutWaitLog = waitingKey;
+			// at most every few seconds - several waiting trains would otherwise log every tick.
+			final long now = System.currentTimeMillis();
+			if (now - mmtrLastTurnoutWaitLogMillis >= MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS) {
+				mmtrLastTurnoutWaitLogMillis = now;
 				System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " waiting for turnout authority on rail " + plan.targetRailHex);
 			}
 			return;
 		}
-		mmtrLastTurnoutWaitLog = "";
 		setMmtrMotionAuto(true);
 		setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
 		System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
