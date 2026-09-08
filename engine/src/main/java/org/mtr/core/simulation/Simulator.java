@@ -100,6 +100,10 @@ public class Simulator extends Data implements Utilities {
 	/** Authoritative junction leg tables (进向表): (node, via) -> ordered continuation rails. */
 	public final org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.LegsStore mmtrJunctionLegs = new org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.LegsStore();
 	private java.nio.file.Path mmtrJunctionLegsPath;
+	/** Wayside signal registry (信号机登记表): placed MTR signal lights participating in the
+	 * block/section model, with optional covered binds (which rail/approach a light reads). */
+	public final org.mtr.core.mmtr.signal.MmtrSignalRegistry mmtrSignals = new org.mtr.core.mmtr.signal.MmtrSignalRegistry();
+	private java.nio.file.Path mmtrSignalsPath;
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
@@ -246,6 +250,11 @@ public class Simulator extends Data implements Utilities {
 		mmtrJunctionLegsPath = savePath.resolve("mmtr-junction-legs.json");
 		final org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.LegsStore loadedLegs = org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.load(mmtrJunctionLegsPath);
 		loadedLegs.legs.forEach(mmtrJunctionLegs.legs::put);
+
+		// MMTR: wayside signal registry (信号机登记表) - placed signal lights + covered binds.
+		mmtrSignalsPath = savePath.resolve("mmtr-signals.json");
+		final org.mtr.core.mmtr.signal.MmtrSignalRegistry loadedSignals = org.mtr.core.mmtr.signal.MmtrSignalRegistry.load(mmtrSignalsPath);
+		loadedSignals.signals.forEach(mmtrSignals.signals::put);
 
 		// MMTR: web-authored consist jobs (replaces the depot timetable for mmtr-managed stock).
 		mmtrJobsPath = savePath.resolve("mmtr-jobs.json");
@@ -591,6 +600,27 @@ public class Simulator extends Data implements Utilities {
 		}
 		if (changed && mmtrJunctionLegsPath != null) {
 			org.mtr.core.mmtr.point.MmtrJunctionLegsRegistry.save(mmtrJunctionLegsPath, mmtrJunctionLegs.legs);
+		}
+		return changed;
+	}
+
+	/**
+	 * MMTR: upsert/remove one wayside signal entry (信号机登记表). Ops:
+	 * "set" = register the light (AUTO unless target given -> BOUND), "remove" = delete.
+	 * @return whether the registry changed
+	 */
+	public boolean mmtrSignalOp(int x, int y, int z, float angle, int aspects, String op, String target) {
+		final boolean changed;
+		if ("remove".equalsIgnoreCase(op)) {
+			changed = mmtrSignals.signals.remove(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(x, y, z)) != null;
+		} else {
+			final String mode = target == null || target.isEmpty() ? "AUTO" : "BOUND";
+			final boolean had = mmtrSignals.get(x, y, z) != null;
+			mmtrSignals.put(x, y, z, angle, aspects, mode, target);
+			changed = !had;
+		}
+		if (changed && mmtrSignalsPath != null) {
+			org.mtr.core.mmtr.signal.MmtrSignalRegistry.save(mmtrSignalsPath, mmtrSignals.signals);
 		}
 		return changed;
 	}

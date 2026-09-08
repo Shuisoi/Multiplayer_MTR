@@ -186,6 +186,19 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("ok", simulator.mmtrJunctionLegsUpsert(x, y, z, via, legs));
 					yield result;
 				}
+				case "mmtr-signals" -> getMmtrSignals(simulator);
+				case "mmtr-signal-op" -> {
+					final long x = jsonReader.getLong("x", 0);
+					final long y = jsonReader.getLong("y", 0);
+					final long z = jsonReader.getLong("z", 0);
+					final float angle = (float) jsonReader.getDouble("angle", 0);
+					final int aspects = jsonReader.getInt("aspects", 2);
+					final String op = jsonReader.getString("op", "set");
+					final String target = jsonReader.getString("target", "");
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("ok", simulator.mmtrSignalOp((int) x, (int) y, (int) z, angle, aspects, op, target));
+					yield result;
+				}
 				case "mmtr-point-op" -> {
 					final long x = jsonReader.getLong("x", 0);
 					final long y = jsonReader.getLong("y", 0);
@@ -365,6 +378,18 @@ public final class SystemMapServlet extends ServletBase {
 	 * aspect would narrow it to the set route). "Pre-approach" reservations are not occupancy.
 	 */
 	private static com.google.gson.JsonArray getMmtrRailAspects(Simulator simulator) {
+		final com.google.gson.JsonArray signals = new com.google.gson.JsonArray();
+		computeRailAspectMap(simulator).forEach((hex, aspect) -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("hex", hex);
+			out.addProperty("aspect", aspect);
+			signals.add(out);
+		});
+		return signals;
+	}
+
+	/** hex -> display aspect for every rail (shared by the rail feed and the signal registry feed). */
+	private static java.util.HashMap<String, String> computeRailAspectMap(Simulator simulator) {
 		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Rail> byHex = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
 		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Position[]> railEnds = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
 		simulator.positionsToRail.forEach((node, neighbourMap) -> neighbourMap.forEach((pos, rail) -> {
@@ -376,24 +401,21 @@ public final class SystemMapServlet extends ServletBase {
 				ends[1] = node;
 			}
 		}));
-		final com.google.gson.JsonArray signals = new com.google.gson.JsonArray();
+		final java.util.HashMap<String, String> aspects = new java.util.HashMap<>();
 		byHex.forEach((hex, rail) -> {
 			final org.mtr.core.data.Position[] ends = railEnds.get(hex);
 			if (ends == null || ends[1] == null) {
 				return;
 			}
 			final int depth = signalDepth(simulator, byHex, railEnds, hex, ends[0], ends[1]);
-			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
-			out.addProperty("hex", hex);
-			out.addProperty("aspect", switch (depth) {
+			aspects.put(hex, switch (depth) {
 				case 1 -> "RED";
 				case 2 -> "SINGLE_YELLOW";
 				case 3 -> "DOUBLE_YELLOW";
 				default -> "GREEN";
 			});
-			signals.add(out);
 		});
-		return signals;
+		return aspects;
 	}
 
 	/**
@@ -519,6 +541,36 @@ public final class SystemMapServlet extends ServletBase {
 		}
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
 		root.add("points", points);
+		return root;
+	}
+
+	/**
+	 * Wayside signal feed (信号机登记表): every registered signal light with its MTR facing
+	 * angle, aspect count, mode (AUTO = infer / BOUND = covered bind) and - for rail-bound
+	 * lights - the live aspect of the rail it reads.
+	 */
+	private static JsonObject getMmtrSignals(Simulator simulator) {
+		final java.util.HashMap<String, String> railAspects = computeRailAspectMap(simulator);
+		final com.google.gson.JsonArray signals = new com.google.gson.JsonArray();
+		simulator.mmtrSignals.signals.forEach((key, entry) -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("key", key);
+			out.addProperty("x", entry.x);
+			out.addProperty("y", entry.y);
+			out.addProperty("z", entry.z);
+			out.addProperty("angle", entry.angle);
+			out.addProperty("aspects", entry.aspects);
+			out.addProperty("mode", entry.mode);
+			out.addProperty("target", entry.target);
+			if ("BOUND".equals(entry.mode) && !entry.target.isEmpty() && !entry.target.contains("|")) {
+				out.addProperty("aspect", railAspects.getOrDefault(entry.target, "GREEN"));
+			} else {
+				out.addProperty("aspect", "");
+			}
+			signals.add(out);
+		});
+		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+		root.add("signals", signals);
 		return root;
 	}
 
