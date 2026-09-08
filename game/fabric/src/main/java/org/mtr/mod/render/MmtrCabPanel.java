@@ -102,24 +102,6 @@ public final class MmtrCabPanel {
 		// Which side the modelled face's normal points at is easy to get wrong (and a flip also flips
 		// the offset), and a one-sided panel then ends up buried inside the dashboard - invisible from
 		// the driver's seat while still visible from outside. Two back-to-back copies cannot fail.
-		// TEMPORARY location marker (remove once the panel is confirmed): an opaque magenta square on
-		// the anchor and a cyan square 0.3 m out along the modelled normal, so a screenshot/report can
-		// tell "the panel is not drawn at all" from "the panel is drawn but the text/plate is wrong".
-		final double[] markerBasis = basisDegrees(hud, 1);
-		final StoredMatrixTransformations markerTransformations = modelTransformations.copy();
-		markerTransformations.add(graphicsHolder -> graphicsHolder.translate(hudPosition.x(), hudPosition.y(), hudPosition.z()));
-		markerTransformations.add(graphicsHolder -> {
-			graphicsHolder.rotateYDegrees((float) markerBasis[0]);
-			graphicsHolder.rotateXDegrees((float) markerBasis[1]);
-			graphicsHolder.rotateZDegrees((float) markerBasis[2]);
-		});
-		MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT, (graphicsHolder, offset) -> {
-			markerTransformations.transform(graphicsHolder, offset);
-			IDrawing.drawTexture(graphicsHolder, -0.75F, -0.75F, 0, 0.75F, 0.75F, 0, Direction.UP, 0xFFFF00FF, GraphicsHolder.getDefaultLight());
-			IDrawing.drawTexture(graphicsHolder, -0.25F, -0.25F, -0.3F, 0.25F, 0.25F, -0.3F, Direction.UP, 0xFF00FFFF, GraphicsHolder.getDefaultLight());
-			graphicsHolder.pop();
-		});
-
 		for (final int facingSign : new int[]{1, -1}) {
 			final double[] basisDegrees = basisDegrees(hud, facingSign);
 			final StoredMatrixTransformations textTransformations = modelTransformations.copy();
