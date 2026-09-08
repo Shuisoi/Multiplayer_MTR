@@ -247,7 +247,14 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 * @param trainStopped whether the train is at rest (required: the driver walks through the train)
 	 */
 	public boolean changeEnds(boolean trainStopped) {
-		return cabs.changeEnds(trainStopped);
+		if (!cabs.changeEnds(trainStopped)) {
+			return false;
+		}
+		// The direction of travel reverses, so "ahead" is the other way now: the flags that described
+		// the old direction (dead end reached, task target boarded) no longer apply.
+		endOfLine = false;
+		atTarget = false;
+		return true;
 	}
 
 	/** Rail the leading face currently stands on, or {@code null} when no cab is manned. */

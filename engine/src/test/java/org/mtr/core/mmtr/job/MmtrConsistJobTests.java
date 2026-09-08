@@ -53,6 +53,13 @@ public final class MmtrConsistJobTests {
 		serve.dueTimeOfDayMs = arrive.dueTimeOfDayMs + 3 * Utilities.MILLIS_PER_MINUTE;
 		job.steps.add(serve);
 
+		// 换端: an in-place step with no target - it must survive the round trip like any other.
+		final MmtrJobStep changeEnds = new MmtrJobStep();
+		changeEnds.stepId = "s3";
+		changeEnds.type = MmtrJobStep.StepType.CHANGE_ENDS;
+		changeEnds.dueTimeOfDayMs = serve.dueTimeOfDayMs + 2 * Utilities.MILLIS_PER_MINUTE;
+		job.steps.add(changeEnds);
+
 		// Through the same JsonObject path the web CRUD / config file uses.
 		final JsonObject json = Utilities.getJsonObjectFromData(job);
 		final MmtrConsistJob parsed = new MmtrConsistJob(new JsonReader(json));
@@ -64,11 +71,13 @@ public final class MmtrConsistJobTests {
 		assertTrue(parsed.repeatDaily);
 		assertEquals(1, parsed.cars.size());
 		assertEquals("loco", parsed.cars.get(0).vehicleId);
-		assertEquals(2, parsed.steps.size());
+		assertEquals(3, parsed.steps.size());
 		assertEquals(MmtrJobStep.StepType.MOVE_TO, parsed.steps.get(0).type);
 		assertEquals(platformId, parsed.steps.get(0).targetId, "64-bit target id must survive");
 		assertEquals(MmtrJobStep.StepType.SERVE, parsed.steps.get(1).type);
 		assertTrue(parsed.steps.get(1).dueTimeOfDayMs > parsed.steps.get(0).dueTimeOfDayMs, "steps keep their order");
+		assertEquals(MmtrJobStep.StepType.CHANGE_ENDS, parsed.steps.get(2).type, "换端 step survives the round trip");
+		assertEquals(0, parsed.steps.get(2).targetId, "换端 has no target");
 	}
 
 	@Test

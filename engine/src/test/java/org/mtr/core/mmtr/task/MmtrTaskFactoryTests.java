@@ -58,6 +58,16 @@ public final class MmtrTaskFactoryTests {
 	}
 
 	@Test
+	public void changeEndsMapsToChangeEndsTask() {
+		final MmtrTask task = MmtrTaskFactory.fromStep(step(MmtrJobStep.StepType.CHANGE_ENDS, 0), false);
+		assertNotNull(task);
+		final ChangeEndsTask mapped = assertInstanceOf(ChangeEndsTask.class, task);
+		assertEquals(0, mapped.targetRef, "换端 is in place: no target object");
+		assertEquals(DUE, mapped.dueMs);
+		assertEquals("", mapped.validate());
+	}
+
+	@Test
 	public void coupleAndUncoupleStayNullUntilDerivedVehicleSlice() {
 		assertNull(MmtrTaskFactory.fromStep(step(MmtrJobStep.StepType.COUPLE, 0), false));
 		assertNull(MmtrTaskFactory.fromStep(step(MmtrJobStep.StepType.UNCOUPLE, 0), false));

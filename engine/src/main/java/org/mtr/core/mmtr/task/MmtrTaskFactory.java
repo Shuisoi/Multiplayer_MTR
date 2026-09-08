@@ -38,6 +38,9 @@ public final class MmtrTaskFactory {
 			case SERVE:
 				task = new StationServiceTask(step.stepId, step.targetId, step.dueTimeOfDayMs, 0);
 				break;
+			case CHANGE_ENDS:
+				task = new ChangeEndsTask(step.stepId, step.dueTimeOfDayMs);
+				break;
 			default:
 				return null; // COUPLE / UNCOUPLE: derived-vehicle slice later
 		}

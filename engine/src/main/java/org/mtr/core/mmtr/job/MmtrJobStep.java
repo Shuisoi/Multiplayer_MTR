@@ -20,7 +20,7 @@ import org.mtr.core.serializer.WriterBase;
  */
 public final class MmtrJobStep implements SerializedDataBase {
 
-	public enum StepType { MOVE_TO, SERVE, COUPLE, UNCOUPLE }
+	public enum StepType { MOVE_TO, SERVE, COUPLE, UNCOUPLE, CHANGE_ENDS }
 
 	public String stepId = "";
 	public StepType type = StepType.MOVE_TO;

@@ -227,6 +227,25 @@ public final class MmtrConsistWalkerTests {
 	}
 
 	@Test
+	public void changeEndsAtTheDeadEndRunsBackOnTheSameRail() {
+		final Line line = new Line();
+		final MmtrConsistWalker walker = MmtrConsistWalker.place(line.sim, new BranchStore(), line.r2, line.nC, line.l2() - 8, new double[]{4}, null);
+		assertNotNull(walker);
+		assertTrue(walker.insertKey(Cab.CAB_B, true, true), "the B-end cab leads toward the buffer");
+		assertTrue(walker.advance(1000));
+		assertTrue(walker.endOfLine(), "the consist rests against the buffer");
+		assertEquals(4, walker.distanceM(), 1e-6);
+
+		// 换端 at the terminal: the crew changes cabs and the same consist runs back out.
+		assertTrue(walker.changeEnds(true));
+		assertTrue(walker.advance(6), "the other cab drives the consist back");
+		assertEquals(10, walker.distanceM(), 1e-6, "distance keeps accumulating, never reverses");
+		assertEquals(line.r2.getHexId(), walker.leadingRailHex(), "still on the terminal rail");
+		assertEquals(line.l2() - 10, walker.body().aEndArcM(), 1e-6, "the A end has run back 6 m from the buffer-resting position");
+		assertEquals(1, walker.occupancy().size());
+	}
+
+	@Test
 	public void placementRefusesWhenTheBodyNeedsAnUnsetFork() {
 		final Fork fork = new Fork();
 		// A 16 m body starting 6 m before the node cannot be placed: the fork ahead has no authority.

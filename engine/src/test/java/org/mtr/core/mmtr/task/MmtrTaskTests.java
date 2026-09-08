@@ -80,6 +80,17 @@ public final class MmtrTaskTests {
 	}
 
 	@Test
+	public void changeEndsNeedsNoTargetAndSaysSo() {
+		final ChangeEndsTask task = new ChangeEndsTask("c1", DUE);
+		assertEquals(MmtrTaskKind.CHANGE_ENDS, task.kind());
+		assertEquals("", task.validate(), "换端 has no target to validate");
+		assertEquals(0, task.targetRef);
+		assertEquals("", task.targetKind);
+		assertTrue(task.describe().contains("换端"), "describe names the operation: " + task.describe());
+		assertEquals(DUE, task.dueMs, "the timetable still carries the planned moment");
+	}
+
+	@Test
 	public void everyConcreteTaskDescribesItself() {
 		for (final MmtrTask task : new MmtrTask[]{
 			new DriveToSidingTask("t", 1L, DUE),
@@ -88,6 +99,7 @@ public final class MmtrTaskTests {
 			new DriveTurnbackTask("t", 4L, DUE),
 			new DriveToConsistTask("t", 5L, DUE, 0),
 			new FreightWorkTask("t", 6L, MmtrTask.TARGET_FREIGHT, DUE, 0),
+			new ChangeEndsTask("t", DUE),
 		}) {
 			assertFalse(task.toString().isEmpty());
 			assertFalse(task.describe().isEmpty(), task.kind() + " must describe its operation");

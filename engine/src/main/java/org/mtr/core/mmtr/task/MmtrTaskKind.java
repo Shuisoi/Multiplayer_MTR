@@ -17,6 +17,11 @@ public enum MmtrTaskKind {
 	STATION_SERVICE,
 	/** 折返/掉头: drive around the turnback (via the junction table) onto the return track. */
 	DRIVE_TURNBACK,
+	/**
+	 * 原地换端 (change ends in place): the consist stands and the crew changes cabs - no movement,
+	 * no target, no dwell. Distinct from {@link #DRIVE_TURNBACK}, which runs around a turnback lead.
+	 */
+	CHANGE_ENDS,
 	/** 连挂走行 (接口预留): approach and stop at the coupling point of another consist /
 	 * 派生非动力车 (Vehicle derivation lands in a later slice); the actual "hooked" transition
 	 * is the future COUPLE action. */

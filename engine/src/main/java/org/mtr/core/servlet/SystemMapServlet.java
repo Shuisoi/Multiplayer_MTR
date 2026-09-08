@@ -757,7 +757,7 @@ public final class SystemMapServlet extends ServletBase {
 				row.addProperty("type", step.type.name());
 				final boolean isPlatform = step.type != org.mtr.core.mmtr.job.MmtrJobStep.StepType.COUPLE && step.type != org.mtr.core.mmtr.job.MmtrJobStep.StepType.UNCOUPLE && isPlatform(simulator, step.targetId);
 				row.addProperty("taskKind", taskKindOf(step, isPlatform));
-				row.addProperty("targetKind", step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.COUPLE || step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.UNCOUPLE ? "" : isPlatform ? "PLATFORM" : "SIDING");
+				row.addProperty("targetKind", step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.COUPLE || step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.UNCOUPLE || step.type == org.mtr.core.mmtr.job.MmtrJobStep.StepType.CHANGE_ENDS ? "" : isPlatform ? "PLATFORM" : "SIDING");
 				row.addProperty("targetId", String.valueOf(step.targetId));
 				row.addProperty("plannedMs", step.dueTimeOfDayMs);
 				if (step.note != null && !step.note.isEmpty()) {
@@ -780,6 +780,7 @@ public final class SystemMapServlet extends ServletBase {
 		return switch (step.type) {
 			case MOVE_TO -> isPlatform ? "DRIVE_TO_PLATFORM" : "DRIVE_TO_SIDING";
 			case SERVE -> "STATION_SERVICE";
+			case CHANGE_ENDS -> "CHANGE_ENDS";
 			case COUPLE -> "COUPLE";
 			case UNCOUPLE -> "UNCOUPLE";
 		};

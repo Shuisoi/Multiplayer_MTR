@@ -675,6 +675,10 @@ public final class MmtrJobScheduler {
 			fail(instance, "consist vanished before step " + step.stepId);
 			return;
 		}
+		if (step.type == MmtrJobStep.StepType.CHANGE_ENDS) {
+			// 换端 has no target and no mission: advanceManual performs it once the consist stands.
+			return;
+		}
 		if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
 			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding (step " + step.stepId + ")");
 			return;
@@ -735,6 +739,16 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		final MmtrJobStep step = instance.stepIndex < instance.job.steps.size() ? instance.job.steps.get((int) instance.stepIndex) : null;
+		if (step != null && step.type == MmtrJobStep.StepType.CHANGE_ENDS) {
+			if (completeChangeEndsStep(instance, vehicle, step)) {
+				if (instance.stepIndex >= instance.job.steps.size()) {
+					instance.state = JobState.DONE;
+				} else {
+					runManualStep(instance, simulator);
+				}
+			}
+			return;
+		}
 		if (step != null && step.type == MmtrJobStep.StepType.SERVE) {
 			// Dwell gate: the consist completed its passenger arrival (doors cycled); the step
 			// closes once it rests at the target platform.
@@ -817,6 +831,13 @@ public final class MmtrJobScheduler {
 			fail(instance, "consist vanished mid-service");
 			return;
 		}
+		if (step.type == MmtrJobStep.StepType.CHANGE_ENDS) {
+			// ATO completes 换端 itself once the consist stands (§3.5.1 decision 3).
+			if (completeChangeEndsStep(instance, vehicle, step) && instance.stepIndex >= instance.job.steps.size()) {
+				instance.state = JobState.DONE;
+			}
+			return;
+		}
 		if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
 			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding, not mid-route (step " + step.stepId + ")");
 			return;
@@ -847,6 +868,31 @@ public final class MmtrJobScheduler {
 	private static void fail(JobInstance instance, String reason) {
 		instance.state = JobState.FAILED;
 		instance.failureReason = reason;
+	}
+
+	/**
+	 * 换端 step: no drive, no mission, no target. The consist must be at rest (a driver cannot change
+	 * cabs on a moving train) and the engine then flips the manned cab — the train itself does not
+	 * move. Both executors share this gate: a manual job performs it when the driver has brought the
+	 * consist to a stand, an ATO job completes it itself (§3.5.1 decision 3).
+	 *
+	 * @return whether the step completed on this tick (and stepIndex was advanced)
+	 */
+	private boolean completeChangeEndsStep(JobInstance instance, Vehicle vehicle, MmtrJobStep step) {
+		if (vehicle.getMmtrConsistWalker() == null) {
+			fail(instance, "step " + step.stepId + " 换端 requires a consist-body vehicle");
+			return false;
+		}
+		if (vehicle.getSpeed() > 0) {
+			return false; // waiting for the stand - not a terminal state
+		}
+		if (!vehicle.changeEndsMmtrMotion()) {
+			fail(instance, "step " + step.stepId + " 换端 refused");
+			return false;
+		}
+		System.out.println("[MMTR-JOB] 换端 at step " + step.stepId + " vehicle=" + vehicle.getId() + " -> cab " + vehicle.getMmtrConsistWalker().cabs().activeCab());
+		instance.stepIndex++;
+		return true;
 	}
 
 	/** Place the job's (possibly make-up composed) rolling-stock template so the engine spawns it. */
