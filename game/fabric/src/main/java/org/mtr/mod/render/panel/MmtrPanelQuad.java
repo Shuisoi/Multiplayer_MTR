@@ -34,8 +34,12 @@ public final class MmtrPanelQuad {
 	private MmtrPanelQuad() {
 	}
 
-	/** Lift the plane off the modelled face so it does not z-fight with the dashboard geometry. */
-	private static final float SURFACE_OFFSET_M = 0.005F;
+	/**
+	 * Lift the plane off the modelled face so it does not z-fight with the dashboard geometry. This is
+	 * deliberately generous: the modelled dashboard can sit slightly proud of the anchor quad's plane,
+	 * and a panel buried inside it shows up as a speckled mix of panel and body colours.
+	 */
+	private static final float SURFACE_OFFSET_M = 0.03F;
 	/** Panels already described in the log, so the geometry is reported once per texture. */
 	private static final ObjectOpenHashSet<String> DEBUG_LOGGED = new ObjectOpenHashSet<>();
 
