@@ -9,6 +9,8 @@ import org.mtr.core.directions.DirectionsFinder;
 import org.mtr.core.generated.data.SidingSchema;
 import org.mtr.core.oba.*;
 import org.mtr.core.operation.ArrivalResponse;
+import org.mtr.core.mmtr.consist.MmtrCabState;
+import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.path.SidingPathFinder;
@@ -296,9 +298,18 @@ public final class Siding extends SidingSchema implements Utilities {
 			&& (!mmtrManualSpawn || !mmtrSessionSpawned)) {
 			Vehicle vehicle = null;
 			if (mmtrManualSpawn) {
-				final MmtrMotionWalker walker = mmtrMotionWalkerFromYard(null, data instanceof org.mtr.core.simulation.Simulator simulator ? simulator.mmtrPointBranches : null, null);
-				if (walker != null) {
-					vehicle = spawnMmtrMotionVehicle(walker);
+				final BranchStore store = data instanceof final Simulator simulator ? simulator.mmtrPointBranches : null;
+				// B7.2d: prefer the consist-body model (double-ended body + manned cab), fall back to
+				// the legacy single-point walker when the body cannot be placed on this yard.
+				final MmtrConsistWalker consistWalker = mmtrConsistWalkerFromYard(null, store, null);
+				if (consistWalker != null) {
+					vehicle = spawnMmtrConsistVehicle(consistWalker, MmtrCabState.Cab.CAB_A);
+				}
+				if (vehicle == null) {
+					final MmtrMotionWalker walker = mmtrMotionWalkerFromYard(null, store, null);
+					if (walker != null) {
+						vehicle = spawnMmtrMotionVehicle(walker);
+					}
 				}
 				if (vehicle == null) {
 					System.out.println("[MMTR-MFST] manual siding " + id + " could not stage a Motion-Core car (yard busy/unwalkable) - legacy fallback");
@@ -434,6 +445,78 @@ public final class Siding extends SidingSchema implements Utilities {
 			}
 		}
 		return count;
+	}
+
+	/**
+	 * B7.2d: the consist-body equivalent of {@link #mmtrMotionWalkerFromYard}. The parked consist is
+	 * placed with its <strong>A end</strong> (car 0's outer end — the head, since MTR car 0 is the
+	 * front car) at the parked head offset measured from the yard's rear node, and its body extends
+	 * toward that rear node. The A-end cab's driver faces outward, so CAB_A departs the yard head-first
+	 * with no reverse running; {@link #spawnMmtrConsistVehicle} hands the consist that system key.
+	 *
+	 * @return the walker, or {@code null} when the yard rail is unresolved or the formation does not fit
+	 */
+	@Nullable
+	public MmtrConsistWalker mmtrConsistWalkerFromYard(@Nullable Position rearEnd, @Nullable BranchStore branches, @Nullable String targetRailHex) {
+		if (defaultPathData == null || vehicleCars.isEmpty()) {
+			return null;
+		}
+		final Rail rail = defaultPathData.getRail();
+		if (rail == null) {
+			return null;
+		}
+		final double trainLength = Siding.getTotalVehicleLength(vehicleCars);
+		final double railLengthM = rail.railMath.getLength();
+		if (trainLength > railLengthM + 1e-6) {
+			return null;
+		}
+		final Position end1 = position1;
+		final Position end2 = position2;
+		final Position rear = rearEnd != null ? rearEnd : (countOtherRailsAt(end1, rail) <= countOtherRailsAt(end2, rail) ? end1 : end2);
+		final Position front = rear.equals(end1) ? end2 : end1;
+		final double headOffset = Math.max(trainLength, Math.min((railLengthM + trainLength) / 2, railLengthM));
+		final double[] carLengthsM = new double[vehicleCars.size()];
+		for (int i = 0; i < carLengthsM.length; i++) {
+			carLengthsM[i] = vehicleCars.get(i).getTotalLength(i == 0, i == carLengthsM.length - 1);
+		}
+		final BranchStore store = branches == null && data instanceof final Simulator simulator ? simulator.mmtrPointBranches : branches;
+		// The spine runs from the A end toward the rear node: measure the A end from the front node.
+		return MmtrConsistWalker.place(data, store, rail, front, railLengthM - headOffset, carLengthsM, targetRailHex);
+	}
+
+	/**
+	 * B7.2d: spawn the parked stock as a consist-body vehicle (the B-series replacement for
+	 * {@link #spawnMmtrMotionVehicle}). Same idle-yard rules; the engine inserts the system key in
+	 * {@code cab} so the consist can move (a real driver path replaces this in B7.6).
+	 */
+	@Nullable
+	public Vehicle spawnMmtrConsistVehicle(MmtrConsistWalker walker, MmtrCabState.Cab cab) {
+		if (walker == null || vehicleCars.isEmpty()) {
+			return null;
+		}
+		if (Siding.getTotalVehicleLength(vehicleCars) > railLength + 1e-6) {
+			return null;
+		}
+		Vehicle parked = null;
+		for (final Vehicle vehicle : vehicleIdMap.values()) {
+			if (vehicle.getIsOnRoute()) {
+				return null; // yard must be idle for Motion-Core dispatch
+			}
+			if (parked != null) {
+				return null; // more than one parked vehicle is not dispatchable
+			}
+			parked = vehicle;
+		}
+		if (parked != null) {
+			vehicleIdMap.remove(parked.getId());
+		}
+		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(),
+			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		vehicle.engageMmtrConsistMotion(walker, cab);
+		vehicleIdMap.put(vehicle.getId(), vehicle);
+		mmtrManualSpawn = true;
+		mmtrSessionSpawned = true;
+		return vehicle;
 	}
 
 	/**
