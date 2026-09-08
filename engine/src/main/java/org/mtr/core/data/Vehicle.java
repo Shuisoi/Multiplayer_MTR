@@ -893,9 +893,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final boolean brakeTargetActive = brakeTargetM < Double.MAX_VALUE / 2;
 		// Unmanned auto run: drives itself toward the armed stop target while no cab override is held.
 		final boolean autoActive = mmtrMotionAuto && !mmtrManualOverride && stopTargetActive && !mmtrMotionStoppedAtTarget && !mmtrBlockedWaiting && remainingToBrake > 1e-6;
-		if (autoActive) {
+		if (autoActive || overridden) {
 			// Resolve the consist type / controller lazily like the driver path does - the auto
-			// planner reads the traction/brake parameters and the AIR_BRAKE split from the type.
+			// planner and the LZB supervision read the traction/brake parameters and the AIR_BRAKE
+			// split from the type.
 			tryInitMmtrController();
 		}
 		final int autoNotch = mmtrConsistType != null ? Math.max(1, Math.min(4, mmtrConsistType.getPowerNotches())) : 4;
@@ -942,7 +943,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				// train brakes with the exact-decel law; OUTSIDE the envelope it keeps cruising - the
 				// envelope engages on its own as the node approaches.
 				final double toNodeM = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
-				final double needDecel = 0.5 * (speed * speed - nextLimitMms * nextLimitMms) / Math.max(toNodeM, 1e-3);
+				// Look one tick ahead: the deceleration needed to arrive at the node at the slower
+				// rail's limit AFTER this tick's travel. Engaging a tick early absorbs the
+				// cruise-to-brake discrete step so the node is crossed at (about) the slower limit.
+				final double needDecel = 0.5 * (speed * speed - nextLimitMms * nextLimitMms) / Math.max(toNodeM - speed * millisElapsed, 1e-3);
 				if (needDecel > decelPerMs * 0.98) {
 					speed = Math.max(nextLimitMms, speed - Math.min(needDecel, decelPerMs) * millisElapsed);
 				} else {
@@ -954,6 +958,42 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				speed = Math.max(cruiseCap, speed - decelPerMs * millisElapsed);
 			} else {
 				speed = Math.min(cruiseCap, speed + accelPerMs * millisElapsed);
+			}
+			integratedDistance = speed * millisElapsed;
+		} else if (overridden && !airBrakeConsist && mmtrConsistType != null && getMmtrRegime() == MmtrRegime.LZB) {
+			// Signal S4 (LZB): continuous speed supervision for manual driving on the high-speed
+			// band (>= 101 km/h rails). Unlike AWS (advisory), the LZB ceiling is ENFORCED: the
+			// driver's traction may never push the train past min(current rail limit, consist
+			// ceiling) - overspeed decays at service deceleration (Zwangsbremsung-style, gentle
+			// first) - and a slower rail ahead is braced for with the service envelope so the
+			// train crosses the node at (about) the slower rail's limit. The driver's own braking
+			// (incl. emergency) stays stronger than the supervision. Air-brake consists keep the
+			// controller path below.
+			final double accelPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getTractionAccelerationMps2()) : vehicleExtraData.getAcceleration() * 1e-3;
+			final double decelPerMs = mmtrMotionServiceDecelPerMs();
+			final double emergencyPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getEmergencyDecelerationMps2()) : vehicleExtraData.getDeceleration() * 2e-3;
+			final double lzbCeiling = Math.min(mmtrCurrentRailLimitPerMs(), kmhToInternal(mmtrConsistType.getMaxSpeedKmh()));
+			final Rail nextRailLzb = mmtrMotionWalker.peekNextRail();
+			final double nextLimitLzb = nextRailLzb == null ? -1 : nextRailLzb.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
+			if (braking) {
+				speed = Math.max(0, speed - (control.isEmergency() ? emergencyPerMs : decelPerMs) * millisElapsed);
+			} else if (nextLimitLzb > 0 && nextLimitLzb < lzbCeiling - 1e-12 && speed > nextLimitLzb) {
+				final double toNodeM = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+				// One-tick look-ahead (same rule as the auto planner): engage the envelope before
+				// this tick's travel crosses the braking point so the node is crossed at the slower
+				// rail's limit instead of being overshot by the cruise-to-brake discrete step.
+				final double needDecel = 0.5 * (speed * speed - nextLimitLzb * nextLimitLzb) / Math.max(toNodeM - speed * millisElapsed, 1e-3);
+				if (needDecel > decelPerMs * 0.98) {
+					speed = Math.max(nextLimitLzb, speed - Math.min(needDecel, decelPerMs) * millisElapsed);
+				} else {
+					speed = Math.min(lzbCeiling, speed + accelPerMs * millisElapsed);
+				}
+			} else if (speed > lzbCeiling) {
+				speed = Math.max(lzbCeiling, speed - decelPerMs * millisElapsed);
+			} else if (wantPower) {
+				speed = Math.min(lzbCeiling, speed + accelPerMs * millisElapsed);
+			} else {
+				speed = Math.max(0, speed - decelPerMs * 0.1 * millisElapsed); // coast
 			}
 			integratedDistance = speed * millisElapsed;
 		} else if ((overridden || autoActive) && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
@@ -1999,6 +2039,62 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	public MmtrRegime getMmtrRegime() {
 		return MmtrRegime.fromSpeedLimitKmh(getMmtrCurrentSpeedLimitKmh());
+	}
+
+	/**
+	 * Signal S4 (LZB): the enforced speed ceiling of the current supervision - min(current rail
+	 * limit, consist ceiling) in km/h; 0 = no supervision active (not on the LZB band / legacy).
+	 */
+	public long getMmtrLzbCeilingKmh() {
+		if (mmtrMotionWalker == null || getMmtrRegime() != MmtrRegime.LZB || mmtrConsistType == null) {
+			return 0;
+		}
+		final double ceilingMms = Math.min(mmtrCurrentRailLimitPerMs(), kmhToInternal(mmtrConsistType.getMaxSpeedKmh()));
+		return Math.round(ceilingMms * 3600.0);
+	}
+
+	/**
+	 * Signal S4 (LZB): the cab target speed in km/h - 0 when the train must stop (occupancy block
+	 * ahead), else the lower of the next rail's limit and the current ceiling; 0 when idle.
+	 */
+	public long getMmtrLzbTargetKmh() {
+		if (mmtrMotionWalker == null || getMmtrRegime() != MmtrRegime.LZB) {
+			return 0;
+		}
+		if (mmtrBlockStopM < Double.MAX_VALUE / 2) {
+			return 0;
+		}
+		final Rail nextRailLzb = mmtrMotionWalker.peekNextRail();
+		if (nextRailLzb != null) {
+			final double nextLimitMms = nextRailLzb.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
+			final double ceilingMms = mmtrCurrentRailLimitPerMs();
+			if (nextLimitMms > 0 && nextLimitMms < ceilingMms - 1e-12) {
+				return Math.round(nextLimitMms * 3600.0);
+			}
+		}
+		return getMmtrLzbCeilingKmh();
+	}
+
+	/**
+	 * Signal S4 (LZB): distance to the current LZB target in metres (the occupancy block stop or
+	 * the node where the slower rail begins); -1 = no bounded target ahead.
+	 */
+	public double getMmtrLzbTargetDistanceM() {
+		if (mmtrMotionWalker == null || getMmtrRegime() != MmtrRegime.LZB) {
+			return -1;
+		}
+		if (mmtrBlockStopM < Double.MAX_VALUE / 2) {
+			return Math.max(0, mmtrBlockStopM - mmtrMotionWalker.distanceM());
+		}
+		final Rail nextRailLzb = mmtrMotionWalker.peekNextRail();
+		if (nextRailLzb != null) {
+			final double nextLimitMms = nextRailLzb.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
+			final double ceilingMms = mmtrCurrentRailLimitPerMs();
+			if (nextLimitMms > 0 && nextLimitMms < ceilingMms - 1e-12) {
+				return mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+			}
+		}
+		return -1;
 	}
 
 	/** Signal S3 (AWS): an unacknowledged point warning is currently active (HUD/display read). */

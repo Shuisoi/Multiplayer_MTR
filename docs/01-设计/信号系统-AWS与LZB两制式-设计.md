@@ -6,6 +6,8 @@
 > mmtr-topology speedLimitKmh；实机摸底：49 轨 = AWS 21（40×15+80×6）/ LZB 28（300 全档））。
 > **S3（AWS 车载警示状态机）已交付**（notes/32，290/0/2；WARN→ack→SPAD、ControlState.acknowledge、
 > MmtrDriveControl 协议字段、motion 模式 SPAD 执行补齐）。
+> **S4（LZB 连续监督·手动强制）已交付**（notes/34，292/0/2；LZB 手动 ceiling 强制 + 慢轨包络 +
+> 驾驶室数据 getter ceiling/目标/距离）。
 > 待交付：S4 LZB 车载监督、S5 联锁收编、S6 文档实机 + 驾驶室 HUD 重构（另项）。
 > v1 统一红黄绿显示 → v2 两制式分级 → **v3 制式判据定案：轨自带限速 ≤100 → AWS / ≥101 → LZB（方向性）**；
 > 双层限速模型确认（轨=基础+制式源；动态约束=独立对象）。代码事实核对自 14fef6c。
