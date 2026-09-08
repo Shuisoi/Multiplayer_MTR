@@ -238,3 +238,88 @@ canvas {
 	border-color: #ff6d6d;
 }
 
+/* --- MMTR live overlay: train markers + signal legend (信号/列车覆盖层) --- */
+
+.train-marker {
+	pointer-events: none;
+	z-index: 2;
+}
+
+.train-marker.parked {
+	background: color-mix(in srgb, var(--background-color) 78%, transparent);
+	border: 1px dashed #9aa0a6;
+	color: #9aa0a6;
+	padding: 1px 6px;
+}
+
+.train-marker .train-marker-dot {
+	width: 7px;
+	height: 7px;
+	box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+}
+
+.train-marker.parked .train-marker-dot {
+	background: #9aa0a6 !important;
+}
+
+.train-marker-text {
+	font-size: 0.6rem;
+	line-height: 1.1;
+}
+
+.train-marker.moving {
+	box-shadow: 0 0 8px rgba(160, 230, 160, 0.55);
+}
+
+.mmtr-map-legend {
+	position: absolute;
+	left: 12px;
+	bottom: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	background: color-mix(in srgb, var(--background-color) 90%, transparent);
+	border: 1px solid var(--p-content-border-color);
+	border-radius: 6px;
+	padding: 6px 9px;
+	font-size: 0.64rem;
+	line-height: 1.25;
+	color: var(--p-text-color);
+	z-index: 4;
+	pointer-events: auto;
+	user-select: none;
+}
+
+.mmtr-legend-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+}
+
+.mmtr-legend-dot {
+	width: 14px;
+	height: 5px;
+	border-radius: 2px;
+	flex: none;
+}
+
+.mmtr-legend-red { background: #ff4d4f; }
+.mmtr-legend-yellow { background: #ffb300; }
+.mmtr-legend-yy { background: #ffe082; }
+.mmtr-legend-white { background: #ffffff; border: 1px solid #9aa0a6; }
+
+.mmtr-legend-train {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #4fb0ff;
+	flex: none;
+	border: 1px solid var(--background-color);
+}
+
+.mmtr-legend-train.parked {
+	background: transparent;
+	border: 1.5px dashed #9aa0a6;
+}
+

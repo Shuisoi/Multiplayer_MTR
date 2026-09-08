@@ -461,6 +461,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		for (final String[] op : plan.forkOps) {
 			mmtrPendingPointOps.add(op.clone());
 		}
+		// The walker elects operator branches (道岔人工位) BEFORE authority grants, and the engine
+		// presets every fork to branch 0 by default. An auto-planned run must clear the operator
+		// rows of ITS OWN forks so the granted (planned) leg is the one the walker crosses; the
+		// row comes back through mmtrEnsurePointDefaults only when the rail set changes, and a
+		// human can still block a mission with an authority lock instead.
+		for (final String[] op : plan.forkOps) {
+			simulator.mmtrPointBranches.set(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], -1);
+		}
+		simulator.persistMmtrPointBranches();
 		final String owner = "v" + getId();
 		mmtrPointOwner = owner;
 		final org.mtr.core.mmtr.point.MmtrPointAuthority authority = simulator.mmtrPointAuthority;
@@ -1508,6 +1517,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrAwsWarningAcknowledged = mmtrAwsState == MMTR_AWS_ACKED;
 		mmtrBlockHeld = mmtrBlockedWaiting;
 		mmtrSpeedLimitKmh = Math.round(mmtrCurrentRailLimitPerMs() * 3600.0);
+		// Signal S4 (LZB) cab display: supervision band flag, enforced ceiling, cab target speed
+		// (0 = stop target ahead) and distance to that target, mirrored from the same values the
+		// driving supervision enforces against - the client HUD reads exactly what the train obeys.
+		mmtrLzbSupervising = getMmtrLzbCeilingKmh() > 0;
+		mmtrLzbCeilingKmh = getMmtrLzbCeilingKmh();
+		mmtrLzbTargetKmh = getMmtrLzbTargetKmh();
+		mmtrLzbTargetDistanceM = getMmtrLzbTargetDistanceM();
 	}
 
 	/** Server-side: (re)evaluate overrun/SPAD protection ahead of the {@code stoppingPoint}. */
@@ -1542,6 +1558,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public boolean isMmtrBlockHeldFromSync() { return mmtrBlockHeld; }
 	/** Signal S2: current per-rail directional speed limit in km/h, mirrored (client HUD); 0 = legacy run. */
 	public long getMmtrSpeedLimitKmhFromSync() { return mmtrSpeedLimitKmh; }
+	/** Signal S4 (LZB): whether continuous LZB supervision is live on this train (mirrored). */
+	public boolean isMmtrLzbSupervisingFromSync() { return mmtrLzbSupervising; }
+	/** Signal S4 (LZB): the enforced speed ceiling in km/h (mirrored); 0 = no supervision. */
+	public long getMmtrLzbCeilingKmhFromSync() { return mmtrLzbCeilingKmh; }
+	/** Signal S4 (LZB): cab target speed in km/h (mirrored); 0 = stop at the target ahead. */
+	public long getMmtrLzbTargetKmhFromSync() { return mmtrLzbTargetKmh; }
+	/** Signal S4 (LZB): distance to the cab target in metres (mirrored); -1 = no bounded target. */
+	public double getMmtrLzbTargetDistanceMFromSync() { return mmtrLzbTargetDistanceM; }
 
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
 		// Tracks the distance

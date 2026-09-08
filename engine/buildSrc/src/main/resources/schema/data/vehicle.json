@@ -180,6 +180,22 @@
 		"mmtrSpeedLimitKmh": {
 			"type": "integer",
 			"default": 0
+		},
+		"mmtrLzbSupervising": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrLzbCeilingKmh": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrLzbTargetKmh": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrLzbTargetDistanceM": {
+			"type": "number",
+			"default": -1
 		}
 	}
 }

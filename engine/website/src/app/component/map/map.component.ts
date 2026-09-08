@@ -40,6 +40,10 @@ const lineMaterialThinDashed = new LineMaterial({color: 0xFFFFFF, linewidth: 3 *
  * white edges stay readable on light themes too. Edges are pure topology - one line per real rail. */
 const lineMaterialRailHalo = new LineMaterial({color: 0x000000, linewidth: 9 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.45});
 const lineMaterialRailCore = new LineMaterial({color: 0xFFFFFF, linewidth: 5 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
+/** MMTR signal layer (信号显示): aspect-coloured cores drawn over the white topology rails. */
+const lineMaterialSignalRed = new LineMaterial({color: 0xFF4D4F, linewidth: 6 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
+const lineMaterialSignalYellow = new LineMaterial({color: 0xFFB300, linewidth: 6 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
+const lineMaterialSignalDoubleYellow = new LineMaterial({color: 0xFFE082, linewidth: 6 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 
 @Component({
 	selector: "app-map",
@@ -83,6 +87,8 @@ export class MapComponent implements AfterViewInit {
 	readonly pointMarkers = signal<PointMarker[]>([]);
 	/** P2: the fork rows of the selected node (one per approach rail), fed to the point console. */
 	readonly selectedNodePoints = signal<MmtrPoint[]>([]);
+	/** MMTR: live rail signal aspects (per-rail block display), polled with the trains feed. */
+	protected readonly liveSignals = this.mmtrTrainsService.signals;
 	private selectedNodeKey = "";
 	readonly clientImageSize = CLIENT_IMAGE_SIZE;
 	readonly loading = this.mapDataService.mapLoading;
@@ -92,6 +98,8 @@ export class MapComponent implements AfterViewInit {
 	private clientPositions: Record<string, { x: number, y: number }> = {};
 
 	private railLayer: THREE.Group | undefined;
+	/** MMTR signal layer: aspect-coloured cores over the white rail topology. */
+	private signalLayer: THREE.Group | undefined;
 	private readonly lineGroups = new Map<string, THREE.Group>();
 	private readonly liveLineMaterials: LineMaterial[] = [];
 	private static readonly RAIL_Z_INDEX = 0;
@@ -145,6 +153,19 @@ export class MapComponent implements AfterViewInit {
 			this.mmtrLayersService.visibleLines();
 			this.mmtrLayersService.focusedLine();
 			this.applyRailLayer();
+			this.applySignalLayer();
+		});
+		// MMTR live overlay (信号 + 车辆): repaint whenever the trains feed refreshes (3s poll) and
+		// after every map move - vehicle positions and signal aspects follow the simulation.
+		effect(() => {
+			this.mmtrTrainsService.trains();
+			this.mmtrTrainsService.signals();
+			this.mmtrTrainsService.lastUpdated();
+			const canvas = this.canvasRef()?.nativeElement;
+			if (!this.loading() && this.controls && canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+				this.applySignalLayer();
+				this.updateLabels();
+			}
 		});
 	}
 
@@ -233,6 +254,57 @@ export class MapComponent implements AfterViewInit {
 			});
 			this.scene.remove(this.railLayer);
 			this.railLayer = undefined;
+		}
+	}
+
+	/**
+	 * MMTR signal layer (信号显示): one coloured core per rail whose live aspect is not clear -
+	 * red = occupied block, single yellow = the next rail is occupied, double yellow = two rails
+	 * ahead (the same chain the in-game signal lights display). Rebuilt on every trains-feed
+	 * refresh (3s) and map change; clear rails stay white underneath.
+	 */
+	private applySignalLayer() {
+		this.clearSignalLayer();
+		const rails = this.mmtrTopologyService.rails();
+		const aspects = this.mmtrTrainsService.signals();
+		if (rails.length === 0 || aspects.length === 0) {
+			return;
+		}
+		const canvas = this.canvasRef()?.nativeElement;
+		if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+			[lineMaterialSignalRed, lineMaterialSignalYellow, lineMaterialSignalDoubleYellow].forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
+		}
+		const aspectByHex = new Map<string, string>();
+		aspects.forEach(aspect => aspectByHex.set(aspect.hex, aspect.aspect));
+		const group = new THREE.Group();
+		for (const rail of rails) {
+			const aspect = aspectByHex.get(rail.hex);
+			if (!aspect || aspect === "GREEN") {
+				continue;
+			}
+			const geometry = new LineGeometry();
+			geometry.setPositions([
+				rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX + 0.5,
+				rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX + 0.5,
+			]);
+			const material = aspect === "RED" ? lineMaterialSignalRed : aspect === "DOUBLE_YELLOW" ? lineMaterialSignalDoubleYellow : lineMaterialSignalYellow;
+			const line = new Line2(geometry, material);
+			line.computeLineDistances();
+			group.add(line);
+		}
+		this.signalLayer = group;
+		this.scene.add(this.signalLayer);
+	}
+
+	private clearSignalLayer() {
+		if (this.signalLayer) {
+			this.signalLayer.children.forEach(child => {
+				if ((child as unknown as Line2).isLine2) {
+					(child as unknown as Line2).geometry.dispose();
+				}
+			});
+			this.scene.remove(this.signalLayer);
+			this.signalLayer = undefined;
 		}
 	}
 
@@ -440,6 +512,9 @@ export class MapComponent implements AfterViewInit {
 				lineMaterialThinDashed.resolution.set(clientWidth, clientHeight);
 				lineMaterialRailHalo.resolution.set(clientWidth, clientHeight);
 				lineMaterialRailCore.resolution.set(clientWidth, clientHeight);
+				lineMaterialSignalRed.resolution.set(clientWidth, clientHeight);
+				lineMaterialSignalYellow.resolution.set(clientWidth, clientHeight);
+				lineMaterialSignalDoubleYellow.resolution.set(clientWidth, clientHeight);
 				this.liveLineMaterials.forEach(material => material.resolution.set(clientWidth, clientHeight));
 				this.camera.updateProjectionMatrix();
 			}
@@ -906,8 +981,12 @@ export class MapComponent implements AfterViewInit {
 		});
 
 		const newTrainMarkers: TrainMarker[] = [];
+		// MMTR live trains: every consist with a position - parked stock in the depot too (grey,
+		// labelled 库) and service trains coloured by mission state. Depot trains stand close
+		// together, so markers at the same spot fan out by a few pixels.
+		const stacked = new Map<string, number>();
 		this.mmtrTrainsService.trains().forEach(train => {
-			if (train.headX === undefined || train.headZ === undefined || !train.onRoute) {
+			if (train.headX === undefined || train.headZ === undefined) {
 				return;
 			}
 			const canvasX = (train.headX - this.camera.position.x) * this.camera.zoom;
@@ -915,12 +994,19 @@ export class MapComponent implements AfterViewInit {
 			if (Math.abs(canvasX) > halfCanvasWidth || Math.abs(canvasY) > halfCanvasHeight) {
 				return;
 			}
+			const stackKey = `${Math.round(canvasX)},${Math.round(canvasY)}`;
+			const stackIndex = stacked.get(stackKey) ?? 0;
+			stacked.set(stackKey, stackIndex + 1);
+			const parked = !train.onRoute;
 			newTrainMarkers.push({
 				vehicleId: train.vehicleId,
-				label: train.routeNumber || train.routeName || train.sidingName,
+				label: parked ? "库" : train.vehicleId.slice(-4),
 				missionState: train.mission?.state ?? "",
+				parked,
+				moving: train.moving,
+				color: parked ? "" : this.missionColor(train.mission?.state ?? ""),
 				x: canvasX + halfCanvasWidth,
-				y: canvasY + halfCanvasHeight,
+				y: canvasY + halfCanvasHeight + stackIndex * 16,
 			});
 		});
 		this.textLabels.set(newTextLabels);
@@ -1015,6 +1101,9 @@ interface TrainMarker {
 	readonly vehicleId: string;
 	readonly label: string;
 	readonly missionState: string;
+	readonly parked: boolean;
+	readonly moving: boolean;
+	readonly color: string;
 	readonly x: number;
 	readonly y: number;
 }

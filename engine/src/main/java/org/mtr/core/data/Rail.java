@@ -450,6 +450,16 @@ public final class Rail extends RailSchema {
 		currentlyBlockedVehicleIds.keySet().forEach(consumer);
 	}
 
+	/**
+	 * MMTR display feed: whether any vehicle currently holds this rail's CURRENTLY_RESERVE
+	 * signal-block reservation (this tick or the previous tick1 snapshot). Mirrors the state the
+	 * authoritative signal-light channel pushes to clients - the web console colours this rail red
+	 * with it. Pre-approach (PRE_RESERVE) holds are intentionally not "occupied".
+	 */
+	public boolean mmtrIsCurrentlyBlocked() {
+		return !currentlyBlockedVehicleIds.isEmpty() || !currentlyBlockedVehicleIdsOld.isEmpty();
+	}
+
 	public void applyModification(SignalModification signalModification) {
 		if (matchesPositions(signalModification)) {
 			if (signalModification.getIsClearAll()) {

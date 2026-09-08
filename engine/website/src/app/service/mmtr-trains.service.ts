@@ -35,6 +35,13 @@ export interface MmtrTrainState {
 
 export interface MmtrSignalState { id: string; }
 
+/** Live signal aspect of one rail (engine mmtr-trains "signals" feed): the display aspect of the
+ * signal protecting this rail, computed from the authoritative occupancy chain. */
+export interface MmtrRailAspect {
+	hex: string;
+	aspect: "RED" | "SINGLE_YELLOW" | "DOUBLE_YELLOW" | "GREEN";
+}
+
 export interface MmtrSidingState {
 	sidingId: string;
 	sidingName: string;
@@ -53,6 +60,7 @@ export interface MmtrSidingState {
 export class MmtrTrainsService {
 	public readonly trains = signal<MmtrTrainState[]>([]);
 	public readonly sidings = signal<MmtrSidingState[]>([]);
+	public readonly signals = signal<MmtrRailAspect[]>([]);
 	public readonly loading = signal(true);
 	public readonly lastUpdated = signal(0);
 	public readonly dispatchFeedback = signal("");
@@ -73,10 +81,11 @@ export class MmtrTrainsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{ data: { currentTime: number, trains: MmtrTrainState[], sidings: MmtrSidingState[], signals?: MmtrSignalState[], points?: MmtrSignalState[] } }>(this.getUrl()).subscribe({
+		this.httpClient.get<{ data: { currentTime: number, trains: MmtrTrainState[], sidings: MmtrSidingState[], signals?: MmtrRailAspect[], points?: MmtrSignalState[] } }>(this.getUrl()).subscribe({
 			next: response => {
 				this.trains.set(response.data.trains ?? []);
 				this.sidings.set(response.data.sidings ?? []);
+				this.signals.set(response.data.signals ?? []);
 				this.lastUpdated.set(Date.now());
 				this.loading.set(false);
 				this.schedule();

@@ -66,6 +66,23 @@
 				     (keydown.space)="selectNode(pointMarker.key); $event.stopPropagation(); $event.preventDefault()"
 				     [pTooltip]="pointMarker.key + (pointMarker.count > 1 ? ' · ' + pointMarker.count + ' 个进向' : '')" tooltipPosition="top"></div>
 			}
+			@for (trainMarker of trainMarkers(); track trainMarker.vehicleId) {
+				<div class="train-marker" [class.parked]="trainMarker.parked" [class.moving]="trainMarker.moving"
+				     [style.transform]="'translate(-50%,-50%) translate(' + trainMarker.x + 'px, ' + trainMarker.y + 'px)'">
+					<span class="train-marker-dot" [style.background]="trainMarker.color || undefined"></span>
+					<span class="train-marker-text">{{ trainMarker.label }}</span>
+				</div>
+			}
+			@if (trainMarkers().length > 0 || liveSignals().length > 0) {
+				<div class="mmtr-map-legend" (mousedown)="$event.stopPropagation()">
+					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-red"></span>占用(红)</div>
+					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-yellow"></span>单黄</div>
+					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-yy"></span>双黄</div>
+					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-white"></span>空闲</div>
+					<div class="mmtr-legend-row"><span class="mmtr-legend-train"></span>列车(色=任务态)</div>
+					<div class="mmtr-legend-row"><span class="mmtr-legend-train parked"></span>停场车</div>
+				</div>
+			}
 			@if (selectedNodePoints().length > 0) {
 				<div class="point-console" (mousedown)="$event.stopPropagation()">
 					<div class="row space-between point-console-header">
