@@ -228,7 +228,7 @@ public class RenderVehicles implements IGui {
 						}
 
 						// MMTR B7.6e: 2D cab panel on the model's mmtr_hud face (one texture, one quad)
-						MmtrCabDashboard.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations);
+						MmtrCabDashboard.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations, absoluteVehicleCarPositionAndRotation.position);
 
 						vehicleResource.iterateModels(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), (modelIndex, model) -> {
 							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, openDoorways, fromResourcePackCreator);

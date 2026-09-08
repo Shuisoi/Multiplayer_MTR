@@ -1,10 +1,15 @@
 package org.mtr.mod.render.panel;
 
+import org.mtr.core.tool.Vector;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import org.mtr.mapping.holder.ClientPlayerEntity;
+import org.mtr.mapping.holder.MinecraftClient;
+import org.mtr.mapping.holder.Vector3d;
 import org.mtr.mod.Init;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
+import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.StoredMatrixTransformations;
@@ -31,15 +36,44 @@ public final class MmtrCabDashboard {
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
 
+	/** Cars further than this from the player do not draw a dashboard when the player is not riding. */
+	private static final double NEARBY_CAR_RADIUS_M = 12;
+
 	/**
 	 * Called once per visible car by {@link org.mtr.mod.render.RenderVehicles}.
 	 *
-	 * @param vehicle      the vehicle being rendered
-	 * @param carNumber    the car index inside the consist
-	 * @param vehicleId    the model ID of that car
-	 * @param carTransform the transform the car model itself is drawn with
+	 * <p>A dashboard is only readable from inside its own car, and every car of a consist can carry the
+	 * {@code mmtr_hud} anchor (they are usually the same model), so drawing one per car puts several
+	 * dashboards in view at once. Only the car the local player is riding draws one; if the player is
+	 * riding something else (another car or a lift) this car draws nothing, and if the player is not
+	 * riding at all only a car close to them draws one.</p>
+	 *
+	 * @param vehicle         the vehicle being rendered
+	 * @param carNumber       the car index inside the consist
+	 * @param vehicleId       the model ID of that car
+	 * @param carTransform    the transform the car model itself is drawn with
+	 * @param carWorldPosition the car's world position, for the "near the player" test
 	 */
-	public static void render(VehicleExtension vehicle, int carNumber, String vehicleId, StoredMatrixTransformations carTransform) {
+	public static void render(VehicleExtension vehicle, int carNumber, String vehicleId, StoredMatrixTransformations carTransform, Vector carWorldPosition) {
+		final long ridingVehicleId = VehicleRidingMovement.getRidingVehicleId();
+		if (ridingVehicleId != 0) {
+			if (ridingVehicleId != vehicle.getId()) {
+				return;
+			}
+		} else {
+			final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
+			if (player == null) {
+				return;
+			}
+			final Vector3d playerPosition = player.getPos();
+			final double dx = playerPosition.getXMapped() - carWorldPosition.x();
+			final double dy = playerPosition.getYMapped() - carWorldPosition.y();
+			final double dz = playerPosition.getZMapped() - carWorldPosition.z();
+			if (dx * dx + dy * dy + dz * dz > NEARBY_CAR_RADIUS_M * NEARBY_CAR_RADIUS_M) {
+				return;
+			}
+		}
+
 		final ObjectArrayList<Anchor> anchors = MmtrVehicleAnchors.get(vehicleId);
 		if (anchors.isEmpty()) {
 			if (MISSING_ANCHORS_LOGGED.add(vehicleId)) {

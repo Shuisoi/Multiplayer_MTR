@@ -341,6 +341,11 @@ public class VehicleRidingMovement {
 		return vehicleId == ridingVehicleId;
 	}
 
+	/** @return the id of the vehicle (or lift) the local player is riding, or 0 when not riding anything */
+	public static long getRidingVehicleId() {
+		return ridingVehicleId;
+	}
+
 	/**
 	 * MMTR: while the crew holds a cab the driver is fixed at the seat and cannot walk around; the
 	 * passenger compartment stays freely walkable. Set when a cab is taken and cleared when it is

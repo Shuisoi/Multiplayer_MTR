@@ -88,8 +88,10 @@ public final class MmtrVehicleAnchors {
 		public final boolean panelFlipU;
 		/** Texture resolution of the 2D panel drawn on this face, in pixels per block; 0 = client default. */
 		public final int panelPxPerMetre;
+		/** Draw the panel on both sides of the face (diagnostics); normally only the driver's side is drawn. */
+		public final boolean panelTwoSided;
 
-		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre) {
+		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided) {
 			this.name = name;
 			this.kind = kind;
 			this.cab = cab;
@@ -106,6 +108,7 @@ public final class MmtrVehicleAnchors {
 			this.heightM = heightM;
 			this.panelFlipU = panelFlipU;
 			this.panelPxPerMetre = panelPxPerMetre;
+			this.panelTwoSided = panelTwoSided;
 		}
 	}
 
@@ -305,7 +308,8 @@ public final class MmtrVehicleAnchors {
 						getDouble(object, "widthM", 0),
 						getDouble(object, "heightM", 0),
 						getBoolean(object, "panelFlipU", false),
-						getInt(object, "panelPxPerMetre", 0)
+						getInt(object, "panelPxPerMetre", 0),
+						getBoolean(object, "panelTwoSided", false)
 				));
 			}
 		} catch (Exception e) {

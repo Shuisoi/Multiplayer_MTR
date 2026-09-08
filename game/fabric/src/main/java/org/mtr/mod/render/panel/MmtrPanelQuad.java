@@ -54,10 +54,11 @@ public final class MmtrPanelQuad {
 		final Vector right = cross(up, normal).normalize();
 		final double halfWidthM = widthM / 2;
 		final double halfHeightM = heightM / 2;
+		final int chosenSide = anchor.panelTwoSided ? 0 : facingSide(anchor);
 
 		if (DEBUG_LOGGED.add(texture.toString())) {
-			Init.LOGGER.info("[MMTR-DBG] panel {} anchor={} modelPos={} modelNormal={} modelUp={} modelRight={} (model space = OBJ file space (x, -y, -z))",
-					texture, anchor.name, format(position), format(normal), format(up), format(right));
+			Init.LOGGER.info("[MMTR-DBG] panel {} anchor={} modelPos={} modelNormal={} modelUp={} modelRight={} chosenSide={} (model space = OBJ file space (x, -y, -z))",
+					texture, anchor.name, format(position), format(normal), format(up), format(right), chosenSide);
 			for (final int side : new int[]{1, -1}) {
 				final Vector sideNormal = scale(normal, side);
 				Init.LOGGER.info("[MMTR-DBG]   side {} yaw={} pitch={} roll={} flipU={} offset={}",
@@ -70,7 +71,7 @@ public final class MmtrPanelQuad {
 			}
 		}
 
-		for (final int side : new int[]{1, -1}) {
+		for (final int side : chosenSide == 0 ? new int[]{1, -1} : new int[]{chosenSide}) {
 			// The back copy is the same frame rotated 180 degrees about its own up axis: right and
 			// normal are negated, up stays. The frame stays right-handed, so it is still a rotation.
 			final Vector sideNormal = scale(normal, side);
@@ -101,6 +102,11 @@ public final class MmtrPanelQuad {
 				// face. With the default winding the visible copy would be the one pushed INTO the
 				// dashboard (Minecraft culls back faces and RenderLayer.getText keeps culling enabled),
 				// which is exactly how the panel ends up hidden behind its own dashboard.
+				// Corner order is bottom-left, bottom-right, top-right, top-left, and MTR's 12-float
+				// drawTexture assigns the four UV pairs as (u1,v2) (u2,v2) (u2,v1) (u1,v1) - i.e. v2 is
+				// the TOP edge and v1 the bottom, the opposite of the rectangle overload's naming. So
+				// v1=0 (image top) belongs to the top corners: pass 0 for v1 and 1 for v2 to keep the
+				// panel upright.
 				final float uLeft = flipU ? 1 : 0;
 				final float uRight = flipU ? 0 : 1;
 				IDrawing.drawTexture(
@@ -109,7 +115,7 @@ public final class MmtrPanelQuad {
 						(float) widthM, 0, 0,
 						(float) widthM, (float) heightM, 0,
 						0, (float) heightM, 0,
-						uLeft, 1, uRight, 0,
+						uLeft, 0, uRight, 1,
 						Direction.UP, IGui.ARGB_WHITE, GraphicsHolder.getDefaultLight()
 				);
 				graphicsHolder.pop();
@@ -123,6 +129,22 @@ public final class MmtrPanelQuad {
 	 */
 	public static Vector toModelSpace(Vector fileVector) {
 		return new Vector(fileVector.x(), -fileVector.y(), -fileVector.z());
+	}
+
+	/**
+	 * @return {@code 1} or {@code -1} for the side of the face the driver sits on, {@code 0} when it
+	 * cannot be decided. In model space the car is centred on the origin, so the car's interior is the
+	 * direction from the anchor towards the origin; the driver's side is the one whose normal points
+	 * that way. This keeps a single panel instead of two back-to-back copies.
+	 */
+	private static int facingSide(Anchor anchor) {
+		final Vector position = toModelSpace(anchor.filePosition);
+		final Vector normal = toModelSpace(anchor.fileNormal).normalize();
+		final double horizontal = normal.x() * -position.x() + normal.z() * -position.z();
+		if (Math.abs(horizontal) < 1.0E-4) {
+			return 0;
+		}
+		return horizontal > 0 ? 1 : -1;
 	}
 
 	private static Vector orthonormalise(Vector vector, Vector normal) {
