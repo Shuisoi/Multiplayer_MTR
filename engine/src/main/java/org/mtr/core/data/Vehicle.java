@@ -19,6 +19,7 @@ import org.mtr.core.mmtr.MmtrComposition;
 import org.mtr.core.mmtr.MmtrDriveAccess;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.MmtrProtection;
+import org.mtr.core.mmtr.MmtrRegime;
 import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
@@ -863,6 +864,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final boolean brakeTargetActive = brakeTargetM < Double.MAX_VALUE / 2;
 		// Unmanned auto run: drives itself toward the armed stop target while no cab override is held.
 		final boolean autoActive = mmtrMotionAuto && !mmtrManualOverride && stopTargetActive && !mmtrMotionStoppedAtTarget && !mmtrBlockedWaiting && remainingToBrake > 1e-6;
+		if (autoActive) {
+			// Resolve the consist type / controller lazily like the driver path does - the auto
+			// planner reads the traction/brake parameters and the AIR_BRAKE split from the type.
+			tryInitMmtrController();
+		}
 		final int autoNotch = mmtrConsistType != null ? Math.max(1, Math.min(4, mmtrConsistType.getPowerNotches())) : 4;
 		// Service-brake envelope against the EFFECTIVE stop (armed stop target or the occupancy block
 		// stop, whichever is nearer). Occupancy braking overrides a driver's own traction but the
@@ -870,6 +876,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final boolean autoBraking = brakeTargetActive && !(overridden && braking) && speed > 0 && remainingToBrake > 0 && remainingToBrake < 0.5 * speed * speed / Math.max(mmtrMotionServiceDecelPerMs(), 1e-12);
 
 		double integratedDistance = 0;
+		final boolean airBrakeConsist = mmtrConsistType != null && mmtrConsistType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
 		if (mmtrBlockedWaiting) {
 			// Parked exactly at the occupancy stop point: traction is suppressed (never creep into
 			// the occupied rail); the flag clears at the top of a later tick once the block opens.
@@ -881,10 +888,43 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final double brakeDelta = Math.min(0.5 * speed * speed / Math.max(remainingToBrake, 1e-3), mmtrMotionServiceDecelPerMs()) * millisElapsed;
 			speed = Math.max(0, speed - brakeDelta);
 			integratedDistance = speed > 0 ? speed * millisElapsed : 0;
+		} else if (autoActive && !airBrakeConsist) {
+			// Signal S2: deterministic auto cruise under the per-segment rail speed limit (directional,
+			// read live from the rail the walker stands on). Cruise target = min(rail limit, consist
+			// ceiling). A SLOWER rail ahead (peeked - same elect contract as the walker) is braced for
+			// with the service-brake envelope so the train crosses the node at (about) that rail's
+			// limit instead of over-running it; residual overspeed after boarding a slower rail decays
+			// at service deceleration. (Air-brake consists keep the controller path below.)
+			final double accelPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getTractionAccelerationMps2()) : vehicleExtraData.getAcceleration() * 1e-3;
+			final double decelPerMs = mmtrMotionServiceDecelPerMs();
+			final double cruiseCap = Math.min(mmtrCurrentRailLimitPerMs(), mmtrConsistType != null ? kmhToInternal(mmtrConsistType.getMaxSpeedKmh()) : vehicleExtraData.getMaxManualSpeed());
+			final Rail nextRailForLimit = mmtrMotionWalker.peekNextRail();
+			final double nextLimitMms = nextRailForLimit == null ? -1 : nextRailForLimit.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
+			final boolean bracingForSlowerRail = nextLimitMms > 0 && nextLimitMms < cruiseCap - 1e-12 && speed > nextLimitMms;
+			if (bracingForSlowerRail) {
+				// A slower rail is ahead. Inside the service-brake envelope (the deceleration needed
+				// to arrive at the node at the slower rail's limit would exceed the service rate) the
+				// train brakes with the exact-decel law; OUTSIDE the envelope it keeps cruising - the
+				// envelope engages on its own as the node approaches.
+				final double toNodeM = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+				final double needDecel = 0.5 * (speed * speed - nextLimitMms * nextLimitMms) / Math.max(toNodeM, 1e-3);
+				if (needDecel > decelPerMs * 0.98) {
+					speed = Math.max(nextLimitMms, speed - Math.min(needDecel, decelPerMs) * millisElapsed);
+				} else {
+					// Outside the envelope: cruise normally (the cap still applies below).
+					speed = Math.min(cruiseCap, speed + accelPerMs * millisElapsed);
+				}
+			} else if (speed > cruiseCap) {
+				// Over the cruise cap (e.g. just boarded a slower rail): service decay back to it.
+				speed = Math.max(cruiseCap, speed - decelPerMs * millisElapsed);
+			} else {
+				speed = Math.min(cruiseCap, speed + accelPerMs * millisElapsed);
+			}
+			integratedDistance = speed * millisElapsed;
 		} else if ((overridden || autoActive) && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
-			// Same fixed sub-step ConsistDynamics integration as the legacy MMTR branch in
-			// simulateMoving (server side; motion mode has no clientside mirror yet). Auto runs feed a
-			// synthesized cruise ControlState; an active cab override feeds the driver's own state.
+			// Driver (any consist) and auto air-brake consists run the fixed sub-step ConsistDynamics
+			// integration (auto feeds a synthesized cruise ControlState; air-brake physics stay on the
+			// per-car composition; an active cab override feeds the driver's own state).
 			final ConsistType mmtrType = mmtrConsistType;
 			final ControlState mmtrState = overridden ? control : new ControlState().setThrottleNotch(autoNotch).setReverser(1);
 			final boolean useCompositionAir = mmtrType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
@@ -906,16 +946,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrPipePressure = mmtrCompositionNow.averagePipePressure();
 				mmtrBrakeCylinderPressure = mmtrCompositionNow.averageCylinderPressure();
 			}
-		} else if (overridden || autoActive) {
-			// No consist-type policy: linear legacy-style integration from the ControlState notches.
-			// Stored VED values are SI (m/s^2) scaled by 1e-3; the internal per-ms rate is SI * 1e-6,
-			// so the per-tick speed change is value * 1e-3 * millisElapsed (m/ms).
+		} else if (overridden) {
+			// No consist-type policy: linear legacy-style integration from the driver's ControlState
+			// notches. Stored VED values are SI (m/s^2) scaled by 1e-3; the internal per-ms rate is
+			// SI * 1e-6, so the per-tick speed change is value * 1e-3 * millisElapsed (m/ms).
 			final double accelPerMs = vehicleExtraData.getAcceleration() * 1e-3;
 			final double decelPerMs = vehicleExtraData.getDeceleration() * 1e-3;
-			final boolean effectivePower = overridden ? wantPower : autoActive;
-			if (overridden && braking) {
+			if (braking) {
 				speed = Math.max(0, speed - decelPerMs * millisElapsed);
-			} else if (effectivePower) {
+			} else if (wantPower) {
 				speed = Math.min(vehicleExtraData.getMaxManualSpeed(), speed + accelPerMs * millisElapsed);
 			} else {
 				speed = Math.max(0, speed - decelPerMs * 0.1 * millisElapsed); // coast-down
@@ -1871,6 +1910,37 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final PositionAndTiltAngle positionAndTiltAngle1 = getPositionAndTiltAngle(value1, overrideY);
 		final PositionAndTiltAngle positionAndTiltAngle2 = getPositionAndTiltAngle(value2, overrideY);
 		return positionAndTiltAngle1 == null || positionAndTiltAngle2 == null ? new BogiePosition(new PositionAndTiltAngle(new Vector(value1, 0, 0), 0), new PositionAndTiltAngle(new Vector(value2, 0, 0), 0)) : new BogiePosition(positionAndTiltAngle1, positionAndTiltAngle2);
+	}
+
+	/** km/h -> engine internal speed (m/ms). */
+	private static double kmhToInternal(double speedKilometersPerHour) {
+		return speedKilometersPerHour / 3600.0;
+	}
+
+	/**
+	 * Signal S2: the speed limit (m/ms) of the rail the walker currently stands on, for the
+	 * direction the vehicle travels (from the walker's entry node toward its ahead node); 0 = that
+	 * direction is unreachable (never driven). Rail limits are directional per MTR data.
+	 */
+	private double mmtrCurrentRailLimitPerMs() {
+		if (mmtrMotionWalker == null) {
+			return 0;
+		}
+		return mmtrMotionWalker.currentRail().getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.enteredFromPosition());
+	}
+
+	/** Signal S2: current per-segment rail speed limit in km/h (0 = not running / unreachable). */
+	public long getMmtrCurrentSpeedLimitKmh() {
+		return Math.round(mmtrCurrentRailLimitPerMs() * 3600.0);
+	}
+
+	/**
+	 * Signal S2/v3: the regime of the rail currently being traversed - AWS (≤ 100 km/h, point
+	 * warning + driver acknowledgement) or LZB (≥ 101 km/h, continuous supervision). Derived per
+	 * travel direction from the rail's own speed limit.
+	 */
+	public MmtrRegime getMmtrRegime() {
+		return MmtrRegime.fromSpeedLimitKmh(getMmtrCurrentSpeedLimitKmh());
 	}
 
 	/**

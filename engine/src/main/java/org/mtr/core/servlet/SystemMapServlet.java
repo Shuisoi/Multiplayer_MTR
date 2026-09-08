@@ -441,6 +441,10 @@ public final class SystemMapServlet extends ServletBase {
 			o.addProperty("x2", ends[1].getX());
 			o.addProperty("y2", ends[1].getY());
 			o.addProperty("z2", ends[1].getZ());
+			// Signal S2: per-direction speed limits (km/h from the MTR rail data) along each travel
+			// direction of this edge - the web console colours / labels tracks by speed band + regime.
+			o.addProperty("speedLimitKmh1", rail.getSpeedLimitKilometersPerHour(ends[0].compareTo(ends[1]) > 0));
+			o.addProperty("speedLimitKmh2", rail.getSpeedLimitKilometersPerHour(ends[1].compareTo(ends[0]) > 0));
 			rails.add(o);
 		});
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
