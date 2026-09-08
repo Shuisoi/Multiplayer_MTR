@@ -187,6 +187,20 @@ public final class SystemMapServlet extends ServletBase {
 					yield result;
 				}
 				case "mmtr-signals" -> getMmtrSignals(simulator);
+				case "mmtr-command" -> {
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					final String command = jsonReader.getString("command", "");
+					if (!command.isEmpty()) {
+						simulator.mmtrPushCommand(command);
+						result.addProperty("ok", true);
+					} else {
+						result.addProperty("ok", false);
+					}
+					final com.google.gson.JsonArray log = new com.google.gson.JsonArray();
+					simulator.mmtrCommandLog.forEach(log::add);
+					result.add("log", log);
+					yield result;
+				}
 				case "mmtr-signal-op" -> {
 					final long x = jsonReader.getLong("x", 0);
 					final long y = jsonReader.getLong("y", 0);

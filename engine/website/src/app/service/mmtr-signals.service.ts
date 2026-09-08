@@ -99,49 +99,40 @@ export class MmtrSignalsService {
 		});
 	}
 
-	/** OP command input (指令栏): resolves known local commands, logs everything. */
+	/** OP command input (指令栏): resolves known local commands, uploads the rest to the engine
+	 * command queue for the game-side executor (fabric) to run. */
 	public runCommand(line: string) {
 		const cmd = (line ?? "").trim();
 		if (!cmd) {
 			return;
 		}
-		const reply = this.resolveCommand(cmd);
-		this.commandLog.update(log => [...log.slice(-19), `> ${cmd}`, reply]);
+		const local = this.resolveLocal(cmd);
+		if (local) {
+			this.commandLog.update(log => [...log.slice(-19), `> ${cmd}`, local]);
+			return;
+		}
+		this.httpClient.post<{data: {ok: boolean, log: string[]}}>(this.mapUrl("mmtr-command"), {command: cmd}).subscribe({
+			next: response => {
+				const reply = response.data?.ok ? "✓ 已入队，等待游戏侧执行器处理" : "✗ 指令未受理";
+				this.commandLog.update(log => [...log.slice(-19), `> ${cmd}`, reply]);
+			},
+			error: error => {
+				console.error("mmtr-command failed", error);
+				this.commandLog.update(log => [...log.slice(-19), `> ${cmd}`, "✗ 指令上传失败：" + (error.status ?? "网络错误")]);
+			},
+		});
 	}
 
-	private resolveCommand(cmd: string): string {
+	/** Pure-local command help/counts; null when the command must go to the engine queue. */
+	private resolveLocal(cmd: string): string | null {
 		const parts = cmd.split(/\s+/);
-		switch (parts[0]) {
-			case "help":
-				return "可用指令：help / signals list / signals scan（待 fabric 执行器接入）/ signal bind <x y z> <railHex>（或用下方表格绑定）";
-			case "signals":
-				if (parts[1] === "list") {
-					return `已登记信号机 ${this.signals().length} 盏（见下方信号机管理表）`;
-				}
-				if (parts[1] === "scan") {
-					return "⚠ /signals scan 需要 fabric 服务端执行器（下一块接入），当前仅回显。";
-				}
-				return "用法：signals list | signals scan";
-			case "signal":
-				if (parts[1] === "bind" && parts.length >= 6) {
-					const x = Number(parts[2]);
-					const y = Number(parts[3]);
-					const z = Number(parts[4]);
-					const hex = parts[5];
-					if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) && hex.length > 10) {
-						const found = this.signals().find(s => s.x === x && s.y === y && s.z === z);
-						if (found) {
-							this.setSignal(found.x, found.y, found.z, found.angle, found.aspects, hex);
-							return `✓ 已提交绑定：信号机 (${x},${y},${z}) → rail ${hex.slice(0, 16)}…`;
-						}
-						return `✗ 找不到信号机 (${x},${y},${z})——请先登记（或用 /signals scan）`;
-					}
-					return "用法：signal bind <x y z> <railHex>";
-				}
-				return "用法：signal bind <x y z> <railHex>";
-			default:
-				return `未知指令：${parts[0]}（help 查看可用指令）`;
+		if (parts[0] === "help") {
+			return "可用指令：help / signals list / signals scan（游戏侧执行器扫描登记信号灯）/ signal bind <x y z> <railHex>（或下方表格绑定）";
 		}
+		if (parts[0] === "signals" && parts[1] === "list") {
+			return `已登记信号机 ${this.signals().length} 盏（见下方信号机管理表）`;
+		}
+		return null;
 	}
 
 	public setFeedback(text: string) {

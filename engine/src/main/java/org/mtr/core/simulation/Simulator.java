@@ -104,6 +104,44 @@ public class Simulator extends Data implements Utilities {
 	 * block/section model, with optional covered binds (which rail/approach a light reads). */
 	public final org.mtr.core.mmtr.signal.MmtrSignalRegistry mmtrSignals = new org.mtr.core.mmtr.signal.MmtrSignalRegistry();
 	private java.nio.file.Path mmtrSignalsPath;
+	/** OP command queue (指令栏): web-pushed commands wait here for the game-side executor
+	 * (fabric server) to poll and run (e.g. /signals scan); results come back as log lines. */
+	public final java.util.ArrayDeque<String> mmtrCommandQueue = new java.util.ArrayDeque<>();
+	public final java.util.ArrayDeque<String> mmtrCommandLog = new java.util.ArrayDeque<>();
+
+	/** Web OP pushes a command; the game-side executor polls {@link #mmtrPollCommand()}. */
+	public void mmtrPushCommand(String command) {
+		final String cmd = command == null ? "" : command.trim();
+		if (!cmd.isEmpty()) {
+			mmtrCommandQueue.addLast(cmd);
+			mmtrCommandLog.addLast("> " + cmd);
+			while (mmtrCommandLog.size() > 200) {
+				mmtrCommandLog.removeFirst();
+			}
+		}
+	}
+
+	/** Game-side executor takes the next pending command, or null when idle. */
+	public @org.jspecify.annotations.Nullable String mmtrPollCommand() {
+		final String cmd = mmtrCommandQueue.pollFirst();
+		if (cmd != null) {
+			mmtrCommandLog.addLast("… 执行: " + cmd);
+			while (mmtrCommandLog.size() > 200) {
+				mmtrCommandLog.removeFirst();
+			}
+		}
+		return cmd;
+	}
+
+	/** Game-side executor reports a command outcome back into the OP log. */
+	public void mmtrCommandResult(String result) {
+		if (result != null && !result.isEmpty()) {
+			mmtrCommandLog.addLast(result);
+			while (mmtrCommandLog.size() > 200) {
+				mmtrCommandLog.removeFirst();
+			}
+		}
+	}
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
