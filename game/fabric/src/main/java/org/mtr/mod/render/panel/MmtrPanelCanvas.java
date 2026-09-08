@@ -9,6 +9,8 @@ import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.font.FontRenderContext;
+import java.awt.font.GlyphVector;
 import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
@@ -194,9 +196,9 @@ public final class MmtrPanelCanvas {
 	}
 
 	/**
-	 * Draws text with its box anchored at {@code (x, y)}. {@code heightM} is the height of the text
-	 * box in metres; the font size is derived from the string's real bounds so mixed CJK/latin text
-	 * keeps a consistent height.
+	 * Draws text with its box anchored at {@code (x, y)}. {@code heightM} is the height of the text's
+	 * INK box in metres (the visible glyphs, not the font's line height), so a 0.2 m readout really
+	 * measures 0.2 m on the dashboard whatever font is used.
 	 */
 	public MmtrPanelCanvas text(String text, double x, double y, double heightM, int color, IGui.HorizontalAlignment horizontalAlignment, IGui.VerticalAlignment verticalAlignment) {
 		if (text == null || text.isEmpty() || heightM <= 0) {
@@ -205,20 +207,23 @@ public final class MmtrPanelCanvas {
 
 		final double targetHeightPx = heightM * scaleY;
 		final Font baseFont = MmtrPanelFont.get(text);
-		final Font probe = baseFont.deriveFont(Font.PLAIN, 100F);
-		final Rectangle2D probeBounds = probe.getStringBounds(text, graphics.getFontRenderContext());
-		if (probeBounds.getHeight() <= 0) {
+		final FontRenderContext fontRenderContext = graphics.getFontRenderContext();
+
+		// Measure at a reference size, then derive the size whose ink box is targetHeightPx tall.
+		final GlyphVector probeGlyphs = baseFont.deriveFont(Font.PLAIN, 100F).createGlyphVector(fontRenderContext, text);
+		final Rectangle2D probeInk = probeGlyphs.getVisualBounds();
+		if (probeInk.getHeight() <= 0) {
 			return this;
 		}
 
-		final Font font = baseFont.deriveFont(Font.PLAIN, (float) (100 * targetHeightPx / probeBounds.getHeight()));
-		final Rectangle2D bounds = font.getStringBounds(text, graphics.getFontRenderContext());
-		final double boxLeft = px(x) + horizontalAlignment.getOffset(0, (float) bounds.getWidth());
-		final double boxTop = py(y) + verticalAlignment.getOffset(0, (float) bounds.getHeight());
+		final Font font = baseFont.deriveFont(Font.PLAIN, (float) (100 * targetHeightPx / probeInk.getHeight()));
+		final GlyphVector glyphs = font.createGlyphVector(fontRenderContext, text);
+		final Rectangle2D ink = glyphs.getVisualBounds();
+		final double boxLeft = px(x) + horizontalAlignment.getOffset(0, (float) ink.getWidth());
+		final double boxTop = py(y) + verticalAlignment.getOffset(0, (float) ink.getHeight());
 
-		graphics.setFont(font);
 		graphics.setColor(colorOf(color));
-		graphics.drawString(text, (float) boxLeft, (float) (boxTop - bounds.getY()));
+		graphics.drawGlyphVector(glyphs, (float) (boxLeft - ink.getX()), (float) (boxTop - ink.getY()));
 		return this;
 	}
 

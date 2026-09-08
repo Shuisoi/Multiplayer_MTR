@@ -82,8 +82,8 @@ public final class MmtrCabDashboard {
 		canvas.fill(0, 0, width, height, BACKGROUND_COLOR);
 		canvas.fillRoundRect(width * 0.015, height * 0.06, width * 0.97, height * 0.88, height * 0.08, PANEL_COLOR);
 
-		canvas.text(String.valueOf(speedKmh), width * 0.5, height * 0.58, height * 0.50, TEXT_COLOR, IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
-		canvas.text("km/h", width * 0.5, height * 0.17, height * 0.17, UNIT_COLOR, IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
+		canvas.text(String.valueOf(speedKmh), width * 0.5, height * 0.60, height * 0.52, TEXT_COLOR, IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
+		canvas.text("km/h", width * 0.5, height * 0.19, height * 0.20, UNIT_COLOR, IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
 	}
 
 	/** Index of a consist car inside its own model (a model can be used several times). */
