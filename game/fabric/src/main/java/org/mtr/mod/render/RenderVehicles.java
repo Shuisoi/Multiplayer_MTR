@@ -33,12 +33,21 @@ public class RenderVehicles implements IGui {
 
 	public static final ObjectArrayList<RidingPlayerInterpolation> RIDING_PLAYER_INTERPOLATIONS = new ObjectArrayList<>();
 
+	/** Throttle for the temporary "does MTR's world rendering run at all" diagnostic. */
+	private static long mmtrLastWorldRenderLogMillis = 0;
+
 	public static void render(long millisElapsed, Vector3d cameraShakeOffset) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final ClientWorld clientWorld = minecraftClient.getWorldMapped();
 		final ClientPlayerEntity clientPlayerEntity = minecraftClient.getPlayerMapped();
 		if (clientWorld == null || clientPlayerEntity == null) {
 			return;
+		}
+
+		final long nowMillis = System.currentTimeMillis();
+		if (nowMillis - mmtrLastWorldRenderLogMillis > 2000) {
+			mmtrLastWorldRenderLogMillis = nowMillis;
+			Init.LOGGER.info("[MMTR-DBG] world render running, client vehicles={}", MinecraftClientData.getInstance().vehicles.size());
 		}
 
 		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
