@@ -187,11 +187,9 @@ public class RenderVehicles implements IGui {
 							if (vehicleResourceCache != null) {
 								vehicleResourceCache.floors.forEach(floor -> {
 									floorsAndDoorways.add(new ObjectBooleanImmutablePair<>(floor, true));
-									// MMTR: boarding is no longer gated on holding a driver key; the gate is
-									// now the permission seam, which is fully open until an authoriser is installed.
-									if (!VehicleRidingMovement.isRiding(vehicle.getId()) && MmtrCabPermissions.canBoard(clientPlayerEntity, vehicle.getId())) {
-										openFloorsAndDoorways.add(floor);
-									}
+									// MMTR: floors are for movement only - boarding happens through open
+									// doorways (below), so the crew is not sucked in by walking inside and
+									// the shift dismount is not undone by an instant re-mount.
 									RenderVehicleHelper.renderFloorOrDoorway(floor, ARGB_WHITE, playerPosition, vehicleCarRenderingPositionAndRotation, offsetVector == null);
 									// Find the floors with the lowest and highest Z values to be used to define where the gangways are
 									gangwayMovementPositions1.check(floor);
@@ -202,7 +200,9 @@ public class RenderVehicles implements IGui {
 							openDoorways.forEach(openDoorway -> {
 								final Box doorway = openDoorway.left();
 								floorsAndDoorways.add(new ObjectBooleanImmutablePair<>(doorway, false));
-								openFloorsAndDoorways.add(doorway);
+								if (MmtrCabPermissions.canBoard(clientPlayerEntity, vehicle.getId())) {
+									openFloorsAndDoorways.add(doorway);
+								}
 								RenderVehicleHelper.renderFloorOrDoorway(doorway, 0xFFFF0000, playerPosition, vehicleCarRenderingPositionAndRotation, offsetVector == null);
 							});
 

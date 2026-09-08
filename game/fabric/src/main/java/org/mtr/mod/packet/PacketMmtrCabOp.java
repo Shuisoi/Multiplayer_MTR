@@ -22,7 +22,7 @@ import org.mtr.mod.Init;
  */
 public final class PacketMmtrCabOp extends PacketHandler {
 
-	public enum Op {ENTER, LEAVE}
+	public enum Op {ENTER, LEAVE, DOORS}
 
 	private final long vehicleId;
 	private final Op op;
@@ -60,7 +60,7 @@ public final class PacketMmtrCabOp extends PacketHandler {
 			if (simulator == null || simulator.mmtrFindVehicle(vehicleId) == null) {
 				continue;
 			}
-			simulator.mmtrPushCommand(op == Op.ENTER ? "cab " + vehicleId + " " + cab : "cab " + vehicleId + " out");
+			simulator.mmtrPushCommand(op == Op.ENTER ? "cab " + vehicleId + " " + cab : op == Op.LEAVE ? "cab " + vehicleId + " out" : "doors " + vehicleId + " toggle");
 			return;
 		}
 	}

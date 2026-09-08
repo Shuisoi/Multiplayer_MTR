@@ -150,19 +150,16 @@ public final class MmtrCabInteraction {
 			return;
 		}
 
-		if (heldVehicleId != 0) {
-			leaveCab(player);
-			return;
-		}
-
-		// Not aiming at a cab door: fall back to the nearest consist within reach, so a player who
-		// stands next to the train can still board a cab directly.
+		// Not aiming at a cab door: the key works the doors of the train within reach instead, so a
+		// train standing with its doors closed can be opened from the platform. No cab teleport here -
+		// the crew has to aim at the cab door to take or leave a cab.
 		final VehicleExtension nearest = nearestVehicle(player);
 		if (nearest == null) {
-			player.sendMessage(new Text(TextHelper.literal("附近没有可进入的列车 / no train within reach").data), true);
+			player.sendMessage(new Text(TextHelper.literal("附近没有列车 / no train within reach").data), true);
 			return;
 		}
-		enterCab(player, new AimTarget(nearest, nearestEndCab(nearest), nearestCarNumber(nearest), 0));
+		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(nearest.getId(), PacketMmtrCabOp.Op.DOORS, ""));
+		player.sendMessage(new Text(TextHelper.literal("开门/关门 / doors toggled").data), true);
 	}
 
 	private static void leaveCab(ClientPlayerEntity player) {
@@ -384,56 +381,6 @@ public final class MmtrCabInteraction {
 	}
 
 	/** The car index of the car the player stands closest to. */
-	private static int nearestCarNumber(Vehicle vehicle) {
-		final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
-		if (player == null) {
-			return 0;
-		}
-		final double x = player.getX();
-		final double y = player.getY();
-		final double z = player.getZ();
-		final var cars = vehicle.getVehicleCarsAndPositions();
-		int best = 0;
-		double bestDistanceSquared = Double.MAX_VALUE;
-		for (int i = 0; i < cars.size(); i++) {
-			for (final Vehicle.BogiePosition bogie : cars.get(i).right()) {
-				final double distanceSquared = squaredDistance(bogie.positionAndTiltAngle1().position(), x, y, z);
-				if (distanceSquared < bestDistanceSquared) {
-					bestDistanceSquared = distanceSquared;
-					best = i;
-				}
-			}
-		}
-		return best;
-	}
-
-	/**
-	 * Which end cab the player stands at: the closer of the first car (A end, cab 1) and the last
-	 * car (B end, cab 2). A consist of one car only has the two ends of that car.
-	 */
-	private static int nearestEndCab(Vehicle vehicle) {
-		final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
-		if (player == null) {
-			return 1;
-		}
-		final double x = player.getX();
-		final double y = player.getY();
-		final double z = player.getZ();
-		final var cars = vehicle.getVehicleCarsAndPositions();
-		if (cars.isEmpty()) {
-			return 1;
-		}
-		double firstEndDistanceSquared = Double.MAX_VALUE;
-		for (final Vehicle.BogiePosition bogie : cars.get(0).right()) {
-			firstEndDistanceSquared = Math.min(firstEndDistanceSquared, squaredDistance(bogie.positionAndTiltAngle1().position(), x, y, z));
-		}
-		double lastEndDistanceSquared = Double.MAX_VALUE;
-		for (final Vehicle.BogiePosition bogie : cars.get(cars.size() - 1).right()) {
-			lastEndDistanceSquared = Math.min(lastEndDistanceSquared, squaredDistance(bogie.positionAndTiltAngle1().position(), x, y, z));
-		}
-		return firstEndDistanceSquared <= lastEndDistanceSquared ? 1 : 2;
-	}
-
 	private static double squaredDistance(Vector position, double x, double y, double z) {
 		final double dx = position.x() - x;
 		final double dy = position.y() - y;

@@ -321,6 +321,28 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 		doorTarget = false;
 	}
 
+	/**
+	 * MMTR B7.6g: crew door control from the game side (the interact key aimed at a door), so a train
+	 * standing with its doors closed can be opened from the platform without boarding it first.
+	 *
+	 * @param action {@code "open"}, {@code "close"} or anything else for a toggle
+	 * @return the door target after the change, {@code true} when the doors are now open
+	 */
+	public boolean mmtrSetDoors(String action) {
+		if ("open".equals(action)) {
+			openDoors();
+		} else if ("close".equals(action)) {
+			closeDoors();
+		} else {
+			toggleDoors();
+		}
+		return doorTarget;
+	}
+
+	public boolean mmtrDoorsOpen() {
+		return doorTarget;
+	}
+
 	protected boolean checkForUpdate() {
 		final boolean needsUpdate = Math.abs(stoppingPoint - oldStoppingPoint) > 0.01 || doorTarget != oldDoorTarget || powerLevel != oldPowerLevel || Math.abs(speedTarget - oldSpeedTarget) > 0.01 || isCurrentlyManual != oldIsCurrentlyManual || hasRidingEntityUpdate;
 		oldStoppingPoint = stoppingPoint;

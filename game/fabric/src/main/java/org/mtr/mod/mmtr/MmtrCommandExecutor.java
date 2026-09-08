@@ -51,13 +51,13 @@ public final class MmtrCommandExecutor {
 			scanSignals(simulator, serverWorld);
 			return;
 		}
-		// B7.6 crew commands: changeends <vehicleId> | cab <vehicleId> <A|B|out>
+		// B7.6 crew commands: changeends <vehicleId> | cab <vehicleId> <A|B|out> | doors <vehicleId> [open|close|toggle]
 		final String[] parts = command.trim().split("\\s+");
-		if (parts.length >= 2 && (parts[0].equals("changeends") || parts[0].equals("cab"))) {
+		if (parts.length >= 2 && (parts[0].equals("changeends") || parts[0].equals("cab") || parts[0].equals("doors"))) {
 			executeCabCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out>)");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle])");
 	}
 
 	/**
@@ -77,6 +77,14 @@ public final class MmtrCommandExecutor {
 		final org.mtr.core.data.Vehicle vehicle = simulator.mmtrFindVehicle(vehicleId);
 		if (vehicle == null) {
 			simulator.mmtrCommandResult("[" + parts[0] + "] 找不到车辆 " + vehicleId);
+			return;
+		}
+		if (parts[0].equals("doors")) {
+			// Crew door control: no cab/consist requirement, so anyone at the platform can open a
+			// standing train's doors through the interact key.
+			final String action = parts.length >= 3 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "toggle";
+			final boolean open = vehicle.vehicleExtraData.mmtrSetDoors(action);
+			simulator.mmtrCommandResult("[doors] " + vehicleId + (open ? " 开门" : " 关门"));
 			return;
 		}
 		if (vehicle.getMmtrConsistWalker() == null) {

@@ -3,6 +3,8 @@ package org.mtr.mod.render;
 import org.mtr.core.tool.Vector;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import org.mtr.mapping.holder.Direction;
+import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.Vector3d;
 import org.mtr.mapping.mapper.GraphicsHolder;
@@ -36,6 +38,8 @@ public final class MmtrCabPanel {
 
 	private static final int TEXT_COLOR = 0xFFE8F4FF;
 	private static final int UNIT_COLOR = 0xFF8FA6B8;
+	/** Backing plate behind the readout (near-black, slightly translucent). */
+	private static final int BACKGROUND_COLOR = 0xE6000000;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
@@ -114,6 +118,32 @@ public final class MmtrCabPanel {
 					maxWidthM, (float) (hud.heightM * 0.28),
 					unitScale, UNIT_COLOR, false, GraphicsHolder.getDefaultLight(), null
 			);
+			graphicsHolder.pop();
+		});
+
+		// Black backing plate so the readout stays legible against a bright interior. Drawn as a
+		// white-texture quad in the same face-aligned space, slightly behind the text.
+		final StoredMatrixTransformations backgroundTransformations = new StoredMatrixTransformations(
+				carPositionAndRotation.position.x(),
+				carPositionAndRotation.position.y(),
+				carPositionAndRotation.position.z()
+		);
+		backgroundTransformations.add(graphicsHolder -> {
+			graphicsHolder.rotateYRadians((float) carPositionAndRotation.yaw);
+			graphicsHolder.rotateXRadians((float) carPositionAndRotation.pitch);
+		});
+		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.position.x(), hud.position.y(), hud.position.z()));
+		backgroundTransformations.add(graphicsHolder -> {
+			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
+			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
+			graphicsHolder.rotateZDegrees((float) basisDegrees[2]);
+		});
+		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(0, 0, SURFACE_OFFSET_M * 0.5F));
+		final float halfWidth = (float) (hud.widthM / 2);
+		final float halfHeight = (float) (hud.heightM / 2);
+		MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolder, offset) -> {
+			backgroundTransformations.transform(graphicsHolder, offset);
+			IDrawing.drawTexture(graphicsHolder, -halfWidth, -halfHeight, 0, halfWidth, halfHeight, 0, Direction.UP, BACKGROUND_COLOR, GraphicsHolder.getDefaultLight());
 			graphicsHolder.pop();
 		});
 	}
