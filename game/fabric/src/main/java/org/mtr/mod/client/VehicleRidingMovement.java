@@ -333,6 +333,51 @@ public class VehicleRidingMovement {
 		return vehicleId == ridingVehicleId;
 	}
 
+	/**
+	 * MMTR B7.6d: puts the player inside a specific car at a fixed car-local point without requiring
+	 * that point to intersect an open floor or doorway. Used when a driver takes a cab — the cab view
+	 * point comes from the model anchors and the crew has to land exactly there — and when a player
+	 * walks into a cab from outside the train.
+	 *
+	 * @param depotId    the depot the vehicle belongs to (needed by the driver key check)
+	 * @param sidingId   the siding the vehicle belongs to
+	 * @param vehicleId  the vehicle ID
+	 * @param carNumber  the car index inside the consist
+	 * @param x          car-local X (positive to the right of the car)
+	 * @param y          car-local Y (floor level, in blocks)
+	 * @param z          car-local Z (positive towards the rear of the car)
+	 * @param vehicleYaw the car's current yaw, so the player's view does not jump on the next tick
+	 * @param yawDegrees the world yaw the player should face, or {@link Double#NaN} to keep it
+	 */
+	public static void mmtrPlaceRiding(long depotId, long sidingId, long vehicleId, int carNumber, double x, double y, double z, double vehicleYaw, double yawDegrees) {
+		if (ridingVehicleId != 0 && ridingVehicleId != vehicleId) {
+			sendUpdate(true);
+		}
+
+		ridingDepotId = depotId;
+		ridingSidingId = sidingId;
+		ridingVehicleId = vehicleId;
+		ridingVehicleCarNumber = carNumber;
+		ridingVehicleCarNumberCacheOld = carNumber;
+		ridingVehicleX = x;
+		ridingVehicleY = y;
+		ridingVehicleZ = z;
+		isOnGangway = false;
+		ridingVehicleCooldown = 0;
+		ridingPositionCache = new Vector3d(x, y, z);
+		ridingPositionCacheOld = ridingPositionCache;
+		ridingYawDifference = null;
+		previousVehicleYaw = vehicleYaw;
+		mmtrDriverSynced = false;
+
+		final ClientPlayerEntity clientPlayerEntity = MinecraftClient.getInstance().getPlayerMapped();
+		if (clientPlayerEntity != null && !Double.isNaN(yawDegrees)) {
+			EntityHelper.setYaw(new Entity(clientPlayerEntity.data), (float) yawDegrees);
+		}
+
+		sendUpdate(false);
+	}
+
 	public static int getMmtrThrottleNotch() {
 		return mmtrThrottleNotch;
 	}

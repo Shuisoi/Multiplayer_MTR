@@ -1,0 +1,331 @@
+package org.mtr.mod.client;
+
+import org.apache.commons.io.IOUtils;
+import org.mtr.core.tool.Vector;
+import org.mtr.libraries.com.google.gson.JsonArray;
+import org.mtr.libraries.com.google.gson.JsonElement;
+import org.mtr.libraries.com.google.gson.JsonObject;
+import org.mtr.libraries.com.google.gson.JsonParser;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.mapping.holder.Identifier;
+import org.mtr.mapping.mapper.ResourceManagerHelper;
+import org.mtr.mod.Init;
+
+import javax.annotation.Nullable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * B7.6d: named model anchors, read from {@code assets/mtr/mmtr_anchors_<vehicleId>.json}.
+ *
+ * <p>The OBJ packager strips every {@code mmtr_*} face out of the render geometry and writes its
+ * centre, orientation and size into that file. The coordinates are the same car-local space the
+ * renderer and MTR's riding code use (1 unit = 1 block, car centre at the origin, +Z towards the
+ * rear of the car), so an anchor can be transformed into the world with the car's
+ * {@link org.mtr.mod.render.PositionAndRotation} and written straight back into the riding state.</p>
+ *
+ * <p>Anchor names (see {@code docs/MMTR-OBJ车辆资源包-标准化工作流.md} §1.1):</p>
+ * <ul>
+ *     <li>{@code mmtr_hud} / {@code mmtr_hud_1} — the dashboard face; its normal points at the driver.</li>
+ *     <li>{@code mmtr_cabdoor_<cab>_<n>} — a door into cab {@code <cab>} (1 = A end, 2 = B end).</li>
+ *     <li>{@code mmtr_seat_<cab>} — optional explicit seat point; takes priority over the HUD offset.</li>
+ * </ul>
+ */
+public final class MmtrVehicleAnchors {
+
+	private MmtrVehicleAnchors() {
+	}
+
+	/** The anchor files live in MTR's own namespace, next to the vehicle model. */
+	private static final String NAMESPACE = "mtr";
+	private static final String FILE_PREFIX = "mmtr_anchors_";
+	private static final String FILE_SUFFIX = ".json";
+
+	/** How far behind the dashboard face the driver's seat sits, in blocks. */
+	public static final double EYE_BACK_M = 1.05;
+	/** How far above the door sill the packager puts the walkable floor slab, in blocks. */
+	private static final double FLOOR_TOP_OFFSET_M = 0.05;
+	/** MTR's fallback floor height, used when no anchor tells us where the floor is. */
+	private static final double DEFAULT_FLOOR_M = 1.0;
+
+	private static final Object2ObjectOpenHashMap<String, ObjectArrayList<Anchor>> CACHE = new Object2ObjectOpenHashMap<>();
+
+	public enum Kind {
+		HUD,
+		CABDOOR,
+		DOOR,
+		SEAT,
+		OTHER
+	}
+
+	/**
+	 * One named face of the model. {@code car} is the car index inside the vehicle model, and
+	 * {@code cab} is the 1-based cab number for cab anchors ({@code 0} when not cab specific).
+	 */
+	public static final class Anchor {
+
+		public final String name;
+		public final Kind kind;
+		public final int cab;
+		public final int car;
+		public final Vector position;
+		public final Vector normal;
+		public final Vector up;
+		public final Vector right;
+		public final double widthM;
+		public final double heightM;
+
+		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM) {
+			this.name = name;
+			this.kind = kind;
+			this.cab = cab;
+			this.car = car;
+			this.position = position;
+			this.normal = normal;
+			this.up = up;
+			this.right = right;
+			this.widthM = widthM;
+			this.heightM = heightM;
+		}
+	}
+
+	/** Where a driver ends up when they take a cab, in car-local coordinates. */
+	public static final class CabView {
+
+		/** Car index inside the vehicle model this point belongs to. */
+		public final int modelCar;
+		/** Car-local X/Z of the driver's seat, and the Y their feet start at. */
+		public final double x;
+		public final double y;
+		public final double z;
+		/** True when this was derived by mirroring a single-cab model into the B end. */
+		public final boolean mirrored;
+
+		private CabView(int modelCar, double x, double y, double z, boolean mirrored) {
+			this.modelCar = modelCar;
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.mirrored = mirrored;
+		}
+	}
+
+	/**
+	 * @param vehicleId the vehicle model ID (for example {@code hst_h})
+	 * @return the anchors of that model, or an empty list when the model has none
+	 */
+	public static ObjectArrayList<Anchor> get(String vehicleId) {
+		if (vehicleId == null || vehicleId.isEmpty()) {
+			return new ObjectArrayList<>();
+		}
+		final ObjectArrayList<Anchor> cached = CACHE.get(vehicleId);
+		if (cached != null) {
+			return cached;
+		}
+		final ObjectArrayList<Anchor> anchors = read(vehicleId);
+		CACHE.put(vehicleId, anchors);
+		return anchors;
+	}
+
+	/** Drops the cache so a reloaded resource pack is picked up. */
+	public static void clearCache() {
+		CACHE.clear();
+	}
+
+	/**
+	 * @return the door anchor into cab {@code cab}, or {@code null} when the model has none
+	 */
+	@Nullable
+	public static Anchor findCabDoor(ObjectArrayList<Anchor> anchors, int cab) {
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.CABDOOR && anchor.cab == cab) {
+				return anchor;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * @return the dashboard anchor of a model car, or {@code null} when the model has none
+	 */
+	@Nullable
+	public static Anchor findHud(ObjectArrayList<Anchor> anchors, int modelCar) {
+		Anchor fallback = null;
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.HUD) {
+				if (anchor.car == modelCar) {
+					return anchor;
+				}
+				if (fallback == null) {
+					fallback = anchor;
+				}
+			}
+		}
+		return fallback;
+	}
+
+	/**
+	 * The point a driver ends up at when taking a cab: an explicit {@code mmtr_seat_<cab>} anchor
+	 * wins, otherwise the seat is placed behind the dashboard along the dashboard's own normal, with
+	 * the feet at the door sill. MTR forces the riding Y onto the floor every tick, so the X/Z of the
+	 * seat is what actually defines the view; Y only decides the first frame.
+	 *
+	 * @param anchors the model's anchors
+	 * @param cab     1 for the A end, 2 for the B end
+	 * @return the car-local seat point, or {@code null} when the model has no cab door to enter
+	 */
+	@Nullable
+	public static CabView cabView(ObjectArrayList<Anchor> anchors, int cab) {
+		final Anchor door = findCabDoor(anchors, cab);
+		final boolean mirrored = cab == 2 && door == null;
+		final Anchor effectiveDoor = mirrored ? findCabDoor(anchors, 1) : door;
+		if (effectiveDoor == null) {
+			return null;
+		}
+
+		final double zSign = mirrored ? -1 : 1;
+		final Anchor hud = findHud(anchors, effectiveDoor.car);
+		final Anchor seat = findSeat(anchors, cab);
+		if (seat != null) {
+			return new CabView(seat.car, seat.position.x(), seat.position.y(), zSign * seat.position.z(), mirrored);
+		}
+
+		final double sillY = effectiveDoor.heightM > 0.05 ? effectiveDoor.position.y() - effectiveDoor.heightM / 2 : DEFAULT_FLOOR_M;
+		final double baseX = hud == null ? effectiveDoor.position.x() : hud.position.x();
+		final double baseZ = (hud == null ? effectiveDoor.position.z() : hud.position.z()) * zSign;
+
+		// The dashboard normal points at the driver, so walking along its horizontal part moves the
+		// seat backwards into the cab. A face without a usable horizontal normal falls back to +Z.
+		double backX = hud == null ? 0 : hud.normal.x() * zSign;
+		double backZ = hud == null ? 1 : hud.normal.z() * zSign;
+		final double backLength = Math.sqrt(backX * backX + backZ * backZ);
+		if (backLength < 1.0E-4) {
+			backX = 0;
+			backZ = 1;
+		} else {
+			backX /= backLength;
+			backZ /= backLength;
+		}
+
+		return new CabView(
+				effectiveDoor.car,
+				baseX + backX * EYE_BACK_M,
+				sillY + FLOOR_TOP_OFFSET_M,
+				baseZ + backZ * EYE_BACK_M,
+				mirrored
+		);
+	}
+
+	@Nullable
+	private static Anchor findSeat(ObjectArrayList<Anchor> anchors, int cab) {
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.SEAT && anchor.cab == cab) {
+				return anchor;
+			}
+		}
+		return null;
+	}
+
+	private static ObjectArrayList<Anchor> read(String vehicleId) {
+		final ObjectArrayList<Anchor> anchors = new ObjectArrayList<>();
+		final String[] content = {""};
+		try {
+			ResourceManagerHelper.readResource(new Identifier(NAMESPACE, FILE_PREFIX + vehicleId + FILE_SUFFIX), inputStream -> {
+				try (final InputStream stream = inputStream) {
+					content[0] = IOUtils.toString(stream, StandardCharsets.UTF_8);
+				} catch (IOException e) {
+					Init.LOGGER.error("Failed to read MMTR anchors for {}", vehicleId, e);
+				}
+			});
+		} catch (Exception e) {
+			Init.LOGGER.error("Failed to load MMTR anchors for {}", vehicleId, e);
+			return anchors;
+		}
+
+		if (content[0].isEmpty()) {
+			return anchors;
+		}
+
+		try {
+			final JsonElement root = JsonParser.parseString(content[0]);
+			if (!root.isJsonObject()) {
+				return anchors;
+			}
+			final JsonArray array = root.getAsJsonObject().getAsJsonArray("anchors");
+			if (array == null) {
+				return anchors;
+			}
+			for (final JsonElement element : array) {
+				if (!element.isJsonObject()) {
+					continue;
+				}
+				final JsonObject object = element.getAsJsonObject();
+				anchors.add(new Anchor(
+						getString(object, "name", ""),
+						parseKind(getString(object, "kind", "")),
+						getInt(object, "cab", 0),
+						getInt(object, "car", 0),
+						getVector(object, "x", "y", "z"),
+						getVector(object, "normal"),
+						getVector(object, "up"),
+						getVector(object, "right"),
+						getDouble(object, "widthM", 0),
+						getDouble(object, "heightM", 0)
+				));
+			}
+		} catch (Exception e) {
+			Init.LOGGER.error("Failed to parse MMTR anchors for {}", vehicleId, e);
+		}
+
+		return anchors;
+	}
+
+	private static Kind parseKind(String kind) {
+		switch (kind) {
+			case "hud":
+				return Kind.HUD;
+			case "cabdoor":
+				return Kind.CABDOOR;
+			case "door":
+				return Kind.DOOR;
+			case "seat":
+				return Kind.SEAT;
+			default:
+				return Kind.OTHER;
+		}
+	}
+
+	private static String getString(JsonObject object, String key, String fallback) {
+		final JsonElement element = object.get(key);
+		return element == null || element.isJsonNull() ? fallback : element.getAsString();
+	}
+
+	private static int getInt(JsonObject object, String key, int fallback) {
+		final JsonElement element = object.get(key);
+		return element == null || element.isJsonNull() ? fallback : element.getAsInt();
+	}
+
+	private static double getDouble(JsonObject object, String key, double fallback) {
+		final JsonElement element = object.get(key);
+		return element == null || element.isJsonNull() ? fallback : element.getAsDouble();
+	}
+
+	private static Vector getVector(JsonObject object, String key) {
+		final JsonElement element = object.get(key);
+		if (element != null && element.isJsonArray()) {
+			final JsonArray array = element.getAsJsonArray();
+			return new Vector(getArrayValue(array, 0), getArrayValue(array, 1), getArrayValue(array, 2));
+		}
+		return new Vector(0, 0, 0);
+	}
+
+	private static Vector getVector(JsonObject object, String keyX, String keyY, String keyZ) {
+		return new Vector(getDouble(object, keyX, 0), getDouble(object, keyY, 0), getDouble(object, keyZ, 0));
+	}
+
+	private static double getArrayValue(JsonArray array, int index) {
+		return index < array.size() ? array.get(index).getAsDouble() : 0;
+	}
+}
