@@ -92,7 +92,7 @@ public final class MmtrCabPanel {
 		final double[] basisDegrees = basisDegrees(hud);
 
 		final StoredMatrixTransformations storedMatrixTransformations = modelTransformations.copy();
-		storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.filePosition.x(), hud.filePosition.y(), hud.filePosition.z()));
+		storedMatrixTransformations.add(graphicsHolder -> graphicsHolder.translate(toModelSpace(hud.filePosition).x(), toModelSpace(hud.filePosition).y(), toModelSpace(hud.filePosition).z()));
 		storedMatrixTransformations.add(graphicsHolder -> {
 			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
 			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
@@ -122,7 +122,7 @@ public final class MmtrCabPanel {
 		// Black backing plate so the readout stays legible against a bright interior. Drawn as a
 		// white-texture quad in the same face-aligned space, slightly behind the text.
 		final StoredMatrixTransformations backgroundTransformations = modelTransformations.copy();
-		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(hud.filePosition.x(), hud.filePosition.y(), hud.filePosition.z()));
+		backgroundTransformations.add(graphicsHolder -> graphicsHolder.translate(toModelSpace(hud.filePosition).x(), toModelSpace(hud.filePosition).y(), toModelSpace(hud.filePosition).z()));
 		backgroundTransformations.add(graphicsHolder -> {
 			graphicsHolder.rotateYDegrees((float) basisDegrees[0]);
 			graphicsHolder.rotateXDegrees((float) basisDegrees[1]);
@@ -144,7 +144,7 @@ public final class MmtrCabPanel {
 	 * made in the reverse order and a roll about the face normal is applied last.
 	 */
 	private static double[] basisDegrees(Anchor anchor) {
-		final Vector normal = anchor.fileNormal.normalize();
+		final Vector normal = toModelSpace(anchor.fileNormal).normalize();
 		final double pitch = Math.asin(Math.max(-1, Math.min(1, normal.y())));
 		final double yaw = Math.atan2(normal.x(), normal.z());
 
@@ -156,13 +156,22 @@ public final class MmtrCabPanel {
 		final double mappedUpY = Math.cos(pitch);
 		final double mappedUpZ = -Math.sin(pitch) * Math.cos(yaw);
 
-		final Vector right = anchor.fileRight.normalize();
+		final Vector right = toModelSpace(anchor.fileRight).normalize();
 		final double roll = -Math.atan2(
 				right.x() * mappedUpX + right.y() * mappedUpY + right.z() * mappedUpZ,
 				right.x() * mappedRightX + right.z() * mappedRightZ
 		);
 
 		return new double[]{Math.toDegrees(yaw), Math.toDegrees(pitch), Math.toDegrees(roll)};
+	}
+
+	/**
+	 * Converts an anchor coordinate or direction from the OBJ file space into the space MTR renders
+	 * the model (and its own display text) in: the loader negates Y, so a file coordinate
+	 * {@code (x, y, z)} becomes {@code (x, -y, z)} there.
+	 */
+	private static Vector toModelSpace(Vector fileVector) {
+		return new Vector(fileVector.x(), -fileVector.y(), fileVector.z());
 	}
 
 	/** Index of a consist car inside its own model (a model can be used several times). */
