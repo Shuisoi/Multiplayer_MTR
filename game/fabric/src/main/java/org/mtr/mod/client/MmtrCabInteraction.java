@@ -74,6 +74,7 @@ public final class MmtrCabInteraction {
 		if (heldVehicleId != 0 && !VehicleRidingMovement.isRiding(heldVehicleId)) {
 			heldVehicleId = 0;
 			heldCab = 0;
+			VehicleRidingMovement.mmtrSetCabLock(false);
 		}
 
 		final AimTarget target = findAimTarget();
@@ -166,6 +167,8 @@ public final class MmtrCabInteraction {
 		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(heldVehicleId, PacketMmtrCabOp.Op.LEAVE, ""));
 		heldVehicleId = 0;
 		heldCab = 0;
+		// Back to being a passenger: free to walk again.
+		VehicleRidingMovement.mmtrSetCabLock(false);
 		player.sendMessage(new Text(TextHelper.literal("拔出钥匙，离开驾驶室 / key out").data), true);
 	}
 
@@ -231,6 +234,8 @@ public final class MmtrCabInteraction {
 				carRotation.yaw,
 				yawDegrees
 		);
+		// The driver is fixed at the seat: no walking around inside the cab.
+		VehicleRidingMovement.mmtrSetCabLock(true);
 		return true;
 	}
 

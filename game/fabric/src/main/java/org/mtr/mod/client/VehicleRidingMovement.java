@@ -61,6 +61,8 @@ public class VehicleRidingMovement {
 	private static boolean prevThrottleUp, prevThrottleDown, prevBrakeApply, prevBrakeRelease, prevReverserUp, prevReverserDown;
 	/** True once the engine has been told this client occupies a cab driver seat this ride. */
 	private static boolean mmtrDriverSynced;
+	/** True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk. */
+	private static boolean mmtrCabLocked;
 
 	public static final int SEND_UPDATE_FREQUENCY = 1000;
 	private static final float VEHICLE_WALKING_SPEED_MULTIPLIER = 0.005F;
@@ -81,6 +83,7 @@ public class VehicleRidingMovement {
 			ridingSidingId = 0;
 			ridingVehicleId = 0;
 			mmtrDriverSynced = false;
+			mmtrCabLocked = false;
 		}
 
 		if (ridingPositionCache != null) {
@@ -202,7 +205,7 @@ public class VehicleRidingMovement {
 		if (isRiding(vehicleId) && ridingVehicleCarNumber == carNumber) {
 			ridingVehicleCooldown = 0;
 			final double entityYawOld = EntityHelper.getYaw(new Entity(clientPlayerEntity.data));
-			final float speedMultiplier = millisElapsed * VEHICLE_WALKING_SPEED_MULTIPLIER * (clientPlayerEntity.isSprinting() ? 2 : 1);
+			final float speedMultiplier = mmtrCabLocked ? 0 : millisElapsed * VEHICLE_WALKING_SPEED_MULTIPLIER * (clientPlayerEntity.isSprinting() ? 2 : 1);
 			// Calculate the relative motion inside vehicle (+Z towards back of vehicle, +/-X towards the left and right of the vehicle)
 			final Vector3d movement = positionAndRotation.transformBackwards(new Vector3d(
 					Math.abs(clientPlayerEntity.getSidewaysSpeedMapped()) > 0.5 ? Math.copySign(speedMultiplier, clientPlayerEntity.getSidewaysSpeedMapped()) : 0,
@@ -336,6 +339,15 @@ public class VehicleRidingMovement {
 
 	public static boolean isRiding(long vehicleId) {
 		return vehicleId == ridingVehicleId;
+	}
+
+	/**
+	 * MMTR: while the crew holds a cab the driver is fixed at the seat and cannot walk around; the
+	 * passenger compartment stays freely walkable. Set when a cab is taken and cleared when it is
+	 * left (or when the ride ends).
+	 */
+	public static void mmtrSetCabLock(boolean locked) {
+		mmtrCabLocked = locked;
 	}
 
 	/**
