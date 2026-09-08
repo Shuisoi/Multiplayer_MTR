@@ -66,7 +66,7 @@ public final class MmtrPanelQuad {
 						round(Math.toDegrees(Math.atan2(sideNormal.x(), sideNormal.z()))),
 						round(Math.toDegrees(Math.asin(clamp(-up.y())))),
 						round(Math.toDegrees(Math.atan2(up.x(), up.y()))),
-						anchor.panelFlipU != (side < 0),
+						anchor.panelFlipU != (side > 0),
 						SURFACE_OFFSET_M);
 			}
 		}
@@ -82,7 +82,13 @@ public final class MmtrPanelQuad {
 			final double pitch = Math.toDegrees(Math.asin(clamp(-up.y())));
 			final double yaw = Math.toDegrees(Math.atan2(sideNormal.x(), sideNormal.z()));
 			final double roll = Math.toDegrees(Math.atan2(up.x(), up.y()));
-			final boolean flipU = anchor.panelFlipU != (side < 0);
+			// The panel's local +X must run towards the driver's right so the readout is not mirrored.
+			// The driver looks along the car's -Z (the dashboard is ahead of them), so their right is
+			// the car's +X. The frame above maps local +X onto sideRight = side * anchor.right, and for
+			// the side the driver sits on (side = -1) that lands on the car's +X, i.e. already correct;
+			// the opposite copy (side = +1) ends up mirrored and needs the U flip. panelFlipU inverts
+			// this for faces authored the other way round.
+			final boolean flipU = anchor.panelFlipU != (side > 0);
 
 			final StoredMatrixTransformations transformations = carTransform.copy();
 			transformations.add(graphicsHolder -> graphicsHolder.translate(position.x(), position.y(), position.z()));
