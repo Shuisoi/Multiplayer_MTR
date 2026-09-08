@@ -95,7 +95,7 @@ public final class MmtrConsistVehicleMotionTests {
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(sim, store, startRail, startEntry, aEndOffsetM, new double[]{ved.getTotalVehicleLength()}, null);
 		assertNotNull(walker, "the consist must fit on the placement rail");
-		v.engageMmtrConsistMotion(walker, MmtrCabState.Cab.CAB_A);
+		v.engageMmtrConsistMotion(walker, MmtrCabState.Cab.CAB_B);
 		return v;
 	}
 
@@ -170,12 +170,12 @@ public final class MmtrConsistVehicleMotionTests {
 		final MmtrMotionSnapshot before = MmtrMotionSnapshot.from(null, v);
 		final double progressBefore = v.getRailProgress();
 		final double beforeAEnd = v.getMmtrConsistWalker().body().aEndArcM();
-		assertEquals("CAB_A", before.activeCab);
+		assertEquals("CAB_B", before.activeCab);
 
 		assertTrue(v.changeEndsMmtrMotion(), "the crew changes ends on the standing consist");
 
 		final MmtrMotionSnapshot after = MmtrMotionSnapshot.from(null, v);
-		assertEquals("CAB_B", after.activeCab, "the other cab now drives");
+		assertEquals("CAB_A", after.activeCab, "the other cab now drives");
 		assertEquals(before.rearX, after.frontX, 1e-9, "I1 at the vehicle level: the rear point is now the front");
 		assertEquals(before.rearZ, after.frontZ, 1e-9);
 		assertEquals(before.frontX, after.rearX, 1e-9, "I1: the front point is now the rear");
@@ -238,6 +238,6 @@ public final class MmtrConsistVehicleMotionTests {
 		driveTicks(v, 5, positions());
 		assertTrue(v.getSpeed() > 0, "the consist is rolling");
 		assertFalse(v.changeEndsMmtrMotion(), "no change-ends while moving");
-		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrConsistWalker().cabs().activeCab());
+		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrConsistWalker().cabs().activeCab());
 	}
 }
