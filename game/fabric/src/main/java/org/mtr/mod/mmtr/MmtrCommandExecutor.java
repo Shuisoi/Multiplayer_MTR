@@ -49,8 +49,53 @@ public final class MmtrCommandExecutor {
 	private static void execute(Simulator simulator, ServerWorld serverWorld, String command) {
 		if (command.equals("signals scan")) {
 			scanSignals(simulator, serverWorld);
+			return;
+		}
+		// B7.6 crew commands: changeends <vehicleId> | cab <vehicleId> <A|B|out>
+		final String[] parts = command.trim().split("\\s+");
+		if (parts.length >= 2 && (parts[0].equals("changeends") || parts[0].equals("cab"))) {
+			executeCabCommand(simulator, parts);
+			return;
+		}
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out>)");
+	}
+
+	/**
+	 * B7.6: OP-side cab ops. {@code changeends <id>} performs the whole 换端 (legal only at a stand,
+	 * only on a consist-body train); {@code cab <id> A|B|out} takes/leaves a cab (key in / key out).
+	 * The physical gates live in the engine ({@code Vehicle.enterMmtrCab/leaveMmtrCab/
+	 * changeEndsMmtrMotion}); this layer only resolves the id and reports back to the command log.
+	 */
+	private static void executeCabCommand(Simulator simulator, String[] parts) {
+		final long vehicleId;
+		try {
+			vehicleId = Long.parseLong(parts[1]);
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[" + parts[0] + "] vehicleId 必须是数字: " + parts[1]);
+			return;
+		}
+		final org.mtr.core.data.Vehicle vehicle = simulator.mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			simulator.mmtrCommandResult("[" + parts[0] + "] 找不到车辆 " + vehicleId);
+			return;
+		}
+		if (vehicle.getMmtrConsistWalker() == null) {
+			simulator.mmtrCommandResult("[" + parts[0] + "] 车辆 " + vehicleId + " 不是编组体车（无驾驶室模型）");
+			return;
+		}
+		if (parts[0].equals("changeends")) {
+			final boolean ok = vehicle.changeEndsMmtrMotion();
+			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 换端完成 → " + vehicle.getMmtrActiveCab() : " 换端失败（需停稳且已有驾驶室）"));
+			return;
+		}
+		final String what = parts.length >= 3 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "a";
+		if (what.equals("out") || what.equals("leave")) {
+			final boolean ok = vehicle.leaveMmtrCab();
+			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已拔钥匙" : " 无钥匙可拔"));
 		} else {
-			simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan)");
+			final org.mtr.core.mmtr.consist.MmtrCabState.Cab cab = what.equals("b") ? org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_B : org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_A;
+			final boolean ok = vehicle.enterMmtrCab(cab);
+			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已进入 " + cab : " 无法进入（需停稳且该驾驶室空闲）"));
 		}
 	}
 

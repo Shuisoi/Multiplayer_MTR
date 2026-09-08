@@ -1395,9 +1395,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * 换端 (change ends) for a motion vehicle: legal only at a stand, and only on the consist model
-	 * (the legacy walker has no cab). The train does not move — see the B-series design invariants.
+	 * B7.6: the crew takes a cab (inserts the key). Legal only on the consist model and only while the
+	 * consist stands — a driver cannot walk into a cab on a moving train. The caller (game side) has
+	 * already checked that the player really stands at that cab and holds a driver key.
 	 */
+	public boolean enterMmtrCab(MmtrCabState.Cab cab) {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		return consistWalker != null && consistWalker.insertKey(cab, speed == 0, true);
+	}
+
+	/**
+	 * B7.6: the crew leaves the cab (pulls the key). Always legal — if the consist is still rolling it
+	 * simply loses traction and the motion branch brakes it to a stand (§3.3).
+	 */
+	public boolean leaveMmtrCab() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		return consistWalker != null && consistWalker.removeKey();
+	}
+
+	/** @return the manned cab of a consist-body vehicle, or {@code NONE}. */
+	public MmtrCabState.Cab getMmtrActiveCab() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		return consistWalker == null ? MmtrCabState.Cab.NONE : consistWalker.cabs().activeCab();
+	}
+
+	/** 换端 (change ends) for a motion vehicle: legal only at a stand, and only on the consist model
+	 * (the legacy walker has no cab). The train does not move — see the B-series design invariants. */
 	public boolean changeEndsMmtrMotion() {
 		if (isClientside || mmtrMotionWalker == null) {
 			return false;

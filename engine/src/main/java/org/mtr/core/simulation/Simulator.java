@@ -741,6 +741,21 @@ public class Simulator extends Data implements Utilities {
 		return false;
 	}
 
+	/**
+	 * B7.6: find a live vehicle by id — OP commands and cab ops address vehicles by their engine id
+	 * (the same id the web feeds and the drive command use).
+	 */
+	@Nullable
+	public Vehicle mmtrFindVehicle(long vehicleId) {
+		final Vehicle[] found = {null};
+		sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
+			if (vehicle.getId() == vehicleId) {
+				found[0] = vehicle;
+			}
+		}));
+		return found[0];
+	}
+
 	private void persistMmtrJobs() {
 		expandMmtrJobTemplates();
 		if (!mmtrJobRegistry.jobs.isEmpty()) {

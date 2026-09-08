@@ -124,6 +124,40 @@ public final class SystemMapServlet extends ServletBase {
 								if (!ok) {
 									result.addProperty("error", "no vehicle with id " + rawVehicleId);
 								}
+							} else if (op.equals("cab-enter") || op.equals("cab-leave") || op.equals("change-ends")) {
+								// B7.6: crew cab ops (key in / key out / 换端) on the consist model. The
+								// game side has already checked the driver's key and position; the engine
+								// enforces the physical gates (consist model, train at a stand).
+								final org.mtr.core.data.Vehicle vehicle = simulator.mmtrFindVehicle(vehicleId);
+								if (vehicle == null) {
+									result.addProperty("error", "no vehicle with id " + rawVehicleId);
+								} else if (vehicle.getMmtrConsistWalker() == null) {
+									result.addProperty("error", "vehicle " + rawVehicleId + " is not a consist-body train");
+								} else if (op.equals("cab-enter")) {
+									final String cabName = jsonReader.getString("cab", "CAB_A");
+									org.mtr.core.mmtr.consist.MmtrCabState.Cab cab = org.mtr.core.mmtr.consist.MmtrCabState.Cab.NONE;
+									try {
+										cab = org.mtr.core.mmtr.consist.MmtrCabState.Cab.valueOf(cabName);
+									} catch (IllegalArgumentException e) {
+										result.addProperty("error", "cab must be CAB_A or CAB_B");
+									}
+									if (cab != org.mtr.core.mmtr.consist.MmtrCabState.Cab.NONE) {
+										ok = vehicle.enterMmtrCab(cab);
+										if (!ok) {
+											result.addProperty("error", "cannot take " + cabName + " (train moving or cab occupied)");
+										}
+									}
+								} else if (op.equals("cab-leave")) {
+									ok = vehicle.leaveMmtrCab();
+								} else {
+									ok = vehicle.changeEndsMmtrMotion();
+									if (!ok) {
+										result.addProperty("error", "cannot change ends (train moving, no cab manned, or not a consist)");
+									}
+								}
+								if (ok) {
+									result.addProperty("activeCab", vehicle.getMmtrActiveCab().name());
+								}
 							} else {
 								result.addProperty("error", "unsupported op '" + op + "'");
 							}

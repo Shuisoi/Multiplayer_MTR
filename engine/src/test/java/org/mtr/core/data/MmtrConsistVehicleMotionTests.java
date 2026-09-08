@@ -231,6 +231,31 @@ public final class MmtrConsistVehicleMotionTests {
 	}
 
 	@Test
+	public void cabOpsTakeAndLeaveTheMannedCab() {
+		final Line line = new Line();
+		// Placed well inside r0 so the A-end cab has room to roll after the crew takes it.
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, line.r0.railMath.getLength() - 12, new BranchStore());
+		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrActiveCab(), "the spawn seam inserted the system key in the B-end cab");
+
+		// Key out, then take the other cab: both are legal at a stand.
+		assertTrue(v.leaveMmtrCab());
+		assertEquals(MmtrCabState.Cab.NONE, v.getMmtrActiveCab());
+		assertFalse(v.leaveMmtrCab(), "no key left to pull");
+		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_A));
+		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrActiveCab());
+		assertFalse(v.enterMmtrCab(MmtrCabState.Cab.CAB_B), "a consist holds exactly one key");
+		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrActiveCab());
+
+		// No cab can be taken on a moving consist; pulling the key is always legal.
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 3, positions());
+		assertTrue(v.getSpeed() > 0, "the consist is rolling");
+		assertFalse(v.enterMmtrCab(MmtrCabState.Cab.CAB_B), "cannot walk into a cab on a moving train");
+		assertTrue(v.leaveMmtrCab());
+		assertEquals(MmtrCabState.Cab.NONE, v.getMmtrActiveCab());
+	}
+
+	@Test
 	public void aMovingConsistVehicleRefusesToChangeEnds() {
 		final Line line = new Line();
 		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
