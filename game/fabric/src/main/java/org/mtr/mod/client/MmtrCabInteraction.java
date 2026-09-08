@@ -54,6 +54,9 @@ public final class MmtrCabInteraction {
 	private static long heldVehicleId = 0;
 	private static int heldCab = 0;
 
+	/** Throttle for the temporary "what does this client actually see" diagnostic. */
+	private static long lastVehicleDebugMillis = 0;
+
 	public static void tick() {
 		final boolean pressed = KeyBindings.MMTR_CAB_INTERACT.isPressed();
 		final boolean justPressed = pressed && !lastPressed;
@@ -63,6 +66,8 @@ public final class MmtrCabInteraction {
 		if (player == null) {
 			return;
 		}
+
+		logVehicleDebug(player);
 
 		// Forget a stale hold as soon as the player is no longer riding that consist.
 		if (heldVehicleId != 0 && !VehicleRidingMovement.isRiding(heldVehicleId)) {
@@ -82,6 +87,47 @@ public final class MmtrCabInteraction {
 			player.sendMessage(new Text(TextHelper.literal(holdsThisCab ? KEY_OUT_PROMPT : enterPrompt(target.cab)).data), true);
 			promptCooldown = PROMPT_INTERVAL_TICKS;
 		}
+	}
+
+	/**
+	 * Temporary diagnostic (B7.6e acceptance): every two seconds report how many vehicles this client
+	 * knows about, where the nearest one is relative to the player and which models they use, so a
+	 * "I cannot see the train" report can be split into "the client has no vehicle" versus
+	 * "the vehicle is far away" versus "the model is not drawn".
+	 */
+	private static void logVehicleDebug(ClientPlayerEntity player) {
+		final long now = System.currentTimeMillis();
+		if (now - lastVehicleDebugMillis < 2000) {
+			return;
+		}
+		lastVehicleDebugMillis = now;
+
+		final var vehicles = MinecraftClientData.getInstance().vehicles;
+		double nearest = -1;
+		String nearestId = "-";
+		String nearestModels = "-";
+		String nearestCarPosition = "-";
+		for (final VehicleExtension vehicle : vehicles) {
+			final double distance = Math.sqrt(Math.max(0, nearestCarDistanceSquared(vehicle, player.getX(), player.getY(), player.getZ())));
+			if (nearest < 0 || distance < nearest) {
+				nearest = distance;
+				nearestId = String.valueOf(vehicle.getId());
+				final StringBuilder models = new StringBuilder();
+				for (final var car : vehicle.getVehicleCarsAndPositions()) {
+					if (models.length() > 0) {
+						models.append(',');
+					}
+					models.append(car.left().getVehicleId());
+					if (car.right().isEmpty()) {
+						continue;
+					}
+					final var bogie = car.right().get(0).positionAndTiltAngle1().position();
+					nearestCarPosition = String.format("%.1f,%.1f,%.1f", bogie.x(), bogie.y(), bogie.z());
+				}
+				nearestModels = models.toString();
+			}
+		}
+		Init.LOGGER.info("[MMTR-DBG] client vehicles={} nearest={} distance={} models=[{}] carPos=({}) player=({}, {}, {})", vehicles.size(), nearestId, nearest < 0 ? "-" : String.format("%.1f", nearest), nearestModels, nearestCarPosition, String.format("%.1f", player.getX()), String.format("%.1f", player.getY()), String.format("%.1f", player.getZ()));
 	}
 
 	private static void handle(ClientPlayerEntity player, @Nullable AimTarget target) {
