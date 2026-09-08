@@ -167,11 +167,12 @@ public final class MmtrCabPanel {
 
 	/**
 	 * Converts an anchor coordinate or direction from the OBJ file space into the space MTR renders
-	 * the model (and its own display text) in: the loader negates Y, so a file coordinate
-	 * {@code (x, y, z)} becomes {@code (x, -y, z)} there.
+	 * the model (and its own display text) in. Verified against MTR's own loader: a part at file
+	 * {@code z = +1.09} (the cab door) is parsed at {@code z = -1.09}, so the model space is
+	 * {@code (x, -y, -z)} of the file space.
 	 */
 	private static Vector toModelSpace(Vector fileVector) {
-		return new Vector(fileVector.x(), -fileVector.y(), fileVector.z());
+		return new Vector(fileVector.x(), -fileVector.y(), -fileVector.z());
 	}
 
 	/** Index of a consist car inside its own model (a model can be used several times). */
