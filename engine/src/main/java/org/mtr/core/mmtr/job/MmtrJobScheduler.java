@@ -692,8 +692,22 @@ public final class MmtrJobScheduler {
 		// PASSENGER when the step serves a platform (doors + dwell at the stop), MANEUVER for a
 		// plain relocation (yard return). Motion-mode missions self-arm every tick (route plan,
 		// turnout grants, stop target), so no legacy autopilot seam is engaged for them.
-		final MmtrMission.Kind kind = isPlatform(simulator, targetId) ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER;
+		final boolean targetIsPlatform = isPlatform(simulator, targetId);
+		final MmtrMission.Kind kind = targetIsPlatform ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER;
+		// Task mapping (作业单步骤 → 任务实例): the mission carries the task definition so the
+		// timetable layer and the future interlocking read where/when/what of the running step.
+		final org.mtr.core.mmtr.task.MmtrTask task = org.mtr.core.mmtr.task.MmtrTaskFactory.fromStep(step, targetIsPlatform);
+		if (task != null) {
+			final String invalid = task.validate();
+			if (!invalid.isEmpty()) {
+				fail(instance, "step " + step.stepId + " task invalid: " + invalid);
+				return;
+			}
+		}
 		final MmtrMission mission = new MmtrMission(vehicle.getId(), kind, instance.job.sidingId, targetId, simulator.getCurrentMillis());
+		if (task != null) {
+			mission.attachTask(task);
+		}
 		if (!vehicle.setMmtrMission(mission)) {
 			fail(instance, "could not attach mission for step " + step.stepId);
 			return;

@@ -1,6 +1,7 @@
 package org.mtr.core.mmtr;
 
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.mmtr.task.MmtrTask;
 
 import java.util.UUID;
 
@@ -24,6 +25,8 @@ public final class MmtrMission {
 	private Executor executor = Executor.AUTOPILOT;
 	private @Nullable UUID executorPlayer;
 	private @Nullable String failureReason;
+	/** The task this mission executes (作业单步骤 → 任务实例); null for legacy ad-hoc dispatches. */
+	private @Nullable MmtrTask task;
 
 	public MmtrMission(long trainVehicleId, Kind kind, long startSidingId, long targetSidingId, long assignedMillis) {
 		this.trainVehicleId = trainVehicleId;
@@ -31,6 +34,16 @@ public final class MmtrMission {
 		this.startSidingId = startSidingId;
 		this.targetSidingId = targetSidingId;
 		this.assignedMillis = assignedMillis;
+	}
+
+	/** Attach the task definition this mission executes (where/when/what for timetable/interlocking). */
+	public void attachTask(@Nullable MmtrTask task) {
+		this.task = task;
+	}
+
+	@Nullable
+	public MmtrTask getTask() {
+		return task;
 	}
 
 	public long getTrainVehicleId() { return trainVehicleId; }
