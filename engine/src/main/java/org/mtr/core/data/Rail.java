@@ -418,6 +418,25 @@ public final class Rail extends RailSchema {
 		return returnSet;
 	}
 
+	/**
+	 * MMTR signal display: a per-rail reserved signal color, deterministic from the rail hex - the
+	 * engine occupancy driver registers a train's CURRENTLY_RESERVE hold under this color, the
+	 * standard rail signal-block channel (Rail#tick1 diff -> SignalBlockUpdate) then pushes it to
+	 * every client, whose signal lights turn red. One reserved color per rail keeps the recursive
+	 * same-colour reservation in {@link #isBlocked} from spreading a hold across connected rails.
+	 */
+	public long mmtrSignalColor() {
+		return 0x40000000L | (getHexId().hashCode() & 0x3FFFFFFF);
+	}
+
+	/** Adds this rail's MMTR reserved signal color unless it already carries it (idempotent). */
+	public void mmtrEnsureSignalColor() {
+		final long color = mmtrSignalColor();
+		if (!signalColors.contains(color)) {
+			signalColors.add(color);
+		}
+	}
+
 	public void copySignalColors(Rail rail) {
 		signalColors.clear();
 		signalColors.addAll(rail.signalColors);

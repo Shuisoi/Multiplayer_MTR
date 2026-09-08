@@ -506,6 +506,31 @@ public class Simulator extends Data implements Utilities {
 		}
 	}
 
+	private String mmtrSignalColorsSignature = "";
+
+	/**
+	 * MMTR signal display (server-authoritative): give every rail its own reserved MMTR signal
+	 * color (rails-signature gated) so the standard rail signal-block channel can carry MMTR
+	 * occupancy - {@link Vehicle#markMmtrSignalBlocks()} registers CURRENTLY_RESERVE holds under
+	 * these colors, Rail#tick1 diffs them and pushes SignalBlockUpdates, and the in-game signal
+	 * lights turn red for EVERY client regardless of locally simulated vehicles.
+	 */
+	public void mmtrEnsureSignalColors() {
+		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|');
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> hexes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+		for (final org.mtr.core.data.Rail rail : rails) {
+			hexes.add(rail.getHexId());
+		}
+		hexes.sort(null);
+		hexes.forEach(hex -> sig.append(hex).append(','));
+		final String signature = sig.toString();
+		if (signature.equals(mmtrSignalColorsSignature)) {
+			return;
+		}
+		mmtrSignalColorsSignature = signature;
+		rails.forEach(org.mtr.core.data.Rail::mmtrEnsureSignalColor);
+	}
+
 	/** Discover all turnouts (道岔) on the rail graph with the operator branch states applied. */
 	public ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> mmtrDiscoverPoints() {
 		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> points = org.mtr.core.mmtr.point.MmtrPointRegistry.discover(this);
@@ -894,6 +919,7 @@ public class Simulator extends Data implements Utilities {
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			mmtrEnsurePointDefaults();
+			mmtrEnsureSignalColors();
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
 			}

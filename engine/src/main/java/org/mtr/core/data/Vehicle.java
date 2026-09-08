@@ -619,6 +619,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 
+		// MMTR signal display (server-authoritative): a running motion train registers the rails it
+		// occupies into the standard rail signal-block channel (under the per-rail MMTR reserved
+		// signal color). Rail#tick1 diffs the holds and pushes SignalBlockUpdates to every nearby
+		// client, so the in-game signal lights protecting those rails turn red for all players -
+		// independent of each client's locally simulated vehicles. Legacy path vehicles already do
+		// this via writeVehiclePositions; motion vehicles need the explicit call here.
+		if (!isClientside && mmtrMotionWalker != null && !mmtrMotionLegs.isEmpty()) {
+			final int headLegIndex = indexInMmtrMotionLegs(railProgress);
+			final double tailProgress = railProgress - vehicleExtraData.getTotalVehicleLength();
+			for (int index = headLegIndex; index >= 0; index--) {
+				final PathData leg = mmtrMotionLegs.get(index);
+				if (tailProgress > leg.getEndDistance()) {
+					break;
+				}
+				leg.getRail().isBlocked(id, Rail.BlockReservation.CURRENTLY_RESERVE);
+			}
+		}
+
 		if (vehicleTimesAlongRoute != null && !mmtrMotionMode) {
 			final long timeAlongRoute = getTimeAlongRoute(railProgress);
 			if (timeAlongRoute > 0) {
