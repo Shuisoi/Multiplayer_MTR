@@ -276,10 +276,10 @@ public final class MmtrVehicleAnchors {
 						parseKind(getString(object, "kind", "")),
 						getInt(object, "cab", 0),
 						getInt(object, "car", 0),
-						getVector(object, "x", "y", "z"),
-						getVector(object, "normal"),
-						getVector(object, "up"),
-						getVector(object, "right"),
+						toRidingSpace(getVector(object, "x", "y", "z")),
+						toRidingSpace(getVector(object, "normal")),
+						toRidingSpace(getVector(object, "up")),
+						toRidingSpace(getVector(object, "right")),
 						getDouble(object, "widthM", 0),
 						getDouble(object, "heightM", 0)
 				));
@@ -291,8 +291,21 @@ public final class MmtrVehicleAnchors {
 		return anchors;
 	}
 
-	private static Kind parseKind(String kind) {
-		switch (kind) {
+	/**
+	 * Converts an anchor coordinate or direction from the OBJ file space into MTR's riding space.
+	 *
+	 * <p>MTR renders a vehicle model with a 180 degree Y flip ({@code getStoredMatrixTransformations})
+	 * and then builds its floor/doorway boxes by negating all three axes of the parsed bounds, so the
+	 * space that players, floors and doorways live in is the file space rotated 180 degrees about Y:
+	 * {@code (x, y, z) -> (-x, y, -z)}. Anchors are authored in the file space (easy to compare with
+	 * Blender), so they must be mirrored here or the panel, the seat and the cab door all end up on
+	 * the opposite side of the car.</p>
+	 */
+	private static Vector toRidingSpace(Vector vector) {
+		return new Vector(-vector.x(), vector.y(), -vector.z());
+	}
+
+	private static Kind parseKind(String kind) {		switch (kind) {
 			case "hud":
 				return Kind.HUD;
 			case "cabdoor":
