@@ -114,7 +114,57 @@ public final class MmtrBlockService {
 		signature = current;
 		boundariesByRail.clear();
 		blocksByRail.clear();
-		simulator.rails.forEach(this::buildRail);
+		final Object2ObjectOpenHashMap<String, Rail> railByHex = new Object2ObjectOpenHashMap<>();
+		simulator.rails.forEach(rail -> railByHex.put(rail.getHexId(), rail));
+
+		// Resolve every signal to the rail it cuts: an explicit target wins (覆盖绑定), otherwise the
+		// nearest rail within tolerance - `signals scan` registers AUTO entries with no target, and
+		// without this inference a scanned wayside light would never cut anything.
+		final Object2ObjectOpenHashMap<String, ObjectArrayList<Boundary>> signalBoundaries = new Object2ObjectOpenHashMap<>();
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			final Rail rail = resolveRail(entry, railByHex);
+			if (rail == null) {
+				continue;
+			}
+			final Double arc = projectArc(rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
+			if (arc == null) {
+				continue;
+			}
+			final double length = rail.railMath.getLength();
+			if (arc <= NODE_SNAP_M || arc >= length - NODE_SNAP_M) {
+				continue; // sitting at an end node: the node is already a boundary
+			}
+			signalBoundaries.computeIfAbsent(rail.getHexId(), key -> new ObjectArrayList<>())
+				.add(new Boundary(arc, BoundaryKind.SIGNAL, MmtrSignalRegistry.key(entry.x, entry.y, entry.z)));
+		}
+		simulator.rails.forEach(rail -> buildRail(rail, signalBoundaries.get(rail.getHexId())));
+	}
+
+	/**
+	 * The rail a signal cuts: its bound {@code target} when set, otherwise the nearest rail within
+	 * {@link #SIGNAL_BIND_TOLERANCE_M} (AUTO placement inference).
+	 */
+	private @Nullable Rail resolveRail(SignalEntry entry, Object2ObjectOpenHashMap<String, Rail> railByHex) {
+		if (entry.target != null && !entry.target.isEmpty()) {
+			final Rail bound = railByHex.get(entry.target);
+			if (bound != null) {
+				return bound;
+			}
+			// A stale target (the rail was redrawn) falls through to geometric inference.
+		}
+		final double x = entry.x + 0.5;
+		final double y = entry.y + 0.5;
+		final double z = entry.z + 0.5;
+		Rail nearest = null;
+		double nearestDistanceSq = SIGNAL_BIND_TOLERANCE_M * SIGNAL_BIND_TOLERANCE_M;
+		for (final Rail rail : simulator.rails) {
+			final Projection projection = project(rail, x, y, z);
+			if (projection != null && projection.distanceSq <= nearestDistanceSq) {
+				nearestDistanceSq = projection.distanceSq;
+				nearest = rail;
+			}
+		}
+		return nearest;
 	}
 
 	/** Every section of {@code railHex}, ordered by arc (empty for an unknown rail). */
@@ -161,7 +211,7 @@ public final class MmtrBlockService {
 		return blocksByRail.size();
 	}
 
-	private void buildRail(Rail rail) {
+	private void buildRail(Rail rail, @Nullable ObjectArrayList<Boundary> signalBoundaries) {
 		final String railHex = rail.getHexId();
 		final double length = rail.railMath.getLength();
 		if (length <= 0) {
@@ -170,19 +220,13 @@ public final class MmtrBlockService {
 		final ObjectArrayList<Boundary> boundaries = new ObjectArrayList<>();
 		boundaries.add(new Boundary(0, BoundaryKind.NODE, "node"));
 		boundaries.add(new Boundary(length, BoundaryKind.NODE, "node"));
-		// Every signal that reads this rail, projected onto the curve.
-		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
-			if (entry.target == null || !entry.target.equals(railHex)) {
-				continue;
+		if (signalBoundaries != null) {
+			for (final Boundary boundary : signalBoundaries) {
+				if (hasBoundaryNear(boundaries, boundary.arcFromOrdered1M)) {
+					continue; // two lights at the same spot are one boundary
+				}
+				boundaries.add(boundary);
 			}
-			final Double arc = projectArc(rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
-			if (arc == null || arc <= NODE_SNAP_M || arc >= length - NODE_SNAP_M) {
-				continue; // not on this rail, or sitting at an end node (no split)
-			}
-			if (hasBoundaryNear(boundaries, arc)) {
-				continue; // two lights at the same spot are one boundary
-			}
-			boundaries.add(new Boundary(arc, BoundaryKind.SIGNAL, MmtrSignalRegistry.key(entry.x, entry.y, entry.z)));
 		}
 		boundaries.sort((a, b) -> Double.compare(a.arcFromOrdered1M, b.arcFromOrdered1M));
 		boundariesByRail.put(railHex, boundaries);
@@ -207,14 +251,25 @@ public final class MmtrBlockService {
 		return false;
 	}
 
+	/** A sampled closest point on a rail curve (arc in ordered-position-1 space). */
+	private static final class Projection {
+		final double arcFromOrdered1M;
+		final double distanceSq;
+
+		Projection(double arcFromOrdered1M, double distanceSq) {
+			this.arcFromOrdered1M = arcFromOrdered1M;
+			this.distanceSq = distanceSq;
+		}
+	}
+
 	/**
-	 * Project a world position onto the rail curve and return the arc in ordered-position-1 space, or
-	 * null when the closest point is farther than {@link #SIGNAL_BIND_TOLERANCE_M}.
+	 * Closest point on the rail curve to a world position (always returns the best sample, however far
+	 * - callers decide whether the distance is acceptable).
 	 *
 	 * <p>Sampling (0.25 m) rather than a closed-form projection: MTR rails are two-arc curves, and a
 	 * signal only needs to land inside the right section, not at millimetre precision.</p>
 	 */
-	public static @Nullable Double projectArc(Rail rail, double worldX, double worldY, double worldZ) {
+	private static @Nullable Projection project(Rail rail, double worldX, double worldY, double worldZ) {
 		final double length = rail.railMath.getLength();
 		if (length <= 0) {
 			return null;
@@ -232,20 +287,31 @@ public final class MmtrBlockService {
 				bestT = Math.min(t, length);
 			}
 		}
-		if (bestDistanceSq > SIGNAL_BIND_TOLERANCE_M * SIGNAL_BIND_TOLERANCE_M) {
-			return null;
-		}
-		// Convert the arc from the rail's declared position1 to the ordered-position-1 space. The
-		// endpoints are read off the curve itself (Rail#getPosition1/2 are protected to the data
-		// package); MTR rail endpoints are integer block coordinates, so rounding is exact.
-		final Position start = toPosition(rail.railMath.getPosition(0, false));
-		final Position end = toPosition(rail.railMath.getPosition(length, false));
-		final boolean startIsOrdered1 = start.compareTo(end) <= 0;
-		return startIsOrdered1 ? bestT : length - bestT;
+		return new Projection(bestT, bestDistanceSq);
 	}
 
-	private static Position toPosition(Vector vector) {
-		return new Position(Math.round(vector.x()), Math.round(vector.y()), Math.round(vector.z()));
+	/**
+	 * Project a world position onto the rail curve and return the arc in ordered-position-1 space, or
+	 * null when the closest point is farther than {@link #SIGNAL_BIND_TOLERANCE_M}.
+	 */
+	public static @Nullable Double projectArc(Rail rail, double worldX, double worldY, double worldZ) {
+		final Projection projection = project(rail, worldX, worldY, worldZ);
+		if (projection == null || projection.distanceSq > SIGNAL_BIND_TOLERANCE_M * SIGNAL_BIND_TOLERANCE_M) {
+			return null;
+		}
+		// No conversion needed: RailMath is always built from the endpoint that sorts first by
+		// Position.compareTo, so its arc space already IS the ordered-position-1 space the shared
+		// occupancy trees use (Rail#mmtrArcOfEndNode documents the same mapping for nodes).
+		return projection.arcFromOrdered1M;
+	}
+
+	/**
+	 * The arc of an endpoint node on {@code rail} in ordered-position-1 space (0 or the rail length),
+	 * or {@code NaN} when {@code node} is not one of the rail's endpoints. Used to find which section a
+	 * train enters when it crosses onto the next rail.
+	 */
+	public static double arcOfNode(Rail rail, @Nullable Position node) {
+		return node == null ? Double.NaN : rail.mmtrArcOfEndNode(node);
 	}
 
 	private String signature() {

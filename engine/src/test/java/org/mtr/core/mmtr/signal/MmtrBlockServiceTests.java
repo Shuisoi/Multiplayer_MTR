@@ -28,7 +28,11 @@ public final class MmtrBlockServiceTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 
 	private static Rail rail(Position p1, Position p2) {
-		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+		return rail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180));
+	}
+
+	private static Rail rail(Position p1, Angle a1, Position p2, Angle a2) {
+		return Rail.newRail(p1, a1, p2, a2, Rail.Shape.QUADRATIC, 0, NO_STYLES,
 			80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
@@ -131,6 +135,30 @@ public final class MmtrBlockServiceTests {
 		assertEquals(2, service.blockCount());
 	}
 
+	/**
+	 * `signals scan` registers AUTO entries with an EMPTY target (MmtrCommandExecutor passes ""), so a
+	 * scanned wayside light must still cut the rail it stands on - otherwise the section feature would
+	 * never show up in a real world without hand-binding every light.
+	 */
+	@Test
+	public void anUnboundScannedSignalStillSplitsTheNearestRail() {
+		final Rail r = rail(new Position(0, 0, 0), new Position(120, 0, 0));
+		final Simulator simulator = sim("build/mmtr-block-auto", r);
+		final int[] coords = blockCoordsAt(r, 60);
+		simulator.mmtrSignals.put(coords[0], coords[1], coords[2], 0, 2, "set", "");
+		final MmtrBlockService service = new MmtrBlockService(simulator);
+		assertEquals(2, service.blocksOf(r.getHexId()).size(), "the AUTO light is inferred onto the rail it stands on");
+		assertEquals(MmtrBlockService.BoundaryKind.SIGNAL, service.boundariesOf(r.getHexId()).get(1).kind);
+	}
+
+	@Test
+	public void anUnboundSignalFarFromEveryRailIsIgnored() {
+		final Rail r = rail(new Position(0, 0, 0), new Position(120, 0, 0));
+		final Simulator simulator = sim("build/mmtr-block-auto-far", r);
+		simulator.mmtrSignals.put(60, 30, 0, 0, 2, "set", "");
+		assertEquals(1, new MmtrBlockService(simulator).blocksOf(r.getHexId()).size(), "30 blocks away is not on a rail");
+	}
+
 	@Test
 	public void sectionsOfDifferentRailsStayIndependent() {
 		final Rail a = rail(new Position(0, 0, 0), new Position(120, 0, 0));
@@ -143,5 +171,31 @@ public final class MmtrBlockServiceTests {
 		assertEquals(3, service.blockCount());
 		assertEquals(2, service.railCount());
 		assertNotNull(service.blockAt(a.getHexId(), 1));
+	}
+
+	/**
+	 * B2 regression: a rail whose DECLARED position 1 sorts after its position 2 (a rail drawn from
+	 * east to west, say) still measures sections from the ordered-first endpoint, because that is where
+	 * {@link Rail#railMath} and the shared occupancy trees start. Reading the endpoints off the curve
+	 * samples instead does not work: a curved rail shape shifts them to the block centre (a rail from
+	 * (-8,0,0) samples as (-7.5, 0, 0.5)), which broke the node lookup for every such rail.
+	 */
+	@Test
+	public void aRailDrawnBackwardsIsCutInOrderedPositionSpace() {
+		final Position east = new Position(120, 0, 0);
+		final Position west = new Position(0, 0, 0);
+		final Rail r = rail(east, Angle.fromAngle(180), west, Angle.fromAngle(0));
+		final Simulator simulator = sim("build/mmtr-block-reversed", r);
+		addSignal(simulator, r, 60);
+		final MmtrBlockService service = new MmtrBlockService(simulator);
+
+		final ObjectArrayList<MmtrBlockService.Block> blocks = service.blocksOf(r.getHexId());
+		assertEquals(2, blocks.size(), "the signal splits the rail regardless of drawing direction");
+		assertEquals(60, blocks.get(0).arcToM, 1.5, "the split is measured from the ordered-first endpoint");
+		assertEquals(0, MmtrBlockService.arcOfNode(r, west), 1e-9, "the ordered-first node is arc 0");
+		assertEquals(r.railMath.getLength(), MmtrBlockService.arcOfNode(r, east), 1e-9, "the other node is the rail length");
+		assertTrue(Double.isNaN(MmtrBlockService.arcOfNode(r, new Position(60, 0, 0))), "a mid-rail point is not a node");
+		assertEquals(blocks.get(0), service.blockAt(r.getHexId(), 10), "arc 10 is the section next to the west node");
+		assertEquals(blocks.get(1), service.blockAt(r.getHexId(), 110), "arc 110 is the far section");
 	}
 }

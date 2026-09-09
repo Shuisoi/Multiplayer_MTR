@@ -28,6 +28,7 @@ import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
+import org.mtr.core.mmtr.signal.MmtrBlockService;
 import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
@@ -3054,14 +3055,106 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 			}
 		}
-		// (2) next rail occupied = the block is closed: stop epsilon short of this rail's end node
+		// (2) next SECTION occupied = that block is closed: stop epsilon short of its boundary (the
+		// signal protecting it, or the rail end when the section ends there). B2: sections are cut by
+		// the wayside signals reading each rail (MmtrBlockService), so a train may run up to the signal
+		// instead of halting at the start of the rail that carries the occupied section.
 		final Rail nextRail = mmtrMotionWalker.peekNextRail();
-		final boolean nextRailAuthorized = authority != null && nextRail != null && authority.covers(nextRail.getHexId());
-		if (nextRail != null && !nextRailAuthorized && hasExternalOccupancy(nextRail, vehiclePositions)) {
-			final double toNode = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
-			stop = Math.min(stop, mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M));
+		final Double sectionStopM = nextSectionStopM(vehiclePositions);
+		if (sectionStopM != null) {
+			stop = Math.min(stop, sectionStopM);
 		}
 		return stop;
+	}
+
+	/**
+	 * B2: the walker-space stop point forced by the NEXT block section ahead being occupied, or null
+	 * when nothing ahead is blocked (or the movement is authorised over that section's rail).
+	 *
+	 * <p>The section ahead is the next one on the current rail when a signal splits it, otherwise the
+	 * first section of the rail the walker would elect - which reproduces the pre-B2 "next rail closed"
+	 * rule exactly on rails with no signals (the synthetic nets and most yard tracks).</p>
+	 */
+	private @Nullable Double nextSectionStopM(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		if (vehiclePositions == null || mmtrMotionWalker == null || mmtrMotionLegs.isEmpty() || !(data instanceof final Simulator simulator)) {
+			return null;
+		}
+		final int index = indexInMmtrMotionLegs(railProgress);
+		final PathData segment = mmtrMotionLegs.get(index);
+		final Rail rail = segment.getRail();
+		if (rail == null) {
+			return null;
+		}
+		final double railLength = rail.railMath.getLength();
+		if (railLength <= 0) {
+			return null;
+		}
+		final double legLength = segment.getEndDistance() - segment.getStartDistance();
+		final double headOffsetInLeg = Math.max(0, Math.min(legLength, railProgress - segment.getStartDistance()));
+		final double headArc = segment.reversePositions ? legLength - headOffsetInLeg : headOffsetInLeg;
+		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
+		if (current == null) {
+			return null;
+		}
+		final boolean towardHigherArc = !segment.reversePositions;
+		final double boundaryArc = towardHigherArc ? current.arcToM : current.arcFromM;
+		final boolean boundaryAtRailEnd = towardHigherArc ? current.arcToM >= railLength - 1e-9 : current.arcFromM <= 1e-9;
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = getMmtrShuntAuthority();
+
+		if (!boundaryAtRailEnd) {
+			// The signal splits this rail: the section beyond it is the next block on the same rail.
+			final double probeArc = Math.max(0, Math.min(railLength - 1e-6, boundaryArc + (towardHigherArc ? 1e-6 : -1e-6)));
+			final MmtrBlockService.Block next = simulator.mmtrBlocks.blockAt(rail.getHexId(), probeArc);
+			if (next == null || next == current) {
+				return null;
+			}
+			if (authority != null && authority.covers(rail.getHexId())) {
+				return null; // permissive working: the authorised movement may enter the occupied section
+			}
+			if (!blockHasExternalOccupancy(rail, next.arcFromM, next.arcToM, vehiclePositions)) {
+				return null;
+			}
+			final double toBoundary = Math.abs(boundaryArc - headArc);
+			return mmtrMotionWalker.distanceM() + Math.max(0, toBoundary - MMTR_BLOCK_NODE_EPS_M);
+		}
+
+		// The section ends at the rail end: the next section is on the elected next rail.
+		final Rail nextRail = mmtrMotionWalker.peekNextRail();
+		if (nextRail == null) {
+			return null;
+		}
+		if (authority != null && authority.covers(nextRail.getHexId())) {
+			return null;
+		}
+		final double entryArc = org.mtr.core.mmtr.signal.MmtrBlockService.arcOfNode(nextRail, mmtrMotionWalker.aheadNode());
+		if (Double.isNaN(entryArc)) {
+			return null;
+		}
+		final double nextLength = nextRail.railMath.getLength();
+		final MmtrBlockService.Block next = simulator.mmtrBlocks.blockAt(nextRail.getHexId(), Math.max(0, Math.min(nextLength - 1e-6, entryArc)));
+		if (next == null || !blockHasExternalOccupancy(nextRail, next.arcFromM, next.arcToM, vehiclePositions)) {
+			return null;
+		}
+		final double toNode = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+		return mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M);
+	}
+
+	/** Whether any OTHER vehicle occupies part of the arc window [orderedFromM, orderedToM] of {@code rail}. */
+	private boolean blockHasExternalOccupancy(Rail rail, double orderedFromM, double orderedToM, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		if (orderedToM - orderedFromM <= 1e-9) {
+			return false;
+		}
+		final Position position1 = rail.getPosition1();
+		final Position position2 = rail.getPosition2();
+		final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;
+		final Position orderedPosition2 = orderedPosition1 == position1 ? position2 : position1;
+		for (int i = 0; i < vehiclePositions.size(); i++) {
+			final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), orderedPosition1, orderedPosition2);
+			if (vehiclePosition != null && vehiclePosition.getClosestOverlap(orderedFromM, orderedToM, false, id) >= 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -3109,22 +3202,6 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 		return nearestGapM == Double.MAX_VALUE ? Double.MAX_VALUE : consistWalker.distanceM() + Math.max(0, nearestGapM - gapM);
-	}
-
-	/** True when any OTHER vehicle occupies any part of {@code rail} (whole-rail block check). */
-	private boolean hasExternalOccupancy(Rail rail, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
-		final Position position1 = rail.getPosition1();
-		final Position position2 = rail.getPosition2();
-		final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;
-		final Position orderedPosition2 = orderedPosition1 == position1 ? position2 : position1;
-		final double length = rail.railMath.getLength();
-		for (int i = 0; i < vehiclePositions.size(); i++) {
-			final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), orderedPosition1, orderedPosition2);
-			if (vehiclePosition != null && vehiclePosition.getClosestOverlap(0, length, false, id) >= 0) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static DoubleDoubleImmutablePair getBlockedBounds(PathData pathData, double lowerRailProgress, double upperRailProgress) {

@@ -225,6 +225,26 @@ public final class Rail extends RailSchema {
 		return position2;
 	}
 
+	/**
+	 * MMTR 闭塞区间 (B1): the arc of one of this rail's end nodes in {@link #railMath}'s arc space -
+	 * which starts at the endpoint that sorts first by {@link Position#compareTo(Position)}, the same
+	 * "ordered position 1" space the shared occupancy trees use - or {@link Double#NaN} when
+	 * {@code position} is not an endpoint of this rail.
+	 *
+	 * <p>The declared positions are compared directly: the curve samples of a curved rail shape are
+	 * shifted to the block centre, so they cannot be matched against node coordinates.</p>
+	 */
+	public double mmtrArcOfEndNode(Position position) {
+		final double length = railMath.getLength();
+		if (position.equals(position1)) {
+			return reversePositions ? length : 0;
+		}
+		if (position.equals(position2)) {
+			return reversePositions ? 0 : length;
+		}
+		return Double.NaN;
+	}
+
 	public TransportMode getTransportMode() {
 		return transportMode;
 	}

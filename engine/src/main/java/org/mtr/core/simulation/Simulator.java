@@ -152,6 +152,10 @@ public class Simulator extends Data implements Utilities {
 	 * state), derived from {@link #mmtrPointAuthority}. The signal layer (A2) reads it to decide whether
 	 * a proceed aspect may be shown; the ops feed shows it per train. */
 	public final org.mtr.core.mmtr.route.MmtrRouteRegistry mmtrRoutes = new org.mtr.core.mmtr.route.MmtrRouteRegistry();
+	/** 闭塞区间服务 (B1/B2): sections cut by the wayside signals reading each rail. S1 stops at a
+	 * SECTION boundary instead of the rail end, so a train may run up to the signal protecting an
+	 * occupied section. Lazy + rails/signals-signature gated. */
+	public final org.mtr.core.mmtr.signal.MmtrBlockService mmtrBlocks = new org.mtr.core.mmtr.signal.MmtrBlockService(this);
 	/** 硬默认 0 (option 3): real servers preset every turnout to operator branch 0. Engines tests keep
 	 * this false so authority/mission semantics stay synthetic; {@link org.mtr.core.Main} enables it. */
 	public boolean mmtrDefaultPointsZero;
