@@ -278,12 +278,17 @@ public final class MmtrCoupleSurgery {
 	}
 
 	/**
-	 * C4b: cut a formation at coupler seam {@code seamIndex} (the car index after which to cut). The
-	 * head half keeps the train's position and identity; the tail half becomes a new vehicle standing
-	 * on the same rail behind the cut, with its own rolling-stock entry. Both halves must be stopped
-	 * (U5) and the cut must hit a seam (U6) - a fixed unit has none.
+	 * C4b: cut a formation after car {@code cutAfterCarIndex} (0-based, so the tail starts at the next
+	 * car). The head half keeps the train's position and identity; the tail half becomes a new vehicle
+	 * standing on the same rail behind the cut, with its own rolling-stock entry. Both halves must be
+	 * stopped (U5) and the cut must hit a coupler (U6) - a fixed unit has none.
+	 *
+	 * <p>C6: the parameter is the CAR index, not a seam index — "cut after car k" is what the operator
+	 * aims at (a car in the formation) and what a job author writes; the coupler gate below then maps
+	 * it onto the seam, refusing a boundary that has no coupler. Earlier code called it
+	 * {@code seamIndex}, which read as "the k-th seam" and did not match the arithmetic.</p>
 	 */
-	public static Result uncouple(Simulator simulator, long vehicleId, int seamIndex) {
+	public static Result uncouple(Simulator simulator, long vehicleId, int cutAfterCarIndex) {
 		final Vehicle vehicle = simulator.mmtrFindVehicle(vehicleId);
 		if (vehicle == null) {
 			return Result.fail("找不到车辆 " + vehicleId);
@@ -296,14 +301,14 @@ public final class MmtrCoupleSurgery {
 			return Result.fail("列车必须停稳才能解挂");
 		}
 		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>(vehicle.vehicleExtraData.immutableVehicleCars);
-		if (seamIndex < 0 || seamIndex >= cars.size() - 1) {
+		if (cutAfterCarIndex < 0 || cutAfterCarIndex >= cars.size() - 1) {
 			return Result.fail("切分点必须两侧都留至少一节车厢（0.." + (cars.size() - 2) + "）");
 		}
-		if (!cars.get(seamIndex).getMmtrCouplerAfter()) {
-			return Result.fail("第 " + seamIndex + " 节之后没有车钩（切分只认接缝，EMU 内部与机车单车无接缝可切）");
+		if (!cars.get(cutAfterCarIndex).getMmtrCouplerAfter()) {
+			return Result.fail("第 " + cutAfterCarIndex + " 节之后没有车钩（切分只认接缝，EMU 内部与机车单车无接缝可切）");
 		}
-		final ObjectArrayList<VehicleCar> headCars = new ObjectArrayList<>(cars.subList(0, seamIndex + 1));
-		final ObjectArrayList<VehicleCar> tailCars = new ObjectArrayList<>(cars.subList(seamIndex + 1, cars.size()));
+		final ObjectArrayList<VehicleCar> headCars = new ObjectArrayList<>(cars.subList(0, cutAfterCarIndex + 1));
+		final ObjectArrayList<VehicleCar> tailCars = new ObjectArrayList<>(cars.subList(cutAfterCarIndex + 1, cars.size()));
 		headCars.get(headCars.size() - 1).setMmtrCouplerAfter(false);
 		final Siding siding = sidingOf(simulator, vehicle);
 		if (siding == null) {
@@ -316,13 +321,13 @@ public final class MmtrCoupleSurgery {
 
 		final JsonObject headJson = Utilities.getJsonObjectFromData(vehicle.vehicleExtraData);
 		headJson.add("vehicleCars", carsJson(headCars));
-		headJson.add("ridingEntities", ridingEntitiesJson(vehicle, seamIndex, false));
+		headJson.add("ridingEntities", ridingEntitiesJson(vehicle, cutAfterCarIndex, false));
 		patchGeometry(headJson, headCars);
 		final VehicleExtraData headData = new VehicleExtraData(new JsonReader(headJson));
 
 		final JsonObject tailJson = Utilities.getJsonObjectFromData(vehicle.vehicleExtraData);
 		tailJson.add("vehicleCars", carsJson(tailCars));
-		tailJson.add("ridingEntities", ridingEntitiesJson(vehicle, seamIndex, true));
+		tailJson.add("ridingEntities", ridingEntitiesJson(vehicle, cutAfterCarIndex, true));
 		patchGeometry(tailJson, tailCars);
 		final VehicleExtraData tailData = new VehicleExtraData(new JsonReader(tailJson));
 
@@ -339,13 +344,13 @@ public final class MmtrCoupleSurgery {
 			final MmtrConsistBody body = consistWalker.body();
 			int bodySeam = -1;
 			for (int i = 0; i < body.seamCount(); i++) {
-				if (body.carIndexAfterSeam(i) == seamIndex) {
+				if (body.carIndexAfterSeam(i) == cutAfterCarIndex) {
 					bodySeam = i;
 					break;
 				}
 			}
 			if (bodySeam < 0) {
-				return Result.fail("第 " + seamIndex + " 节不是编组体的接缝");
+				return Result.fail("第 " + cutAfterCarIndex + " 节不是编组体的接缝");
 			}
 			seamArc = body.seamArcM(bodySeam);
 			headConsistWalker = placeConsistHalf(simulator, body, body.aEndArcM(), headCars);
@@ -409,11 +414,11 @@ public final class MmtrCoupleSurgery {
 		}
 
 		if (airUnits.length == cars.size()) {
-			head.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, 0, seamIndex + 1)));
-			tail.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, seamIndex + 1, airUnits.length)));
+			head.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, 0, cutAfterCarIndex + 1)));
+			tail.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, cutAfterCarIndex + 1, airUnits.length)));
 		}
 
-		System.out.println("[MMTR-COUP] 解挂完成: " + vehicleId + " 在接缝 " + seamIndex + " 切分 -> 前段 " + head.getId()
+		System.out.println("[MMTR-COUP] 解挂完成: " + vehicleId + " 在第 " + (cutAfterCarIndex + 1) + " 节后切分 -> 前段 " + head.getId()
 				+ "（" + headCars.size() + " 节）+ 后段 " + tail.getId() + "（" + tailCars.size() + " 节）");
 		return Result.split(head, tail);
 	}
@@ -472,15 +477,15 @@ public final class MmtrCoupleSurgery {
 	}
 
 	/** Riding entities of one side of the cut, rebased onto that side's car list. */
-	private static JsonArray ridingEntitiesJson(Vehicle vehicle, int seamIndex, boolean tailSide) {
+	private static JsonArray ridingEntitiesJson(Vehicle vehicle, int cutAfterCarIndex, boolean tailSide) {
 		final JsonArray entities = new JsonArray();
 		vehicle.vehicleExtraData.iterateRidingEntities(entity -> {
-			final boolean inTail = entity.getRidingCar() > seamIndex;
+			final boolean inTail = entity.getRidingCar() > cutAfterCarIndex;
 			if (inTail != tailSide) {
 				return;
 			}
 			final JsonObject json = Utilities.getJsonObjectFromData(entity);
-			json.addProperty("ridingCar", inTail ? entity.getRidingCar() - seamIndex - 1 : entity.getRidingCar());
+			json.addProperty("ridingCar", inTail ? entity.getRidingCar() - cutAfterCarIndex - 1 : entity.getRidingCar());
 			entities.add(json);
 		});
 		return entities;

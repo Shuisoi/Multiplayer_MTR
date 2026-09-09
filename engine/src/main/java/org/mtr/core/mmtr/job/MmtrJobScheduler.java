@@ -408,8 +408,14 @@ public final class MmtrJobScheduler {
 			return CoupleOutcome.FAILED;
 		}
 		// Compose the source job's cars into this job's own spawn template (this job's cars first).
+		// C6/U6: the make-up joint is a real coupler, so the last car of the initiator's group declares
+		// it - otherwise a later UNCOUPLE (or a game-side cut) could not separate the two groups again.
 		instance.spawnCars.clear();
 		instance.spawnCars.addAll(instance.job.cars);
+		if (!instance.job.cars.isEmpty() && !target.job.cars.isEmpty()) {
+			instance.job.cars.get(instance.job.cars.size() - 1).mmtrCouplerAfter = true;
+			instance.spawnCars.get(instance.job.cars.size() - 1).mmtrCouplerAfter = true;
+		}
 		instance.spawnCars.addAll(target.job.cars);
 		instance.mergedPlaced = true;
 		target.consumed = true;
@@ -477,6 +483,24 @@ public final class MmtrJobScheduler {
 	}
 
 	/**
+	 * C6: a yard UNCOUPLE may only cut where the stock actually has a coupler (design U6). The value in
+	 * the job step is the CAR index to cut after — the same semantics as the {@code uncouple <id> <car>}
+	 * command and as aiming at a car in the game — so a fixed unit (an EMU rake) can never be cut
+	 * internally, and a make-up joint can.
+	 *
+	 * @return {@code null} when the cut is legal, otherwise the reason to report
+	 */
+	static @org.jspecify.annotations.Nullable String uncoupleRefusal(ObjectArrayList<MmtrCarSpec> cars, int cutAfterCarIndex) {
+		if (cutAfterCarIndex < 0 || cutAfterCarIndex >= cars.size() - 1) {
+			return "uncouple cut index " + cutAfterCarIndex + " must leave at least one car on each side (" + cars.size() + " cars)";
+		}
+		if (!cars.get(cutAfterCarIndex).mmtrCouplerAfter) {
+			return "uncouple cut index " + cutAfterCarIndex + " has no coupler after that car（第 " + cutAfterCarIndex + " 节之后没有车钩，切分只认接缝）";
+		}
+		return null;
+	}
+
+	/**
 	 * UNCOUPLE on the yard: split the parked consist after {@code targetIndex}. The head keeps the
 	 * job (rebuilt through the yard surgery); the cut tail becomes the siding's next stock source -
 	 * the engine respawns it as a parked vehicle once the head has cleared the siding, which keeps
@@ -494,8 +518,9 @@ public final class MmtrJobScheduler {
 		if (instance.fleetCars.isEmpty()) {
 			instance.fleetCars.addAll(instance.job.cars);
 		}
-		if (cut < 0 || cut >= instance.fleetCars.size() - 1) {
-			fail(instance, "uncouple cut index " + cut + " must leave at least one car on each side (" + instance.fleetCars.size() + " cars)");
+		final String refusal = uncoupleRefusal(instance.fleetCars, cut);
+		if (refusal != null) {
+			fail(instance, refusal);
 			return false;
 		}
 		final ObjectArrayList<MmtrCarSpec> head = new ObjectArrayList<>(cut + 1);

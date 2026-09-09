@@ -7,6 +7,7 @@ import org.mtr.core.tool.Utilities;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -89,5 +90,36 @@ public final class MmtrConsistJobTests {
 		assertEquals(0, job.depotId);
 		assertTrue(job.steps.isEmpty());
 		assertTrue(job.repeatDaily, "daily repeat is the default for a consist job");
+	}
+
+	/**
+	 * C6/U6: a yard UNCOUPLE cuts after a CAR index and must hit a coupler. Before this the yard path
+	 * only checked the range, so a job could cut a fixed unit (an EMU rake) in the middle — something
+	 * the physical surgery refuses.
+	 */
+	@Test
+	public void yardUncoupleOnlyCutsAtACoupler() {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<MmtrCarSpec> cars = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+		cars.add(car("loco", true));
+		cars.add(car("wagon", false));
+
+		assertNull(MmtrJobScheduler.uncoupleRefusal(cars, 0), "the loco/wagon joint is a legal cut");
+		assertTrue(MmtrJobScheduler.uncoupleRefusal(cars, 1).contains("one car on each side"), "cutting after the last car is refused");
+		assertTrue(MmtrJobScheduler.uncoupleRefusal(cars, -1).contains("one car on each side"), "a negative cut index is refused");
+
+		// A fixed 2-car unit: no coupler inside it, so the only boundary is the end of the consist.
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<MmtrCarSpec> emu = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+		emu.add(car("emu_a", false));
+		emu.add(car("emu_b", false));
+		assertTrue(MmtrJobScheduler.uncoupleRefusal(emu, 0).contains("没有车钩"), "a fixed unit cannot be cut internally");
+	}
+
+	private static MmtrCarSpec car(String vehicleId, boolean couplerAfter) {
+		final MmtrCarSpec car = new MmtrCarSpec();
+		car.vehicleId = vehicleId;
+		car.length = 10;
+		car.width = 2;
+		car.mmtrCouplerAfter = couplerAfter;
+		return car;
 	}
 }
