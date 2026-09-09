@@ -12,6 +12,7 @@ import org.mtr.core.tool.Vector;
 import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -197,5 +198,26 @@ public final class MmtrBlockServiceTests {
 		assertTrue(Double.isNaN(MmtrBlockService.arcOfNode(r, new Position(60, 0, 0))), "a mid-rail point is not a node");
 		assertEquals(blocks.get(0), service.blockAt(r.getHexId(), 10), "arc 10 is the section next to the west node");
 		assertEquals(blocks.get(1), service.blockAt(r.getHexId(), 110), "arc 110 is the far section");
+	}
+
+	/**
+	 * B3b: every section carries its own reserved signal colour so the standard signal-block channel can
+	 * carry per-section occupancy. Section 0 reuses the rail's own colour (an unsplit rail is therefore
+	 * byte-identical to before), and the colours must be stable across rebuilds because the client maps
+	 * blocked colours to sections by value.
+	 */
+	@Test
+	public void everySectionCarriesItsOwnReservedSignalColor() {
+		final Rail r = rail(new Position(0, 0, 0), new Position(120, 0, 0));
+		final Simulator simulator = sim("build/mmtr-block-colors", r);
+		addSignal(simulator, r, 60);
+		final MmtrBlockService service = new MmtrBlockService(simulator);
+
+		final ObjectArrayList<MmtrBlockService.Block> blocks = service.blocksOf(r.getHexId());
+		assertEquals(2, blocks.size());
+		assertEquals(r.mmtrSignalColor(), blocks.get(0).signalColor, "section 0 keeps the rail colour");
+		assertNotEquals(blocks.get(0).signalColor, blocks.get(1).signalColor, "the far section carries its own colour");
+		assertEquals(blocks.get(1).signalColor, new MmtrBlockService(simulator).blocksOf(r.getHexId()).get(1).signalColor,
+			"the colour is stable across rebuilds");
 	}
 }

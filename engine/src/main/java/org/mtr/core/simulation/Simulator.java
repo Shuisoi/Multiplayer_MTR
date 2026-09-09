@@ -585,9 +585,16 @@ public class Simulator extends Data implements Utilities {
 	 * occupancy - {@link Vehicle#markMmtrSignalBlocks()} registers CURRENTLY_RESERVE holds under
 	 * these colors, Rail#tick1 diffs them and pushes SignalBlockUpdates, and the in-game signal
 	 * lights turn red for EVERY client regardless of locally simulated vehicles.
+	 *
+	 * <p>B3b: a rail that a wayside signal splits carries one colour per SECTION (section 0 = the rail
+	 * colour, so unsplit rails are unchanged); {@link Vehicle#markMmtrSignalBlocks()} reserves only the
+	 * sections the consist actually occupies, which is what lets the display count sections.</p>
 	 */
 	public void mmtrEnsureSignalColors() {
-		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|');
+		// B3b: a rail split by a wayside signal carries one colour per SECTION, so the standard
+		// signal-block channel can carry per-section occupancy to every client.
+		mmtrBlocks.refresh();
+		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|').append(mmtrBlocks.signature()).append('|');
 		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> hexes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
 		for (final org.mtr.core.data.Rail rail : rails) {
 			hexes.add(rail.getHexId());
@@ -599,7 +606,10 @@ public class Simulator extends Data implements Utilities {
 			return;
 		}
 		mmtrSignalColorsSignature = signature;
-		rails.forEach(org.mtr.core.data.Rail::mmtrEnsureSignalColor);
+		rails.forEach(rail -> {
+			rail.mmtrEnsureSignalColor();
+			mmtrBlocks.blocksOf(rail.getHexId()).forEach(block -> rail.mmtrEnsureSignalColor(block.signalColor));
+		});
 	}
 
 	private org.mtr.core.mmtr.signal.@org.jspecify.annotations.Nullable MmtrSignalAspect mmtrSignalAspectView;

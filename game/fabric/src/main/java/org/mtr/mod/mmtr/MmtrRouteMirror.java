@@ -47,12 +47,15 @@ public final class MmtrRouteMirror {
 			}
 			final Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails = simulator.mmtrRoutes.setMainRouteNextRails();
 			final ObjectOpenHashSet<String> pendingEntries = simulator.mmtrRoutes.pendingEntryRails();
-			final String signature = nextRails.toString() + "|" + pendingEntries.toString();
+			// B3b: the block sections of every SPLIT rail (a wayside signal in mid-rail). Empty in a
+			// world whose lights all stand beside nodes - which is the normal case - so nothing is sent.
+			final Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails = simulator.mmtrBlocks.splitRails();
+			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + splitRails.toString();
 			if (signature.equals(LAST_SIGNATURE.get(worldId))) {
 				continue;
 			}
 			LAST_SIGNATURE.put(worldId, signature);
-			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries);
+			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, splitRails);
 			final org.mtr.mapping.holder.ServerWorld mappedWorld = new org.mtr.mapping.holder.ServerWorld(serverWorld);
 			MinecraftServerHelper.iteratePlayers(mappedWorld, serverPlayerEntity -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketMmtrRoutes(content)));
 		}

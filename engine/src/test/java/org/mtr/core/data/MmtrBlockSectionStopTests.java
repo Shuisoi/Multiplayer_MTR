@@ -89,6 +89,8 @@ public final class MmtrBlockSectionStopTests {
 				final Vector position = a.railMath.getPosition(signalArcM, false);
 				sim.mmtrSignals.put((int) Math.floor(position.x()), (int) Math.floor(position.y()), (int) Math.floor(position.z()), 0, 2, "set", a.getHexId());
 			}
+			// B3b: the per-section reserved colours must be on the rails before any reservation happens.
+			sim.mmtrEnsureSignalColors();
 		}
 
 		Vehicle spawn() {
@@ -99,8 +101,10 @@ public final class MmtrBlockSectionStopTests {
 			return vehicle;
 		}
 
-		/** One 1000 ms tick: rotate the trees, inject the foreign train into A, then simulate. */
+		/** One 1000 ms tick: roll the rail signal-block snapshots, rotate the trees, inject the foreign
+		 * train into A, then simulate (the server order in {@code Simulator.tick}). */
 		void tick() {
+			rollRails();
 			trees.removeFirst();
 			trees.add(new Object2ObjectAVLTreeMap<>());
 			Data.put(trees.get(1), a.getPosition1(), a.getPosition2(),
@@ -115,6 +119,30 @@ public final class MmtrBlockSectionStopTests {
 		void tickUntil(BooleanSupplier condition, int maxTicks) {
 			for (int i = 0; i < maxTicks && !condition.getAsBoolean(); i++) {
 				tick();
+			}
+			assertTrue(condition.getAsBoolean(), "condition not met within " + maxTicks + " ticks");
+		}
+
+		/** One tick with NOTHING occupying the trees (the train runs freely into the far section). */
+		void tickClear() {
+			rollRails();
+			trees.removeFirst();
+			trees.add(new Object2ObjectAVLTreeMap<>());
+			siding.simulateVehicles(1000, trees);
+		}
+
+		/**
+		 * The rail half of {@code Simulator.tick}: without it the per-colour holds would accumulate
+		 * across ticks instead of being rolled into the previous-tick snapshot.
+		 */
+		private void rollRails() {
+			sim.rails.forEach(rail -> rail.tick1(sim));
+			sim.rails.forEach(rail -> rail.tick2(1000));
+		}
+
+		void tickClearUntil(BooleanSupplier condition, int maxTicks) {
+			for (int i = 0; i < maxTicks && !condition.getAsBoolean(); i++) {
+				tickClear();
 			}
 			assertTrue(condition.getAsBoolean(), "condition not met within " + maxTicks + " ticks");
 		}
@@ -171,5 +199,31 @@ public final class MmtrBlockSectionStopTests {
 		assertEquals(12.0 - 0.001, v.getMmtrMotionWalker().offsetM(), 0.05, "held epsilon short of the A entrance node");
 		assertEquals(n.y.getHexId(), v.getMmtrMotionWalker().railHex(), "never boarded the occupied rail A");
 		assertFalse(v.isMmtrMotionStoppedAtTarget(), "the block stop is not a task arrival");
+	}
+
+	/**
+	 * B3b: the reservation is per SECTION. A consist standing in the far section holds that section's
+	 * colour only - the section behind it stays clear, which is what lets the display show a caution
+	 * instead of a red for the signal protecting the near section.
+	 */
+	@Test
+	public void aTrainInTheFarSectionDoesNotCloseTheNearSectionColor() {
+		final SectionNet n = new SectionNet("build/mmtr-section-colors", true);
+		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> sections = n.sim.mmtrBlocks.blocksOf(n.a.getHexId());
+		assertEquals(2, sections.size(), "the bound signal cuts rail A in two");
+
+		final Vehicle v = n.spawn();
+		v.setMmtrMotionAuto(true);
+		// Stop 150 m into rail A: the consist comes to rest INSIDE A's far section (the split is at 100 m).
+		v.setMmtrMotionStopTarget(12.0 + 150.0, true);
+		n.tickClearUntil(v::isMmtrMotionStoppedAtTarget, 4000);
+		assertEquals(n.a.getHexId(), v.getMmtrMotionWalker().railHex(), "the train stopped on rail A");
+		final double tailArc = v.getMmtrMotionWalker().offsetM() - v.vehicleExtraData.getTotalVehicleLength();
+		assertTrue(tailArc > 100.0, "the WHOLE consist stands beyond the signal, tail at arc " + tailArc);
+
+		assertTrue(n.a.mmtrIsSignalColorBlocked(sections.get(1).signalColor),
+			"the section the consist stands in is held under its own colour");
+		assertFalse(n.a.mmtrIsSignalColorBlocked(sections.get(0).signalColor),
+			"B3b: the section BEHIND the consist stays clear (the pre-B3b whole-rail hold would have closed it)");
 	}
 }

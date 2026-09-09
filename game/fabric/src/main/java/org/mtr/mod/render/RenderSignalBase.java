@@ -201,12 +201,13 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 	}
 
 	/**
-	 * MMTR: how far along the travel direction the nearest occupied rail sits, counted from the
-	 * protected rail(s) found at {@code nodePos}: 1 = protected occupied, 2 = one rail beyond,
-	 * 3 = two rails beyond, 0 = clear. Blocked = locally simulated occupancy OR the authoritative
-	 * server per-rail signal-color holds. The walk itself lives in {@link MmtrSignalChain} (pure, so
-	 * the client rule is unit-tested); this adapter only supplies the client rail graph. A rail that
-	 * is the entry of a still-PENDING route shows danger (the movement waits outside its signal).
+	 * MMTR: how far along the travel direction the nearest occupied SECTION sits, counted from the
+	 * protected rail(s) found at {@code nodePos}: 1 = protected occupied, 2 = the next section (same
+	 * rail beyond a wayside signal, or the next rail), 3 = two sections beyond, 0 = clear. Blocked =
+	 * locally simulated occupancy OR the authoritative server signal-colour holds, per section when the
+	 * engine mirrored sections (B3b). The walk itself lives in {@link MmtrSignalChain} (pure, so the
+	 * client rule is unit-tested); this adapter only supplies the client rail graph and mirror. A rail
+	 * that is the entry of a still-PENDING route shows danger (the movement waits outside its signal).
 	 */
 	private static int mmtrChainDepth(MinecraftClientData data, Position nodePos, ObjectArrayList<String> protectedHexes) {
 		for (final String hex : protectedHexes) {
@@ -215,6 +216,8 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 			}
 		}
 		return MmtrSignalChain.depth(nodePos, protectedHexes, new ClientRailGraph(data),
+			MmtrClientRoutes::sections,
+			(hex, color) -> data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).contains((long) color),
 			hex -> data.blockedRailIds.contains(hex) || !data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).isEmpty(),
 			MmtrClientRoutes::nextRails, 3);
 	}
@@ -246,6 +249,36 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 			}
 			return out;
 		}
+
+		@Override
+		public double entryArc(Position node, String railHex) {
+			final org.mtr.core.data.Rail rail = mmtrRailAt(data, node, railHex);
+			if (rail == null) {
+				return 0;
+			}
+			final double arc = rail.mmtrArcOfEndNode(node);
+			return Double.isNaN(arc) ? 0 : arc;
+		}
+
+		@Override
+		public double railLength(Position node, String railHex) {
+			final org.mtr.core.data.Rail rail = mmtrRailAt(data, node, railHex);
+			return rail == null ? 0 : rail.railMath.getLength();
+		}
+	}
+
+	/** The client rail {@code hex} that meets {@code nodePos}, or null. */
+	@Nullable
+	private static org.mtr.core.data.Rail mmtrRailAt(MinecraftClientData data, Position nodePos, String hex) {
+		final Object2ObjectOpenHashMap<Position, org.mtr.core.data.Rail> neighbours = data.positionsToRail.get(nodePos);
+		if (neighbours != null) {
+			for (final org.mtr.core.data.Rail rail : neighbours.values()) {
+				if (rail.getHexId().equals(hex)) {
+					return rail;
+				}
+			}
+		}
+		return null;
 	}
 
 	/** The far endpoint of the rail {@code hex} that the train enters from {@code nodePos}. */

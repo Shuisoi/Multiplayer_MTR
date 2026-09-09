@@ -103,6 +103,7 @@
   - **95 = 闭塞区间 B1：`MmtrBlockService`**（按信号灯切区间、几何投影、ordered-1 弧长空间、双签名缓存；纯数据未接线，481/0/2）。
   - **96 = 闭塞区间 B2：S1 按区间停车**（`nextSectionStopM`：同轨下一区间被占→停在灯前，区间到轨端→仍停轨端节点前；新增 `Rail.mmtrArcOfEndNode` 修掉"曲线采样端点"（曲线轨端点是方块中心，round 后对不上声明端点，曾让 15 例红）；新增 3 例，486/0/2；fabric gate 通过）。
   - **97 = 闭塞区间 B3：区间可观测 + 实机布点实测**（`MmtrBlockReport` + OP 指令 `blocks [all|<railHex>]`；实测运行中 dev 世界 8 架灯**全部贴在节点旁**（横向 2.06 m、沿轨 0 m）、134 轨 = 134 区间、无切分轨，1 架 BOUND 灯离其 target 轨 > 8 m 属"哑绑定"；故客户端显示无需改动，487/0/2）。
+  - **98 = 闭塞区间 B3b：每区间一个信号色 + 镜像区间边界**（区间 0 = 轨色、其余按轨+序号派生；`Rail.mmtrReserveSignalColor`/`mmtrIsSignalColorBlocked`；`Vehicle.markMmtrSignalBlock` 只预留车列实际占用的区间；引擎 `MmtrSignalAspect` 与客户端 `MmtrSignalChain` 都按区间计数；`PacketMmtrRoutes` 新增 `sections` 字段，未切分轨零发送；490/0/2 + fabric 20 例）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）

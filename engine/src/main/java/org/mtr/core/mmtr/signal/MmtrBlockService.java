@@ -73,11 +73,19 @@ public final class MmtrBlockService {
 		public final double arcFromM;
 		public final double arcToM;
 		public final String id;
+		/**
+		 * B3b: the reserved signal color that carries THIS section's occupancy through the standard
+		 * signal-block channel. The first section of a rail reuses the rail's own color, so a rail that
+		 * is not split carries exactly the color it carried before (zero behaviour change), and a split
+		 * rail carries one extra color per further section.
+		 */
+		public final long signalColor;
 
-		private Block(String railHex, double arcFromM, double arcToM) {
+		private Block(String railHex, double arcFromM, double arcToM, long signalColor) {
 			this.railHex = railHex;
 			this.arcFromM = arcFromM;
 			this.arcToM = arcToM;
+			this.signalColor = signalColor;
 			this.id = railHex + "@" + Math.round(arcFromM * 100.0) / 100.0 + "-" + Math.round(arcToM * 100.0) / 100.0;
 		}
 
@@ -243,14 +251,26 @@ public final class MmtrBlockService {
 		boundariesByRail.put(railHex, boundaries);
 
 		final ObjectArrayList<Block> blocks = new ObjectArrayList<>();
+		final long railColor = rail.mmtrSignalColor();
 		for (int i = 0; i + 1 < boundaries.size(); i++) {
 			final double from = boundaries.get(i).arcFromOrdered1M;
 			final double to = boundaries.get(i + 1).arcFromOrdered1M;
 			if (to - from > 1e-6) {
-				blocks.add(new Block(railHex, from, to));
+				blocks.add(new Block(railHex, from, to, i == 0 ? railColor : sectionColor(railHex, railColor, i)));
 			}
 		}
 		blocksByRail.put(railHex, blocks);
+	}
+
+	/**
+	 * B3b: a stable reserved colour for section {@code index > 0} of {@code railHex}, distinct from the
+	 * rail's own colour (which section 0 keeps). Derived from the rail hex so it survives rebuilds and
+	 * so two engines agree; collisions across rails are harmless (a colour is only ever reserved on the
+	 * rail it belongs to, and clients look blocked colours up per rail).
+	 */
+	private static long sectionColor(String railHex, long railColor, int index) {
+		final long color = 0x40000000L | ((railHex.hashCode() * 31L + index) & 0x3FFFFFFFL);
+		return color == railColor ? 0x40000000L | ((railHex.hashCode() * 31L + index + 7919L) & 0x3FFFFFFFL) : color;
 	}
 
 	private static boolean hasBoundaryNear(ObjectArrayList<Boundary> boundaries, double arc) {
@@ -325,17 +345,36 @@ public final class MmtrBlockService {
 		return node == null ? Double.NaN : rail.mmtrArcOfEndNode(node);
 	}
 
-	private String signature() {
-		final StringBuilder out = new StringBuilder();
-		final ObjectArrayList<String> railHexes = new ObjectArrayList<>();
-		simulator.rails.forEach(rail -> railHexes.add(rail.getHexId()));
-		railHexes.sort(null);
-		railHexes.forEach(hex -> out.append(hex).append(','));
-		out.append('|');
-		final ObjectArrayList<String> signalKeys = new ObjectArrayList<>();
-		simulator.mmtrSignals.signals.forEach((key, entry) -> signalKeys.add(key + ">" + entry.target));
-		signalKeys.sort(null);
-		signalKeys.forEach(key -> out.append(key).append(','));
-		return out.toString();
+	/**
+	 * The rails+signals signature the cache is gated on (public: the signal-colour gate reuses it).
+	 *
+	 * <p>A 32-bit mix rather than a concatenated string: this is called from the per-tick motion and
+	 * display paths (once per vehicle stop query), and sorting + building a multi-kilobyte string for
+	 * 130+ rails on every call showed up as needless work. A rail redraw or signal re-bind still
+	 * changes the hash, which is all the gate needs.</p>
+	 */
+	public String signature() {
+		int hash = simulator.rails.size() * 31 + 1;
+		for (final Rail rail : simulator.rails) {
+			hash = hash * 31 + rail.getHexId().hashCode();
+		}
+		hash = hash * 31 + simulator.mmtrSignals.signals.size();
+		for (final java.util.Map.Entry<String, SignalEntry> entry : simulator.mmtrSignals.signals.entrySet()) {
+			hash = hash * 31 + entry.getKey().hashCode();
+			hash = hash * 31 + (entry.getValue().target == null ? 0 : entry.getValue().target.hashCode());
+		}
+		return Integer.toHexString(hash);
+	}
+
+	/** The rails cut into more than one section (B3b: the mirror pushes exactly these to clients). */
+	public Object2ObjectOpenHashMap<String, ObjectArrayList<Block>> splitRails() {
+		refresh();
+		final Object2ObjectOpenHashMap<String, ObjectArrayList<Block>> out = new Object2ObjectOpenHashMap<>();
+		blocksByRail.forEach((railHex, blocks) -> {
+			if (blocks.size() > 1) {
+				out.put(railHex, blocks);
+			}
+		});
+		return out;
 	}
 }

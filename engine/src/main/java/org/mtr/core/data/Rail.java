@@ -451,9 +451,37 @@ public final class Rail extends RailSchema {
 
 	/** Adds this rail's MMTR reserved signal color unless it already carries it (idempotent). */
 	public void mmtrEnsureSignalColor() {
-		final long color = mmtrSignalColor();
+		mmtrEnsureSignalColor(mmtrSignalColor());
+	}
+
+	/**
+	 * MMTR 闭塞区间 (B3b): adds one reserved signal color unless the rail already carries it. Besides
+	 * the per-rail color, a rail split by a wayside signal carries one color per SECTION, so the
+	 * standard signal-block channel can carry per-section occupancy to every client.
+	 */
+	public void mmtrEnsureSignalColor(long color) {
 		if (!signalColors.contains(color)) {
 			signalColors.add(color);
+		}
+	}
+
+	/**
+	 * MMTR 闭塞区间 (B3b): whether this rail currently holds {@code color} (this tick or the previous
+	 * tick's snapshot) - the per-SECTION counterpart of {@link #mmtrIsCurrentlyBlocked()}.
+	 */
+	public boolean mmtrIsSignalColorBlocked(long color) {
+		return currentlyBlockedVehicleIds.containsKey(color) || currentlyBlockedVehicleIdsOld.containsKey(color);
+	}
+
+	/**
+	 * MMTR 闭塞区间 (B3b): register a CURRENTLY_RESERVE hold under one section color. Section colors
+	 * are unique to (rail, section), so unlike {@link #isBlocked} this never spreads a hold to the
+	 * connected rails - which is exactly what makes "the train is in section 2 but section 1 is clear"
+	 * expressible in the standard signal-block channel.
+	 */
+	public void mmtrReserveSignalColor(long vehicleId, long color) {
+		if (signalColors.contains(color)) {
+			currentlyBlockedVehicleIds.put(color, vehicleId);
 		}
 	}
 

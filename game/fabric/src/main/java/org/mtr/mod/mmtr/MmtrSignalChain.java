@@ -4,21 +4,26 @@ import org.mtr.core.data.Position;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
- * A2 client-side signal chain, pure: how far ahead (in rails, the protected one included) the nearest
- * occupied rail sits when the signal protecting a rail is approached from a node.
+ * A2 client-side signal chain, pure: how far ahead (in SECTIONS, the protected one included) the
+ * nearest occupied section sits when the signal protecting a rail is approached from a node.
  *
  * <p>Extracted from {@code RenderSignalBase} so the CLIENT rule can be tested without Minecraft - it
  * is the second half of "信号 = 进路 × 闭塞" and had no coverage at all: the engine computes the same
  * thing in {@code MmtrSignalAspect}, and the two must agree.</p>
  *
  * <ul>
- *   <li>depth 1 = the protected rail itself is occupied, 2 = one rail beyond in the travel direction,
- *       3 = two beyond, 0 = clear;</li>
+ *   <li>depth 1 = the protected section itself is occupied, 2 = the section beyond it in the travel
+ *       direction, 3 = the one after that, 0 = clear;</li>
+ *   <li>B3b: a rail split by a wayside signal is walked as TWO steps (the near section, then the far
+ *       one), so a train standing in the far section leaves the signal protecting the near one at a
+ *       caution instead of red - matching the engine, which stops S1 at that signal (B2);</li>
  *   <li>continuations keep the travel direction (positive dot product, no turn-backs);</li>
  *   <li>at a fork every branch counts UNLESS the engine mirrored a locked path for that rail - then
  *       only the mirrored candidate that actually continues from the node being left is followed (a
@@ -39,6 +44,22 @@ public final class MmtrSignalChain {
 		}
 	}
 
+	/**
+	 * One block section of a rail, mirrored by the engine (B3b). The colour is the reserved signal
+	 * colour the authoritative channel holds while the section is occupied.
+	 */
+	public static final class Section {
+		public final double fromM;
+		public final double toM;
+		public final long color;
+
+		public Section(double fromM, double toM, long color) {
+			this.fromM = fromM;
+			this.toM = toM;
+			this.color = color;
+		}
+	}
+
 	/** The rail graph as the client sees it (an adapter over {@code MinecraftClientData} in the renderer). */
 	public interface RailGraph {
 		/** The far endpoint of {@code railHex} when entered from {@code node}, or null when unknown. */
@@ -46,27 +67,51 @@ public final class MmtrSignalChain {
 
 		/** Every rail meeting at {@code node} except {@code railHex}, with that rail's far endpoint. */
 		List<RailEnd> otherRailsAt(Position node, String railHex);
+
+		/** The arc of {@code node} on {@code railHex} in ordered-position-1 space (0 when unknown). */
+		default double entryArc(Position node, String railHex) {
+			return 0;
+		}
+
+		/** The length of {@code railHex} in metres (0 when unknown). */
+		default double railLength(Position node, String railHex) {
+			return 0;
+		}
 	}
 
 	private MmtrSignalChain() {
 	}
 
 	/**
-	 * @param startNode      the node the signal's protected rail(s) are entered from
-	 * @param protectedHexes the rail(s) the signal protects (one per matching rail at the node)
-	 * @param graph          the client rail graph
-	 * @param blocked        per-rail occupancy (local simulation or the authoritative signal colors)
+	 * Whole-rail walk (no section data): the pre-B3b rule, kept for callers/tests that have no mirror.
+	 *
+	 * @param startNode       the node the signal's protected rail(s) are entered from
+	 * @param protectedHexes  the rail(s) the signal protects (one per matching rail at the node)
+	 * @param graph           the client rail graph
+	 * @param blocked         per-rail occupancy (local simulation or the authoritative signal colors)
 	 * @param lockedNextRails the mirrored locked path: rail hex -&gt; next rail candidates
-	 * @param maxDepth       chain depth to model (3 = red / single / double yellow / green)
+	 * @param maxDepth        chain depth to model (3 = red / single / double yellow / green)
 	 */
 	public static int depth(Position startNode, List<String> protectedHexes, RailGraph graph, Predicate<String> blocked, Function<String, List<String>> lockedNextRails, int maxDepth) {
+		return depth(startNode, protectedHexes, graph, hex -> Collections.emptyList(), (hex, color) -> false, blocked, lockedNextRails, maxDepth);
+	}
+
+	/**
+	 * B3b section-aware walk.
+	 *
+	 * @param sections       per-rail mirrored sections (empty list = the rail is one section)
+	 * @param sectionBlocked whether a rail's section colour is currently held
+	 * @param railBlocked    the per-rail occupancy test (used when no sections are mirrored, and as the
+	 *                       conservative fallback for a blocked colour that belongs to no section)
+	 */
+	public static int depth(Position startNode, List<String> protectedHexes, RailGraph graph, Function<String, List<Section>> sections, BiPredicate<String, Long> sectionBlocked, Predicate<String> railBlocked, Function<String, List<String>> lockedNextRails, int maxDepth) {
 		List<Object[]> level = new ArrayList<>();
 		for (final String hex : protectedHexes) {
-			level.add(new Object[]{hex, startNode});
+			level.add(new Object[]{hex, startNode, graph.entryArc(startNode, hex)});
 		}
 		for (int depth = 1; depth <= maxDepth; depth++) {
 			for (final Object[] entry : level) {
-				if (blocked.test((String) entry[0])) {
+				if (sectionBlocked((String) entry[0], (Double) entry[2], sections, sectionBlocked, railBlocked)) {
 					return depth;
 				}
 			}
@@ -77,6 +122,13 @@ public final class MmtrSignalChain {
 			for (final Object[] entry : level) {
 				final String curHex = (String) entry[0];
 				final Position node = (Position) entry[1];
+				final double arc = (Double) entry[2];
+				final Section section = sectionAt(sections.apply(curHex), arc);
+				if (section != null && section.toM < graph.railLength(node, curHex) - 1e-9) {
+					// B3b: another section on the SAME rail - the next step keeps the entry node.
+					nextLevel.add(new Object[]{curHex, node, section.toM});
+					continue;
+				}
 				final Position far = graph.farEnd(node, curHex);
 				if (far == null) {
 					continue;
@@ -92,7 +144,7 @@ public final class MmtrSignalChain {
 				for (final String lockedNext : lockedNextRails.apply(curHex)) {
 					for (final RailEnd other : others) {
 						if (other.railHex.equals(lockedNext)) {
-							nextLevel.add(new Object[]{lockedNext, far});
+							nextLevel.add(new Object[]{lockedNext, far, graph.entryArc(far, lockedNext)});
 							followedLockedPath = true;
 							break;
 						}
@@ -108,7 +160,7 @@ public final class MmtrSignalChain {
 					// Continue only in the travel direction (dot product with the incoming heading).
 					final double dot = (other.farEnd.getX() - far.getX()) * (far.getX() - node.getX()) + (other.farEnd.getZ() - far.getZ()) * (far.getZ() - node.getZ());
 					if (dot > 0) {
-						nextLevel.add(new Object[]{other.railHex, far});
+						nextLevel.add(new Object[]{other.railHex, far, graph.entryArc(far, other.railHex)});
 					}
 				}
 			}
@@ -118,5 +170,39 @@ public final class MmtrSignalChain {
 			level = nextLevel;
 		}
 		return 0;
+	}
+
+	/**
+	 * Whether the section of {@code hex} containing {@code arc} is occupied. Mirrors the engine rule: the
+	 * section's own colour wins; a blocked colour that belongs to NO mirrored section (a legacy MTR block
+	 * or a manual block) conservatively closes the whole rail.
+	 */
+	private static boolean sectionBlocked(String hex, double arc, Function<String, List<Section>> sections, BiPredicate<String, Long> sectionBlocked, Predicate<String> railBlocked) {
+		final List<Section> list = sections.apply(hex);
+		if (list.isEmpty()) {
+			return railBlocked.test(hex);
+		}
+		final Section section = sectionAt(list, arc);
+		if (section != null && sectionBlocked.test(hex, section.color)) {
+			return true;
+		}
+		boolean anySectionColorBlocked = false;
+		for (final Section candidate : list) {
+			if (sectionBlocked.test(hex, candidate.color)) {
+				anySectionColorBlocked = true;
+				break;
+			}
+		}
+		return railBlocked.test(hex) && !anySectionColorBlocked;
+	}
+
+	/** The section containing {@code arc} (half-open [from, to); the far end belongs to the last one). */
+	private static @Nullable Section sectionAt(List<Section> sections, double arc) {
+		for (final Section section : sections) {
+			if (arc >= section.fromM - 1e-9 && arc < section.toM - 1e-9) {
+				return section;
+			}
+		}
+		return sections.isEmpty() ? null : sections.get(sections.size() - 1);
 	}
 }

@@ -35,6 +35,15 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 
 	/** Build the wire form from the engine's derived views (flattened pairs; a rail may repeat). */
 	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries) {
+		return contentOf(nextRails, pendingEntries, new Object2ObjectOpenHashMap<>());
+	}
+
+	/**
+	 * B3b: the same payload plus the block sections of every SPLIT rail, flattened as
+	 * {@code [railHex, fromM, toM, color] * n}. Unsplit rails are omitted, so a world without a
+	 * mid-rail light sends nothing extra.
+	 */
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
 		nextRails.forEach((from, tos) -> tos.forEach(to -> {
@@ -45,6 +54,14 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		pendingEntries.forEach(pending::add);
 		json.add("nextRails", next);
 		json.add("pendingEntries", pending);
+		final JsonArray sections = new JsonArray();
+		splitRails.forEach((railHex, blocks) -> blocks.forEach(block -> {
+			sections.add(railHex);
+			sections.add(String.valueOf(block.arcFromM));
+			sections.add(String.valueOf(block.arcToM));
+			sections.add(String.valueOf(block.signalColor));
+		}));
+		json.add("sections", sections);
 		return json.toString();
 	}
 
@@ -58,8 +75,20 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		for (int i = 0; i + 1 < flat.size(); i += 2) {
 			next.computeIfAbsent(flat.get(i), key -> new java.util.ArrayList<>()).add(flat.get(i + 1));
 		}
-		MmtrClientRoutes.update(next, pending);
-		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s)");
+		// B3b sections: flattened 4-tuples [railHex, fromM, toM, color].
+		final ObjectArrayList<String> sectionHexes = new ObjectArrayList<>();
+		jsonReader.iterateStringArray("sections", sectionHexes::clear, sectionHexes::add);
+		final Map<String, java.util.List<org.mtr.mod.mmtr.MmtrSignalChain.Section>> sections = new HashMap<>();
+		for (int i = 0; i + 3 < sectionHexes.size(); i += 4) {
+			sections.computeIfAbsent(sectionHexes.get(i), key -> new java.util.ArrayList<>()).add(
+				new org.mtr.mod.mmtr.MmtrSignalChain.Section(
+					Double.parseDouble(sectionHexes.get(i + 1)),
+					Double.parseDouble(sectionHexes.get(i + 2)),
+					Long.parseLong(sectionHexes.get(i + 3))
+				));
+		}
+		MmtrClientRoutes.update(next, pending, sections);
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s)");
 	}
 
 	@Override

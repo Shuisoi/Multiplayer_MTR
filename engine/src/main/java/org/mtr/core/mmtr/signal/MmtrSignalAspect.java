@@ -139,17 +139,22 @@ public final class MmtrSignalAspect {
 	}
 
 	/**
-	 * How far ahead (in rails, the protected one included) the nearest occupied rail sits when the
-	 * signal protecting {@code hex} is approached from {@code entryPos}: 1 = protected rail
-	 * occupied, 2 = one rail beyond, 3 = two rails beyond, 0 = clear.
+	 * How far ahead (in SECTIONS, the protected one included) the nearest occupied section sits when
+	 * the signal protecting {@code hex} is approached from {@code entryPos}: 1 = the entry section is
+	 * occupied, 2 = the section beyond it, 3 = the one after that, 0 = clear.
+	 *
+	 * <p>B3b: the walk counts sections, not rails. A rail that a wayside signal splits therefore
+	 * contributes two steps (the near section, then the far one) and a train standing in the far
+	 * section no longer paints the signal protecting the near one red - which is exactly what B2's S1
+	 * stop already promises (the movement may run up to that signal). A rail that is not split keeps
+	 * one section = one rail, i.e. the pre-B3b behaviour bit for bit.</p>
 	 */
 	private int chainDepth(String hex, Position entryPos) {
 		final List<Object[]> level = new ObjectArrayList<>();
-		level.add(new Object[]{entryPos, hex});
+		level.add(new Object[]{entryPos, hex, entryArcOf(hex, entryPos)});
 		for (int depth = 1; depth <= MAX_DEPTH; depth++) {
 			for (final Object[] entry : level) {
-				final Rail rail = byHex.get((String) entry[1]);
-				if (rail != null && rail.mmtrIsCurrentlyBlocked()) {
+				if (sectionBlocked((String) entry[1], (Double) entry[2])) {
 					return depth;
 				}
 			}
@@ -158,7 +163,18 @@ public final class MmtrSignalAspect {
 			}
 			final List<Object[]> nextLevel = new ObjectArrayList<>();
 			for (final Object[] entry : level) {
-				continuations((Position) entry[0], (String) entry[1], nextLevel);
+				final Position node = (Position) entry[0];
+				final String curHex = (String) entry[1];
+				final double arc = (Double) entry[2];
+				final MmtrBlockService.Block section = simulator.mmtrBlocks.blockAt(curHex, arc);
+				final Rail rail = byHex.get(curHex);
+				final double railLength = rail == null ? 0 : rail.railMath.getLength();
+				if (section != null && section.arcToM < railLength - 1e-9) {
+					// Another section on the SAME rail: the next step keeps the entry node.
+					nextLevel.add(new Object[]{node, curHex, section.arcToM});
+				} else {
+					continuations(node, curHex, nextLevel);
+				}
 			}
 			if (nextLevel.isEmpty()) {
 				break;
@@ -167,6 +183,45 @@ public final class MmtrSignalAspect {
 			level.addAll(nextLevel);
 		}
 		return 0;
+	}
+
+	/** The arc of {@code hex}'s entry node in ordered-position-1 space (0 when it is not an endpoint). */
+	private double entryArcOf(String hex, Position entryPos) {
+		final Rail rail = byHex.get(hex);
+		if (rail == null) {
+			return 0;
+		}
+		final double arc = rail.mmtrArcOfEndNode(entryPos);
+		return Double.isNaN(arc) ? 0 : arc;
+	}
+
+	/**
+	 * Whether the section of {@code hex} containing {@code arc} is occupied. The authoritative source is
+	 * the per-section reserved signal colour (B3b); a blocked colour that belongs to NO section - a
+	 * legacy MTR block or a manual block - conservatively closes the whole rail, which is exactly the
+	 * pre-B3b per-rail reading.
+	 */
+	private boolean sectionBlocked(String hex, double arc) {
+		final Rail rail = byHex.get(hex);
+		if (rail == null) {
+			return false;
+		}
+		final ObjectArrayList<MmtrBlockService.Block> sections = simulator.mmtrBlocks.blocksOf(hex);
+		if (sections.isEmpty()) {
+			return rail.mmtrIsCurrentlyBlocked();
+		}
+		final MmtrBlockService.Block section = simulator.mmtrBlocks.blockAt(hex, arc);
+		if (section != null && rail.mmtrIsSignalColorBlocked(section.signalColor)) {
+			return true;
+		}
+		boolean anySectionColorBlocked = false;
+		for (final MmtrBlockService.Block candidate : sections) {
+			if (rail.mmtrIsSignalColorBlocked(candidate.signalColor)) {
+				anySectionColorBlocked = true;
+				break;
+			}
+		}
+		return rail.mmtrIsCurrentlyBlocked() && !anySectionColorBlocked;
 	}
 
 	/**
@@ -181,7 +236,7 @@ public final class MmtrSignalAspect {
 		}
 		final String routeNextHex = routeNextRail(curHex, node, far);
 		if (routeNextHex != null) {
-			out.add(new Object[]{far, routeNextHex});
+			out.add(new Object[]{far, routeNextHex, entryArcOf(routeNextHex, far)});
 			return;
 		}
 		final Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(far);
@@ -193,7 +248,7 @@ public final class MmtrSignalAspect {
 				// Continue only in the travel direction (dot product with the incoming heading).
 				final double dot = (otherEnd.getX() - far.getX()) * (far.getX() - node.getX()) + (otherEnd.getZ() - far.getZ()) * (far.getZ() - node.getZ());
 				if (dot > 0) {
-					out.add(new Object[]{far, rail.getHexId()});
+					out.add(new Object[]{far, rail.getHexId(), entryArcOf(rail.getHexId(), far)});
 				}
 			}
 		});

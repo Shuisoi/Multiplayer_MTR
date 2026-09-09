@@ -205,6 +205,63 @@ public final class MmtrSignalAspectTests {
 		rail.tick2(0);
 	}
 
+	/** B3b: occupy ONE section by reserving just that section's colour (what a train standing in it does). */
+	private static void occupySection(Simulator sim, Rail rail, org.mtr.core.mmtr.signal.MmtrBlockService.Block section) {
+		rail.mmtrReserveSignalColor(999_999_004L, section.signalColor);
+		rail.tick1(sim);
+		rail.tick2(0);
+	}
+
+	/**
+	 * B3b: the chain counts SECTIONS. A rail split by a wayside signal is two steps, so a train standing
+	 * in the far section leaves the signal protecting the near one at a caution - it must not paint it red
+	 * (B2 already lets the movement run up to that signal). Without a split the same layout is red, which
+	 * is the pre-B3b reading and is asserted on its own network first.
+	 */
+	@Test
+	public void theChainCountsSectionsOnASplitRail() {
+		// Unsplit: one section, so an occupied rail is the protected section itself.
+		final Simulator whole = splitRailSim("build/mmtr-aspect-whole-rail", false);
+		final Rail wholeRail = whole.rails.stream().filter(rail -> rail.railMath.getLength() > 100).findFirst().orElseThrow();
+		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> oneSection = whole.mmtrBlocks.blocksOf(wholeRail.getHexId());
+		assertEquals(1, oneSection.size(), "no light on the rail: one section");
+		occupySection(whole, wholeRail, oneSection.get(0));
+		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(whole, whole.mmtrRoutes).aspectFrom(wholeRail.getHexId(), new Position(0, 0, 0)),
+			"unsplit rail: the occupied rail is the protected section itself (red)");
+
+		// Split by a wayside light at arc 100 of the 200 m rail.
+		final Simulator sim = splitRailSim("build/mmtr-aspect-sections", true);
+		final Rail longRail = sim.rails.stream().filter(rail -> rail.railMath.getLength() > 100).findFirst().orElseThrow();
+		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> sections = sim.mmtrBlocks.blocksOf(longRail.getHexId());
+		assertEquals(2, sections.size(), "the light splits the rail");
+		final MmtrSignalAspect aspect = new MmtrSignalAspect(sim, sim.mmtrRoutes);
+		assertEquals(MmtrSignalAspect.Aspect.GREEN, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)), "clear: green");
+
+		occupySection(sim, longRail, sections.get(1));
+		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
+			"B3b: only the FAR section is occupied, so the signal protecting the near one shows a caution");
+
+		occupySection(sim, longRail, sections.get(0));
+		assertEquals(MmtrSignalAspect.Aspect.RED, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
+			"the protected (near) section occupied is red");
+	}
+
+	/** Entry rail (-20..0) + a 200 m rail, optionally cut in two by a wayside light at arc 100. */
+	private static Simulator splitRailSim(String savePath, boolean withSignal) {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get(savePath), false);
+		final Rail entry = through(new Position(-20, 0, 0), new Position(0, 0, 0));
+		final Rail longRail = through(new Position(0, 0, 0), new Position(200, 0, 0));
+		sim.rails.add(entry);
+		sim.rails.add(longRail);
+		sim.sync();
+		if (withSignal) {
+			final org.mtr.core.tool.Vector middle = longRail.railMath.getPosition(100, false);
+			sim.mmtrSignals.put((int) Math.floor(middle.x()), (int) Math.floor(middle.y()), (int) Math.floor(middle.z()), 0, 2, "set", longRail.getHexId());
+		}
+		sim.mmtrEnsureSignalColors();
+		return sim;
+	}
+
 	@Test
 	public void unknownAndEmptyRailsAreSafe() {
 		final Net n = new Net("build/mmtr-aspect-unknown");

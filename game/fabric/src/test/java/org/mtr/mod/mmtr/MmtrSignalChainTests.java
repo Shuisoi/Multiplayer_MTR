@@ -33,10 +33,12 @@ public final class MmtrSignalChainTests {
 	/** node -> (rail hex -> that rail's other endpoint). */
 	private static final class Graph implements MmtrSignalChain.RailGraph {
 		private final Map<Position, Map<String, Position>> ends = new HashMap<>();
+		private final Map<String, Position[]> railEnds = new HashMap<>();
 
 		private void rail(String hex, Position p1, Position p2) {
 			ends.computeIfAbsent(p1, key -> new HashMap<>()).put(hex, p2);
 			ends.computeIfAbsent(p2, key -> new HashMap<>()).put(hex, p1);
+			railEnds.put(hex, p1.compareTo(p2) <= 0 ? new Position[]{p1, p2} : new Position[]{p2, p1});
 		}
 
 		@Override
@@ -53,6 +55,25 @@ public final class MmtrSignalChainTests {
 				}
 			});
 			return out;
+		}
+
+		@Override
+		public double entryArc(Position node, String railHex) {
+			final Position[] pair = railEnds.get(railHex);
+			if (pair == null) {
+				return 0;
+			}
+			return pair[0].equals(node) ? 0 : length(railHex);
+		}
+
+		@Override
+		public double railLength(Position node, String railHex) {
+			return length(railHex);
+		}
+
+		private double length(String railHex) {
+			final Position[] pair = railEnds.get(railHex);
+			return pair == null ? 0 : Math.hypot(pair[1].getX() - pair[0].getX(), pair[1].getZ() - pair[0].getZ());
 		}
 	}
 
@@ -114,5 +135,37 @@ public final class MmtrSignalChainTests {
 			"an unknown rail is clear and has no continuation");
 		assertEquals(1, MmtrSignalChain.depth(N, List.of("missing"), graph(), hex -> true, hex -> List.of(), 3),
 			"a blocked protected rail is red even when the graph cannot continue from it");
+	}
+
+	/**
+	 * B3b: with mirrored sections the walk counts SECTIONS. A rail split by a wayside signal is two
+	 * steps, so a train standing in the far section leaves the signal protecting the near one at a
+	 * caution - the client now agrees with the engine (and with B2, which stops S1 at that signal).
+	 */
+	@Test
+	public void aSplitRailIsCountedInSections() {
+		final Graph g = graph();
+		final Map<String, List<MmtrSignalChain.Section>> sections = new HashMap<>();
+		sections.put(S, List.of(new MmtrSignalChain.Section(0, 30, 11L), new MmtrSignalChain.Section(30, 60, 22L)));
+		final java.util.Set<Long> blockedColors = new java.util.HashSet<>();
+		final java.util.function.BiPredicate<String, Long> sectionBlocked = (hex, color) -> hex.equals(S) && blockedColors.contains(color);
+		final java.util.function.Predicate<String> railBlocked = hex -> hex.equals(S) && !blockedColors.isEmpty();
+
+		assertEquals(0, MmtrSignalChain.depth(N, List.of(S), g, hex -> sections.getOrDefault(hex, List.of()), sectionBlocked, railBlocked, hex -> List.of(), 3),
+			"clear line is green");
+
+		blockedColors.add(22L);
+		assertEquals(2, MmtrSignalChain.depth(N, List.of(S), g, hex -> sections.getOrDefault(hex, List.of()), sectionBlocked, railBlocked, hex -> List.of(), 3),
+			"B3b: the occupied FAR section is one section beyond the protected near one (single yellow)");
+
+		blockedColors.add(11L);
+		assertEquals(1, MmtrSignalChain.depth(N, List.of(S), g, hex -> sections.getOrDefault(hex, List.of()), sectionBlocked, railBlocked, hex -> List.of(), 3),
+			"the protected (near) section occupied is red");
+
+		// A blocked colour that belongs to NO mirrored section (a legacy/manual block) closes the rail.
+		blockedColors.clear();
+		blockedColors.add(99L);
+		assertEquals(1, MmtrSignalChain.depth(N, List.of(S), g, hex -> sections.getOrDefault(hex, List.of()), sectionBlocked, railBlocked, hex -> List.of(), 3),
+			"an unknown blocked colour conservatively closes the whole rail");
 	}
 }

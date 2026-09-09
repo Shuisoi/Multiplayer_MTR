@@ -823,7 +823,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				if (tailProgress > leg.getEndDistance()) {
 					break;
 				}
-				leg.getRail().isBlocked(id, Rail.BlockReservation.CURRENTLY_RESERVE);
+				markMmtrSignalBlock(leg, index == headLegIndex, tailProgress);
 			}
 		}
 
@@ -969,6 +969,40 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 			vehicleExtraData.removeRidingEntitiesIf(vehicleRidingEntity -> uuidToRemove.contains(vehicleRidingEntity.uuid));
 			vehicleExtraData.addRidingEntities(vehicleRidingEntitiesToAdd);
+		}
+	}
+
+	/**
+	 * B3b: register this consist's hold on ONE leg's rail. A rail that is not split carries a single
+	 * MMTR colour, so the legacy whole-rail reservation ({@link Rail#isBlocked}, which also keeps the
+	 * MTR block semantics for the legacy path) is exactly right. A rail split by a wayside signal
+	 * carries one colour per SECTION instead, and only the sections the consist actually stands on are
+	 * reserved - otherwise a train in the far section would still close the near one and the display
+	 * could never count sections.
+	 */
+	private void markMmtrSignalBlock(PathData leg, boolean isHeadLeg, double tailProgress) {
+		final Rail legRail = leg.getRail();
+		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> sections =
+			data instanceof final Simulator simulator ? simulator.mmtrBlocks.blocksOf(legRail.getHexId()) : null;
+		if (sections == null || sections.size() <= 1) {
+			legRail.isBlocked(id, Rail.BlockReservation.CURRENTLY_RESERVE);
+			return;
+		}
+		final double legLength = leg.getEndDistance() - leg.getStartDistance();
+		if (legLength <= 0) {
+			return;
+		}
+		final double headOffset = isHeadLeg ? Utilities.clampSafe(railProgress - leg.getStartDistance(), 0, legLength) : legLength;
+		final double tailOffset = Utilities.clampSafe(tailProgress - leg.getStartDistance(), 0, legLength);
+		// The leg runs from its entry node; convert the two offsets into the rail's ordered-1 arc space.
+		final double headArc = leg.reversePositions ? legLength - headOffset : headOffset;
+		final double tailArc = leg.reversePositions ? legLength - tailOffset : tailOffset;
+		final double arcFrom = Math.min(headArc, tailArc);
+		final double arcTo = Math.max(headArc, tailArc);
+		for (final org.mtr.core.mmtr.signal.MmtrBlockService.Block section : sections) {
+			if (section.arcToM > arcFrom + 1e-9 && section.arcFromM < arcTo - 1e-9) {
+				legRail.mmtrReserveSignalColor(id, section.signalColor);
+			}
 		}
 	}
 
