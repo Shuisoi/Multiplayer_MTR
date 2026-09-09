@@ -38,6 +38,19 @@ public final class MmtrShuntAuthorityRegistry {
 	 * @return the granted authority
 	 */
 	public MmtrShuntAuthority grant(long vehicleId, @Nullable String grantRailHex, @Nullable String targetRailHex, Kind kind, double speedLimitKmh, long validityMillis) {
+		return grant(vehicleId, grantRailHex, targetRailHex, kind, speedLimitKmh, validityMillis, null);
+	}
+
+	/**
+	 * C10: authorise a whole ROUTE - the movement may cross rails other stock occupies on the way to the
+	 * target, so every rail of the planned route is exempt from the whole-rail block (S1). The grant and
+	 * target rails stay first/last of the route for the map feed and the coupling gate.
+	 */
+	public MmtrShuntAuthority grantRoute(long vehicleId, @Nullable String grantRailHex, @Nullable String targetRailHex, @Nullable Iterable<String> routeRailHexes, Kind kind, double speedLimitKmh, long validityMillis) {
+		return grant(vehicleId, grantRailHex, targetRailHex, kind, speedLimitKmh, validityMillis, routeRailHexes);
+	}
+
+	private MmtrShuntAuthority grant(long vehicleId, @Nullable String grantRailHex, @Nullable String targetRailHex, Kind kind, double speedLimitKmh, long validityMillis, @Nullable Iterable<String> routeRailHexes) {
 		final long now = clock.getAsLong();
 		final long validity = validityMillis <= 0 ? DEFAULT_VALIDITY_MILLIS : validityMillis;
 		final MmtrShuntAuthority authority = new MmtrShuntAuthority(
@@ -47,7 +60,8 @@ public final class MmtrShuntAuthorityRegistry {
 				targetRailHex,
 				speedLimitKmh > 0 ? speedLimitKmh : (kind == null ? Kind.SUBSIDIARY_SHUNT : kind).getDefaultSpeedLimitKmh(),
 				now,
-				now + validity
+				now + validity,
+				routeRailHexes
 		);
 		byVehicle.put(vehicleId, authority);
 		return authority;

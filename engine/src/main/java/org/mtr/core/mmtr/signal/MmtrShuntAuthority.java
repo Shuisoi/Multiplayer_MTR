@@ -1,5 +1,8 @@
 package org.mtr.core.mmtr.signal;
 
+import it.unimi.dsi.fastutil.objects.ObjectArraySet;
+import org.jspecify.annotations.Nullable;
+
 /**
  * 调车授权 / 呼唤显示 (subsidiary signal authority) — C3a.
  *
@@ -67,8 +70,18 @@ public final class MmtrShuntAuthority {
 	private final double speedLimitKmh;
 	private final long grantedAtMillis;
 	private final long expiresAtMillis;
+	/**
+	 * C10: every rail of the authorised movement's ROUTE. A task-driven shunt may cross rails that other
+	 * stock occupies on the way (the classic "relocation past a parked rake"), and the whole-rail block
+	 * (S1) must not stop it mid-route. Empty for a plain two-rail grant.
+	 */
+	private final ObjectArraySet<String> routeRailHexes;
 
 	MmtrShuntAuthority(Kind kind, long vehicleId, String grantRailHex, String targetRailHex, double speedLimitKmh, long grantedAtMillis, long expiresAtMillis) {
+		this(kind, vehicleId, grantRailHex, targetRailHex, speedLimitKmh, grantedAtMillis, expiresAtMillis, null);
+	}
+
+	MmtrShuntAuthority(Kind kind, long vehicleId, String grantRailHex, String targetRailHex, double speedLimitKmh, long grantedAtMillis, long expiresAtMillis, @Nullable Iterable<String> routeRailHexes) {
 		this.kind = kind;
 		this.vehicleId = vehicleId;
 		this.grantRailHex = grantRailHex == null ? "" : grantRailHex;
@@ -76,6 +89,14 @@ public final class MmtrShuntAuthority {
 		this.speedLimitKmh = speedLimitKmh;
 		this.grantedAtMillis = grantedAtMillis;
 		this.expiresAtMillis = expiresAtMillis;
+		this.routeRailHexes = new ObjectArraySet<>();
+		if (routeRailHexes != null) {
+			for (final String railHex : routeRailHexes) {
+				if (railHex != null && !railHex.isEmpty()) {
+					this.routeRailHexes.add(railHex);
+				}
+			}
+		}
 	}
 
 	public Kind getKind() {
@@ -118,9 +139,14 @@ public final class MmtrShuntAuthority {
 		return Math.max(0, expiresAtMillis - nowMillis);
 	}
 
-	/** Whether the authority covers {@code railHex} (the movement's own rails). */
+	/** Whether the authority covers {@code railHex} (the movement's own rails, or any rail of its route). */
 	public boolean covers(String railHex) {
-		return railHex != null && (railHex.equals(grantRailHex) || railHex.equals(targetRailHex));
+		return railHex != null && (railHex.equals(grantRailHex) || railHex.equals(targetRailHex) || routeRailHexes.contains(railHex));
+	}
+
+	/** Every rail of the authorised route (may be empty for a plain two-rail grant). */
+	public ObjectArraySet<String> getRouteRailHexes() {
+		return routeRailHexes;
 	}
 
 	/** Whether AWS is suppressed under this aspect. */

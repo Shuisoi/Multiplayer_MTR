@@ -55,6 +55,11 @@ public final class MmtrRunPlanner {
 		public double flipCumulativeM = -1;
 		/** Hex of the dead-end rail the run must flip (换端) at; empty when no flip is planned. */
 		public String flipRailHex = "";
+		/**
+		 * C10: every rail the run crosses, in order (the current rail first). A task-driven shunt uses
+		 * this to authorise its WHOLE route, so S1 does not stop it on a rail another train occupies.
+		 */
+		public final ObjectArrayList<String> routeRailHexes = new ObjectArrayList<>();
 	}
 
 	private MmtrRunPlanner() {
@@ -361,7 +366,9 @@ public final class MmtrRunPlanner {
 				}
 			}
 			cumulM += i == orderedRails.size() - 1 ? desired.railMath.getLength() * clamp : desired.railMath.getLength();
+			plan.routeRailHexes.add(desired.getHexId());
 		}
+		plan.routeRailHexes.add(0, currentRail.getHexId());
 		plan.feasible = true;
 		plan.reason = "ok";
 		return plan;
@@ -502,8 +509,10 @@ public final class MmtrRunPlanner {
 			final Rail segmentRail = nextNode.equals(farEnd) ? target : prev.get(nextNode) == null ? null : prev.get(nextNode).rail;
 			if (segmentRail != null) {
 				cumulM += segmentRail.railMath.getLength();
+				plan.routeRailHexes.add(segmentRail.getHexId());
 			}
 		}
+		plan.routeRailHexes.add(0, currentRail.getHexId());
 		plan.feasible = true;
 		plan.reason = "ok";
 		return plan;
@@ -697,8 +706,10 @@ public final class MmtrRunPlanner {
 			final Rail segmentRail = nextNode.equals(farEnd) ? target : prev.get(nextNode) == null ? null : prev.get(nextNode).rail;
 			if (segmentRail != null) {
 				cumulM += segmentRail.railMath.getLength();
+				plan.routeRailHexes.add(segmentRail.getHexId());
 			}
 		}
+		plan.routeRailHexes.add(0, flipRail.getHexId());
 		plan.feasible = true;
 		plan.reason = "ok";
 		return plan;

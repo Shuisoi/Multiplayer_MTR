@@ -44,9 +44,28 @@ public final class MmtrShuntAuthorityTests {
 		assertFalse(registry.allowsCoexistence(RAIL_C), "any other section stays one-train-per-section");
 	}
 
+	/**
+	 * C10: a task-driven shunt is authorised along its WHOLE planned route, because the movement may cross
+	 * rails other stock occupies on the way to the target (实机 2026-09-09: a relocation past a parked rake
+	 * stopped at the intermediate occupancy face even though its target rail was authorised).
+	 */
 	@Test
-	public void oneTrainOneAuthority() {
-		final AtomicLong clock = new AtomicLong(0);
+	public void aRouteWideAuthorityCoversEveryRailOfTheMovement() {
+		final AtomicLong clock = new AtomicLong(5_000);
+		final MmtrShuntAuthorityRegistry registry = registry(clock);
+		final MmtrShuntAuthority authority = registry.grantRoute(9L, RAIL_A, RAIL_C,
+			java.util.List.of(RAIL_A, RAIL_B, RAIL_C), Kind.SUBSIDIARY_SHUNT, 25, 60_000);
+
+		assertTrue(authority.covers(RAIL_A), "the rail the movement starts on");
+		assertTrue(authority.covers(RAIL_B), "an intermediate rail of the route (may be occupied)");
+		assertTrue(authority.covers(RAIL_C), "the target rail");
+		assertFalse(authority.covers("rail-d"), "a rail outside the route stays blocked");
+		assertEquals(3, authority.getRouteRailHexes().size(), "the whole route is recorded for the map/console");
+		assertTrue(registry.allowsCoexistence(RAIL_B), "permissive working applies on the route's middle rails too");
+	}
+
+	@Test
+	public void oneTrainOneAuthority() {		final AtomicLong clock = new AtomicLong(0);
 		final MmtrShuntAuthorityRegistry registry = registry(clock);
 		registry.grant(1L, RAIL_A, RAIL_B, Kind.SUBSIDIARY_SHUNT, 0, 60_000);
 		registry.grant(2L, RAIL_A, RAIL_C, Kind.CALLING_ON, 0, 60_000);

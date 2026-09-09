@@ -27,6 +27,20 @@ public final class MmtrMission {
 	private @Nullable String failureReason;
 	/** The task this mission executes (作业单步骤 → 任务实例); null for legacy ad-hoc dispatches. */
 	private @Nullable MmtrTask task;
+	/**
+	 * C10: this movement is a 调车 shunt. When the vehicle plans it, the engine grants a ROUTE-wide
+	 * 调车授权 (every rail of the plan), so S1 does not stop it on a rail another train occupies on the
+	 * way to the target - and the coupling gate has the authority it requires.
+	 */
+	private boolean needsShuntAuthority;
+
+	public void setNeedsShuntAuthority(boolean value) {
+		needsShuntAuthority = value;
+	}
+
+	public boolean needsShuntAuthority() {
+		return needsShuntAuthority;
+	}
 
 	public MmtrMission(long trainVehicleId, Kind kind, long startSidingId, long targetSidingId, long assignedMillis) {
 		this.trainVehicleId = trainVehicleId;

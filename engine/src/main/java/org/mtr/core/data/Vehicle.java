@@ -503,6 +503,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mission.fail(plan.reason);
 			return;
 		}
+		if (mission.needsShuntAuthority() && mmtrMotionWalker.railHex() != null) {
+			// C10: authorise the WHOLE planned route, not just its target rail - a task-driven shunt may
+			// cross rails other stock occupies on the way, and S1 must not stop it mid-route.
+			final org.mtr.core.mmtr.signal.MmtrShuntAuthority existing = simulator.mmtrShuntAuthorities.active(getId());
+			final boolean sameRoute = existing != null && existing.getRouteRailHexes().size() == plan.routeRailHexes.size()
+				&& existing.getTargetRailHex().equals(plan.targetRailHex);
+			simulator.mmtrShuntAuthorities.grantRoute(getId(), mmtrMotionWalker.railHex(), plan.targetRailHex, plan.routeRailHexes,
+				org.mtr.core.mmtr.signal.MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT, 0, 15 * 60 * 1000L);
+			if (!sameRoute) {
+				System.out.println("[MMTR-MSG] 调车进路授权覆盖 " + plan.routeRailHexes.size() + " 条轨（" + plan.targetRailHex + " 为目标）");
+			}
+		}
 		if (!armMmtrPointRun(simulator, plan)) {
 			// Feasible but a fork is operator-locked or held by another train: the mission stays
 			// ASSIGNED and this self-arm retries every tick until the grants land (operator unlock

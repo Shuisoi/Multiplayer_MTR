@@ -731,9 +731,7 @@ public final class MmtrJobScheduler {
 		// turnout grants, stop target), so no legacy autopilot seam is engaged for them.
 		final boolean targetIsPlatform = isPlatform(simulator, targetId);
 		final MmtrMission.Kind kind = targetIsPlatform ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER;
-		if (!targetIsPlatform) {
-			grantShuntForStep(instance, vehicle, simulator, targetId);
-		}
+		final boolean shuntNeeded = !targetIsPlatform && grantShuntForStep(instance, vehicle, simulator, targetId);
 		// Task mapping (作业单步骤 → 任务实例): the mission carries the task definition so the
 		// timetable layer and the future interlocking read where/when/what of the running step.
 		final org.mtr.core.mmtr.task.MmtrTask task = org.mtr.core.mmtr.task.MmtrTaskFactory.fromStep(step, targetIsPlatform);
@@ -745,6 +743,7 @@ public final class MmtrJobScheduler {
 			}
 		}
 		final MmtrMission mission = new MmtrMission(vehicle.getId(), kind, instance.job.sidingId, targetId, simulator.getCurrentMillis());
+		mission.setNeedsShuntAuthority(shuntNeeded);
 		if (task != null) {
 			mission.attachTask(task);
 		}
@@ -765,18 +764,19 @@ public final class MmtrJobScheduler {
 	 * ({@link MmtrCoupleSurgery}) requires a live authority for the movement. An empty target gets no
 	 * authority, so ordinary relocations keep their normal protection.
 	 */
-	private void grantShuntForStep(JobInstance instance, Vehicle vehicle, Simulator simulator, long targetSidingId) {
+	private boolean grantShuntForStep(JobInstance instance, Vehicle vehicle, Simulator simulator, long targetSidingId) {
 		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
 		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
 		if (walker == null || targetRail == null || targetRail.getHexId().equals(walker.railHex())) {
-			return;
+			return false;
 		}
 		if (findParkedOnSiding(simulator, targetSidingId) == null && !nextStepIsCouple(instance)) {
-			return;
+			return false;
 		}
 		simulator.mmtrShuntAuthorities.grant(vehicle.getId(), walker.railHex(), targetRail.getHexId(),
 			MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT, MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT.getDefaultSpeedLimitKmh(), SHUNT_AUTHORITY_MILLIS);
 		System.out.println("[MMTR-JOB] 调车授权 " + instance.job.jobId + " vehicle=" + vehicle.getId() + " -> rail " + targetRail.getHexId() + "（任务驱动的调车进路）");
+		return true;
 	}
 
 	private boolean nextStepIsCouple(JobInstance instance) {
