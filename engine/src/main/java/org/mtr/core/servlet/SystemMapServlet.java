@@ -412,6 +412,12 @@ public final class SystemMapServlet extends ServletBase {
 					train.addProperty("shuntSpeedLimitKmh", shuntAuthority.getSpeedLimitKmh());
 					train.addProperty("shuntRemainingS", Math.round(shuntAuthority.remainingMillis(simulator.getCurrentMillis()) / 1000.0));
 				}
+				// S5: the live 进路 of this train (rails + turnouts + SET/PENDING) - the ops console
+				// shows which movement the interlocking has actually set, not just its target rail.
+				final org.mtr.core.mmtr.route.MmtrRoute route = vehicle.getMmtrRoute();
+				if (route != null) {
+					train.add("route", mmtrRouteJson(route));
+				}
 				final MmtrMission mission = vehicle.getMmtrMission();
 				if (mission != null) {
 					final com.google.gson.JsonObject missionJson = new com.google.gson.JsonObject();
@@ -445,8 +451,38 @@ public final class SystemMapServlet extends ServletBase {
 		// yellow chain behind it from the occupancy chain ahead) - the web console colours the
 		// track exactly like the in-game signal lights protecting each rail.
 		root.add("signals", getMmtrRailAspects(simulator));
+		// S5: every live route (SET and PENDING), so the console can show the interlocking state
+		// independently of the train markers (and name what a waiting movement is blocked on).
+		root.add("routes", getMmtrRoutes(simulator));
 		root.add("points", new com.google.gson.JsonArray());
 		return root;
+	}
+
+	/** One route as the ops feed / a train card shows it. */
+	private static com.google.gson.JsonObject mmtrRouteJson(org.mtr.core.mmtr.route.MmtrRoute route) {
+		final com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+		json.addProperty("vehicleId", String.valueOf(route.getVehicleId()));
+		json.addProperty("kind", route.getKind().name());
+		json.addProperty("state", route.isEstablished() ? "SET" : "PENDING");
+		json.addProperty("entryRail", route.getEntryRailHex() == null ? "" : route.getEntryRailHex());
+		json.addProperty("targetRail", route.getTargetRailHex());
+		json.addProperty("railCount", route.getRailHexes().size());
+		json.addProperty("forkCount", route.getForks().size());
+		json.addProperty("requestedMillis", route.getRequestedMillis());
+		if (!route.isEstablished()) {
+			json.addProperty("stateReason", route.getStateReason());
+		}
+		final com.google.gson.JsonArray rails = new com.google.gson.JsonArray();
+		route.getRailHexes().forEach(rails::add);
+		json.add("rails", rails);
+		return json;
+	}
+
+	/** Every live route, ordered by vehicle id (deterministic feed). */
+	private static com.google.gson.JsonArray getMmtrRoutes(Simulator simulator) {
+		final com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+		simulator.mmtrRoutes.snapshot().forEach(route -> out.add(mmtrRouteJson(route)));
+		return out;
 	}
 
 	/**

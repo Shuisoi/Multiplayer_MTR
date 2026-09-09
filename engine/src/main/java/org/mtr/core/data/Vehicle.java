@@ -161,6 +161,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** P3: the plan whose en-route forks this vehicle requested through the turnout authority
 	 * (refreshed every tick while the mission run is armed); null when no auto plan is active. */
 	private MmtrRunPlanner.Plan mmtrMotionPlan;
+	/**
+	 * S5: the live 进路 of this train (rails + turnouts + SET/PENDING state), created when a motion
+	 * mission arms and released when it goes terminal. The signal layer (A2) reads it through
+	 * {@code Simulator.mmtrRoutes} to decide whether a proceed aspect may be shown for a rail.
+	 */
+	private org.mtr.core.mmtr.route.MmtrRoute mmtrRoute;
 	/** 尽头换向 (terminal flip): whether the armed plan's dead-end flip already happened. Plans
 	 * without a flip point are born "done"; armMmtrPointRun resets it when the new plan flips. */
 	private boolean mmtrMotionFlipDone = true;
@@ -450,6 +456,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
 			}
 		}
+
+		// S5: keep the published route's state in step with the turnout authority EVERY tick, not only
+		// while the run is armed - a fork whose grant expires, or that an operator parks while the train
+		// is still waiting to arm, must drop the route to PENDING so the signal protecting it returns
+		// to danger instead of showing proceed for a movement the interlocking no longer has set.
+		if (mmtrRoute != null && data instanceof final Simulator routeSimulator) {
+			routeSimulator.mmtrRoutes.refresh(getId(), routeSimulator.mmtrPointAuthority);
+		}
 	}
 
 	/**
@@ -573,7 +587,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker != null) {
 			mmtrMotionWalker.setPointAuthority(authority, owner);
 		}
-		return MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+		// S5: publish the movement as a first-class 进路 (route) BEFORE requesting the turnouts, so the
+		// signal layer sees PENDING (danger) while the points are being taken and SET the moment every
+		// one of them is held - the signal can never show proceed for a route the interlocking has not
+		// set. A shunt (调车) keeps its own kind: it is authorised by a subsidiary aspect, not a main one.
+		mmtrRoute = simulator.mmtrRoutes.request(new org.mtr.core.mmtr.route.MmtrRoute(
+			getId(), owner,
+			simulator.mmtrShuntAuthorities.active(getId()) == null
+				? org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN
+				: org.mtr.core.mmtr.route.MmtrRoute.Kind.SHUNT,
+			plan.routeRailHexes, plan.forkOps, plan.targetRailHex, data.getCurrentMillis()));
+		final boolean allForksGranted = MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+		simulator.mmtrRoutes.refresh(getId(), authority);
+		return allForksGranted;
 	}
 
 	/**
@@ -636,6 +662,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		mmtrPendingPointOps.clear();
 		mmtrMotionPlan = null;
+		// S5: a released movement drops its route - the signal layer must stop reading it as set.
+		if (mmtrRoute != null) {
+			if (data instanceof final Simulator routeSimulator) {
+				routeSimulator.mmtrRoutes.release(getId());
+			}
+			mmtrRoute = null;
+		}
 	}
 
 	/**
@@ -1612,6 +1645,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public MmtrCabState.Cab getMmtrActiveCab() {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
 		return consistWalker == null ? MmtrCabState.Cab.NONE : consistWalker.cabs().activeCab();
+	}
+
+	/** S5: the live 进路 of this train (null when it has no armed motion mission). */
+	public org.mtr.core.mmtr.route.@Nullable MmtrRoute getMmtrRoute() {
+		return mmtrRoute;
 	}
 
 	/** @return who holds the key ("NONE" / "SYSTEM" / "CREW") of a consist-body vehicle. */

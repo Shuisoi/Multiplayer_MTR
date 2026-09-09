@@ -148,6 +148,10 @@ public class Simulator extends Data implements Utilities {
 	/** C3a 调车授权 (subsidiary-aspect authority): one train at a time may pass a signal at danger into
 	 * an occupied section to couple; the registry is the data plane the vehicle/yard read. */
 	public final org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry mmtrShuntAuthorities = new org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry(this::getCurrentMillis);
+	/** S5 进路登记表 (route registry): the live route object per train (rails + turnouts + SET/PENDING
+	 * state), derived from {@link #mmtrPointAuthority}. The signal layer (A2) reads it to decide whether
+	 * a proceed aspect may be shown; the ops feed shows it per train. */
+	public final org.mtr.core.mmtr.route.MmtrRouteRegistry mmtrRoutes = new org.mtr.core.mmtr.route.MmtrRouteRegistry();
 	/** 硬默认 0 (option 3): real servers preset every turnout to operator branch 0. Engines tests keep
 	 * this false so authority/mission semantics stay synthetic; {@link org.mtr.core.Main} enables it. */
 	public boolean mmtrDefaultPointsZero;
@@ -738,6 +742,11 @@ public class Simulator extends Data implements Utilities {
 	public boolean deleteMmtrVehicle(long vehicleId) {
 		for (final Siding siding : sidings) {
 			if (siding.removeVehicleById(vehicleId)) {
+				// A deleted train must not leave a stale route / turnout hold behind: the signal layer
+				// would keep showing its route as set over rails nothing runs on any more.
+				mmtrRoutes.release(vehicleId);
+				mmtrPointAuthority.releaseAll("v" + vehicleId);
+				mmtrShuntAuthorities.revoke(vehicleId);
 				return true;
 			}
 		}
