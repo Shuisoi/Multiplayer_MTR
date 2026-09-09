@@ -98,6 +98,7 @@
   - **91 = 客户端信号链抽成纯函数并补测试**（`MmtrSignalChain.depth` 承接 `RenderSignalBase` 的链走行，渲染器只留 `ClientRailGraph` 适配器；`MmtrSignalChainTests` 5 例覆盖红/单黄/双黄/保守分岔/镜像收窄/折返双候选；fabric 测试 8/0，引擎 472/0/2 不变）。
   - **92 = A2 真实轨道图验收（引擎内）**（`DevA2RealGraphTests`：dev 存档上生成真车 → 显示层覆盖全部真实轨、车所在轨 RED、新载入无进路；顺带记录 `saves/新的世界` 49 轨 vs 运行中 `world` 134 轨是两个存档；473/0/2）。
   - **93 = A3 补缺：AWS 确认键（默认 H）**（此前引擎支持 acknowledge、HUD 显示状态，但**客户端没有任何按键送出去**——实机一响必 SPAD；新增 `MMTR_AWS_ACK` 绑定 + `PacketDriveControl.acknowledge` + 上升沿发送 + HUD 提示"按 H 确认"）。
+  - **94 = 实机缺陷：提前按下的确认被记住**（无警告时按 H 会挂起，下一条警告第一 tick 就被它确认 → 2.5 s 窗口形同虚设、永不 SPAD；改为"只在警告显示时按才计数"，并清空陈旧队列；`MmtrAwsWarningTests` 6/0、全量 474/0/2）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）
