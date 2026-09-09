@@ -83,9 +83,15 @@ public final class MmtrConsistRearClearTests {
 		assertTrue(walker.advance(4.9));
 		assertTrue(authority.isGrantedTo(fork.node0.getX(), fork.node0.getY(), fork.node0.getZ(), fork.rIn.getHexId(), OWNER), "the tail is still on the point");
 
-		// One more push: the tail clears and the point is released.
+		// One more push: the tail clears the node, but ② 岔区清限 keeps the point held while any part of
+		// the consist is still inside the junction's clearance zone (10 m past the node).
 		assertTrue(walker.advance(0.2));
-		assertFalse(authority.isGrantedTo(fork.node0.getX(), fork.node0.getY(), fork.node0.getZ(), fork.rIn.getHexId(), OWNER), "rear-clear released the point");
+		assertTrue(authority.isGrantedTo(fork.node0.getX(), fork.node0.getY(), fork.node0.getZ(), fork.rIn.getHexId(), OWNER), "the tail cleared the node but is still inside the clearance zone");
+		assertEquals(1, walker.pendingReleaseCount());
+
+		// Traveling the clearance margin releases it.
+		assertTrue(walker.advance(org.mtr.core.data.Vehicle.MMTR_JUNCTION_CLEARANCE_M));
+		assertFalse(authority.isGrantedTo(fork.node0.getX(), fork.node0.getY(), fork.node0.getZ(), fork.rIn.getHexId(), OWNER), "clearance-clear released the point");
 		assertEquals(0, walker.pendingReleaseCount());
 	}
 

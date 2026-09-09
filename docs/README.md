@@ -105,6 +105,7 @@
   - **97 = 闭塞区间 B3：区间可观测 + 实机布点实测**（`MmtrBlockReport` + OP 指令 `blocks [all|<railHex>]`；实测运行中 dev 世界 8 架灯**全部贴在节点旁**（横向 2.06 m、沿轨 0 m）、134 轨 = 134 区间、无切分轨，1 架 BOUND 灯离其 target 轨 > 8 m 属"哑绑定"；故客户端显示无需改动，487/0/2）。
   - **98 = 闭塞区间 B3b：每区间一个信号色 + 镜像区间边界**（区间 0 = 轨色、其余按轨+序号派生；`Rail.mmtrReserveSignalColor`/`mmtrIsSignalColorBlocked`；`Vehicle.markMmtrSignalBlock` 只预留车列实际占用的区间；引擎 `MmtrSignalAspect` 与客户端 `MmtrSignalChain` 都按区间计数；`PacketMmtrRoutes` 新增 `sections` 字段，未切分轨零发送；490/0/2 + fabric 20 例）。
   - **99 = ① 区间式信号 × 道岔：区间入口停车**（`MmtrMotionPosition.wouldHaltAtForkOn` + S1 规则 (3)：下一区间的出口是"选不出腿"的道岔 → 停在含岔区间的入口（信号前），不再开进去占着咽喉等；区间停车时岔权申请不再受 120 m 接近窗口限制（防死等）；调车授权豁免；新增 2 例、1 例期望值按新语义更新，492/0/2）。
+  - **100 = ② 岔区清限 / 侧面防护**（`MMTR_JUNCTION_CLEARANCE_M = 10 m`：车尾越岔节点后还要走满清限才算法清空；S1 规则 (4) 把从第三条腿进岔的移动扣在岔前；编组体道岔锁闭延长到清限点，冲突进路因此保持 PENDING；新增 1 例、1 例期望值更新，493/0/2）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）

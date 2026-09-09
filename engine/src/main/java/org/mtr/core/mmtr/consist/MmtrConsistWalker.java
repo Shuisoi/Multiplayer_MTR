@@ -674,8 +674,13 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 			return false;
 		}
 		// B5: the front has just crossed this node; the point's hold (if we hold it) survives until the
-		// rear clears the node, i.e. after another consist-length of travel.
-		pendingReleases.add(new PendingRelease(node.getX(), node.getY(), node.getZ(), lead.railHex(), distanceM + body.lengthM()));
+		// rear clears the node, i.e. after another consist-length of travel. ② 岔区清限: at a JUNCTION
+		// the hold lasts a clearance margin longer, so the points cannot be moved while any part of this
+		// consist is still inside the junction's clearance zone (side protection).
+		final double clearanceM = data.positionsToRail.get(node) == null || data.positionsToRail.get(node).size() < 3
+			? 0
+			: org.mtr.core.data.Vehicle.MMTR_JUNCTION_CLEARANCE_M;
+		pendingReleases.add(new PendingRelease(node.getX(), node.getY(), node.getZ(), lead.railHex(), distanceM + body.lengthM() + clearanceM));
 		if (towardB) {
 			body.appendLeg(next);
 		} else {

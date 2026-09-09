@@ -255,6 +255,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private static final double MMTR_BLOCK_NODE_EPS_M = 0.001;
 	/**
+	 * ② 岔区清限 (junction clearance): how far past a junction node a consist must be before the node
+	 * counts as clear. A section boundary sits ON the node, so without this margin a consist whose tail
+	 * has just left the node would no longer hold the junction, and a movement approaching from another
+	 * leg could be admitted straight into its side (侧面防护). 10 m is a tunable model value - real
+	 * clearance points sit where the diverging tracks are far enough apart for the longest vehicle.
+	 */
+	public static final double MMTR_JUNCTION_CLEARANCE_M = 10.0;
+	/**
 	 * Signal S3/A3 (AWS): the warning triggers while the train runs inside this lead distance of the
 	 * signal it is about to pass (a non-green aspect) or of a restricted boundary (an occupancy stop
 	 * / a slower rail to be braced for). Real AWS magnets sit ~200 yd (183 m) before the signal; the
@@ -3129,7 +3137,77 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrSectionAuthorityHold = true;
 			stop = Math.min(stop, authorityStopM);
 		}
+		// (4) ② 岔区清限 / 侧面防护: the node the train is about to cross is a junction whose clearance
+		// zone is fouled by ANOTHER train (a consist whose tail is still inside the zone). A section
+		// boundary sits on the node, so the section test alone would call the junction clear the moment
+		// the other train's tail leaves it - and a movement entering from a third leg could be driven
+		// into that train's side. Hold at this rail's end node instead.
+		final Double junctionStopM = junctionClearanceStopM(vehiclePositions);
+		if (junctionStopM != null) {
+			stop = Math.min(stop, junctionStopM);
+		}
 		return stop;
+	}
+
+	/**
+	 * ②: the walker-space stop point that holds the train at its current rail's end node when the node
+	 * ahead is a junction (>= 3 rails) whose clearance zone is occupied by another vehicle, or null when
+	 * the node is a plain joint / dead end, or the zone is clear.
+	 */
+	private @Nullable Double junctionClearanceStopM(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+		if (vehiclePositions == null || mmtrMotionWalker == null || mmtrMotionLegs.isEmpty() || !(data instanceof final Simulator simulator)) {
+			return null;
+		}
+		final Position node = mmtrMotionWalker.aheadNode();
+		if (node == null) {
+			return null;
+		}
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
+		if (neighbours == null || neighbours.size() < 3) {
+			return null;
+		}
+		// The train must actually be about to CROSS the node (its section ends at the rail end); a
+		// mid-rail signal boundary is not a junction crossing.
+		final int index = indexInMmtrMotionLegs(railProgress);
+		final PathData segment = mmtrMotionLegs.get(index);
+		final Rail rail = segment.getRail();
+		if (rail == null) {
+			return null;
+		}
+		final double railLength = rail.railMath.getLength();
+		final double legLength = segment.getEndDistance() - segment.getStartDistance();
+		final double headOffsetInLeg = Math.max(0, Math.min(legLength, railProgress - segment.getStartDistance()));
+		final double headArc = segment.reversePositions ? legLength - headOffsetInLeg : headOffsetInLeg;
+		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
+		if (current == null) {
+			return null;
+		}
+		final boolean towardHigherArc = !segment.reversePositions;
+		final boolean boundaryAtRailEnd = towardHigherArc ? current.arcToM >= railLength - 1e-9 : current.arcFromM <= 1e-9;
+		if (!boundaryAtRailEnd) {
+			return null;
+		}
+		for (final Rail other : neighbours.values()) {
+			final double otherLength = other.railMath.getLength();
+			if (otherLength <= 0) {
+				continue;
+			}
+			// The clearance window is the first MMTR_JUNCTION_CLEARANCE_M metres of every rail meeting at
+			// the node, measured from the node (each rail's own ordered-1 arc space).
+			final double nodeArc = MmtrBlockService.arcOfNode(other, node);
+			if (Double.isNaN(nodeArc)) {
+				continue;
+			}
+			final double windowFrom = nodeArc <= 1e-9 ? 0 : Math.max(0, otherLength - MMTR_JUNCTION_CLEARANCE_M);
+			final double windowTo = nodeArc <= 1e-9 ? Math.min(otherLength, MMTR_JUNCTION_CLEARANCE_M) : otherLength;
+			if (windowTo - windowFrom > 1e-9 && blockHasExternalOccupancy(other, windowFrom, windowTo, vehiclePositions)) {
+				// Walker-space distance to the ahead node: offsetM is measured from the entry node
+				// toward the node being approached (ordered-arc space flips for a reverse-running leg).
+				final double toNode = railLength - mmtrMotionWalker.offsetM();
+				return mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M);
+			}
+		}
+		return null;
 	}
 
 	/**
