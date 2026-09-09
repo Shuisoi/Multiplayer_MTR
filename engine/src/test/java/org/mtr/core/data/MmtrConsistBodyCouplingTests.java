@@ -196,8 +196,62 @@ public final class MmtrConsistBodyCouplingTests {
 		assertTrue(mergedSegment.toM() >= 10.0, "the merged body now covers the loco's old position, toM=" + mergedSegment.toM());
 		assertEquals(mergedBody.lengthM(), mergedSegment.lengthM(), 0.05, "the occupied slice is the whole body");
 
-		// The merged train keeps standing still and is unmanned (the crew re-takes the leading cab).
+		// The merged train keeps standing still, and the crew KEEPS its key: the locomotive's cab is now
+		// inside the formation (C5b), which the state machine expresses with an arc position.
 		assertEquals(0, merged.getSpeed(), 1e-9);
-		assertTrue(!mergedWalker.cabs().isManned(), "after coupling nobody holds the key");
+		assertTrue(mergedWalker.cabs().isManned(), "the crew keeps the key across the coupling");
+		assertTrue(mergedWalker.cabs().isCrewKey(), "it is a crew key, not the engine's placeholder");
+		assertTrue(mergedWalker.cabs().isInteriorCab(), "the cab is inside the merged formation");
+		assertEquals(8.2, mergedWalker.cabs().cabArcM(), 0.05, "the key sits at the locomotive's A end, i.e. the joint");
+		assertEquals(Cab.CAB_A, mergedWalker.cabs().activeCab(), "the driver still faces the A end (the rake leads)");
+	}
+
+	@Test
+	public void uncouplingConsistBodiesCutsAtTheSeam() {
+		final Approached a = new Approached();
+		final MmtrCoupleSurgery.Result coupled = MmtrCoupleSurgery.couple(a.n.sim, a.loco.getId(), a.rake.getId());
+		assertTrue(coupled.ok(), coupled.reason());
+		final Vehicle merged = coupled.vehicle();
+		final MmtrConsistBody mergedBody = merged.getMmtrConsistWalker().body();
+		final double mergedAEndArc = mergedBody.aEndArcM();
+		final double mergedLength = mergedBody.lengthM();
+
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.uncouple(a.n.sim, merged.getId(), 1);
+		assertTrue(result.ok(), result.reason());
+		final Vehicle head = result.vehicle();
+		final Vehicle tail = result.other();
+		assertNotNull(head);
+		assertNotNull(tail);
+
+		// Both halves are consist bodies with the right formation.
+		assertNotNull(head.getMmtrConsistWalker(), "the head half is a consist body");
+		assertNotNull(tail.getMmtrConsistWalker(), "the tail half is a consist body");
+		assertEquals(2, head.getMmtrConsistWalker().body().carCount(), "the head keeps the rake's 2 cars");
+		assertEquals(1, tail.getMmtrConsistWalker().body().carCount(), "the tail is the loco");
+		assertEquals("loco", tail.vehicleExtraData.immutableVehicleCars.get(0).getVehicleId());
+		assertEquals(0, head.getMmtrConsistWalker().body().seamCount(), "the head has no seam left");
+		assertEquals(0, tail.getMmtrConsistWalker().body().seamCount(), "neither has the tail");
+
+		// The head half did not move: its A end is where the merged train's A end was.
+		assertEquals(mergedAEndArc, head.getMmtrConsistWalker().body().aEndArcM(), 1e-9, "the head keeps its A end");
+		assertEquals(a.n.y1.getHexId(), head.getMmtrConsistWalker().body().legAtArcM(head.getMmtrConsistWalker().body().aEndArcM()).railHex());
+		// The tail's A end sits at the seam, and the two halves together are the old train.
+		assertEquals(mergedLength - 2.1, head.getMmtrConsistWalker().body().lengthM() + tail.getMmtrConsistWalker().body().lengthM() - tail.getMmtrConsistWalker().body().lengthM(), 0.2,
+				"the head is the rake half");
+		assertTrue(tail.getMmtrConsistWalker().body().lengthM() > 1.9 && tail.getMmtrConsistWalker().body().lengthM() < 2.2, "the tail is one car long");
+
+		// The crew's key followed the locomotive into the tail half, at its A end.
+		assertTrue(tail.getMmtrConsistWalker().cabs().isCrewKey(), "the driver stays in the loco");
+		assertEquals(0, tail.getMmtrConsistWalker().cabs().cabArcM(), 1e-6, "the loco's cab is the tail's A end");
+		assertTrue(!head.getMmtrConsistWalker().cabs().isManned(), "the rake half is unmanned");
+		assertEquals(0, head.getSpeed(), 1e-9);
+		assertEquals(0, tail.getSpeed(), 1e-9);
+
+		// Both halves survive the yard's duplicate rule (nose to tail is a legal stabled state).
+		for (int i = 0; i < 60; i++) {
+			a.n.tick();
+		}
+		assertNotNull(a.n.sim.mmtrFindVehicle(head.getId()), "the head half survives");
+		assertNotNull(a.n.sim.mmtrFindVehicle(tail.getId()), "the tail half survives");
 	}
 }

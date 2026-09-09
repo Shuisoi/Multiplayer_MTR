@@ -387,6 +387,26 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		return leg == null ? null : data.railIdMap.get(leg.railHex());
 	}
 
+	/**
+	 * C5b: the rail a signal/occupancy layer must reference — the manned cab's leading end, or the A
+	 * end while the consist is unmanned. {@link #currentRail()} deliberately returns {@code null} when
+	 * nobody holds the key (there is no "front" without a driver), but a stabled consist still occupies
+	 * its rail and must be seen by the yard and by other trains.
+	 */
+	public @Nullable Rail referenceRail() {
+		return railAtArcM(referenceArcM());
+	}
+
+	/** C5b: the arc of the face {@link #referenceRail()} refers to. */
+	public double referenceArcM() {
+		return frontArcM();
+	}
+
+	/** C5b: offset of the reference face within its rail. */
+	public double referenceOffsetM() {
+		return offsetAtArcM(referenceArcM());
+	}
+
 	/** The rail behind a spine leg. */
 	public @Nullable Rail railForLeg(SpineLeg leg) {
 		return data.railIdMap.get(leg.railHex());

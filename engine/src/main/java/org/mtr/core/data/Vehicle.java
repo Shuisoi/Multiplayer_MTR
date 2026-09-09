@@ -1780,14 +1780,28 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker == null) {
 			return null;
 		}
-		final Rail rail = mmtrMotionWalker.currentRail();
+		// C5b: an unmanned consist body still occupies its rail - reference the body, not the cab.
+		final Rail rail;
+		final double leadingOffset;
+		final boolean towardExit;
+		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
+			rail = consistWalker.referenceRail();
+			leadingOffset = consistWalker.referenceOffsetM();
+			towardExit = consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+		} else {
+			rail = mmtrMotionWalker.currentRail();
+			leadingOffset = mmtrMotionWalker.offsetM();
+			towardExit = true;
+		}
 		if (rail == null) {
 			return null;
 		}
 		final double railLength = rail.railMath.getLength();
-		final double head = Math.min(railLength, Math.max(0, mmtrMotionWalker.offsetM()));
-		final double tail = Math.max(0, head - vehicleExtraData.getTotalVehicleLength());
-		return new RailSpan(rail.getHexId(), tail, head);
+		final double clampedLeadingOffset = Math.min(railLength, Math.max(0, leadingOffset));
+		// C5b: the body extends BEHIND the leading face along the direction of travel — toward larger
+		// rail offsets when the consist drives toward its B end, toward smaller ones otherwise.
+		final double otherEndOffset = towardExit ? clampedLeadingOffset - vehicleExtraData.getTotalVehicleLength() : clampedLeadingOffset + vehicleExtraData.getTotalVehicleLength();
+		return new RailSpan(rail.getHexId(), Math.max(0, Math.min(clampedLeadingOffset, otherEndOffset)), Math.min(railLength, Math.max(clampedLeadingOffset, otherEndOffset)));
 	}
 
 	/**
@@ -2354,15 +2368,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker == null) {
 			return null;
 		}
-		final Rail rail = mmtrMotionWalker.currentRail();
+		final Rail rail;
+		final double leadingOffset;
+		final boolean towardExit;
+		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
+			rail = consistWalker.referenceRail();
+			leadingOffset = consistWalker.referenceOffsetM();
+			towardExit = consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+		} else {
+			rail = mmtrMotionWalker.currentRail();
+			leadingOffset = mmtrMotionWalker.offsetM();
+			towardExit = true;
+		}
 		if (rail == null) {
 			return null;
 		}
 		final double railLength = rail.railMath.getLength();
-		final double leadingOffset = Math.max(0, Math.min(railLength, mmtrMotionWalker.offsetM()));
-		final boolean towardExit = !(mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker)
-				|| consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
-		return new double[]{towardExit ? leadingOffset : railLength - leadingOffset, vehicleExtraData.getTotalVehicleLength()};
+		final double clampedLeadingOffset = Math.max(0, Math.min(railLength, leadingOffset));
+		return new double[]{towardExit ? clampedLeadingOffset : railLength - clampedLeadingOffset, vehicleExtraData.getTotalVehicleLength()};
 	}
 
 	/** Index of the leg whose cumulative range contains {@code progress} (last leg when beyond). */
@@ -2804,14 +2827,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * rail's own ordered-position coordinate, which is where a consist body writes its footprint.
 	 */
 	private double mmtrConsistBodyBlockStop(MmtrConsistWalker consistWalker, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, double gapM) {
-		final Rail rail = consistWalker.currentRail();
+		final Rail rail = consistWalker.referenceRail();
 		final Position entry = consistWalker.enteredFromPosition();
-		final Position ahead = consistWalker.aheadNode();
-		if (rail == null || entry == null || ahead == null) {
+		if (rail == null || entry == null) {
 			return Double.MAX_VALUE;
 		}
 		final double railLength = rail.railMath.getLength();
-		final double leadingOffset = Math.max(0, Math.min(railLength, consistWalker.offsetM()));
+		final double leadingOffset = Math.max(0, Math.min(railLength, consistWalker.referenceOffsetM()));
 		// The body's leg coordinate runs entryNode -> exitNode, i.e. from the A side toward the B side.
 		// The consist travels toward its manned cab: CAB_A leads with the A end, so the leading face
 		// moves toward the leg's ENTRY (decreasing offset); CAB_B leads toward the EXIT. (The walker's

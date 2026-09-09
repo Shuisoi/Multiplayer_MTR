@@ -141,10 +141,20 @@ public final class MmtrCoupleSurgery {
 		mergedCars.forEach(car -> carsJson.add(Utilities.getJsonObjectFromData(car)));
 		mergedJson.add("vehicleCars", carsJson);
 		mergedJson.add("ridingEntities", mergedRidingEntitiesJson(leading, trailing, leadingCars.size()));
+		patchGeometry(mergedJson, mergedCars);
 		final VehicleExtraData mergedData = new VehicleExtraData(new JsonReader(mergedJson));
 
 		final MmtrMotionPosition walker = leading.getMmtrMotionWalker();
 		final TransportMode transportMode = leading.getTransportMode();
+		// C5b: where the crew's key ends up in the merged formation. The trailing train's cab faces
+		// the seam (its leading end faces the train it coupled onto), so its arc becomes
+		// leadingLength + its own cab arc; a key at a named end keeps its label (and therefore the
+		// direction of travel), an interior cab keeps its arc.
+		final MmtrConsistWalker trailingWalker = trailing.getMmtrConsistWalker();
+		final boolean trailingHasCrewKey = trailingWalker != null && trailingWalker.cabs().isCrewKey();
+		final double trailingCabArc = trailingWalker == null ? 0 : cabArcOf(trailingWalker);
+		final boolean trailingCabFacesA = trailingWalker != null && trailingWalker.cabs().activeCab() == MmtrCabState.Cab.CAB_A;
+		final java.util.UUID trailingCrewUuid = trailingWalker == null ? null : trailingWalker.cabs().crewUuid();
 		// C5: a consist body must be rebuilt too - its car lengths and coupler seams are part of the
 		// body, and the spine has to cover the trailing train's rails. Do this BEFORE any mutation so
 		// a formation that cannot be placed leaves the world untouched.
@@ -165,10 +175,18 @@ public final class MmtrCoupleSurgery {
 
 		final Vehicle merged = new Vehicle(mergedData, leadingSiding, new JsonReader(Utilities.getJsonObjectFromData(leading)), simulator);
 		if (mergedConsistWalker != null) {
-			// The rebuilt body is unmanned: the trailing train's cab is now inside the formation, which
-			// the two-cab model cannot express - the crew takes the leading cab.
 			merged.engageMmtrConsistMotion(mergedConsistWalker, MmtrCabState.Cab.NONE);
 			mergedConsistWalker.removeKey();
+			if (trailingHasCrewKey) {
+				// C5b: the crew keeps its key - it is now in an interior cab (the locomotive's cab
+				// inside the merged formation), which the state machine expresses with an arc position.
+				// The joint's arc comes from the merged body itself (MTR's total-length convention adds
+				// the coupling paddings at the seam, so summing the two halves would be off by one).
+				final double jointArc = jointSeamArcM(mergedConsistWalker.body(), leadingCars.size() - 1);
+				mergedConsistWalker.cabs().insertKeyAtArc(jointArc + trailingCabArc, trailingCabFacesA, true, true, trailingCrewUuid);
+				System.out.println("[MMTR-COUP] 连挂后钥匙留在机车驾驶室（编组内 " + Math.round((jointArc + trailingCabArc) * 10.0) / 10.0 + " m 处，朝向 "
+						+ (trailingCabFacesA ? "A" : "B") + " 端）");
+			}
 		} else if (walker instanceof final MmtrMotionWalker legacyWalker) {
 			merged.engageMmtrMotion(legacyWalker);
 		} else {
@@ -231,6 +249,25 @@ public final class MmtrCoupleSurgery {
 		);
 	}
 
+	/** C5b: the manned cab's arc from the formation's A end (0 / body length for the named ends). */
+	private static double cabArcOf(MmtrConsistWalker walker) {
+		final MmtrCabState cabs = walker.cabs();
+		if (!Double.isNaN(cabs.cabArcM())) {
+			return cabs.cabArcM();
+		}
+		return cabs.activeCab() == MmtrCabState.Cab.CAB_B ? walker.body().lengthM() : 0;
+	}
+
+	/** C5b: arc of the seam that sits after car {@code carIndex} in a body, or the body length. */
+	private static double jointSeamArcM(MmtrConsistBody body, int carIndex) {
+		for (int i = 0; i < body.seamCount(); i++) {
+			if (body.carIndexAfterSeam(i) == carIndex) {
+				return body.seamArcM(i);
+			}
+		}
+		return body.aEndArcM() + body.lengthM();
+	}
+
 	private static @Nullable Siding sidingOf(Simulator simulator, Vehicle vehicle) {		final Siding[] found = {null};
 		simulator.sidings.forEach(siding -> {
 			if (siding.getVehicleById(vehicle.getId()) != null) {
@@ -265,28 +302,12 @@ public final class MmtrCoupleSurgery {
 		if (!cars.get(seamIndex).getMmtrCouplerAfter()) {
 			return Result.fail("第 " + seamIndex + " 节之后没有车钩（切分只认接缝，EMU 内部与机车单车无接缝可切）");
 		}
-		if (walker instanceof MmtrConsistWalker) {
-			return Result.fail("编组体（双驾驶室）的解挂待 C5（接缝里程 seamArcM）");
-		}
-		final Rail rail = walker.currentRail();
-		final Position entry = walker.enteredFromPosition();
-		if (rail == null || entry == null) {
-			return Result.fail("找不到列车所在轨道");
-		}
 		final ObjectArrayList<VehicleCar> headCars = new ObjectArrayList<>(cars.subList(0, seamIndex + 1));
 		final ObjectArrayList<VehicleCar> tailCars = new ObjectArrayList<>(cars.subList(seamIndex + 1, cars.size()));
 		headCars.get(headCars.size() - 1).setMmtrCouplerAfter(false);
-		final double cutOffset = walker.offsetM() - Siding.getTotalVehicleLength(headCars);
-		final double railLength = rail.railMath.getLength();
-		if (cutOffset <= 0.05 || cutOffset >= railLength - 0.05) {
-			return Result.fail("切分点落在轨外（跨轨切分待 C5），cutOffset=" + Math.round(cutOffset * 100.0) / 100.0 + " m");
-		}
 		final Siding siding = sidingOf(simulator, vehicle);
 		if (siding == null) {
 			return Result.fail("找不到车辆所属股道");
-		}
-		if (!(walker instanceof final MmtrMotionWalker legacyWalker)) {
-			return Result.fail("未知的走行器类型，未做手术");
 		}
 
 		// Air: each half keeps the pipe state it had (the two halves are no longer connected).
@@ -296,26 +317,96 @@ public final class MmtrCoupleSurgery {
 		final JsonObject headJson = Utilities.getJsonObjectFromData(vehicle.vehicleExtraData);
 		headJson.add("vehicleCars", carsJson(headCars));
 		headJson.add("ridingEntities", ridingEntitiesJson(vehicle, seamIndex, false));
+		patchGeometry(headJson, headCars);
 		final VehicleExtraData headData = new VehicleExtraData(new JsonReader(headJson));
 
 		final JsonObject tailJson = Utilities.getJsonObjectFromData(vehicle.vehicleExtraData);
 		tailJson.add("vehicleCars", carsJson(tailCars));
 		tailJson.add("ridingEntities", ridingEntitiesJson(vehicle, seamIndex, true));
+		patchGeometry(tailJson, tailCars);
 		final VehicleExtraData tailData = new VehicleExtraData(new JsonReader(tailJson));
+
+		// C5b: the walkers of both halves. A consist body is cut at a seam ARC (its own geometry); a
+		// legacy motion walker at a rail offset derived from the head half's length.
+		final MmtrConsistWalker consistWalker = vehicle.getMmtrConsistWalker();
+		MmtrConsistWalker headConsistWalker = null;
+		MmtrConsistWalker tailConsistWalker = null;
+		MmtrMotionWalker tailLegacyWalker = null;
+		MmtrMotionWalker legacyWalker = null;
+		double seamArc = 0;
+		double cutOffset = 0;
+		if (consistWalker != null) {
+			final MmtrConsistBody body = consistWalker.body();
+			int bodySeam = -1;
+			for (int i = 0; i < body.seamCount(); i++) {
+				if (body.carIndexAfterSeam(i) == seamIndex) {
+					bodySeam = i;
+					break;
+				}
+			}
+			if (bodySeam < 0) {
+				return Result.fail("第 " + seamIndex + " 节不是编组体的接缝");
+			}
+			seamArc = body.seamArcM(bodySeam);
+			headConsistWalker = placeConsistHalf(simulator, body, body.aEndArcM(), headCars);
+			tailConsistWalker = placeConsistHalf(simulator, body, seamArc, tailCars);
+			if (headConsistWalker == null || tailConsistWalker == null) {
+				return Result.fail("切分后的编组体无法放在当前轨道上（跨轨切分或岔道未定）");
+			}
+		} else if (walker instanceof final MmtrMotionWalker motionWalker) {
+			legacyWalker = motionWalker;
+			final Rail rail = walker.currentRail();
+			final Position entry = walker.enteredFromPosition();
+			if (rail == null || entry == null) {
+				return Result.fail("找不到列车所在轨道");
+			}
+			cutOffset = walker.offsetM() - Siding.getTotalVehicleLength(headCars);
+			if (cutOffset <= 0.05 || cutOffset >= rail.railMath.getLength() - 0.05) {
+				return Result.fail("切分点落在轨外（跨轨切分待后续），cutOffset=" + Math.round(cutOffset * 100.0) / 100.0 + " m");
+			}
+			tailLegacyWalker = MmtrMotionWalker.startAtOffset(simulator, rail, entry, cutOffset, simulator.mmtrPointBranches, null);
+		} else {
+			return Result.fail("未知的走行器类型，未做手术");
+		}
 
 		siding.unregisterVehicle(vehicle);
 		// The head keeps the original vehicle's identity (clients keep their mirror and just see the
 		// formation shrink); the tail is a genuinely new vehicle with a fresh id.
 		final Vehicle head = new Vehicle(headData, siding, new JsonReader(Utilities.getJsonObjectFromData(vehicle)), simulator);
-		head.engageMmtrMotion(legacyWalker);
+		if (headConsistWalker != null) {
+			head.engageMmtrConsistMotion(headConsistWalker, MmtrCabState.Cab.NONE);
+			headConsistWalker.removeKey();
+		} else {
+			head.engageMmtrMotion(legacyWalker);
+		}
 		siding.adoptVehicle(head);
 
-		final MmtrMotionWalker tailWalker = MmtrMotionWalker.startAtOffset(simulator, rail, entry, cutOffset, simulator.mmtrPointBranches, null);
 		final JsonObject tailVehicleJson = new JsonObject();
 		tailVehicleJson.addProperty("id", new java.util.Random().nextLong());
 		final Vehicle tail = new Vehicle(tailData, siding, new JsonReader(tailVehicleJson), simulator);
-		tail.engageMmtrMotion(tailWalker);
+		if (tailConsistWalker != null) {
+			tail.engageMmtrConsistMotion(tailConsistWalker, MmtrCabState.Cab.NONE);
+			tailConsistWalker.removeKey();
+		} else {
+			tail.engageMmtrMotion(tailLegacyWalker);
+		}
 		siding.adoptVehicle(tail);
+
+		// C5b: the crew's key stays with the half that contains the cab.
+		if (consistWalker != null && consistWalker.cabs().isCrewKey()) {
+			final double cabArc = cabArcOf(consistWalker);
+			final boolean towardA = consistWalker.cabs().activeCab() == MmtrCabState.Cab.CAB_A;
+			final java.util.UUID crew = consistWalker.cabs().crewUuid();
+			// The cab arc is at or behind the seam: the driver's cab belongs to the tail half (a cab
+			// sitting exactly on the joint is the tail half's leading cab, which is the common case -
+			// the locomotive's cab is right at the end that coupled).
+			if (cabArc >= seamArc - 1e-6) {
+				tailConsistWalker.cabs().insertKeyAtArc(cabArc - seamArc, towardA, true, true, crew);
+				System.out.println("[MMTR-COUP] 解挂后钥匙留在后段（编组内 " + Math.round((cabArc - seamArc) * 10.0) / 10.0 + " m 处）");
+			} else {
+				headConsistWalker.cabs().insertKeyAtArc(cabArc, towardA, true, true, crew);
+			}
+		}
 
 		if (airUnits.length == cars.size()) {
 			head.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, 0, seamIndex + 1)));
@@ -323,15 +414,61 @@ public final class MmtrCoupleSurgery {
 		}
 
 		System.out.println("[MMTR-COUP] 解挂完成: " + vehicleId + " 在接缝 " + seamIndex + " 切分 -> 前段 " + head.getId()
-				+ "（" + headCars.size() + " 节）+ 后段 " + tail.getId() + "（" + tailCars.size() + " 节，头端 "
-				+ Math.round(cutOffset * 100.0) / 100.0 + " m）");
+				+ "（" + headCars.size() + " 节）+ 后段 " + tail.getId() + "（" + tailCars.size() + " 节）");
 		return Result.split(head, tail);
+	}
+
+	/**
+	 * C5b: place one half of a cut consist body. Its A end sits at {@code aEndArcM} in the ORIGINAL
+	 * body's spine; the new walker's own spine starts there, so the seam arcs are recomputed in its
+	 * space.
+	 */
+	private static @Nullable MmtrConsistWalker placeConsistHalf(Simulator simulator, MmtrConsistBody body, double aEndArcM, ObjectArrayList<VehicleCar> cars) {
+		final MmtrConsistBody.SpineLeg leg = body.legAtArcM(aEndArcM);
+		if (leg == null) {
+			return null;
+		}
+		final Rail rail = simulator.railIdMap.get(leg.railHex());
+		if (rail == null) {
+			return null;
+		}
+		final double aEndOffsetM = body.legOffsetM(aEndArcM);
+		final double[] carLengthsM = new double[cars.size()];
+		final boolean[] couplerAfter = new boolean[cars.size()];
+		for (int i = 0; i < carLengthsM.length; i++) {
+			carLengthsM[i] = cars.get(i).getTotalLength(i == 0, i == carLengthsM.length - 1);
+			couplerAfter[i] = cars.get(i).getMmtrCouplerAfter();
+		}
+		return MmtrConsistWalker.place(
+				simulator,
+				simulator.mmtrPointBranches,
+				rail,
+				leg.entryNode(),
+				aEndOffsetM,
+				carLengthsM,
+				null,
+				MmtrConsistBody.seamArcMsFrom(aEndOffsetM, carLengthsM, couplerAfter),
+				MmtrConsistBody.seamCarIndexesFrom(carLengthsM, couplerAfter)
+		);
 	}
 
 	private static JsonArray carsJson(ObjectArrayList<VehicleCar> cars) {
 		final JsonArray array = new JsonArray();
 		cars.forEach(car -> array.add(Utilities.getJsonObjectFromData(car)));
 		return array;
+	}
+
+	/**
+	 * C4/C5: patch the derived geometry of a VED rebuilt from JSON. {@code totalVehicleLength} and
+	 * {@code defaultPosition} are final schema fields copied verbatim from the source formation, so a
+	 * merged/split train would otherwise keep the old train's length (which the yard rule, the
+	 * occupancy spans and {@code getIsOnRoute()} all read).
+	 */
+	private static void patchGeometry(JsonObject json, ObjectArrayList<VehicleCar> cars) {
+		final double totalLengthM = Siding.getTotalVehicleLength(cars);
+		json.addProperty("totalVehicleLength", totalLengthM);
+		final double railLengthM = json.has("railLength") ? json.get("railLength").getAsDouble() : 0;
+		json.addProperty("defaultPosition", (railLengthM + totalLengthM) / 2);
 	}
 
 	/** Riding entities of one side of the cut, rebased onto that side's car list. */

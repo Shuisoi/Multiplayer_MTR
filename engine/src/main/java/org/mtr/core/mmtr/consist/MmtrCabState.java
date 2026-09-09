@@ -62,9 +62,28 @@ public final class MmtrCabState {
 	private Cab activeCab = Cab.NONE;
 	private KeyHolder keyHolder = KeyHolder.NONE;
 	private @Nullable UUID crewUuid;
+	/**
+	 * C5b: arc position of the manned cab from the consist's A end, in metres — {@link Double#NaN}
+	 * while unmanned. {@code CAB_A} is arc 0 and {@code CAB_B} is the far end, but a coupling leaves
+	 * the crew in a cab that is now INSIDE the formation (the locomotive that coupled onto a rake
+	 * becomes the rear unit), and the two-end model could not express that: the train had to be left
+	 * unmanned. The arc says where the key actually is; the direction of travel still comes from the
+	 * cab's facing ({@link #activeCab()}).
+	 */
+	private double cabArcM = Double.NaN;
 
 	public Cab activeCab() {
 		return activeCab;
+	}
+
+	/** C5b: arc position of the manned cab from the A end, or {@code NaN} when unmanned. */
+	public double cabArcM() {
+		return cabArcM;
+	}
+
+	/** C5b: whether the manned cab is inside the formation rather than at one of its two ends. */
+	public boolean isInteriorCab() {
+		return isManned() && cabArcM > 1e-6 && !Double.isNaN(cabArcM);
 	}
 
 	public KeyHolder keyHolder() {
@@ -115,8 +134,22 @@ public final class MmtrCabState {
 			return false;
 		}
 		activeCab = cab;
+		cabArcM = Double.NaN; // a named end cab; interior cabs use insertKeyAtArc
 		keyHolder = KeyHolder.CREW;
 		this.crewUuid = crewUuid;
+		return true;
+	}
+
+	/**
+	 * C5b: insert the key in an <em>interior</em> cab at {@code arcM} from the A end, with the driver
+	 * facing {@code towardA}. Used by the coupling surgery, which leaves the crew in the locomotive's
+	 * cab even though that cab is now inside the merged formation.
+	 */
+	public boolean insertKeyAtArc(double arcM, boolean towardA, boolean trainStopped, boolean driverAtCab, @Nullable UUID crewUuid) {
+		if (!insertKey(towardA ? Cab.CAB_A : Cab.CAB_B, trainStopped, driverAtCab, crewUuid)) {
+			return false;
+		}
+		cabArcM = arcM;
 		return true;
 	}
 
@@ -131,6 +164,7 @@ public final class MmtrCabState {
 			return false;
 		}
 		activeCab = cab;
+		cabArcM = Double.NaN;
 		keyHolder = KeyHolder.SYSTEM;
 		crewUuid = null;
 		return true;
@@ -166,6 +200,7 @@ public final class MmtrCabState {
 		activeCab = Cab.NONE;
 		keyHolder = KeyHolder.NONE;
 		this.crewUuid = null;
+		cabArcM = Double.NaN;
 		return true;
 	}
 
@@ -185,6 +220,8 @@ public final class MmtrCabState {
 			return false;
 		}
 		activeCab = activeCab == Cab.CAB_A ? Cab.CAB_B : Cab.CAB_A;
+		// Walking to the other cab leaves an interior cab behind: the crew ends up at a named end.
+		cabArcM = Double.NaN;
 		return true;
 	}
 
