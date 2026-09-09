@@ -1,6 +1,7 @@
 package org.mtr.core.mmtr.route;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -50,6 +51,13 @@ public final class MmtrRoute {
 	private final ObjectArrayList<String[]> forks = new ObjectArrayList<>();
 	private final String targetRailHex;
 	private final long requestedMillis;
+	/**
+	 * Turnouts the train has already CROSSED, by {@code x,y,z|viaHex} key. A crossed point no longer
+	 * belongs to the route that still has to be set: route locking releases sectionally, so the route
+	 * stays SET over the rails ahead after the train has passed its first fork (without this, a
+	 * multi-fork route would drop to PENDING the moment the train crossed its first point).
+	 */
+	private final ObjectOpenHashSet<String> crossedForkKeys = new ObjectOpenHashSet<>();
 	private boolean established;
 	private String stateReason = "not refreshed";
 
@@ -113,6 +121,28 @@ public final class MmtrRoute {
 	/** Whether the route runs over {@code railHex} (either direction). */
 	public boolean coversRail(@Nullable String railHex) {
 		return railHex != null && !railHex.isEmpty() && railHexes.contains(railHex);
+	}
+
+	/** Mark a turnout {@code x,y,z|viaHex} as crossed: it no longer has to be held for this route. */
+	public void markForkCrossed(String nodeViaKey) {
+		if (nodeViaKey != null && !nodeViaKey.isEmpty()) {
+			crossedForkKeys.add(nodeViaKey);
+		}
+	}
+
+	/** Whether this fork demand has already been crossed (route locking released it). */
+	public boolean isForkCrossed(String[] fork) {
+		return fork != null && fork.length >= 4 && crossedForkKeys.contains(fork[0] + "," + fork[1] + "," + fork[2] + "|" + fork[3]);
+	}
+
+	/** Whether every turnout of this route has been crossed (nothing left to hold). */
+	public boolean allForksCrossed() {
+		for (final String[] fork : forks) {
+			if (!isForkCrossed(fork)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**

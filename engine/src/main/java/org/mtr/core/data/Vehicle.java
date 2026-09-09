@@ -648,6 +648,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		mmtrPendingPointOps.removeIf(op -> crossed.contains(op[0] + "," + op[1] + "," + op[2] + "|" + op[3]));
+		// S5: route locking releases sectionally - a crossed turnout no longer has to be held for the
+		// route, so the route stays SET over the rails ahead of the train.
+		if (mmtrRoute != null) {
+			crossed.forEach(mmtrRoute::markForkCrossed);
+		}
 	}
 
 	/** P3: drop every turnout request this vehicle holds/queued (terminal missions, yard reset). */

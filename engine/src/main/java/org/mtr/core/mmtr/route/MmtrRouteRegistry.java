@@ -62,8 +62,17 @@ public final class MmtrRouteRegistry {
 			route.applyState(true, "no turnout in this route");
 			return;
 		}
+		if (route.allForksCrossed()) {
+			// Route locking releases sectionally: once the train has crossed every turnout, nothing is
+			// left to hold - the movement stays set over the rails ahead.
+			route.applyState(true, "all turnouts crossed");
+			return;
+		}
 		boolean allGranted = true;
 		for (final String[] fork : route.getForks()) {
+			if (route.isForkCrossed(fork)) {
+				continue; // already used up; its hold was released at the crossing
+			}
 			if (!authority.isGrantedTo(Long.parseLong(fork[0]), Long.parseLong(fork[1]), Long.parseLong(fork[2]), fork[3], route.getOwner())) {
 				allGranted = false;
 				break;

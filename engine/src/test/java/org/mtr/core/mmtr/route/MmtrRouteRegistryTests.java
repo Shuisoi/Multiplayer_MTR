@@ -231,6 +231,38 @@ public final class MmtrRouteRegistryTests {
 		assertTrue(registry.pendingEntryRails().isEmpty(), "no live PENDING route -> no forced-red entry");
 	}
 
+	/**
+	 * S5 route locking releases SECTIONALLY: a turnout the train has crossed no longer has to be held,
+	 * so the route stays SET over the rails ahead. Without this a multi-fork route would drop to
+	 * PENDING the instant the train crossed its first point (and the signal ahead would lose the
+	 * narrowing A2 gives it).
+	 */
+	@Test
+	public void aCrossedTurnoutNoLongerBlocksTheRoute() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrRouteRegistry registry = new MmtrRouteRegistry();
+		final MmtrPointAuthority authority = new MmtrPointAuthority(clock::get);
+		final MmtrRoute route = registry.request(route(1));
+		grantAll(authority, 1, 5000);
+		registry.refresh(1, authority);
+		assertTrue(route.isEstablished());
+
+		// The train crosses the first turnout and its hold is consumed - the route must stay SET.
+		authority.passed(0, 0, 0, VIA_A, "v1");
+		route.markForkCrossed("0,0,0|" + VIA_A);
+		registry.refresh(1, authority);
+		assertTrue(route.isEstablished(), "one crossed turnout does not drop the route while the next is held");
+		assertEquals(route, registry.routeOverRail(RAIL_MID), "the signal layer still reads it");
+
+		// The second turnout is consumed too: nothing is left to hold, the movement stays set.
+		authority.passed(60, 0, 0, VIA_B, "v1");
+		route.markForkCrossed("60,0,0|" + VIA_B);
+		registry.refresh(1, authority);
+		assertTrue(route.isEstablished(), "all turnouts crossed -> nothing left to hold");
+		assertEquals("all turnouts crossed", route.getStateReason());
+		assertTrue(registry.setMainRouteNextRails().containsKey(RAIL_ENTRY), "the locked path is still published");
+	}
+
 	@Test
 	public void routeExposesItsRailsForksAndTarget() {
 		final MmtrRoute route = route(3);
