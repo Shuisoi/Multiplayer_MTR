@@ -46,7 +46,7 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	public VehicleExtension(VehicleUpdate vehicleUpdate, Data data) {
 		super(vehicleUpdate.getVehicleExtraData(), null, new JsonReader(Utilities.getJsonObjectFromData(vehicleUpdate.getVehicle())), data);
 		serverSpeedKilometersPerHour = getSpeed() * 3600;
-		org.mtr.mod.Init.LOGGER.info("[MMTR-CL] mirror created id=" + getId() + " cars=" + vehicleExtraData.immutableVehicleCars.size() + " path=" + vehicleExtraData.immutablePath.size() + " progress=" + railProgress + " doors=" + vehicleExtraData.getDoorMultiplier());
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] mirror created id=" + getId() + " cars=" + vehicleExtraData.immutableVehicleCars.size() + " path=" + vehicleExtraData.immutablePath.size() + " progress=" + railProgress + " doors=" + vehicleExtraData.getDoorMultiplier());
 		final PersistentVehicleData tempPersistentVehicleData = MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.get(getId());
 		if (tempPersistentVehicleData == null || !tempPersistentVehicleData.matchesCarCount(vehicleExtraData.immutableVehicleCars.size())) {
 			// MMTR: coupling/uncoupling changes a vehicle id's car count, so the per-car cache must be

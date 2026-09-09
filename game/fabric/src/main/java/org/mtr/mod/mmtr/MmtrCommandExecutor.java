@@ -67,7 +67,32 @@ public final class MmtrCommandExecutor {
 			executeCoupleCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex>)");
+		// 诊断开关: trace [on|off|status] - 每 tick 的走行/同步日志（默认关）
+		if (parts[0].equals("trace")) {
+			executeTraceCommand(simulator, parts);
+			return;
+		}
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
+	}
+
+	/**
+	 * 实机诊断开关: {@code trace on|off|status}. The per-tick motion / client-sync traces are off by
+	 * default - a single coupled consist fills thousands of log lines a minute and buries the messages
+	 * that matter - so they are switched on only while someone is watching, without a server restart.
+	 */
+	private static void executeTraceCommand(Simulator simulator, String[] parts) {
+		final String action = parts.length >= 2 ? parts[1] : "status";
+		switch (action) {
+			case "on" -> org.mtr.core.mmtr.MmtrTrace.setEnabled(true);
+			case "off" -> org.mtr.core.mmtr.MmtrTrace.setEnabled(false);
+			case "status" -> {
+			}
+			default -> {
+				simulator.mmtrCommandResult("[trace] 用法: trace on | trace off | trace status");
+				return;
+			}
+		}
+		simulator.mmtrCommandResult("[trace] 每 tick 走行/同步日志 = " + (org.mtr.core.mmtr.MmtrTrace.isEnabled() ? "开" : "关"));
 	}
 
 	/**

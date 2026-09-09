@@ -1288,7 +1288,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 			} else {
 				lastMovementMillis = data.getCurrentMillis();
-				System.out.println("[MMTR-DRV] motion seg=" + mmtrMotionWalker.railHex() + " offset=" + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + " dist=" + Math.round(consumed * 1000.0) / 1000.0 + " speed=" + speed);
+				org.mtr.core.mmtr.MmtrTrace.log("[MMTR-DRV] motion seg=" + mmtrMotionWalker.railHex() + " offset=" + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + " dist=" + Math.round(consumed * 1000.0) / 1000.0 + " speed=" + speed);
 			}
 		} else if (speed == 0 && brakeTargetActive && brakeTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
 			if (stopTargetActive && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
@@ -2282,7 +2282,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				}
 				updateMmtrSyncFields();
 				if (speed != mmtrSpeed || mmtrDistanceTravelled > 0) {
-					System.out.println("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " speed=" + speed + "->" + mmtrSpeed + " dist=" + mmtrResult.distanceMeters + " prot=" + mmtrProtectionNow);
+					org.mtr.core.mmtr.MmtrTrace.log("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " speed=" + speed + "->" + mmtrSpeed + " dist=" + mmtrResult.distanceMeters + " prot=" + mmtrProtectionNow);
 				}
 			}
 			speed = mmtrSpeed;
@@ -2440,7 +2440,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(clientPosition, updateRadius) : Utilities.isBetween(clientPosition, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
 					client.update(this, needsUpdate, 0);
 					if (logPush) {
-						System.out.println("[MMTR-SYNC] push vehicle " + id + " dirty=" + needsUpdate + " client=" + client.uuid + " progress=" + Math.round(railProgress) + " legs=" + mmtrMotionLegs.size() + " radius=" + updateRadius + " pos=" + clientPosition.getX() + "," + clientPosition.getZ());
+						org.mtr.core.mmtr.MmtrTrace.log("[MMTR-SYNC] push vehicle " + id + " dirty=" + needsUpdate + " client=" + client.uuid + " progress=" + Math.round(railProgress) + " legs=" + mmtrMotionLegs.size() + " radius=" + updateRadius + " pos=" + clientPosition.getX() + "," + clientPosition.getZ());
 					}
 				}
 			});
