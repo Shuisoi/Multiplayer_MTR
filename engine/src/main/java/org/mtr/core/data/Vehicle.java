@@ -143,6 +143,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private double mmtrBlockStopM = Double.MAX_VALUE;
 	/**
+	 * ①: the current block stop comes from the "block ahead ends at an unset turnout" rule, not from
+	 * occupancy. While it is set, the approach-locking window is extended to the next fork ahead (see
+	 * {@link #replenishForkRequests}): a train held at the signal before a long block would otherwise
+	 * never come within the 120 m request window of the turnout it is waiting for.
+	 */
+	private boolean mmtrSectionAuthorityHold = false;
+
+	/** Short reason for the block-stop log line (the operator reads these in the server log). */
+	private String mmtrBlockStopReason() {
+		return mmtrSectionAuthorityHold ? "block ahead ends at an unset turnout" : "block ahead occupied";
+	}
+	/**
 	 * Signal S1: this vehicle is parked at its occupancy stop point (blocked by an occupied rail
 	 * ahead). Traction is suppressed while it stands; the flag clears automatically once the block
 	 * stop disappears (the rail ahead emptied), resuming auto runs / manual control.
@@ -623,12 +635,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final double forkAbsM = j < mmtrMotionPlan.forkMeters.size() ? mmtrMotionPlan.forkMeters.get(j) : Double.NaN;
 			final double remainingM = forkAbsM - distanceNow;
 			if (remainingM <= 0 || remainingM > MMTR_APPROACH_LOCK_METERS) {
-				continue; // already crossed (drained) or not yet in the approach window
-			}
-			if (pendingContainsFork(op)) {
+				// ①: while held at the signal before the block whose far end is an unset turnout, the
+				// request must still be out - the train may be a whole block (up to 187 m in the dev
+				// world) short of it, so the 120 m approach window would never open and the run would
+				// wait forever. Only the NEXT fork is requested this way (never the whole route).
+				if (!mmtrSectionAuthorityHold || remainingM <= 0 || pendingContainsFork(op)) {
+					continue;
+				}
+			} else if (pendingContainsFork(op)) {
 				continue;
 			}
 			mmtrPendingPointOps.add(op.clone());
+			if (mmtrSectionAuthorityHold) {
+				return; // just the next fork ahead
+			}
 		}
 	}
 
@@ -1350,7 +1370,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				speed = 0;
 				if (!mmtrBlockedWaiting) {
 					mmtrBlockedWaiting = true;
-					System.out.println("[MMTR-SIG] motion stopped at occupancy block " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (rail ahead occupied, waiting)");
+					System.out.println("[MMTR-SIG] motion stopped at block stop " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (" + mmtrBlockStopReason() + ", waiting)");
 				}
 			} else if (consumed < integratedDistance - 1e-9) {
 				speed = 0;
@@ -1371,10 +1391,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (stopTargetActive && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
 				mmtrMotionArriveAtStopTarget();
 			} else if (!mmtrBlockedWaiting) {
-				// Already resting exactly at the occupancy stop (e.g. the advance was clamped to zero
+				// Already resting exactly at the block stop (e.g. the advance was clamped to zero
 				// because the block point was reached inside this tick): enter the waiting state.
 				mmtrBlockedWaiting = true;
-				System.out.println("[MMTR-SIG] motion resting at occupancy block " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (rail ahead occupied, waiting)");
+				System.out.println("[MMTR-SIG] motion resting at block stop " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (" + mmtrBlockStopReason() + ", waiting)");
 			}
 		}
 
@@ -3098,7 +3118,85 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (sectionStopM != null) {
 			stop = Math.min(stop, sectionStopM);
 		}
+		// (3) ① 区间式信号与道岔配合: the block ahead ends at a turnout the movement cannot be cleared
+		// through (no operator branch, no grant, no target match). Real interlocking holds the train at
+		// the signal BEFORE that block; without this the train runs the whole block and parks at the
+		// points, occupying the block and hiding why the signal is red. The stop is the same boundary
+		// as (2) - the signal at the end of the section the train is standing in.
+		mmtrSectionAuthorityHold = false;
+		final Double authorityStopM = nextSectionAuthorityStopM();
+		if (authorityStopM != null) {
+			mmtrSectionAuthorityHold = true;
+			stop = Math.min(stop, authorityStopM);
+		}
 		return stop;
+	}
+
+	/**
+	 * ①: the walker-space stop point that holds the train at the boundary of the section it is about to
+	 * enter when THAT section ends at a turnout the movement cannot be cleared through, or null when the
+	 * block ahead is clear of that condition.
+	 *
+	 * <p>Only a section that reaches its rail's far node carries the junction: a block that ends at an
+	 * intermediate signal has its own head further on, and the train may enter it and stop at that
+	 * signal instead. A train already inside the block that ends at the unset turnout keeps the old
+	 * behaviour (it draws up to the points and waits there) - the signal it passed is behind it.</p>
+	 */
+	private @Nullable Double nextSectionAuthorityStopM() {
+		if (mmtrMotionWalker == null || mmtrMotionLegs.isEmpty() || !(data instanceof final Simulator simulator)) {
+			return null;
+		}
+		final int index = indexInMmtrMotionLegs(railProgress);
+		final PathData segment = mmtrMotionLegs.get(index);
+		final Rail rail = segment.getRail();
+		if (rail == null) {
+			return null;
+		}
+		final double railLength = rail.railMath.getLength();
+		if (railLength <= 0) {
+			return null;
+		}
+		final double legLength = segment.getEndDistance() - segment.getStartDistance();
+		final double headOffsetInLeg = Math.max(0, Math.min(legLength, railProgress - segment.getStartDistance()));
+		final double headArc = segment.reversePositions ? legLength - headOffsetInLeg : headOffsetInLeg;
+		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
+		if (current == null) {
+			return null;
+		}
+		final boolean towardHigherArc = !segment.reversePositions;
+		final boolean boundaryAtRailEnd = towardHigherArc ? current.arcToM >= railLength - 1e-9 : current.arcFromM <= 1e-9;
+		final Rail entryRail;
+		final double entryArc;
+		if (boundaryAtRailEnd) {
+			entryRail = mmtrMotionWalker.peekNextRail();
+			if (entryRail == null) {
+				return null;
+			}
+			entryArc = MmtrBlockService.arcOfNode(entryRail, mmtrMotionWalker.aheadNode());
+			if (Double.isNaN(entryArc)) {
+				return null;
+			}
+		} else {
+			entryRail = rail;
+			entryArc = towardHigherArc ? current.arcToM : current.arcFromM;
+		}
+		final MmtrBlockService.Block entrySection = simulator.mmtrBlocks.blockAt(entryRail.getHexId(), entryArc);
+		if (entrySection == null) {
+			return null;
+		}
+		// 调车授权 (permissive working) over the block being entered keeps the pre-① behaviour: the
+		// authorised movement may draw up to the points.
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = getMmtrShuntAuthority();
+		if (authority != null && authority.covers(entryRail.getHexId())) {
+			return null;
+		}
+		final double entryRailLength = entryRail.railMath.getLength();
+		final boolean entrySectionEndsAtRailEnd = towardHigherArc ? entrySection.arcToM >= entryRailLength - 1e-9 : entrySection.arcFromM <= 1e-9;
+		if (!entrySectionEndsAtRailEnd || !mmtrMotionWalker.wouldHaltAtForkOn(entryRail)) {
+			return null;
+		}
+		final double toBoundary = towardHigherArc ? current.arcToM - headArc : headArc - current.arcFromM;
+		return mmtrMotionWalker.distanceM() + Math.max(0, toBoundary - MMTR_BLOCK_NODE_EPS_M);
 	}
 
 	/**

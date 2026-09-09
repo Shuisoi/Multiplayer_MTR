@@ -52,6 +52,15 @@ public interface MmtrMotionPosition {
 	/** Side-effect-free look-ahead at the next rail, or {@code null} when the train would halt/end. */
 	@Nullable Rail peekNextRail();
 
+	/**
+	 * ① 区间式信号与道岔配合: whether the movement would be held at a turnout at the far end of
+	 * {@code rail} if it boarded that rail now — i.e. the far node has a continuation but no operator
+	 * branch / grant / target match elects one. The section stop uses it to hold the train at the signal
+	 * BEFORE the block whose far end is an unset turnout, instead of letting it run to the points and
+	 * wait there (which would occupy the block). Side-effect-free; {@code null} is "no such rail".
+	 */
+	boolean wouldHaltAtForkOn(@Nullable Rail rail);
+
 	/** Whether the leading end has boarded the task target rail. */
 	boolean atTarget();
 

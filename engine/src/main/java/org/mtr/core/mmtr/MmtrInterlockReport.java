@@ -36,7 +36,8 @@ public final class MmtrInterlockReport {
 		out.append("[interlock] vehicle=").append(vehicleId)
 			.append(" rail=").append(shortHex(railHex))
 			.append(" next=").append(shortHex(walker == null || walker.peekNextRail() == null ? null : walker.peekNextRail().getHexId()))
-			.append(" route=").append(route == null ? "none" : route.getKind() + "/" + (route.isEstablished() ? "SET" : "PENDING"));
+			.append(" route=").append(route == null ? "none" : route.getKind() + "/" + (route.isEstablished() ? "SET" : "PENDING"))
+			.append(" blockHeld=").append(vehicle.isMmtrBlockHeldFromSync());
 		if (route == null) {
 			out.append(" (无进路：自由驾驶，信号按占用链显示)");
 			return out.toString();

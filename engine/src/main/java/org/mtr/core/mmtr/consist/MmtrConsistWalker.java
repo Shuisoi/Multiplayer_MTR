@@ -224,8 +224,44 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		return next == null ? null : data.railIdMap.get(next.railHex());
 	}
 
-	private int legIndex(SpineLeg leg) {
-		for (int i = 0; i < body.legCount(); i++) {
+	/**
+	 * ①: see {@link MmtrMotionPosition#wouldHaltAtForkOn(Rail)}. Direction-aware: the entry node is the
+	 * one the leading end came from and the far node the one it is heading for, so the answer matches
+	 * what {@link #extendSpine} would do at that node.
+	 */
+	@Override
+	public boolean wouldHaltAtForkOn(@Nullable Rail target) {
+		if (target == null || !cabs.isManned()) {
+			return false;
+		}
+		final boolean towardB = towardB();
+		final SpineLeg lead = leadingLeg();
+		final boolean onCurrentRail = target.getHexId().equals(lead.railHex());
+		final Position entry = onCurrentRail
+			? (towardB ? lead.entryNode() : lead.exitNode())
+			: (towardB ? lead.exitNode() : lead.entryNode());
+		final Position far = otherEnd(entry, target);
+		if (far == null || !MmtrForkElection.hasContinuation(data, far, target)) {
+			return false;
+		}
+		return MmtrForkElection.elect(data, branches, pointAuthority, pointOwner.isEmpty() ? null : pointOwner, targetRailHex, far, entry, target) == null;
+	}
+
+	/** The endpoint of {@code rail} other than {@code at}, or null when {@code at} is not an endpoint. */
+	private @Nullable Position otherEnd(Position at, Rail rail) {
+		final Object2ObjectOpenHashMap<Position, Rail> neighbours = data.positionsToRail.get(at);
+		if (neighbours == null) {
+			return null;
+		}
+		for (final Object2ObjectOpenHashMap.Entry<Position, Rail> entry : neighbours.object2ObjectEntrySet()) {
+			if (entry.getValue() == rail || entry.getValue().getHexId().equals(rail.getHexId())) {
+				return entry.getKey();
+			}
+		}
+		return null;
+	}
+
+	private int legIndex(SpineLeg leg) {		for (int i = 0; i < body.legCount(); i++) {
 			if (body.leg(i) == leg) {
 				return i;
 			}

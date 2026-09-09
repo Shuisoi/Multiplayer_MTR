@@ -21,6 +21,7 @@ import java.nio.file.Paths;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -140,13 +141,17 @@ public final class MmtrVehicleMotionRunTests {
 		assertTrue(onStraight, "same vehicle must continue onto the straight real rail after the flip, got " + maxAfterStraight);
 		assertTrue(v.getHeadPositionAndTiltAngle() != null && v.getHeadPositionAndTiltAngle().position().x() > 0, "head geometry follows the real rail after the flip");
 
-		// It keeps going through the pass node and halts at fork 1 (unset, rIn+rStraight+rBeyondA
-		// ~60 m) - a SECOND live halt, then the same vehicle is elected onto the diverging rail.
+		// ① 区间式信号与道岔配合: the train no longer runs INTO the block that ends at the second fork -
+		// it is held at the signal BEFORE that block (the end of rStraight, 40 m cumulative), so the
+		// block containing the turnout stays clear while it waits for the decision.
 		final double secondMax = driveTicks(v, 600, vp);
-		assertTrue(secondMax < 61.5, "must halt at the second unset fork, got " + secondMax);
-		assertTrue(v.getMmtrMotionWalker().haltedAtAuthority(), "walker awaits authority at the second fork");
-		assertEquals(n.rBeyondA.getHexId(), v.getMmtrMotionWalker().railHex(), "approaching the second fork on the continuation rail");
+		assertEquals(40.0 - 0.001, secondMax, 0.05, "held at the boundary before the block ending at the second fork");
+		assertEquals(n.rStraight.getHexId(), v.getMmtrMotionWalker().railHex(), "the block containing the turnout stays clear");
+		assertFalse(v.getMmtrMotionWalker().haltedAtAuthority(), "the walker is not at the points - the section stop holds the train");
+		assertTrue(v.isMmtrBlockHeldFromSync(), "the mirrored hold flag carries the wait to the HUD");
+		assertEquals(0, v.getSpeed(), 1e-9, "at rest while the block ahead is not cleared");
 
+		// Flipping the second fork's branch clears the block: the same held train proceeds through it.
 		store.set(n.node1.getX(), n.node1.getY(), n.node1.getZ(), n.rBeyondA.getHexId(), 1);
 		double maxAfterSecondFlip = secondMax;
 		boolean onDiverge2 = false;

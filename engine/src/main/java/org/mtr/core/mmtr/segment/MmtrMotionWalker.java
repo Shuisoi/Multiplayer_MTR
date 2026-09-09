@@ -273,6 +273,24 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 		return remaining < deltaM;
 	}
 
+	/**
+	 * ①: see {@link MmtrMotionPosition#wouldHaltAtForkOn(Rail)}. The election inputs are the walker's
+	 * own (branch store, authority grant, target), so the answer cannot drift from {@link #advance}.
+	 */
+	@Override
+	public boolean wouldHaltAtForkOn(@Nullable Rail target) {
+		if (target == null || rail == null || ahead == null || enteredFrom == null) {
+			return false;
+		}
+		final boolean onCurrentRail = target == rail || target.getHexId().equals(rail.getHexId());
+		final Position entry = onCurrentRail ? enteredFrom : ahead;
+		final Position far = otherEnd(entry, target);
+		if (far == null || !org.mtr.core.mmtr.point.MmtrForkElection.hasContinuation(data, far, target)) {
+			return false;
+		}
+		return org.mtr.core.mmtr.point.MmtrForkElection.elect(data, branches, pointAuthority, pointAuthorityOwner, targetRailHex, far, entry, target) == null;
+	}
+
 	private @Nullable Rail electAtFork(ObjectArrayList<Rail> forwardRails, ObjectArrayList<Position> forwardEnds) {
 		// P1/P3: the ordered-leg election (operator > auto grant > task target > single continuation)
 		// now lives in MmtrForkElection so the consist-body walker (B3) shares one implementation.
