@@ -995,7 +995,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// chain so a fresh SPAD suppresses traction this very tick.
 		tickMmtrAwsWarning(millisElapsed);
 
-		vehicleExtraData.closeDoors();
+		// MMTR: only a moving train closes its doors (MTR's safety rule). Closing them every tick also
+		// reverted a crew door command on the next tick, so a standing train could never be opened -
+		// neither from the platform interact key nor from the cabin door key.
+		if (speed != 0) {
+			vehicleExtraData.closeDoors();
+		}
 		final double previousSpeed = speed;
 		final double remainingToBrake = brakeTargetM < Double.MAX_VALUE / 2 ? brakeTargetM - mmtrMotionWalker.distanceM() : Double.MAX_VALUE;
 		final boolean brakeTargetActive = brakeTargetM < Double.MAX_VALUE / 2;

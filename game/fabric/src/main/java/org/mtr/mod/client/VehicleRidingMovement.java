@@ -91,11 +91,16 @@ public class VehicleRidingMovement {
 			ridingPositionCacheOld = ridingPositionCache;
 		}
 
-		final boolean isHoldingDriverKeyNew = driverKey != null;
+		final ClientPlayerEntity permissionPlayer = minecraftClient.getPlayerMapped();
+		// MMTR: a crew member seated in a cab is the driver even without holding a key item. The engine
+		// occupation lock (MmtrDriveAccess.canControl) only honours control from a rider it sees as
+		// isDriver, and that flag is exactly what this client reports to the server - so taking a cab
+		// with the interact key must set it, otherwise the throttle only worked while holding the key.
+		final boolean mmtrCabDriver = mmtrCabLocked && ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId);
+		final boolean isHoldingDriverKeyNew = driverKey != null || mmtrCabDriver;
 		// MMTR: the driver key still grants control, but the permission seam can grant it as well, so
 		// boarding a cab no longer requires holding the creative/depot key.
-		final ClientPlayerEntity permissionPlayer = minecraftClient.getPlayerMapped();
-		final boolean canDrive = isHoldingDriverKeyNew && driverKey.canDrive || ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId);
+		final boolean canDrive = driverKey != null && driverKey.canDrive || ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId);
 		final boolean canOpenDoors = isHoldingDriverKeyNew && driverKey.canOpenDoors || ridingVehicleId != 0 && MmtrCabPermissions.canOpenDoors(permissionPlayer, ridingVehicleId);
 		pressingAccelerateTicks = canDrive && KeyBindings.TRAIN_ACCELERATE.isPressed() ? pressingAccelerateTicks + 1 : 0;
 		pressingBrakeTicks = canDrive && KeyBindings.TRAIN_BRAKE.isPressed() ? pressingBrakeTicks + 1 : 0;
