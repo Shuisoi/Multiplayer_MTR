@@ -111,7 +111,7 @@ notes/77 红线的崩溃就是这么来的），再启动 dev 服务端。
 
 | # | 场景 | 期望证据 |
 |---|------|---------|
-| 1 | 给一列车派任务（`mmtr-vehicle-task` / 作业单），观察 WEB `mmtr-trains` | 该车出现 `route{state:"SET",kind:"MAIN",entryRail,targetRail,rails[]}`；`routes[]` 顶层也有它 |
+| 1 | 给一列车派任务（`mmtr-vehicle-task` / 作业单），观察 WEB `mmtr-trains` | 该车出现 `route{state:"SET",kind:"MAIN",entryRail,targetRail,rails[]}`；`routes[]` 顶层也有它；**同时**在网页指令栏发 `interlock <该车id>` 得到引擎侧对照（进路/道岔持有/每条轨显示/客户端收窄） |
 | 2 | 该车经过分岔 | 分岔处信号灯按**进路放行**（不再因另一支被占而保守显黄/红）；`[MMTR-DRV] motion seg=` 沿进路推进 |
 | 3 | 人为 `mmtr-point-lock` 该进路的一个道岔（或让另一列车先持有） | 该车进路变 `state:"PENDING"`，`stateReason` 点名道岔与 `lock=true`/`holder=v…`；**车不越过该道岔**，信号显红 |
 | 4 | 解锁 / 对方释放 | 进路自动回到 `SET`，车继续（分段释放：越过第一个道岔后进路仍为 `SET`） |

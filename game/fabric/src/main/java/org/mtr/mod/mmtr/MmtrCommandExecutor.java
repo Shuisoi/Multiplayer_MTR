@@ -53,6 +53,11 @@ public final class MmtrCommandExecutor {
 		}
 		// B7.6 crew commands: changeends <vehicleId> | cab <vehicleId> <A|B|out> | doors <vehicleId> [open|close|toggle]
 		final String[] parts = command.trim().split("\\s+");
+		// A2/A3/S5 interlocking report: what the engine thinks this train's route and signals are.
+		if (parts.length >= 1 && parts[0].equals("interlock")) {
+			executeInterlock(simulator, parts);
+			return;
+		}
 		if (parts.length >= 2 && (parts[0].equals("changeends") || parts[0].equals("cab") || parts[0].equals("doors"))) {
 			executeCabCommand(simulator, parts);
 			return;
@@ -72,7 +77,27 @@ public final class MmtrCommandExecutor {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
+	}
+
+	/**
+	 * A2/A3/S5 联锁诊断: {@code interlock <vehicleId>} prints the engine's view of one train's movement -
+	 * route kind/state (SET/PENDING) and its reason, every turnout it still needs with the authority
+	 * state (holder/lock/queue), the aspect the signal layer would show for every rail of the route,
+	 * and the narrowing that was mirrored to clients. {@code interlock all} summarises every live
+	 * route. Output goes to the OP command log (网页指令栏可见), which is what makes the in-game
+	 * verification pass a comparison instead of a guess.
+	 */
+	private static void executeInterlock(Simulator simulator, String[] parts) {
+		if (parts.length < 2 || parts[1].equals("all")) {
+			simulator.mmtrCommandResult(org.mtr.core.mmtr.MmtrInterlockReport.describeAll(simulator));
+			return;
+		}
+		try {
+			simulator.mmtrCommandResult(org.mtr.core.mmtr.MmtrInterlockReport.describe(simulator, Long.parseLong(parts[1])));
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[interlock] 用法: interlock <vehicleId> | interlock all");
+		}
 	}
 
 	/**
