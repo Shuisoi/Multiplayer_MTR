@@ -60,7 +60,8 @@
   - **57 = 驾驶室命名 `<车厢序号><端>`**（双端机车同节车两套 HUD/seat 锚点按 `(car, cab)` 查；HUD/提示/指令统一 3A/3B，内部驾驶室可进入，419/0/2）；
   - **58 = 打包 P1 客车 / SAF101 双端机车 / cargotest 货车**（`MMTR_NewStock_v1.zip`；导出命名三处修正 + 打包器 `floor`/`extraDoorways`）；
   - **59 = 新车底进世界**（滚动清单换代 + 6 台测试车/作业单清场；发现 OBJ 车底的 FLOOR/DOORWAY 部件被 MTR 忽略）；
-  - **60 = 驾驶室仪表：镜像修正 + 双 HUD 面 + 画面按车型**（`flipU` 不再依赖 `side`；`findHuds` 让双端机车两端都出图；新增 `MmtrHudLayout` 按车型画面板）。
+  - **60 = 驾驶室仪表：镜像修正 + 双 HUD 面 + 画面按车型**（`flipU` 不再依赖 `side`；`findHuds` 让双端机车两端都出图；新增 `MmtrHudLayout` 按车型画面板）；
+  - **61 = 实机缺陷：端2 没法开车**（方向相关的停车标志 `endOfLine`/`atTarget` 没随驾驶室切换清掉；`syncDirectionFlags()` + 死端换驾驶室回归用例，420/0/2）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 仓库范围外（历史早期资料，未入库）
