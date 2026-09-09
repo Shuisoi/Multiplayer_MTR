@@ -5,6 +5,7 @@ import org.mtr.mod.Init;
 import org.mtr.mod.mmtr.MmtrChunkTracker;
 import org.mtr.mod.mmtr.MmtrCommandExecutor;
 import org.mtr.mod.mmtr.MmtrPlayerSessions;
+import org.mtr.mod.mmtr.MmtrRouteMirror;
 
 public final class MTR implements ModInitializer {
 
@@ -14,5 +15,6 @@ public final class MTR implements ModInitializer {
 		MmtrChunkTracker.register();
 		MmtrCommandExecutor.register();
 		MmtrPlayerSessions.register();
+		MmtrRouteMirror.register();
 	}
 }

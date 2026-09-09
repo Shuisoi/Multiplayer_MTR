@@ -18,6 +18,7 @@ import org.mtr.mod.block.BlockSignalBase;
 import org.mtr.mod.block.IBlock;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.MmtrClientRoutes;
 import org.mtr.mod.data.IGui;
 
 import javax.annotation.Nullable;
@@ -202,11 +203,17 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 	 * MMTR: how far along the travel direction the nearest occupied rail sits, counted from the
 	 * protected rail(s) found at {@code nodePos}: 1 = protected occupied, 2 = one rail beyond,
 	 * 3 = two rails beyond, 0 = clear. Blocked = locally simulated occupancy OR the authoritative
-	 * server per-rail signal-color holds. Continuations keep the travel direction (dot > 0, no
-	 * turn-backs); at a fork every branch is considered (conservative worst case - a precise
-	 * route-locked aspect needs the S5 interlocking).
+	 * server per-rail signal-color holds. Continuations keep the travel direction (dot &gt; 0, no
+	 * turn-backs); at a fork every branch is considered unless a SET main route locks one path
+	 * (A2: the engine's route mirror narrows the walk to the route's own next rail), and a rail that
+	 * is the entry of a still-PENDING route shows danger (the movement waits outside its signal).
 	 */
 	private static int mmtrChainDepth(MinecraftClientData data, Position nodePos, ObjectArrayList<String> protectedHexes) {
+		for (final String hex : protectedHexes) {
+			if (MmtrClientRoutes.isPendingEntry(hex)) {
+				return 1;
+			}
+		}
 		final java.util.function.Predicate<String> blocked = hex -> data.blockedRailIds.contains(hex)
 			|| !data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).isEmpty();
 		final ObjectArrayList<ObjectObjectImmutablePair<String, Position>> level = new ObjectArrayList<>();
@@ -226,6 +233,12 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 				}
 				final Object2ObjectOpenHashMap<Position, org.mtr.core.data.Rail> neighbours = data.positionsToRail.get(far);
 				if (neighbours == null) {
+					continue;
+				}
+				// A2: a SET main route locks one path through this rail - follow only that rail.
+				final String lockedNext = MmtrClientRoutes.nextRail(entry.left());
+				if (lockedNext != null && neighbours.values().stream().anyMatch(rail -> rail.getHexId().equals(lockedNext))) {
+					nextLevel.add(new ObjectObjectImmutablePair<>(lockedNext, far));
 					continue;
 				}
 				neighbours.forEach((otherEnd, rail) -> {

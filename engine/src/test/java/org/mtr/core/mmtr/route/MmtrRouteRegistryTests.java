@@ -199,6 +199,38 @@ public final class MmtrRouteRegistryTests {
 			"a different kind is a different movement and replaces the route");
 	}
 
+	/**
+	 * A2 client mirror: the two derived views the in-game renderer needs — the locked path
+	 * (rail -&gt; next rail) and the rails whose route is still PENDING.
+	 */
+	@Test
+	public void clientMirrorCarriesTheLockedPathAndThePendingEntries() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrRouteRegistry registry = new MmtrRouteRegistry();
+		final MmtrPointAuthority authority = new MmtrPointAuthority(clock::get);
+		final MmtrRoute set = registry.request(route(1));
+		final MmtrRoute pending = registry.request(route(2));
+		grantAll(authority, 1, 5000);
+		registry.refresh(1, authority);
+		registry.refresh(2, authority);
+
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> nextRails = registry.setMainRouteNextRails();
+		assertEquals(RAIL_MID, nextRails.get(RAIL_ENTRY), "the SET route's locked path is mirrored");
+		assertEquals(RAIL_TARGET, nextRails.get(RAIL_MID));
+		assertFalse(nextRails.containsKey(RAIL_TARGET), "the last rail has no next rail");
+		assertEquals(1, registry.pendingEntryRails().size(), "only the PENDING route's entry is listed");
+		assertTrue(registry.pendingEntryRails().contains(RAIL_ENTRY), "the waiting movement's entry rail shows danger");
+
+		// A shunt route never narrows the main display, even when set.
+		registry.release(1);
+		registry.request(new MmtrRoute(1, "v1", MmtrRoute.Kind.SHUNT, rails(), new ObjectArrayList<>(), RAIL_TARGET, 3000));
+		registry.refresh(1, authority);
+		assertTrue(registry.setMainRouteNextRails().isEmpty(), "a SET shunt mirrors nothing");
+
+		registry.release(2);
+		assertTrue(registry.pendingEntryRails().isEmpty(), "no live PENDING route -> no forced-red entry");
+	}
+
 	@Test
 	public void routeExposesItsRailsForksAndTarget() {
 		final MmtrRoute route = route(3);

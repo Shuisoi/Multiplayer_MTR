@@ -1,6 +1,8 @@
 package org.mtr.core.mmtr.route;
 
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.mmtr.point.MmtrPointAuthority;
@@ -99,6 +101,39 @@ public final class MmtrRouteRegistry {
 	/** Every live route, ordered by vehicle id (ops feed). */
 	public ObjectArrayList<MmtrRoute> snapshot() {
 		return new ObjectArrayList<>(sorted());
+	}
+
+	/**
+	 * A2 client mirror: rail hex -&gt; the next rail of the SET MAIN route running over it. This map IS
+	 * the fork-narrowing rule in one object, so the in-game renderer can follow the locked path
+	 * instead of walking every branch (and instead of re-implementing the route logic).
+	 */
+	public Object2ObjectOpenHashMap<String, String> setMainRouteNextRails() {
+		final Object2ObjectOpenHashMap<String, String> out = new Object2ObjectOpenHashMap<>();
+		for (final MmtrRoute route : sorted()) {
+			if (!route.isEstablished() || route.getKind() != MmtrRoute.Kind.MAIN) {
+				continue;
+			}
+			final ObjectArrayList<String> rails = route.getRailHexes();
+			for (int i = 0; i + 1 < rails.size(); i++) {
+				out.putIfAbsent(rails.get(i), rails.get(i + 1));
+			}
+		}
+		return out;
+	}
+
+	/** A2 client mirror: rails that are the entry of a PENDING route — their signal shows danger. */
+	public ObjectOpenHashSet<String> pendingEntryRails() {
+		final ObjectOpenHashSet<String> out = new ObjectOpenHashSet<>();
+		for (final MmtrRoute route : sorted()) {
+			if (!route.isEstablished()) {
+				final String entry = route.getEntryRailHex();
+				if (entry != null && !entry.isEmpty()) {
+					out.add(entry);
+				}
+			}
+		}
+		return out;
 	}
 
 	public int size() {
