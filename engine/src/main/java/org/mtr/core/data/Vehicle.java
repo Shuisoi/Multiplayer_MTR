@@ -109,6 +109,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private long mmtrMissionTargetArrivedMillis;
 	/**
+	 * C10: whether this mission already changed ends once because the route could not be planned in the
+	 * direction the train happened to face. Guards against flipping back and forth on an impossible
+	 * target - a second failure is reported to the mission owner.
+	 */
+	private boolean mmtrMissionFlippedForTarget;
+	/**
 	 * MMTR (L3, server): live Motion-Core run mode. When non-null this vehicle's RUNNING motion is
 	 * decided per tick by the walker — (segment, offset), fork branches elected live from the current
 	 * BranchStore/task at each node — instead of a pre-baked whole-journey path. {@link #railProgress}
@@ -344,6 +350,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return false;
 		}
 		mmtrMission = mission;
+		mmtrMissionFlippedForTarget = false;
 		return true;
 	}
 
@@ -478,6 +485,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), 1.0);
+		if (!plan.feasible && speed <= 1e-9 && !mmtrMissionFlippedForTarget && mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker && consistWalker.changeEnds(true)) {
+			// C10 换端重规划: the plan could not be made in the direction the train happens to face - the
+			// classic case is a stub siding whose only way out is behind the train. A real crew changes
+			// ends (a double-cab unit) and tries again, so do that ONCE per mission and let the self-arm
+			// below run again next tick with the new orientation. The flag stops an A/B/A flip loop: a
+			// second failure is reported.
+			mmtrMissionFlippedForTarget = true;
+			mmtrMotionLegCount = mmtrMotionWalker.legCount();
+			refreshMmtrMotionLegs();
+			System.out.println("[MMTR-MSG] motion mission could not be planned facing this way (" + plan.reason + ") - changed ends on " + mmtrMotionWalker.railHex() + " and retrying");
+			return;
+		}
 		if (!plan.feasible) {
 			mission.fail(plan.reason);
 			return;
