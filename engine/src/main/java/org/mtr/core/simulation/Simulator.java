@@ -145,6 +145,9 @@ public class Simulator extends Data implements Utilities {
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
+	/** C3a 调车授权 (subsidiary-aspect authority): one train at a time may pass a signal at danger into
+	 * an occupied section to couple; the registry is the data plane the vehicle/yard read. */
+	public final org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry mmtrShuntAuthorities = new org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry(this::getCurrentMillis);
 	/** 硬默认 0 (option 3): real servers preset every turnout to operator branch 0. Engines tests keep
 	 * this false so authority/mission semantics stay synthetic; {@link org.mtr.core.Main} enables it. */
 	public boolean mmtrDefaultPointsZero;

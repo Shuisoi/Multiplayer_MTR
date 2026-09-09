@@ -61,6 +61,18 @@
 			"type": "string",
 			"default": ""
 		},
+		"mmtrShuntAuthority": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrShuntSpeedLimitKmh": {
+			"type": "number",
+			"default": 0
+		},
+		"mmtrShuntRemainingS": {
+			"type": "number",
+			"default": 0
+		},
 		"mmtrThrottleNotch": {
 			"type": "integer",
 			"default": 0

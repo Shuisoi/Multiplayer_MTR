@@ -289,12 +289,18 @@ public final class MmtrCabHudRenderer {
 	private static void drawLampsAndDoors(GraphicsHolder graphicsHolder, GuiDrawing gui, int x, int y, VehicleExtraData extraData) {
 		final int xEnd = drawLampChip(gui, graphicsHolder, x, y, "保护", vehicle.isMmtrProtectionFromSync() ? NEON_RED : 0xFF22303C, vehicle.isMmtrProtectionFromSync() ? "SPAD" : "");
 		final boolean doorsOpen = extraData.getDoorMultiplier() > 0;
-		final int xDoors = drawChip(gui, graphicsHolder, xEnd + GAP, y, doorsOpen ? "DO" : "DC", doorsOpen ? NEON_GREEN : TEXT_DIM);
+		int xNext = drawChip(gui, graphicsHolder, xEnd + GAP, y, doorsOpen ? "DO" : "DC", doorsOpen ? NEON_GREEN : TEXT_DIM);
 		// B7.6h: which side is open (Y = left, U = right). Only shown once the crew works the doors
 		// by hand; automatic door opening still reports the plain DO/DC aggregate.
 		if (extraData.isMmtrDoorManual()) {
-			final int xLeft = drawChip(gui, graphicsHolder, xDoors + GAP, y, "L", extraData.getMmtrDoorLeft() ? NEON_GREEN : TEXT_DIM);
-			drawChip(gui, graphicsHolder, xLeft + GAP, y, "R", extraData.getMmtrDoorRight() ? NEON_GREEN : TEXT_DIM);
+			xNext = drawChip(gui, graphicsHolder, xNext + GAP, y, "L", extraData.getMmtrDoorLeft() ? NEON_GREEN : TEXT_DIM);
+			xNext = drawChip(gui, graphicsHolder, xNext + GAP, y, "R", extraData.getMmtrDoorRight() ? NEON_GREEN : TEXT_DIM);
+		}
+		// C3a 调车授权: the main head stays red, the subsidiary display authorises the movement. Amber,
+		// because it is a caution aspect, and it carries the movement's speed limit.
+		final String shunt = vehicle.getMmtrShuntAuthorityFromSync();
+		if (!shunt.isEmpty()) {
+			drawChip(gui, graphicsHolder, xNext + GAP, y, "副显示 " + Math.round(vehicle.getMmtrShuntSpeedLimitKmhFromSync()), NEON_AMBER);
 		}
 	}
 

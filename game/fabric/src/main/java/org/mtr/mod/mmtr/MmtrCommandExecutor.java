@@ -57,7 +57,69 @@ public final class MmtrCommandExecutor {
 			executeCabCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both])");
+		// C3a 调车授权: shunt <vehicleId> <targetRailHex|off> [minutes] [kmh] [SUBSIDIARY_SHUNT|CALLING_ON]
+		if (parts.length >= 2 && parts[0].equals("shunt")) {
+			executeShuntCommand(simulator, parts);
+			return;
+		}
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE])");
+	}
+
+	/**
+	 * C3a 调车授权 (subsidiary-aspect authority): {@code shunt <id> <targetRailHex> [minutes] [kmh]}
+	 * grants one train the authority to pass a signal at danger into the occupied section (the rail
+	 * it is about to couple to), {@code shunt <id> off} withdraws it. The grant rail is the rail the
+	 * train stands on right now, so the authority covers exactly this movement.
+	 */
+	private static void executeShuntCommand(Simulator simulator, String[] parts) {
+		final long vehicleId;
+		try {
+			vehicleId = Long.parseLong(parts[1]);
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[shunt] vehicleId 必须是数字: " + parts[1]);
+			return;
+		}
+		final org.mtr.core.data.Vehicle vehicle = simulator.mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			simulator.mmtrCommandResult("[shunt] 找不到车辆 " + vehicleId);
+			return;
+		}
+		if (parts.length < 3) {
+			simulator.mmtrCommandResult("[shunt] 用法: shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBSIDIARY_SHUNT|CALLING_ON]");
+			return;
+		}
+		if (parts[2].equalsIgnoreCase("off") || parts[2].equalsIgnoreCase("revoke")) {
+			final boolean ok = simulator.mmtrShuntAuthorities.revoke(vehicleId);
+			simulator.mmtrCommandResult("[shunt] " + vehicleId + (ok ? " 已撤销调车授权" : " 无授权可撤销"));
+			return;
+		}
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		final String grantRailHex = walker == null ? "" : walker.railHex();
+		final long minutes = parts.length >= 4 ? parseLong(parts[3], 5) : 5;
+		final double speedLimitKmh = parts.length >= 5 ? parseDouble(parts[4], 0) : 0;
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority.Kind kind = parts.length >= 6 && parts[5].equalsIgnoreCase("CALLING_ON")
+				? org.mtr.core.mmtr.signal.MmtrShuntAuthority.Kind.CALLING_ON
+				: org.mtr.core.mmtr.signal.MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT;
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = simulator.mmtrShuntAuthorities.grant(
+				vehicleId, grantRailHex, parts[2], kind, speedLimitKmh, Math.max(1, minutes) * 60_000L);
+		simulator.mmtrCommandResult("[shunt] " + vehicleId + " 已授 " + authority.getKind() + ": " + grantRailHex + " -> " + authority.getTargetRailHex()
+				+ " 限速 " + Math.round(authority.getSpeedLimitKmh()) + " km/h，有效期 " + minutes + " 分钟（主显示仍红，副显示授权）");
+	}
+
+	private static long parseLong(String value, long fallback) {
+		try {
+			return Long.parseLong(value);
+		} catch (NumberFormatException e) {
+			return fallback;
+		}
+	}
+
+	private static double parseDouble(String value, double fallback) {
+		try {
+			return Double.parseDouble(value);
+		} catch (NumberFormatException e) {
+			return fallback;
+		}
 	}
 
 	/**

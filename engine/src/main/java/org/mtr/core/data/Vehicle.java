@@ -27,6 +27,7 @@ import org.mtr.core.mmtr.consist.MmtrCabState;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
+import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.simulation.Simulator;
@@ -1164,6 +1165,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 
+		// C3a: a 调车授权 movement runs at the shunt speed limit - enforced like the LZB ceiling
+		// (traction may not hold the train above it; the excess decays at service deceleration).
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority shuntAuthority = getMmtrShuntAuthority();
+		if (shuntAuthority != null) {
+			final double shuntCap = kmhToInternal(shuntAuthority.getSpeedLimitKmh());
+			if (speed > shuntCap) {
+				speed = Math.max(shuntCap, speed - mmtrMotionServiceDecelPerMs() * millisElapsed);
+				integratedDistance = speed * millisElapsed;
+			}
+		}
+
 		if (integratedDistance > 0) {
 			final double before = mmtrMotionWalker.distanceM();
 			mmtrMotionWalker.advance(integratedDistance);
@@ -1339,6 +1351,17 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	@Nullable
 	public MmtrConsistWalker getMmtrConsistWalker() {
 		return mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker ? consistWalker : null;
+	}
+
+	/**
+	 * C3a: the live 调车授权 (subsidiary-aspect authority) of this train, or {@code null}. Only the
+	 * server owns authorities; client mirrors always report {@code null}.
+	 */
+	public MmtrShuntAuthority getMmtrShuntAuthority() {
+		if (isClientside || !(data instanceof final Simulator simulator)) {
+			return null;
+		}
+		return simulator.mmtrShuntAuthorities.active(id);
 	}
 
 	/**
@@ -1751,6 +1774,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrActiveCab = getMmtrActiveCab().name();
 		mmtrCabKeyHolder = getMmtrCabKeyHolder().name();
 		mmtrCabCrew = cabWalker == null || cabWalker.cabs().crewUuid() == null ? "" : cabWalker.cabs().crewUuid().toString();
+		// C3a: the subsidiary-aspect authority the driver's display shows (main head stays red).
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority shunt = getMmtrShuntAuthority();
+		final String shuntKind = shunt == null ? "" : shunt.getKind().name();
+		if (!shuntKind.equals(mmtrShuntAuthority)) {
+			vehicleExtraData.mmtrMarkSyncDirty(); // a granted/expired authority must reach the client HUD
+		}
+		mmtrShuntAuthority = shuntKind;
+		mmtrShuntSpeedLimitKmh = shunt == null ? 0 : shunt.getSpeedLimitKmh();
+		mmtrShuntRemainingS = shunt == null ? 0 : Math.round(shunt.remainingMillis(data.getCurrentMillis()) / 1000.0);
 		if (mmtrActiveControl != null) {
 			mmtrThrottleNotch = mmtrActiveControl.getThrottleNotch();
 			mmtrBrakeNotch = mmtrActiveControl.getBrakeNotch();
@@ -1801,6 +1833,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrProtection) {
 			return true;
 		}
+		// C3a: under a 调车授权 the protection layer must not judge a SPAD/overrun - the movement is
+		// authorised to close up to the train standing in the occupied section, so "past the stopping
+		// point" is exactly what the signal permitted. (An emergency already engaged before the grant
+		// keeps its own lock countdown; only NEW judgements are suspended.)
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = getMmtrShuntAuthority();
+		if (authority != null && !authority.enforcesProtection()) {
+			return false;
+		}
 		// Same emergency envelope as the legacy path (Siding.MAX_ACCELERATION * 2, m/ms^2).
 		if (MmtrProtection.requiresProtection(speed, stoppingPoint - railProgress, Siding.MAX_ACCELERATION * 2)) {
 			mmtrProtection = true;
@@ -1842,6 +1882,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public String getMmtrCabKeyHolderFromSync() { return mmtrCabKeyHolder == null ? "" : mmtrCabKeyHolder; }
 	/** 钥匙归属: the crew member whose key is in the cab (empty for a system key), from the snapshot. */
 	public String getMmtrCabCrewFromSync() { return mmtrCabCrew == null ? "" : mmtrCabCrew; }
+	/** C3a: the subsidiary-aspect authority from the last snapshot ("" / "SUBSIDIARY_SHUNT" / "CALLING_ON"). */
+	public String getMmtrShuntAuthorityFromSync() { return mmtrShuntAuthority == null ? "" : mmtrShuntAuthority; }
+	/** C3a: the authorised movement's speed limit in km/h (mirrored); 0 = no authority. */
+	public double getMmtrShuntSpeedLimitKmhFromSync() { return mmtrShuntSpeedLimitKmh; }
+	/** C3a: seconds left on the authority (mirrored); 0 = no authority. */
+	public double getMmtrShuntRemainingSFromSync() { return mmtrShuntRemainingS; }
 
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
 		// Tracks the distance
@@ -2448,6 +2494,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * holds without re-timing - no punishment for an already-safe stand.
 	 */
 	private void tickMmtrAwsWarning(long millisElapsed) {
+		// C3a: under a 调车授权 (subsidiary aspect) AWS is suppressed - the signal has just authorised
+		// this movement into the occupied section, so a warning horn would be wrong. This is the real
+		// AWS rule, not an omission.
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = getMmtrShuntAuthority();
+		if (authority != null && authority.suppressesAws()) {
+			if (mmtrAwsState != MMTR_AWS_NONE) {
+				mmtrAwsState = MMTR_AWS_NONE;
+				mmtrAwsWarnElapsedMillis = 0;
+				mmtrAwsAckQueued = false;
+				System.out.println("[MMTR-AWS] warning suppressed by 调车授权 " + authority.getKind());
+			}
+			return;
+		}
 		if (mmtrMotionWalker == null || mmtrAwsState == MMTR_AWS_NONE && !mmtrManualOverride) {
 			return;
 		}
@@ -2522,11 +2581,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker == null || vehiclePositions == null || mmtrMotionLegs.isEmpty()) {
 			return Double.MAX_VALUE;
 		}
+		// C3a 调车授权: under a subsidiary aspect the authorised movement may enter the occupied
+		// section (permissive working) - the rails it covers are exempt from both block rules. The
+		// movement is capped to the shunt speed limit instead, i.e. "prepared to stop at sight".
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = getMmtrShuntAuthority();
 		double stop = Double.MAX_VALUE;
 		// (1) external occupancy face on the current rail, from the head up to the end of the rail
 		final int index = indexInMmtrMotionLegs(railProgress);
 		final PathData segment = mmtrMotionLegs.get(index);
-		if (railProgress < segment.getEndDistance() - 1e-9) {
+		final boolean currentRailAuthorized = authority != null && authority.covers(segment.getRail() == null ? null : segment.getRail().getHexId());
+		if (!currentRailAuthorized && railProgress < segment.getEndDistance() - 1e-9) {
 			final DoubleDoubleImmutablePair bounds = getBlockedBounds(segment, railProgress, segment.getEndDistance());
 			for (int i = 0; i < vehiclePositions.size(); i++) {
 				final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), segment.getOrderedPosition1(), segment.getOrderedPosition2());
@@ -2540,7 +2604,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		// (2) next rail occupied = the block is closed: stop epsilon short of this rail's end node
 		final Rail nextRail = mmtrMotionWalker.peekNextRail();
-		if (nextRail != null && hasExternalOccupancy(nextRail, vehiclePositions)) {
+		final boolean nextRailAuthorized = authority != null && nextRail != null && authority.covers(nextRail.getHexId());
+		if (nextRail != null && !nextRailAuthorized && hasExternalOccupancy(nextRail, vehiclePositions)) {
 			final double toNode = mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
 			stop = Math.min(stop, mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M));
 		}

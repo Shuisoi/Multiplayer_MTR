@@ -296,7 +296,7 @@ public final class Siding extends SidingSchema implements Utilities {
 				// auto-re-cycles it by a timetable departure index.
 			} else {
 				trainsAtDepot++;
-				final boolean allowDoublePark = mmtrFormationWindow && trainsAtDepot <= 2;
+				final boolean allowDoublePark = mmtrCoexistenceAuthorized() && trainsAtDepot <= 2;
 				if (trainsAtDepot > 1 && !allowDoublePark) {
 					trainsToRemove.add(vehicle);
 				}
@@ -574,12 +574,17 @@ public final class Siding extends SidingSchema implements Utilities {
 	}
 
 	/**
-	 * MMTR yard reset: remove every parked (not-on-route) vehicle from this siding. Used before a
-	 * daily respawn / when re-authoring web jobs so leftover stock never blocks a fresh spawn or a
-	 * make-up (the engine keeps at most one parked vehicle per siding).
+	 * C3a 调车授权: whether this siding may hold a second train right now. The old
+	 * {@code mmtrFormationWindow} flag (declared here, read at the parked-count check, never assigned
+	 * anywhere) modelled "a data limit to switch off", which is the wrong model - a section may hold
+	 * two trains only while a subsidiary-aspect authority covers it (permissive working, GKRT0044).
 	 */
-	/** MMTR arrival make-up window: while true the siding tolerates up to two parked vehicles for one merge tick. */
-	public boolean mmtrFormationWindow;
+	public boolean mmtrCoexistenceAuthorized() {
+		if (!(data instanceof final Simulator simulator) || defaultPathData == null || defaultPathData.getRail() == null) {
+			return false;
+		}
+		return simulator.mmtrShuntAuthorities.allowsCoexistence(defaultPathData.getRail().getHexId());
+	}
 	/**
 	 * MMTR rolling-stock manifest: when true, vehicles generated on this siding are spawned
 	 * manual-allowed so a human (or, later, an AI peer) can drive them directly regardless of the
@@ -590,6 +595,11 @@ public final class Siding extends SidingSchema implements Utilities {
 	 * "keep one parked from template" respawn does not keep re-seeding a new train every departure. */
 	public boolean mmtrSessionSpawned;
 
+	/**
+	 * MMTR yard reset: remove every parked (not-on-route) vehicle from this siding. Used before a
+	 * daily respawn / when re-authoring web jobs so leftover stock never blocks a fresh spawn or a
+	 * make-up (the engine keeps at most one parked vehicle per siding unless a 调车授权 is live).
+	 */
 	public void clearParkedVehicles() {
 		final ObjectArraySet<Vehicle> toRemove = new ObjectArraySet<>();
 		vehicleIdMap.values().forEach(vehicle -> {

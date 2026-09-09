@@ -403,6 +403,15 @@ public final class SystemMapServlet extends ServletBase {
 						train.addProperty("headZ", Math.round(head.position().z() * 100.0) / 100.0);
 					}
 				}
+				// C3a: the subsidiary-aspect authority a train holds (main head stays red) - the ops
+				// console shows which movement is authorised to enter an occupied section.
+				final org.mtr.core.mmtr.signal.MmtrShuntAuthority shuntAuthority = vehicle.getMmtrShuntAuthority();
+				if (shuntAuthority != null) {
+					train.addProperty("shuntAuthority", shuntAuthority.getKind().name());
+					train.addProperty("shuntTargetRail", shuntAuthority.getTargetRailHex());
+					train.addProperty("shuntSpeedLimitKmh", shuntAuthority.getSpeedLimitKmh());
+					train.addProperty("shuntRemainingS", Math.round(shuntAuthority.remainingMillis(simulator.getCurrentMillis()) / 1000.0));
+				}
 				final MmtrMission mission = vehicle.getMmtrMission();
 				if (mission != null) {
 					final com.google.gson.JsonObject missionJson = new com.google.gson.JsonObject();
