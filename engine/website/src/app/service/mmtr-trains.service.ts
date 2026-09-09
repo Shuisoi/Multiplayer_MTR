@@ -13,6 +13,28 @@ export interface MmtrMissionState {
 	failureReason?: string;
 }
 
+/**
+ * S5 进路 (route): the movement a train's mission has set. "SET" = the interlocking holds every
+ * turnout it still needs, so the signals along it may clear; "PENDING" = it is waiting (the
+ * stateReason names the point and who holds it). Kind SHUNT is authorised by a subsidiary aspect,
+ * so it never clears a main head.
+ */
+export interface MmtrRouteState {
+	kind: string;
+	state: string;
+	entryRail: string;
+	targetRail: string;
+	railCount: number;
+	forkCount: number;
+	stateReason?: string;
+}
+
+/** A2 client mirror: exactly the narrowing the engine pushed to the game clients. */
+export interface MmtrRouteMirror {
+	nextRails: Record<string, string[]>;
+	pendingEntries: string[];
+}
+
 export interface MmtrTrainState {
 	vehicleId: string;
 	sidingId: string;
@@ -34,6 +56,8 @@ export interface MmtrTrainState {
 	headX?: number;
 	headZ?: number;
 	mission?: MmtrMissionState;
+	/** S5: the live route of this train, omitted when it has none. */
+	route?: MmtrRouteState;
 }
 
 export interface MmtrSignalState { id: string; }
@@ -64,6 +88,7 @@ export class MmtrTrainsService {
 	public readonly trains = signal<MmtrTrainState[]>([]);
 	public readonly sidings = signal<MmtrSidingState[]>([]);
 	public readonly signals = signal<MmtrRailAspect[]>([]);
+	public readonly routeMirror = signal<MmtrRouteMirror>({nextRails: {}, pendingEntries: []});
 	public readonly loading = signal(true);
 	public readonly lastUpdated = signal(0);
 	public readonly dispatchFeedback = signal("");
@@ -84,11 +109,12 @@ export class MmtrTrainsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{ data: { currentTime: number, trains: MmtrTrainState[], sidings: MmtrSidingState[], signals?: MmtrRailAspect[], points?: MmtrSignalState[] } }>(this.getUrl()).subscribe({
+		this.httpClient.get<{ data: { currentTime: number, trains: MmtrTrainState[], sidings: MmtrSidingState[], signals?: MmtrRailAspect[], routeMirror?: MmtrRouteMirror, points?: MmtrSignalState[] } }>(this.getUrl()).subscribe({
 			next: response => {
 				this.trains.set(response.data.trains ?? []);
 				this.sidings.set(response.data.sidings ?? []);
 				this.signals.set(response.data.signals ?? []);
+				this.routeMirror.set(response.data.routeMirror ?? {nextRails: {}, pendingEntries: []});
 				this.lastUpdated.set(Date.now());
 				this.loading.set(false);
 				this.schedule();

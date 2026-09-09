@@ -6,6 +6,7 @@
 			<div class="mmtr-feedback">{{ dispatchFeedback() }}</div>
 		}
 		<div class="mmtr-section-title">列车任务 / Trains & Missions</div>
+		<div class="mmtr-muted mmtr-mirror">{{ mirrorSummary() }}</div>
 		@if (loading()) {
 			<p-progressSpinner styleClass="w-3rem h-3rem"/>
 		} @else if (trains().length === 0) {
@@ -15,7 +16,7 @@
 				<div class="mmtr-row">
 					<div class="mmtr-row-main">
 						<div class="mmtr-name">{{ train.sidingName }}<span class="mmtr-muted"> · {{ train.routeNumber || "无线路" }}</span></div>
-						<div class="mmtr-sub">{{ missionLabel(train) }}</div>
+						<div class="mmtr-sub">{{ missionLabel(train) }}<span class="mmtr-muted"> · {{ routeDetail(train) }}</span></div>
 					</div>
 					<div class="mmtr-actions">
 						@if (canDispatch(train)) {
@@ -24,6 +25,9 @@
 					</div>
 					<div class="mmtr-badges">
 						<span class="mmtr-badge" [class.on-route]="train.onRoute" [class.parked]="!train.onRoute">{{ statusLabel(train) }}</span>
+						@if (train.route) {
+							<span class="mmtr-badge" [class.on-route]="train.route!.state === 'SET'" [class.failed]="train.route!.state !== 'SET'">{{ routeLabel(train) }}</span>
+						}
 						@if (train.cabManned) {
 							<span class="mmtr-badge">{{ cabLabel(train) }}</span>
 						}

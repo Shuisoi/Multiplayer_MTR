@@ -35,6 +35,7 @@ export class MmtrOpsPanelComponent {
 	protected readonly sidings = this.mmtrTrainsService.sidings;
 	protected readonly loading = this.mmtrTrainsService.loading;
 	protected readonly dispatchFeedback = this.mmtrTrainsService.dispatchFeedback;
+	protected readonly routeMirror = this.mmtrTrainsService.routeMirror;
 
 	protected readonly jobs = this.mmtrJobsService.jobs;
 	protected readonly jobStates = this.mmtrJobsService.states;
@@ -141,6 +142,43 @@ export class MmtrOpsPanelComponent {
 	/** B7.7: which cab the crew is in — the leading end follows the manned cab. */
 	protected cabLabel(train: MmtrTrainState): string {
 		return train.activeCab === "CAB_A" ? "驾驶室 1（A 端）" : train.activeCab === "CAB_B" ? "驾驶室 2（B 端）" : "无人";
+	}
+
+	// ---- S5 进路 / interlocking (A2/A4) ----
+
+	/** Short rail hex for the console (the feed uses 6-part hexes). */
+	protected shortHex(hex?: string): string {
+		return !hex ? "-" : hex.length > 8 ? `…${hex.slice(-8)}` : hex;
+	}
+
+	/** "进路 列车·已设 6轨" / "进路 调车·待设 6轨" - the movement this train has set. */
+	protected routeLabel(train: MmtrTrainState): string {
+		const route = train.route;
+		if (!route) {
+			return "无进路";
+		}
+		const kind = route.kind === "SHUNT" ? "调车" : "列车";
+		return `进路 ${kind}·${route.state === "SET" ? "已设" : "待设"} ${route.railCount}轨`;
+	}
+
+	/** Why a route is not set (names the blocking point and its holder), or the target when it is. */
+	protected routeDetail(train: MmtrTrainState): string {
+		const route = train.route;
+		if (!route) {
+			return "无进路（信号按占用链显示）";
+		}
+		return route.state === "SET" ? `目标 ${this.shortHex(route.targetRail)}` : route.stateReason ?? "等待联锁";
+	}
+
+	/** One line describing what the engine pushed to the game clients (A2 mirror). */
+	protected mirrorSummary(): string {
+		const mirror = this.routeMirror();
+		const locked = Object.keys(mirror.nextRails ?? {}).length;
+		const pending = (mirror.pendingEntries ?? []).length;
+		if (locked === 0 && pending === 0) {
+			return "无进路：信号按占用链显示";
+		}
+		return `${locked} 条轨被进路锁定 · ${pending} 处进路未设（起点信号红）`;
 	}
 
 	/** Dispatch a parked manual train to the terminal of its current path (MANEUVER). */
