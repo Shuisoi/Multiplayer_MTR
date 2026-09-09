@@ -110,6 +110,8 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			VehicleRidingMovement.tick();
 			// B7.6c: the "press F to enter/leave the cab" interaction.
 			org.mtr.mod.client.MmtrCabInteraction.tick();
+			// C7: the "aim at a train and press K to couple/uncouple" interaction.
+			org.mtr.mod.client.MmtrCoupleInteraction.tick();
 			ArrivalsCacheClient.INSTANCE.tick();
 		}
 

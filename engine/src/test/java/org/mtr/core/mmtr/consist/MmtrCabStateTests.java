@@ -101,17 +101,31 @@ public final class MmtrCabStateTests {
 	}
 
 	@Test
-	public void theEngineNeverTakesACabFromACrew() {
-		final MmtrCabState state = new MmtrCabState();
+	public void theEngineNeverTakesACabFromACrew() {		final MmtrCabState state = new MmtrCabState();
 		assertTrue(state.insertKey(Cab.CAB_A, true, true, DRIVER_A));
 		assertFalse(state.insertSystemKey(Cab.CAB_B, true), "a running crew always wins over the engine");
 		assertEquals(Cab.CAB_A, state.activeCab());
 		assertFalse(state.insertSystemKey(Cab.CAB_A, false), "and the system key still needs a standing train");
 	}
 
+	/**
+	 * 用户口径（2026-09-09）："端 1 开着的时候跑到端 2 再开，端 1 自动关就行" —— 单钥匙的前提下，
+	 * **同一乘务员**移动钥匙是允许的（旧端随之关闭），别人仍然抢不走。
+	 */
 	@Test
-	public void oneConsistOneCrewKey() {
+	public void theSameCrewMovesTheKeyToTheOtherCab() {
 		final MmtrCabState state = new MmtrCabState();
+		assertTrue(state.insertKey(Cab.CAB_A, true, true, DRIVER_A));
+		assertTrue(state.insertKey(Cab.CAB_B, true, true, DRIVER_A), "同一乘务员换到另一端");
+		assertEquals(Cab.CAB_B, state.activeCab(), "旧端随之关闭");
+		assertEquals(KeyHolder.CREW, state.keyHolder());
+		assertEquals(DRIVER_A, state.crewUuid());
+		assertFalse(state.insertKey(Cab.CAB_A, true, true, DRIVER_B), "换了端也仍然只有一个钥匙，别人抢不走");
+		assertEquals(Cab.CAB_B, state.activeCab());
+	}
+
+	@Test
+	public void oneConsistOneCrewKey() {		final MmtrCabState state = new MmtrCabState();
 		assertTrue(state.insertKey(Cab.CAB_A, true, true, DRIVER_A));
 		assertFalse(state.insertKey(Cab.CAB_B, true, true, DRIVER_B), "another crew member cannot take the consist");
 		assertFalse(state.insertKey(Cab.CAB_B, true, true), "and an anonymous insert cannot either");

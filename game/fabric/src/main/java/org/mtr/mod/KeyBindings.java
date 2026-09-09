@@ -19,6 +19,8 @@ public final class KeyBindings {
 		// B7.6c: press F to enter/leave the cab (classic "enter vehicle" key).
 		// G (not F): F is vanilla's "swap item with offhand", which the crew hits constantly in the cab.
 		MMTR_CAB_INTERACT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.cab_interact", GLFW.GLFW_KEY_G, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		// C7: aim at a train and press K to couple onto it / cut a coupler in front of the aimed car.
+		MMTR_COUPLE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.couple", GLFW.GLFW_KEY_K, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		// B7.6h: per-side door keys in the cab (rail practice: open only the platform side).
 		MMTR_DOOR_LEFT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_left", GLFW.GLFW_KEY_Y, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		MMTR_DOOR_RIGHT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_right", GLFW.GLFW_KEY_U, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
@@ -41,6 +43,8 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_BRAKE_APPLY;
 	public static final KeyBinding MMTR_BRAKE_RELEASE;
 	public static final KeyBinding MMTR_CAB_INTERACT;
+	/** C7: the coupling interaction key. */
+	public static final KeyBinding MMTR_COUPLE;
 	public static final KeyBinding MMTR_DOOR_LEFT;
 	public static final KeyBinding MMTR_DOOR_RIGHT;
 	public static final KeyBinding DEBUG_1_NEGATIVE;

@@ -93,6 +93,7 @@ public final class Init implements Utilities {
 		REGISTRY.registerPacket(PacketDriveTrain.class, PacketDriveTrain::new);
 		REGISTRY.registerPacket(PacketDriveControl.class, PacketDriveControl::new);
 		REGISTRY.registerPacket(PacketMmtrCabOp.class, PacketMmtrCabOp::new);
+		REGISTRY.registerPacket(PacketMmtrCoupleOp.class, PacketMmtrCoupleOp::new);
 		REGISTRY.registerPacket(PacketFetchArrivals.class, PacketFetchArrivals::new);
 		REGISTRY.registerPacket(PacketForwardClientRequest.class, PacketForwardClientRequest::new);
 		REGISTRY.registerPacket(PacketUpdateKeyDispenserConfig.class, PacketUpdateKeyDispenserConfig::new);
