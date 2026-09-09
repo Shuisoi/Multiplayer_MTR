@@ -845,13 +845,16 @@ public final class MmtrJobScheduler {
 			return false;
 		}
 		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
-		if (walker == null) {
+		// A freshly merged consist body has no rail yet for a tick (the surgery re-places the spine), so
+		// the walker's rail hex can be null right after a coupling - never dereference it blind.
+		final String railHex = walker == null ? null : walker.railHex();
+		if (railHex == null) {
 			return false;
 		}
 		final Vehicle[] target = {null};
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(other -> {
 			if (target[0] == null && other.getId() != vehicle.getId() && other.getSpeed() <= 1e-9 && other.getMmtrMotionWalker() != null
-				&& walker.railHex().equals(other.getMmtrMotionWalker().railHex())) {
+				&& railHex.equals(other.getMmtrMotionWalker().railHex())) {
 				target[0] = other;
 			}
 		}));
@@ -873,13 +876,14 @@ public final class MmtrJobScheduler {
 		}
 		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
 		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
-		if (walker == null || targetRail == null || !targetRail.getHexId().equals(walker.railHex())) {
+		final String railHex = walker == null ? null : walker.railHex();
+		if (railHex == null || targetRail == null || !targetRail.getHexId().equals(railHex)) {
 			return false;
 		}
 		final boolean[] other = {false};
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(otherVehicle -> {
 			if (otherVehicle.getId() != vehicle.getId() && otherVehicle.getMmtrMotionWalker() != null
-				&& walker.railHex().equals(otherVehicle.getMmtrMotionWalker().railHex())) {
+				&& railHex.equals(otherVehicle.getMmtrMotionWalker().railHex())) {
 				other[0] = true;
 			}
 		}));
@@ -896,13 +900,14 @@ public final class MmtrJobScheduler {
 			}
 		}
 		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
-		if (walker == null) {
+		final String railHex = walker == null ? null : walker.railHex();
+		if (railHex == null) {
 			return null;
 		}
 		final Vehicle[] found = {null};
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(other -> {
 			if (found[0] == null && other.getId() != vehicle.getId() && other.getMmtrMotionWalker() != null
-				&& walker.railHex().equals(other.getMmtrMotionWalker().railHex())) {
+				&& railHex.equals(other.getMmtrMotionWalker().railHex())) {
 				found[0] = other;
 			}
 		}));

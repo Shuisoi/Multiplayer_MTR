@@ -96,6 +96,20 @@ public final class MmtrRunPlanner {
 	}
 
 	/**
+	 * Metres from the leading face to the node it is heading toward. A consist body's {@code offsetM()}
+	 * is measured along the spine (A → B), so a train running A-end-first ({@code travelsTowardB() ==
+	 * false}) has {@code offsetM()} metres LEFT, not travelled - using {@code length - offset} put the
+	 * planned stop (and the 牵出—推进 reversal point) 2×offset too far down the line, which is why the
+	 * real locomotive drove straight past its reversal point (实机 2026-09-09, aassdd).
+	 */
+	private static double remainingToAheadNodeM(MmtrMotionPosition walker) {
+		if (walker instanceof final MmtrConsistWalker consistWalker && !consistWalker.travelsTowardB()) {
+			return Math.max(0, consistWalker.offsetM());
+		}
+		return Math.max(0, walker.currentRailLengthM() - walker.offsetM());
+	}
+
+	/**
 	 * Plans the run of {@code vehicle} to a stop on {@code targetRailHex}: {@code stopFraction} of the
 	 * target rail's length from its entry end (1.0 = its far end). Infeasible when the vehicle is not
 	 * in motion mode, the target rail is missing/unreachable, a needed turnout branch is not the
@@ -306,7 +320,7 @@ public final class MmtrRunPlanner {
 
 		// Distances: the remainder of the current rail, then every traversed rail (the last one only
 		// up to the stop fraction). The reversal stops SETBACK_EPS_M short of its node.
-		final double toStartNodeM = Math.max(0, currentRail.railMath.getLength() - walker.offsetM());
+		final double toStartNodeM = remainingToAheadNodeM(walker);
 		final double clamp = Math.max(0.0, Math.min(1.0, stopFraction));
 		double travelledM = toStartNodeM;
 		double flipAtM = -1;
@@ -439,7 +453,7 @@ public final class MmtrRunPlanner {
 
 		// Cumulative metres from the vehicle's current position to the stop: remainder of the current
 		// rail + every planned rail up to the target entry + fraction of the target rail.
-		double fromCurrentToStartNode = currentRail.railMath.getLength() - walker.offsetM();
+		double fromCurrentToStartNode = remainingToAheadNodeM(walker);
 		if (fromCurrentToStartNode < 0) {
 			fromCurrentToStartNode = 0;
 		}
@@ -534,7 +548,7 @@ public final class MmtrRunPlanner {
 			return plan;
 		}
 		final double nowM = walker.distanceM();
-		final double remM = Math.max(0, currentRail.railMath.getLength() - walker.offsetM());
+		final double remM = remainingToAheadNodeM(walker);
 
 		// Resolve the flip corridor: where the train is heading, only the near-straight continuation
 		// (legs) is drivable. A single continuation that ends in a true dead end is the flip rail.

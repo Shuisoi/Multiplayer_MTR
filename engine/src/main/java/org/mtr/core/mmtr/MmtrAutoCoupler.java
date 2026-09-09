@@ -88,6 +88,10 @@ public final class MmtrAutoCoupler {
 			return null;
 		}
 		final String initiatorRail = initiatorWalker.railHex();
+		if (initiatorRail == null) {
+			// A freshly merged consist body has no rail for a tick while its spine is re-placed.
+			return null;
+		}
 		final Vehicle[] best = {null};
 		final double[] bestGap = {Double.MAX_VALUE};
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
