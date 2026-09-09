@@ -61,6 +61,18 @@
 			"type": "string",
 			"default": ""
 		},
+		"mmtrCabCarIndex": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrCabEnd": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrCabArcM": {
+			"type": "number",
+			"default": 0
+		},
 		"mmtrShuntAuthority": {
 			"type": "string",
 			"default": ""

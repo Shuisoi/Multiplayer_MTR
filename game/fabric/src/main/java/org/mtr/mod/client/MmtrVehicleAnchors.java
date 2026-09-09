@@ -178,18 +178,40 @@ public final class MmtrVehicleAnchors {
 	 */
 	@Nullable
 	public static Anchor findHud(ObjectArrayList<Anchor> anchors, int modelCar) {
-		Anchor fallback = null;
+		return findHud(anchors, modelCar, 1);
+	}
+
+	/**
+	 * C6: the dashboard anchor of cab {@code cab} in {@code modelCar}.
+	 *
+	 * <p>A double-ended locomotive has TWO cabs in ONE car, named {@code mmtr_hud_1} and
+	 * {@code mmtr_hud_2} (see the packager convention {@code <kind>[_<cab>][_<index>]}), so the lookup
+	 * has to be by (car, cab) — looking only by car would always find the first dashboard and put the
+	 * second cab's seat and panel in the first cab.</p>
+	 *
+	 * @param cab 1 = A-end cab, 2 = B-end cab; {@code <= 0} means "unspecified" (single-cab model)
+	 */
+	@Nullable
+	public static Anchor findHud(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+		final int wantedCab = cab <= 0 ? 1 : cab;
+		Anchor carOnly = null;
+		Anchor cabOnly = null;
 		for (final Anchor anchor : anchors) {
-			if (anchor.kind == Kind.HUD) {
-				if (anchor.car == modelCar) {
-					return anchor;
-				}
-				if (fallback == null) {
-					fallback = anchor;
-				}
+			if (anchor.kind != Kind.HUD) {
+				continue;
+			}
+			final int anchorCab = anchor.cab <= 0 ? 1 : anchor.cab;
+			if (anchor.car == modelCar && anchorCab == wantedCab) {
+				return anchor;
+			}
+			if (anchor.car == modelCar && carOnly == null) {
+				carOnly = anchor;
+			}
+			if (anchorCab == wantedCab && cabOnly == null) {
+				cabOnly = anchor;
 			}
 		}
-		return fallback;
+		return carOnly != null ? carOnly : cabOnly;
 	}
 
 	/**
@@ -210,10 +232,12 @@ public final class MmtrVehicleAnchors {
 		if (effectiveDoor == null) {
 			return null;
 		}
+		// The effective cab number: a mirrored single-cab model uses its cab 1 anchors for cab 2.
+		final int effectiveCab = mirrored ? 1 : cab;
 
 		final double zSign = mirrored ? -1 : 1;
-		final Anchor hud = findHud(anchors, effectiveDoor.car);
-		final Anchor seat = findSeat(anchors, cab);
+		final Anchor hud = findHud(anchors, effectiveDoor.car, effectiveCab);
+		final Anchor seat = findSeat(anchors, effectiveCab);
 		if (seat != null) {
 			// A seat anchor's normal is the direction of travel; mirroring only flips the Z component.
 			// The Y is taken from the door sill: MTR snaps the rider onto the floor every tick and

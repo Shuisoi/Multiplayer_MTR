@@ -220,9 +220,19 @@ public final class MmtrConsistBody {
 		return seamArcMs[index];
 	}
 
-	/** C5: car index in front of seam {@code index} (i.e. the cut keeps cars {@code 0..index}). */
+	/** C5b: car index in front of seam {@code index} (i.e. the cut keeps cars {@code 0..index}). */
 	public int carIndexAfterSeam(int index) {
 		return seamCarIndexes[index];
+	}
+
+	/** C5b: index of the car containing {@code arcM}, or {@code -1} when the arc is outside the body. */
+	public int carIndexAtArcM(double arcM) {
+		for (int i = 0; i < carLengthsM.length; i++) {
+			if (arcM <= carEndArcM(i) + EPSILON_M) {
+				return i;
+			}
+		}
+		return carLengthsM.length - 1;
 	}
 
 	/** All car centres, in consist order (index 0 = A-end car). */

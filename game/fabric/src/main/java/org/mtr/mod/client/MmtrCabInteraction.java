@@ -54,6 +54,8 @@ public final class MmtrCabInteraction {
 	/** The cab this client believes it holds; the engine is still the authority. */
 	private static long heldVehicleId = 0;
 	private static int heldCab = 0;
+	/** C6: the consist car the held cab sits in (a double-ended loco has two cabs in one car). */
+	private static int heldCarNumber = -1;
 	/** When the current claim was made; reconciliation waits for the server's mirrored answer. */
 	private static long claimMillis = 0;
 
@@ -103,8 +105,8 @@ public final class MmtrCabInteraction {
 		if (promptCooldown > 0) {
 			promptCooldown--;
 		} else if (target != null) {
-			final boolean holdsThisCab = heldVehicleId == target.vehicle.getId() && heldCab == target.cab;
-			player.sendMessage(new Text(TextHelper.literal(holdsThisCab ? KEY_OUT_PROMPT : enterPrompt(target.cab)).data), true);
+			final boolean holdsThisCab = heldVehicleId == target.vehicle.getId() && heldCab == target.end && heldCarNumber == target.carNumber;
+			player.sendMessage(new Text(TextHelper.literal(holdsThisCab ? KEY_OUT_PROMPT : enterPrompt(target.carNumber, target.end)).data), true);
 			promptCooldown = PROMPT_INTERVAL_TICKS;
 		}
 	}
@@ -161,7 +163,7 @@ public final class MmtrCabInteraction {
 
 	private static void handle(ClientPlayerEntity player, @Nullable AimTarget target) {
 		if (target != null) {
-			if (heldVehicleId == target.vehicle.getId() && heldCab == target.cab) {
+			if (heldVehicleId == target.vehicle.getId() && heldCab == target.end && heldCarNumber == target.carNumber) {
 				leaveCab(player);
 			} else {
 				enterCab(player, target);
@@ -190,6 +192,7 @@ public final class MmtrCabInteraction {
 	private static void forget(@Nullable ClientPlayerEntity player, @Nullable String message) {
 		heldVehicleId = 0;
 		heldCab = 0;
+		heldCarNumber = -1;
 		claimMillis = 0;
 		// Back to being a passenger: free to walk again.
 		VehicleRidingMovement.mmtrSetCabLock(false);
@@ -218,7 +221,8 @@ public final class MmtrCabInteraction {
 		final String holder = vehicle.getMmtrCabKeyHolderFromSync();
 		final String crew = vehicle.getMmtrCabCrewFromSync();
 		final String localUuid = player.getUuid() == null ? "" : player.getUuid().toString();
-		if (activeCab.equals(expectedCab) && "CREW".equals(holder) && (crew.isEmpty() || crew.equals(localUuid))) {
+		final boolean sameCar = vehicle.getMmtrCabCarIndexFromSync() == heldCarNumber + 1;
+		if (activeCab.equals(expectedCab) && sameCar && "CREW".equals(holder) && (crew.isEmpty() || crew.equals(localUuid))) {
 			return;
 		}
 		if (activeCab.isEmpty() && holder.isEmpty()) {
@@ -244,46 +248,40 @@ public final class MmtrCabInteraction {
 			player.sendMessage(new Text(TextHelper.literal("没有进入该驾驶室的权限 / not authorised").data), true);
 			return;
 		}
-		final int cab = target.cab;
-		final String cabName = cab == 2 ? "CAB_B" : "CAB_A";
-		final boolean changing = heldCab != 0 && heldCab != cab;
+		final String cabName = (target.carNumber + 1) + (target.end == 2 ? "B" : "A");
+		final boolean changing = heldCab != 0 && (heldCab != target.end || heldCarNumber != target.carNumber);
 		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(target.vehicle.getId(), PacketMmtrCabOp.Op.ENTER, cabName));
 		heldVehicleId = target.vehicle.getId();
-		heldCab = cab;
+		heldCab = target.end;
+		heldCarNumber = target.carNumber;
 		claimMillis = System.currentTimeMillis();
 
-		final boolean snapped = placeAtCabView(target.vehicle, cab);
-		player.sendMessage(new Text(TextHelper.literal((changing ? "换到 " : "") + enterPrompt(cab) + (snapped ? "" : "（该模型缺少 mmtr_ 锚点，未移动视角）")).data), true);
+		final boolean snapped = placeAtCabView(target.vehicle, target.carNumber, target.end);
+		player.sendMessage(new Text(TextHelper.literal((changing ? "换到 " : "") + enterPrompt(target.carNumber, target.end) + (snapped ? "" : "（该模型缺少 mmtr_ 锚点，未移动视角）")).data), true);
 	}
 
 	/**
-	 * Moves the player's riding state to the cab's view point. Cab 1 lives in the consist's first car
-	 * and cab 2 in the last car, so the anchor is resolved from that end's model.
+	 * Moves the player's riding state to the cab's view point. The cab is identified by its consist
+	 * car and end, so a double-ended locomotive's two cabs (same car, opposite ends) and a coupled
+	 * formation's interior cab all resolve to their own model anchors.
 	 *
 	 * @return true when the view point could be resolved and applied
 	 */
-	private static boolean placeAtCabView(VehicleExtension vehicle, int cab) {
+	private static boolean placeAtCabView(VehicleExtension vehicle, int carNumber, int end) {
 		final ObjectArrayList<CarTransform> cars = carTransforms(vehicle);
-		if (cars.isEmpty()) {
+		if (cars.isEmpty() || carNumber < 0 || carNumber >= cars.size()) {
 			return false;
 		}
 
-		final int edgeCar = cab == 2 ? cars.size() - 1 : 0;
-		final String modelId = cars.get(edgeCar).vehicleId;
+		final String modelId = cars.get(carNumber).vehicleId;
 		final ObjectArrayList<Anchor> anchors = MmtrVehicleAnchors.get(modelId);
-		final CabView view = MmtrVehicleAnchors.cabView(anchors, cab);
+		final CabView view = MmtrVehicleAnchors.cabView(anchors, end);
 		if (view == null) {
-			Init.LOGGER.info("[MMTR] cab {} of vehicle {} (model {}): no mmtr_cabdoor_{}_* anchor found ({} anchors loaded)", cab, vehicle.getId(), modelId, cab, anchors.size());
+			Init.LOGGER.info("[MMTR] cab {} of car {} (vehicle {}, model {}): no mmtr_cabdoor_{}_* anchor found ({} anchors loaded)", end, carNumber + 1, vehicle.getId(), modelId, end, anchors.size());
 			return false;
 		}
-		Init.LOGGER.info("[MMTR] cab {} of vehicle {} (model {}): seat car-local ({}, {}, {}) mirrored={}", cab, vehicle.getId(), modelId, view.x, view.y, view.z, view.mirrored);
+		Init.LOGGER.info("[MMTR] cab {} of car {} (vehicle {}, model {}): seat car-local ({}, {}, {}) mirrored={}", end, carNumber + 1, vehicle.getId(), modelId, view.x, view.y, view.z, view.mirrored);
 
-		// The model block containing the edge car; view.modelCar is an index inside that block.
-		int base = edgeCar;
-		while (base > 0 && cars.get(base - 1).vehicleId.equals(modelId)) {
-			base--;
-		}
-		final int carNumber = Math.max(0, Math.min(cars.size() - 1, base + view.modelCar));
 		final PositionAndRotation carRotation = cars.get(carNumber).rotation;
 
 		// The driver faces the direction the dashboard faces away from (car-local, taken from the
@@ -307,8 +305,9 @@ public final class MmtrCabInteraction {
 		return true;
 	}
 
-	private static String enterPrompt(int cab) {
-		return cab == 2 ? "按 G 进入 2 号驾驶室 / press G — cab 2" : "按 G 进入 1 号驾驶室 / press G — cab 1";
+	/** C6 cab naming: car index (1-based) + end, e.g. {@code 第3节 A 端驾驶室} = "3A". */
+	private static String enterPrompt(int carNumber, int end) {
+		return "按 G 进入 第" + (carNumber + 1) + "节 " + (end == 2 ? "B" : "A") + " 端驾驶室 / press G — cab " + (carNumber + 1) + (end == 2 ? "B" : "A");
 	}
 
 	/** Shown instead of the entry prompt when the crew already holds that cab. */
@@ -351,7 +350,6 @@ public final class MmtrCabInteraction {
 					if (cab == 0) {
 						continue;
 					}
-
 					final Vector world = cars.get(carNumber).rotation.transformForwards(anchor.position, Vector::rotateX, Vector::rotateY, Vector::add);
 					final double dx = world.x() - cameraX;
 					final double dy = world.y() - cameraY;
@@ -375,25 +373,22 @@ public final class MmtrCabInteraction {
 	}
 
 	/**
-	 * Which cab an anchor actually gives access to, or {@code 0} when this anchor does not belong to
-	 * a cab of the consist. Cab 1 lives at the A end (first car) and cab 2 at the B end (last car); a
-	 * model with a single cab is used at both ends by mirroring it into the B end.
+	 * Which cab an anchor actually gives access to ({@code 1} = the car's A-end cab, {@code 2} = its
+	 * B-end cab), or {@code 0} when the anchor is unusable.
+	 *
+	 * <p>C6: a model may carry a cab at EITHER or BOTH ends of the same car (双端机车 names them
+	 * {@code mmtr_cabdoor_1_*} and {@code mmtr_cabdoor_2_*}), and a coupled formation can have cabs
+	 * inside it, so any car whose model carries the anchor is a valid cab — the old rule only accepted
+	 * the consist's two end cars, which made a double-ended locomotive's second cab and every
+	 * post-coupling interior cab unreachable. The one exception stays: a single-cab model placed at
+	 * the B end serves cab 2 through its cab-1 anchors (mirroring).</p>
 	 */
 	private static int validCab(ObjectArrayList<CarTransform> cars, ObjectArrayList<Anchor> anchors, int carNumber, int anchorCab) {
-		final int lastCarNumber = cars.size() - 1;
-		if (anchorCab == 1) {
-			if (carNumber == 0) {
-				return 1;
-			}
-			if (carNumber == lastCarNumber && MmtrVehicleAnchors.findCabDoor(anchors, 2) == null) {
-				return 2;
-			}
-			return 0;
-		}
-		if (anchorCab == 2 && carNumber == lastCarNumber) {
+		final int end = anchorCab == 2 ? 2 : 1;
+		if (end == 1 && cars.size() > 1 && carNumber == cars.size() - 1 && MmtrVehicleAnchors.findCabDoor(anchors, 2) == null) {
 			return 2;
 		}
-		return 0;
+		return end;
 	}
 
 	/** The car index inside the model for a consist car (a model can be used several times). */
@@ -464,13 +459,13 @@ public final class MmtrCabInteraction {
 	private static final class AimTarget {
 
 		private final VehicleExtension vehicle;
-		private final int cab;
+		private final int end;
 		private final int carNumber;
 		private final double distanceSquared;
 
-		private AimTarget(VehicleExtension vehicle, int cab, int carNumber, double distanceSquared) {
+		private AimTarget(VehicleExtension vehicle, int end, int carNumber, double distanceSquared) {
 			this.vehicle = vehicle;
-			this.cab = cab;
+			this.end = end;
 			this.carNumber = carNumber;
 			this.distanceSquared = distanceSquared;
 		}

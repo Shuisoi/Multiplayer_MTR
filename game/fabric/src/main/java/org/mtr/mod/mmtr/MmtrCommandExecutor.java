@@ -195,9 +195,25 @@ public final class MmtrCommandExecutor {
 			final boolean ok = vehicle.leaveMmtrCab(crew);
 			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已拔钥匙" : " 无钥匙可拔（或钥匙在他人手中）"));
 		} else {
-			final org.mtr.core.mmtr.consist.MmtrCabState.Cab cab = what.equals("b") ? org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_B : org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_A;
-			final boolean ok = vehicle.enterMmtrCab(cab, crew);
-			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已进入 " + cab + "（钥匙归属 " + vehicle.getMmtrCabKeyHolder() + (crew == null ? "" : " " + crew) + "）" : " 无法进入（需停稳且该驾驶室空闲）"));
+			// C6 cab naming: "<car><A|B>" (e.g. 3A = the A-end cab of car 3) or the plain ends A/B.
+			final java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("^(\\d*)([ab])$", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(what);
+			if (!matcher.matches()) {
+				simulator.mmtrCommandResult("[" + parts[0] + "] 驾驶室写法: A | B | <车厢序号><A|B>（例如 3A / 3B）");
+				return;
+			}
+			final String carText = matcher.group(1);
+			final boolean towardA = matcher.group(2).equalsIgnoreCase("a");
+			final boolean ok;
+			final String name;
+			if (carText.isEmpty()) {
+				ok = vehicle.enterMmtrCab(towardA ? org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_A : org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_B, crew);
+				name = towardA ? "A" : "B";
+			} else {
+				final int carIndex = Integer.parseInt(carText) - 1;
+				ok = vehicle.enterMmtrCabAtCar(carIndex, towardA, crew);
+				name = (carIndex + 1) + (towardA ? "A" : "B");
+			}
+			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已进入驾驶室 " + name + "（钥匙归属 " + vehicle.getMmtrCabKeyHolder() + (crew == null ? "" : " " + crew) + "）" : " 无法进入（需停稳且该驾驶室空闲）"));
 		}
 	}
 

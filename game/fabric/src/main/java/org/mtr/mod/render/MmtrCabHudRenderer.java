@@ -300,7 +300,13 @@ public final class MmtrCabHudRenderer {
 		// because it is a caution aspect, and it carries the movement's speed limit.
 		final String shunt = vehicle.getMmtrShuntAuthorityFromSync();
 		if (!shunt.isEmpty()) {
-			drawChip(gui, graphicsHolder, xNext + GAP, y, "副显示 " + Math.round(vehicle.getMmtrShuntSpeedLimitKmhFromSync()), NEON_AMBER);
+			xNext = drawChip(gui, graphicsHolder, xNext + GAP, y, "副显示 " + Math.round(vehicle.getMmtrShuntSpeedLimitKmhFromSync()), NEON_AMBER);
+		}
+		// C6 cab naming: car index (1-based) + end, so a double-ended locomotive's two cabs in one car
+		// read as "3A" / "3B" and a coupled formation's interior cab is named the same way.
+		final String cabName = vehicle.getMmtrCabNameFromSync();
+		if (!cabName.isEmpty()) {
+			drawChip(gui, graphicsHolder, xNext + GAP, y, "驾驶室 " + cabName, NEON_BLUE);
 		}
 	}
 

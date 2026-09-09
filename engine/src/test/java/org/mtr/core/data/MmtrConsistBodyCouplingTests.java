@@ -207,6 +207,33 @@ public final class MmtrConsistBodyCouplingTests {
 	}
 
 	@Test
+	public void theCrewCanTakeACabByCarAndEnd() {
+		final Approached a = new Approached();
+		// The rake (2 cars) is manned by the yard's system key at its A-end cab.
+		assertEquals(Cab.CAB_A, a.rake.getMmtrActiveCab());
+		assertEquals(1, a.rake.getMmtrCabCarIndexFromSync(), "the system key sits in car 1");
+		assertEquals("A", a.rake.getMmtrCabEndFromSync());
+		assertEquals("1A", a.rake.getMmtrCabNameFromSync());
+
+		// A crew member takes the B-end cab of the LAST car.
+		final java.util.UUID crew = java.util.UUID.randomUUID();
+		assertTrue(a.rake.enterMmtrCabAtCar(1, false, crew), "the crew takes the B end of car 2");
+		assertEquals(Cab.CAB_B, a.rake.getMmtrActiveCab(), "the B end leads now");
+		assertEquals(2, a.rake.getMmtrCabCarIndexFromSync());
+		assertEquals("B", a.rake.getMmtrCabEndFromSync());
+		assertEquals("2B", a.rake.getMmtrCabNameFromSync());
+		assertTrue(a.rake.getMmtrConsistWalker().cabs().isCrewKey());
+		assertEquals(crew, a.rake.getMmtrConsistWalker().cabs().crewUuid());
+		assertEquals(a.rake.getMmtrConsistWalker().body().carEndArcM(1), a.rake.getMmtrConsistWalker().cabs().cabArcM(), 1e-6,
+				"the cab arc is the car's B-end arc");
+
+		// And to the other cab of the SAME car: a double-ended locomotive's two cabs differ by end.
+		assertTrue(a.rake.enterMmtrCabAtCar(1, true, crew), "the same crew moves to the other cab of the same car");
+		assertEquals(Cab.CAB_A, a.rake.getMmtrActiveCab());
+		assertEquals("2A", a.rake.getMmtrCabNameFromSync());
+	}
+
+	@Test
 	public void uncouplingConsistBodiesCutsAtTheSeam() {
 		final Approached a = new Approached();
 		final MmtrCoupleSurgery.Result coupled = MmtrCoupleSurgery.couple(a.n.sim, a.loco.getId(), a.rake.getId());

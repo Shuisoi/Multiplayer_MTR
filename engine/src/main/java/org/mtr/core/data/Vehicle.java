@@ -24,6 +24,7 @@ import org.mtr.core.mmtr.MmtrRegime;
 import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.mmtr.consist.MmtrCabState;
+import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
@@ -1483,6 +1484,42 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * C6: the crew takes the cab at {@code carIndex}, facing {@code towardA}. A double-ended
+	 * locomotive has a cab at EACH end of the same car, and a coupled formation can have cabs inside
+	 * it, so the cab is identified by (car, facing) — {@link MmtrCabState.Cab#CAB_A}/{@code CAB_B}
+	 * remain the two named ends. On a legacy (non consist-body) train only the named ends exist.
+	 *
+	 * @return whether the cab is now manned by the crew
+	 */
+	public boolean enterMmtrCabAtCar(int carIndex, boolean towardA, @Nullable UUID crewUuid) {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		if (consistWalker == null) {
+			return enterMmtrCab(towardA ? MmtrCabState.Cab.CAB_A : MmtrCabState.Cab.CAB_B, crewUuid);
+		}
+		final MmtrConsistBody body = consistWalker.body();
+		if (carIndex < 0 || carIndex >= body.carCount() || speed != 0) {
+			return false;
+		}
+		final double arcM = towardA ? body.carStartArcM(carIndex) : body.carEndArcM(carIndex);
+		if (consistWalker.cabs().isManned() && !consistWalker.cabs().isSystemKey() && !consistWalker.cabs().isHeldBy(crewUuid)) {
+			return false; // another crew member holds the key
+		}
+		if (!consistWalker.cabs().insertKeyAtArc(arcM, towardA, true, true, crewUuid)) {
+			return false;
+		}
+		releaseMmtrPointRequests();
+		mmtrMotionPlan = null;
+		mmtrMotionAuto = false;
+		mmtrMotionStopTargetM = -1;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrMotionStopOpenDoors = false;
+		mmtrMotionArrivalControlSeq = -1;
+		mmtrRunStopTarget = -1;
+		updateMmtrCabSyncFields();
+		return true;
+	}
+
+	/**
 	 * B7.6: the crew leaves the cab (pulls the key). Always legal — if the consist is still rolling it
 	 * simply loses traction and the motion branch brakes it to a stand (§3.3).
 	 */
@@ -1530,6 +1567,25 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
 		final UUID crew = consistWalker == null ? null : consistWalker.cabs().crewUuid();
 		mmtrCabCrew = crew == null ? "" : crew.toString();
+		// C6: the cab's identity as a crew-facing name: car index (1-based) + end. A double-ended
+		// locomotive has both cabs in one car, so "3A"/"3B" is what the HUD and the interact prompt use.
+		if (consistWalker == null || !consistWalker.cabs().isManned()) {
+			mmtrCabCarIndex = 0;
+			mmtrCabEnd = "";
+			mmtrCabArcM = 0;
+		} else {
+			final MmtrConsistBody body = consistWalker.body();
+			final double arcM = Double.isNaN(consistWalker.cabs().cabArcM())
+					? (cab == MmtrCabState.Cab.CAB_B ? body.lengthM() : 0)
+					: consistWalker.cabs().cabArcM();
+			mmtrCabArcM = arcM;
+			// A cab sitting exactly on a car boundary belongs to the car it is the END of: the A-end cab
+			// of car i is at the boundary with car i-1, the B-end cab of car i at the boundary with
+			// car i+1. Nudge the probe by the facing so a double-ended loco names both cabs by car.
+			final double probeArcM = cab == MmtrCabState.Cab.CAB_A ? arcM + 1e-4 : arcM - 1e-4;
+			mmtrCabCarIndex = body.carIndexAtArcM(probeArcM) + 1;
+			mmtrCabEnd = cab == MmtrCabState.Cab.CAB_B ? "B" : "A";
+		}
 		vehicleExtraData.mmtrMarkSyncDirty();
 	}
 
@@ -1966,6 +2022,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public String getMmtrCabKeyHolderFromSync() { return mmtrCabKeyHolder == null ? "" : mmtrCabKeyHolder; }
 	/** 钥匙归属: the crew member whose key is in the cab (empty for a system key), from the snapshot. */
 	public String getMmtrCabCrewFromSync() { return mmtrCabCrew == null ? "" : mmtrCabCrew; }
+	/** C6: 1-based car index of the manned cab from the snapshot (0 = no cab). */
+	public int getMmtrCabCarIndexFromSync() { return (int) mmtrCabCarIndex; }
+	/** C6: the manned cab's end from the snapshot ("A" / "B" / ""). */
+	public String getMmtrCabEndFromSync() { return mmtrCabEnd == null ? "" : mmtrCabEnd; }
+	/** C6: arc of the manned cab from the formation's A end (mirrored). */
+	public double getMmtrCabArcMFromSync() { return mmtrCabArcM; }
+	/** C6: the crew-facing cab name ("3A", "8B", …) or "" when unmanned. */
+	public String getMmtrCabNameFromSync() {
+		return getMmtrCabCarIndexFromSync() == 0 || getMmtrCabEndFromSync().isEmpty() ? "" : getMmtrCabCarIndexFromSync() + getMmtrCabEndFromSync();
+	}
 	/** C3a: the subsidiary-aspect authority from the last snapshot ("" / "SUBSIDIARY_SHUNT" / "CALLING_ON"). */
 	public String getMmtrShuntAuthorityFromSync() { return mmtrShuntAuthority == null ? "" : mmtrShuntAuthority; }
 	/** C3a: the authorised movement's speed limit in km/h (mirrored); 0 = no authority. */
