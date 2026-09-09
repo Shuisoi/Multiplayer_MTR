@@ -685,7 +685,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		} else {
 			currentIndex = 0;
-			simulateInDepot();
+			// MMTR: a client mirror of a motion vehicle must NOT run the depot simulation. It would
+			// overwrite the synced railProgress with the siding's default position
+			// ((railLength + trainLength) / 2) and clear reversed on every frame, so a multi-car
+			// consist is placed relative to a railProgress that no longer matches the synced path -
+			// every car then falls outside the path and the whole train collapses onto one point.
+			if (!mmtrMotionMirror) {
+				simulateInDepot();
+			}
 		}
 
 		stoppingCooldown = Math.max(0, stoppingCooldown - millisElapsed);
