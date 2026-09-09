@@ -58,9 +58,11 @@ public final class MmtrSignalAspectTests {
 			sim.sync();
 			sim.mmtrEnsureSignalColors();
 			// ④: a fork nobody has decided shows danger (no route through the junction can be set). The
-			// real server presets every fork to operator branch 0 (Simulator.mmtrDefaultPointsZero), so
-			// preset it here too - otherwise these "free driving" nets would all read red.
-			sim.mmtrPointBranches.set(fork.getX(), fork.getY(), fork.getZ(), entry.getHexId(), 0);
+			// real server presets EVERY (fork, approach) pair to operator branch 0
+			// (Simulator.mmtrDefaultPointsZero), so preset them here too - otherwise these "free driving"
+			// nets would all read red.
+			sim.positionsToRail.get(fork).forEach((otherEnd, rail) ->
+				sim.mmtrPointBranches.set(fork.getX(), fork.getY(), fork.getZ(), rail.getHexId(), 0));
 		}
 
 		/** Mark a rail occupied the way a standing train does (manual block -> CURRENTLY_RESERVE). */
@@ -185,9 +187,10 @@ public final class MmtrSignalAspectTests {
 		sim.rails.add(d);
 		sim.sync();
 		sim.mmtrEnsureSignalColors();
-		// ④: decide the fork at M (via S) the way the real server's default preset does, so the free
-		// driving signal is not held at danger for an undecided turnout.
-		sim.mmtrPointBranches.set(m.getX(), m.getY(), m.getZ(), s.getHexId(), 0);
+		// ④: decide the fork at M on every approach the way the real server's default preset does, so the
+		// free driving signal is not held at danger for an undecided turnout.
+		sim.positionsToRail.get(m).forEach((otherEnd, rail) ->
+			sim.mmtrPointBranches.set(m.getX(), m.getY(), m.getZ(), rail.getHexId(), 0));
 
 		occupy(sim, d);
 		occupy(sim, entry);
@@ -246,8 +249,10 @@ public final class MmtrSignalAspectTests {
 		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
 			"an undecided fork holds the signal protecting the approach rail at danger");
 
-		// The operator presets a branch (what the real server's default does): the junction is decided.
-		sim.mmtrPointBranches.set(n.getX(), n.getY(), n.getZ(), entry.getHexId(), 0);
+		// The operator presets a branch on every approach (what the real server's default does): the
+		// junction is decided.
+		sim.positionsToRail.get(n).forEach((otherEnd, rail) ->
+			sim.mmtrPointBranches.set(n.getX(), n.getY(), n.getZ(), rail.getHexId(), 0));
 		assertEquals(MmtrSignalAspect.Aspect.GREEN, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
 			"a decided junction clears the signal when the line is otherwise clear");
 

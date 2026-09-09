@@ -53,17 +53,28 @@ public final class MmtrJunctionState {
 		if (trees != null && clearanceZoneFouled(node, neighbours, trees)) {
 			return true;
 		}
-		// A fork nobody has decided: no operator branch row and no authority holder on ANY approach.
-		for (final Rail via : neighbours.values()) {
+		// A fork nobody has decided: an approach whose ordered legs need a CHOICE (>= 2 legs) has neither
+		// an operator branch row nor an authority holder. A degree-3 node whose approaches all have a
+		// single forward continuation is a plain pass-through (no rows exist for it and none are needed),
+		// so it must never restrict the display.
+		for (final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap.Entry<Position, Rail> entry : neighbours.object2ObjectEntrySet()) {
+			final Rail via = entry.getValue();
 			final String viaHex = via.getHexId();
+			final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg> legs =
+				org.mtr.core.mmtr.point.MmtrPoint.computeOrderedLegs(node, entry.getKey(), via, neighbours,
+					simulator.mmtrJunctionLegs.get(node.getX(), node.getY(), node.getZ(), viaHex));
+			if (legs.size() < 2) {
+				continue;
+			}
 			if (simulator.mmtrPointBranches.contains(node.getX(), node.getY(), node.getZ(), viaHex)) {
-				return false;
+				continue; // the operator (or the real server's default preset) decided this approach
 			}
 			if (simulator.mmtrPointAuthority.holder(node.getX(), node.getY(), node.getZ(), viaHex) != null) {
-				return false;
+				continue; // an authority grant decides it
 			}
+			return true;
 		}
-		return true;
+		return false;
 	}
 
 	/** Every uncleared junction node, keyed {@code x,y,z} (what the client mirror needs). */
