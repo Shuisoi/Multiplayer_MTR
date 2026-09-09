@@ -66,7 +66,7 @@ public final class MmtrPanelQuad {
 						round(Math.toDegrees(Math.atan2(sideNormal.x(), sideNormal.z()))),
 						round(Math.toDegrees(Math.asin(clamp(-up.y())))),
 						round(Math.toDegrees(Math.atan2(up.x(), up.y()))),
-						anchor.panelFlipU != (side > 0),
+						flipU(anchor),
 						SURFACE_OFFSET_M);
 			}
 		}
@@ -82,13 +82,16 @@ public final class MmtrPanelQuad {
 			final double pitch = Math.toDegrees(Math.asin(clamp(-up.y())));
 			final double yaw = Math.toDegrees(Math.atan2(sideNormal.x(), sideNormal.z()));
 			final double roll = Math.toDegrees(Math.atan2(up.x(), up.y()));
-			// The panel's local +X must run towards the driver's right so the readout is not mirrored.
-			// The driver looks along the car's -Z (the dashboard is ahead of them), so their right is
-			// the car's +X. The frame above maps local +X onto sideRight = side * anchor.right, and for
-			// the side the driver sits on (side = -1) that lands on the car's +X, i.e. already correct;
-			// the opposite copy (side = +1) ends up mirrored and needs the U flip. panelFlipU inverts
-			// this for faces authored the other way round.
-			final boolean flipU = anchor.panelFlipU != (side > 0);
+			// The panel's local +X must run towards the driver's right, otherwise the readout reads
+			// backwards. The frame above does that for whichever side is drawn, with no side-dependent
+			// correction: the drawn copy's normal is side * normal and it points AT the driver, so the
+			// driver looks along -side * normal and their right is
+			// (-side * normal) x up = side * (up x normal) = side * right = sideRight, which is exactly
+			// the quad's local +X. An earlier version assumed the driver always looks along the car's
+			// -Z, which mirrored every face whose dashboard points the other way in model space (a
+			// B-end cab, and the new double-ended SAF101 loco). panelFlipU in the anchor JSON remains
+			// the escape hatch for a face the modeller authored the other way round.
+			final boolean mirrorU = flipU(anchor);
 
 			final StoredMatrixTransformations transformations = carTransform.copy();
 			transformations.add(graphicsHolder -> graphicsHolder.translate(position.x(), position.y(), position.z()));
@@ -113,8 +116,8 @@ public final class MmtrPanelQuad {
 				// the TOP edge and v1 the bottom, the opposite of the rectangle overload's naming. So
 				// v1=0 (image top) belongs to the top corners: pass 0 for v1 and 1 for v2 to keep the
 				// panel upright.
-				final float uLeft = flipU ? 1 : 0;
-				final float uRight = flipU ? 0 : 1;
+				final float uLeft = mirrorU ? 1 : 0;
+				final float uRight = mirrorU ? 0 : 1;
 				IDrawing.drawTexture(
 						graphicsHolder,
 						0, 0, 0,
@@ -127,6 +130,14 @@ public final class MmtrPanelQuad {
 				graphicsHolder.pop();
 			});
 		}
+	}
+
+	/**
+	 * Whether the panel image must be mirrored horizontally on the quad. The quad frame already puts
+	 * the panel's local +X towards the driver's right, so only an anchor that asks for it is flipped.
+	 */
+	private static boolean flipU(Anchor anchor) {
+		return anchor.panelFlipU;
 	}
 
 	/**

@@ -174,14 +174,6 @@ public final class MmtrVehicleAnchors {
 	}
 
 	/**
-	 * @return the dashboard anchor of a model car, or {@code null} when the model has none
-	 */
-	@Nullable
-	public static Anchor findHud(ObjectArrayList<Anchor> anchors, int modelCar) {
-		return findHud(anchors, modelCar, 1);
-	}
-
-	/**
 	 * C6: the dashboard anchor of cab {@code cab} in {@code modelCar}.
 	 *
 	 * <p>A double-ended locomotive has TWO cabs in ONE car, named {@code mmtr_hud_1} and
@@ -212,6 +204,22 @@ public final class MmtrVehicleAnchors {
 			}
 		}
 		return carOnly != null ? carOnly : cabOnly;
+	}
+
+	/**
+	 * C6: EVERY dashboard anchor of {@code modelCar}, one per cab, in file order. A double-ended
+	 * locomotive carries two dashboards in one car ({@code mmtr_hud_1} / {@code mmtr_hud_2}), and each
+	 * one belongs to its own cab, so the renderer has to draw a panel per anchor instead of picking a
+	 * single one. A single-cab model returns its one anchor.
+	 */
+	public static ObjectArrayList<Anchor> findHuds(ObjectArrayList<Anchor> anchors, int modelCar) {
+		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.HUD && anchor.car == modelCar) {
+				result.add(anchor);
+			}
+		}
+		return result;
 	}
 
 	/**
