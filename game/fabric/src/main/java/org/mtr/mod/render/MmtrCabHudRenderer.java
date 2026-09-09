@@ -263,7 +263,9 @@ public final class MmtrCabHudRenderer {
 		} else {
 			stateColor = 0xFF22303C;
 		}
-		final int xEnd = drawLampChip(gui, graphicsHolder, x, y, "AWS", stateColor, pending ? "警示-需确认" : acknowledged ? "已确认" : "");
+		// A3: while the warning is unacknowledged the lamp names the key that cancels it (H, rebindable
+		// in Options - Controls); an unacknowledged warning becomes a SPAD emergency stop after ~2.5 s.
+		final int xEnd = drawLampChip(gui, graphicsHolder, x, y, "AWS", stateColor, pending ? "警示-按 H 确认" : acknowledged ? "已确认" : "");
 		// Occupancy hold lamp.
 		drawLampChip(gui, graphicsHolder, xEnd + GAP, y, "等待", vehicle.isMmtrBlockHeldFromSync() ? NEON_AMBER : 0xFF22303C, vehicle.isMmtrBlockHeldFromSync() ? "占用" : "");
 	}

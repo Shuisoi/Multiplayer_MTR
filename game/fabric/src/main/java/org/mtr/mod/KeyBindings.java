@@ -21,6 +21,10 @@ public final class KeyBindings {
 		MMTR_CAB_INTERACT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.cab_interact", GLFW.GLFW_KEY_G, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		// C7: aim at a train and press K to couple onto it / cut a coupler in front of the aimed car.
 		MMTR_COUPLE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.couple", GLFW.GLFW_KEY_K, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		// A3: AWS point-warning acknowledge (the yellow/black cancel button on a real desk). An
+		// unacknowledged warning becomes a SPAD emergency stop after ~2.5 s, so this key is part of
+		// the driver workflow, not an optional extra.
+		MMTR_AWS_ACK = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.aws_ack", GLFW.GLFW_KEY_H, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		// B7.6h: per-side door keys in the cab (rail practice: open only the platform side).
 		MMTR_DOOR_LEFT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_left", GLFW.GLFW_KEY_Y, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		MMTR_DOOR_RIGHT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_right", GLFW.GLFW_KEY_U, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
@@ -45,6 +49,8 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_CAB_INTERACT;
 	/** C7: the coupling interaction key. */
 	public static final KeyBinding MMTR_COUPLE;
+	/** A3: the AWS acknowledge (cancel) key. */
+	public static final KeyBinding MMTR_AWS_ACK;
 	public static final KeyBinding MMTR_DOOR_LEFT;
 	public static final KeyBinding MMTR_DOOR_RIGHT;
 	public static final KeyBinding DEBUG_1_NEGATIVE;

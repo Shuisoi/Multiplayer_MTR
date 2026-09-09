@@ -115,7 +115,7 @@ notes/77 红线的崩溃就是这么来的），再启动 dev 服务端。
 | 2 | 该车经过分岔 | 分岔处信号灯按**进路放行**（不再因另一支被占而保守显黄/红）；`[MMTR-DRV] motion seg=` 沿进路推进 |
 | 3 | 人为 `mmtr-point-lock` 该进路的一个道岔（或让另一列车先持有） | 该车进路变 `state:"PENDING"`，`stateReason` 点名道岔与 `lock=true`/`holder=v…`；**车不越过该道岔**，信号显红 |
 | 4 | 解锁 / 对方释放 | 进路自动回到 `SET`，车继续（分段释放：越过第一个道岔后进路仍为 `SET`） |
-| 5 | 黄灯区段手动开车 | 接近**非绿**信号时 `[MMTR-AWS] warning on … signal SINGLE_YELLOW/DOUBLE_YELLOW/RED …`；确认（按确认键）后指示保持；信号转绿时 `[MMTR-AWS] warning cleared` |
+| 5 | 黄灯区段手动开车 | 接近**非绿**信号时 `[MMTR-AWS] warning on … signal SINGLE_YELLOW/DOUBLE_YELLOW/RED …`；驾驶室 AWS 灯闪"警示-按 H 确认"，按 **H**（默认键，可在 选项→控制 改）后 `[MMTR-AWS] acknowledged`、灯转"已确认"；信号转绿时 `[MMTR-AWS] warning cleared` |
 | 6 | 未确认并继续行驶 | 约 2.5 s 后 `[MMTR-AWS] unacknowledged warning - SPAD emergency engaged`，车紧急制动停稳 |
 | 7 | 双车咽喉（两条股道同抢一个岔，不同腿） | WEB `routes[]`：先 SET 者持有；后者 `PENDING` 且车留在自己股道；前者越岔后后者自动 SET 并通过 |
 | 8 | 双车同腿跟随 | 后车进路点被独占而等待；点释放后跟进，最终被 **S1 占用**停在闭塞边界（不撞前车） |

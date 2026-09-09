@@ -62,6 +62,8 @@ public class VehicleRidingMovement {
 	private static boolean prevThrottleUp, prevThrottleDown, prevBrakeApply, prevBrakeRelease, prevReverserUp, prevReverserDown;
 	/** Rising-edge state of the cab crew's per-side door keys (Y = left, U = right). */
 	private static boolean prevDoorLeftPressed, prevDoorRightPressed;
+	/** Rising-edge state of the AWS acknowledge key (H) - a one-shot press. */
+	private static boolean prevAwsAckPressed;
 	/** True once the engine has been told this client occupies a cab driver seat this ride. */
 	private static boolean mmtrDriverSynced;
 	/** True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk. */
@@ -141,6 +143,24 @@ public class VehicleRidingMovement {
 			}
 		} else {
 			prevThrottleUp = prevThrottleDown = prevBrakeApply = prevBrakeRelease = prevReverserUp = prevReverserDown = false;
+		}
+
+		// A3: AWS acknowledge (H) - a one-shot press of the yellow/black cancel button. It must reach
+		// the engine even when no notch changed, so it sends its own drive command; an unacknowledged
+		// warning becomes a SPAD emergency stop after ~2.5 s.
+		if (canDrive && ridingVehicleId != 0) {
+			final boolean awsAckPressed = KeyBindings.MMTR_AWS_ACK.isPressed();
+			if (awsAckPressed && !prevAwsAckPressed) {
+				if (!mmtrDriverSynced) {
+					isHoldingDriverKey = isHoldingDriverKeyNew;
+					sendUpdate(false);
+					mmtrDriverSynced = true;
+				}
+				InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDriveControl(ridingVehicleId, mmtrThrottleNotch, mmtrBrakeNotch, mmtrReverser, false, true));
+			}
+			prevAwsAckPressed = awsAckPressed;
+		} else {
+			prevAwsAckPressed = false;
 		}
 
 		if (sendPositionUpdateTime > 0 && sendPositionUpdateTime <= System.currentTimeMillis() || isHoldingDriverKeyNew != isHoldingDriverKey || pressingAccelerateTicks == 1 || pressingBrakeTicks == 1 || pressingDoorsTicks == 1 || pressingAtoTicks == 1 || doorOverrideTicks == 1) {
