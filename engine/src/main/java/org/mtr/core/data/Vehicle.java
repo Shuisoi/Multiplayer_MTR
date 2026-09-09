@@ -158,6 +158,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** 尽头换向 (terminal flip): whether the armed plan's dead-end flip already happened. Plans
 	 * without a flip point are born "done"; armMmtrPointRun resets it when the new plan flips. */
 	private boolean mmtrMotionFlipDone = true;
+	/**
+	 * REV: a reverser direction change was requested while the consist was rolling and is waiting for
+	 * the stand that lets it be applied (traction is cut in the meantime).
+	 */
+	private boolean mmtrReverserPending;
 	/** P3: authority owner key of this vehicle's requests (mission runs), reset on release. */
 	private String mmtrPointOwner = "";
 	/** P3: en-route forks still ahead of this vehicle (not yet crossed); refreshed while armed so a
@@ -952,9 +957,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private void simulateMmtrMotion(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
 		mmtrMotionMirror = true;
+		// REV 换向器: a direction change requested while rolling is held back (traction is cut) until the
+		// consist is at a stand, where it is applied without moving anything - exactly the interlock a
+		// real reverser has, and the only way a flip cannot teleport the motion.
+		if (mmtrReverserPending && speed <= 1e-9) {
+			mmtrReverserPending = false;
+			applyMmtrTravelReversed(mmtrActiveControl != null && mmtrActiveControl.getReverser() < 0);
+		}
 		final ControlState control = mmtrActiveControl;
 		final boolean overridden = mmtrManualOverride && control != null;
-		final boolean wantPower = overridden && control.getReverser() > 0 && control.getThrottleNotch() > 0 && !(control.getBrakeNotch() > 0 || control.isEmergency());
+		final boolean consistBody = mmtrMotionWalker instanceof MmtrConsistWalker;
+		// A consist-body train runs whichever way the reverser points (R1); the legacy single-point
+		// walker has no reverse and keeps the old rule (reverser must be forward).
+		final boolean forwardRequested = control != null && (consistBody ? control.getReverser() != 0 : control.getReverser() > 0);
+		final boolean wantPower = overridden && forwardRequested && !mmtrReverserPending && control.getThrottleNotch() > 0 && !(control.getBrakeNotch() > 0 || control.isEmergency());
 		final boolean braking = overridden && (control.getBrakeNotch() > 0 || control.isEmergency());
 		final boolean stopTargetActive = mmtrMotionStopTargetM >= 0;
 
@@ -1307,10 +1323,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrActiveControl = controlState.copy();
 		// Server-authoritative input guard: clamp whatever the client sent before storing/mirroring.
 		MmtrDriveAccess.sanitize(mmtrActiveControl);
-		// 火车不能倒车: Motion-Core vehicles have no reverse gear - any reverser <= 0 request is
-		// ignored (reverser forced to 1) so legacy direction keys can never drive the walker back.
-		if (mmtrMotionWalker != null && mmtrActiveControl.getReverser() < 1) {
-			mmtrActiveControl.setReverser(1);
+		// REV 换向器: on a consist-body train the reverser SELECTS the direction of travel (tail-first
+		// while the same cab stays manned). The change takes effect at a stand; while rolling it is held
+		// as pending and traction is cut until the consist stops, so the motion never teleports. A
+		// legacy single-point train has no reverse and keeps the historical behaviour (reverser <= 0
+		// simply gives no traction).
+		if (mmtrMotionWalker instanceof final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker) {
+			final boolean reversed = mmtrActiveControl.getReverser() < 0;
+			if (speed <= 1e-9) {
+				mmtrReverserPending = false;
+				applyMmtrTravelReversed(reversed);
+			} else {
+				mmtrReverserPending = consistWalker.travelReversed() != reversed;
+			}
 		}
 		mmtrDriverUuid = driverUuid;
 		mmtrManualOverride = true;
@@ -1326,8 +1351,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrControlApplySeq++;
 	}
 
-	/** Releases the MMTR explicit override (occupation lock) and neutralises the legacy HUD power. */
-	public void releaseMmtrManualOverride() {
+	/** Releases the MMTR explicit override (occupation lock) and neutralises the legacy HUD power. */	public void releaseMmtrManualOverride() {
 		if (!mmtrManualOverride && !mmtrActive) {
 			return;
 		}
@@ -1589,6 +1613,31 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		vehicleExtraData.mmtrMarkSyncDirty();
 	}
 
+	/**
+	 * REV 换向器: point the consist the other way without changing the manned cab. The body does not
+	 * move (I1) and the geometry is untouched (I2) — the walker just leads with its other end. Like
+	 * 换端, everything the armed run holds was computed for the old direction and is dropped.
+	 */
+	private void applyMmtrTravelReversed(boolean reversed) {
+		if (!(mmtrMotionWalker instanceof final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker)
+				|| !consistWalker.setTravelReversed(reversed)) {
+			return;
+		}
+		releaseMmtrPointRequests();
+		mmtrMotionPlan = null;
+		mmtrMotionFlipDone = true;
+		mmtrMotionAuto = false;
+		mmtrMotionStopTargetM = -1;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrMotionStopOpenDoors = false;
+		mmtrMotionArrivalControlSeq = -1;
+		mmtrRunStopTarget = -1;
+		// The mirror path is oriented by the direction of travel: re-publish it (same rails, opposite
+		// order, same railProgress) so the client re-renders the consist in place.
+		syncMmtrConsistMirror();
+		System.out.println("[MMTR-DRV] 换向器: " + (reversed ? "车尾在前（反向行驶）" : "车头在前"));
+	}
+
 	/** 换端 (change ends) for a motion vehicle: legal only at a stand, and only on the consist model
 	 * (the legacy walker has no cab). The train does not move — see the B-series design invariants. */
 	public boolean changeEndsMmtrMotion() {
@@ -1843,7 +1892,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
 			rail = consistWalker.referenceRail();
 			leadingOffset = consistWalker.referenceOffsetM();
-			towardExit = consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+			towardExit = consistWalker.travelsTowardB();
 		} else {
 			rail = mmtrMotionWalker.currentRail();
 			leadingOffset = mmtrMotionWalker.offsetM();
@@ -2440,7 +2489,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
 			rail = consistWalker.referenceRail();
 			leadingOffset = consistWalker.referenceOffsetM();
-			towardExit = consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+			towardExit = consistWalker.travelsTowardB();
 		} else {
 			rail = mmtrMotionWalker.currentRail();
 			leadingOffset = mmtrMotionWalker.offsetM();
@@ -2904,7 +2953,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// The consist travels toward its manned cab: CAB_A leads with the A end, so the leading face
 		// moves toward the leg's ENTRY (decreasing offset); CAB_B leads toward the EXIT. (The walker's
 		// aheadNode() is the spine's B-side node and says nothing about the direction of travel.)
-		final boolean towardExit = consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+		final boolean towardExit = consistWalker.travelsTowardB();
 		final Position position1 = rail.getPosition1();
 		final Position position2 = rail.getPosition2();
 		final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;

@@ -356,4 +356,63 @@ public final class MmtrConsistVehicleMotionTests {
 		driveTicks(v, 60, positions());
 		assertTrue(walker.distanceM() > before + 0.5, "the consist drove back out of the dead end");
 	}
+
+	/**
+	 * REV 换向器: the reverser points the consist the other way while the SAME cab stays manned, which is
+	 * what a shunting locomotive does — no 换端 needed. The body must not move when the lever is pulled
+	 * (I1) and the geometry stays untouched (I2).
+	 */
+	@Test
+	public void reverserDrivesTheConsistTailFirstFromTheSameCab() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrActiveCab());
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 10, positions());
+		assertTrue(walker.distanceM() > 0.5, "the consist ran with its B end leading");
+		v.applyMmtrControl(new ControlState().setBrakeNotch(8).setReverser(1));
+		driveTicks(v, 200, positions());
+		assertEquals(0, v.getSpeed(), 1e-9, "at rest before the reverser is pulled");
+
+		final double frontBefore = walker.frontArcM();
+		final double rearBefore = walker.rearArcM();
+		assertFalse(walker.travelReversed());
+
+		v.applyMmtrControl(new ControlState().setReverser(-1));
+		assertTrue(walker.travelReversed(), "the reverser flips the direction of travel");
+		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrActiveCab(), "the crew stays in the same cab");
+		assertEquals(frontBefore, walker.rearArcM(), 1e-9, "I1: the old front face is the new rear face");
+		assertEquals(rearBefore, walker.frontArcM(), 1e-9);
+		assertEquals(0, v.getSpeed(), 1e-9, "pulling the reverser moves nothing");
+
+		final double before = walker.distanceM();
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(-1));
+		driveTicks(v, 10, positions());
+		assertTrue(walker.distanceM() > before + 0.5, "the consist drove tail-first");
+		assertTrue(v.getSpeed() > 0);
+	}
+
+	/**
+	 * REV: a reverser change requested while rolling must not teleport the motion — traction is cut and
+	 * the new direction applies once the consist is at a stand (a real reverser's interlock).
+	 */
+	@Test
+	public void reverserChangeWhileRollingWaitsForTheStand() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 5, positions());
+		assertTrue(v.getSpeed() > 0, "the consist is rolling");
+		final double progressWhileRolling = walker.distanceM();
+
+		// Pull the reverser AND brake: the direction must not change while the train is still moving.
+		v.applyMmtrControl(new ControlState().setBrakeNotch(8).setReverser(-1));
+		assertFalse(walker.travelReversed(), "the direction does not flip while rolling");
+		driveTicks(v, 200, positions());
+		assertEquals(0, v.getSpeed(), 1e-9);
+		assertTrue(walker.travelReversed(), "the requested direction applies once at a stand");
+		assertTrue(walker.distanceM() >= progressWhileRolling, "I3: distance never decreases");
+	}
 }

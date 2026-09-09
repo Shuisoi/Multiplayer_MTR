@@ -29,8 +29,13 @@ import java.util.UUID;
  * </ul>
  *
  * <p>Invariants this class is responsible for: I1 (change-ends zero displacement), I2 (posture and
- * direction decoupled), I3 (cumulative distance never decreases; travel is always toward the manned
- * cab's facing, so the consist can never run backwards).</p>
+ * direction decoupled), I3 (cumulative distance never decreases within one direction of travel).</p>
+ *
+ * <p>REV (换向器 / reverse running): the direction of travel is the manned cab's facing end, XOR
+ * {@link #setTravelReversed(boolean)}. A driver who pulls the reverser keeps their cab but the train
+ * runs tail-first — the body is untouched, exactly like {@link #changeEnds(boolean)}, only the leading
+ * face changes. Changing it while rolling would teleport the motion, so the caller applies it at a
+ * stand (the same interlock as a real reverser).</p>
  */
 public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMotionPosition {
 
@@ -49,6 +54,8 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	private boolean endOfLine;
 	/** The leading end has boarded {@link #targetRailHex} and the run rests there (task arrival). */
 	private boolean atTarget;
+	/** REV: the reverser is pulled — the train runs tail-first while the same cab stays manned. */
+	private boolean travelReversed;
 	/**
 	 * The manned cab {@link #endOfLine}/{@link #atTarget} were computed for. Both flags describe the
 	 * DIRECTION of travel ("the front reached a dead end" / "the front boarded the target"), so they
@@ -56,6 +63,8 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 * command) changes the direction without going through {@link #changeEnds(boolean)}.
 	 */
 	private MmtrCabState.Cab flagsCab = MmtrCabState.Cab.NONE;
+	/** The reverser position {@link #endOfLine}/{@link #atTarget} were computed for. */
+	private boolean flagsReversed;
 	/**
 	 * B5 rear-clear: a point the consist's front has crossed but whose hold must survive until the
 	 * <em>rear</em> has cleared it. Keyed by the cumulative distance at which that happens, so it
@@ -204,7 +213,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		if (!cabs.isManned()) {
 			return null;
 		}
-		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final boolean towardB = towardB();
 		final SpineLeg lead = leadingLeg();
 		final int index = legIndex(lead);
 		final int nextIndex = towardB ? index + 1 : index - 1;
@@ -325,11 +334,44 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 */
 	private void syncDirectionFlags() {
 		final MmtrCabState.Cab active = cabs.activeCab();
-		if (active != flagsCab) {
+		if (active != flagsCab || travelReversed != flagsReversed) {
 			flagsCab = active;
+			flagsReversed = travelReversed;
 			endOfLine = false;
 			atTarget = false;
 		}
+	}
+
+	/** The direction of travel: the manned cab's facing end, flipped by the reverser (R1). */
+	private boolean towardB() {
+		return cabs.travelsToward(MmtrCabState.End.B) != travelReversed;
+	}
+
+	/** Whether the train currently runs tail-first (the reverser is pulled). */
+	public boolean travelReversed() {
+		return travelReversed;
+	}
+
+	/** The direction of travel as seen from the outside (mirror / snapshot code). */
+	public boolean travelsTowardB() {
+		return towardB();
+	}
+
+	/**
+	 * REV 换向器: run tail-first while the SAME cab stays manned. The body does not move (I1) and the
+	 * geometry is untouched (I2); only the leading face changes, so the distance-dependent flags of the
+	 * old direction are dropped. The caller applies this at a stand — a flip while rolling would
+	 * reverse the motion instantaneously.
+	 *
+	 * @return whether the direction actually changed
+	 */
+	public boolean setTravelReversed(boolean reversed) {
+		if (reversed == travelReversed) {
+			return false;
+		}
+		travelReversed = reversed;
+		syncDirectionFlags();
+		return true;
 	}
 
 	/**
@@ -346,7 +388,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		if (!cabs.isManned() || deltaM <= EPSILON_M || atTarget) {
 			return false;
 		}
-		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final boolean towardB = towardB();
 		double remaining = deltaM;
 		while (remaining > EPSILON_M && !haltedAtAuthority && !endOfLine && !atTarget) {
 			final double space = towardB ? body.spineLengthM() - body.bEndArcM() : body.aEndArcM();
@@ -391,11 +433,11 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	}
 
 	private double leadingArcM() {
-		return cabs.travelsToward(MmtrCabState.End.B) ? body.bEndArcM() : body.aEndArcM();
+		return towardB() ? body.bEndArcM() : body.aEndArcM();
 	}
 
 	private double trailingArcM() {
-		return cabs.travelsToward(MmtrCabState.End.B) ? body.aEndArcM() : body.bEndArcM();
+		return towardB() ? body.aEndArcM() : body.bEndArcM();
 	}
 
 	/** Arc position of the leading (front) face; equals the A end when no cab is manned. */
@@ -481,7 +523,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 */
 	public ObjectArrayList<org.mtr.core.data.PathData> buildMirrorLegs() {
 		final ObjectArrayList<org.mtr.core.data.PathData> out = new ObjectArrayList<>();
-		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final boolean towardB = towardB();
 		if (towardB) {
 			for (int i = 0; i < body.legCount(); i++) {
 				addLeg(out, body.leg(i), true);
@@ -497,13 +539,13 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 
 	/** Distance of the leading face along {@link #buildMirrorLegs()}, m. */
 	public double mirrorHeadArcM() {
-		return cabs.travelsToward(MmtrCabState.End.B) ? body.bEndArcM() : body.spineLengthM() - body.aEndArcM();
+		return towardB() ? body.bEndArcM() : body.spineLengthM() - body.aEndArcM();
 	}
 
 	/** Offset of the leading face within the last mirror leg (measured from that leg's start). */
 	public double mirrorHeadOffsetM() {
 		final SpineLeg leg = leadingLeg();
-		return cabs.travelsToward(MmtrCabState.End.B) ? frontOffsetM() : leg.lengthM() - frontOffsetM();
+		return towardB() ? frontOffsetM() : leg.lengthM() - frontOffsetM();
 	}
 
 	/**
@@ -511,7 +553,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 * i.e. when the B end leads (CAB_A manned). Mirrored as {@code Vehicle.reversed}.
 	 */
 	public boolean mirrorReversed() {
-		return cabs.travelsToward(MmtrCabState.End.B);
+		return towardB();
 	}
 
 	private void addLeg(ObjectArrayList<org.mtr.core.data.PathData> out, SpineLeg leg, boolean tailToHead) {
@@ -546,13 +588,13 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	}
 
 	private int leadingLegIndex() {
-		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final boolean towardB = towardB();
 		final int index = body.legIndexAtArcM(leadingArcM(), towardB);
 		return index >= 0 ? index : (towardB ? body.legCount() - 1 : 0);
 	}
 
 	private int trailingLegIndex() {
-		final boolean towardB = cabs.travelsToward(MmtrCabState.End.B);
+		final boolean towardB = towardB();
 		final int index = body.legIndexAtArcM(trailingArcM(), !towardB);
 		return index >= 0 ? index : (towardB ? 0 : body.legCount() - 1);
 	}
