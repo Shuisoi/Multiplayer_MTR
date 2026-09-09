@@ -109,7 +109,6 @@ public final class MmtrCabInteraction {
 		String nearestId = "-";
 		String nearestModels = "-";
 		String nearestCarPosition = "-";
-		String nearestPathDebug = "-";
 		boolean nearestRayTracing = false;
 		int rayTracingCars = 0;
 		for (final VehicleExtension vehicle : vehicles) {
@@ -125,7 +124,6 @@ public final class MmtrCabInteraction {
 				nearestId = String.valueOf(vehicle.getId());
 				nearestRayTracing = rayTracing.length > 0 && rayTracing[0];
 				final StringBuilder models = new StringBuilder();
-				final StringBuilder carZs = new StringBuilder();
 				for (final var car : vehicle.getVehicleCarsAndPositions()) {
 					if (models.length() > 0) {
 						models.append(',');
@@ -136,23 +134,11 @@ public final class MmtrCabInteraction {
 					}
 					final var bogie = car.right().get(0).positionAndTiltAngle1().position();
 					nearestCarPosition = String.format("%.1f,%.1f,%.1f", bogie.x(), bogie.y(), bogie.z());
-					carZs.append(String.format("%.0f ", bogie.z()));
 				}
 				nearestModels = models.toString();
-				// Temporary: the client's own view of the synced path, to explain "all cars on one spot".
-				final var path = vehicle.vehicleExtraData.immutablePath;
-				final var firstLeg = path.isEmpty() ? null : path.get(0);
-				nearestPathDebug = "progress=" + String.format("%.1f", vehicle.getRailProgress())
-					+ " reversed=" + vehicle.getReversed()
-					+ " len=" + String.format("%.1f", vehicle.vehicleExtraData.getTotalVehicleLength())
-					+ " legs=" + path.size()
-					+ " start=" + (firstLeg == null ? "-" : String.format("%.1f", firstLeg.getStartDistance()))
-					+ " end=" + (path.isEmpty() ? "-" : String.format("%.1f", path.get(path.size() - 1).getEndDistance()))
-					+ " rail=" + (firstLeg == null ? "-" : (firstLeg.getRail() == null ? "null" : "found"))
-					+ " zs=[" + carZs.toString().trim() + "]";
 			}
 		}
-		Init.LOGGER.info("[MMTR-DBG] client vehicles={} rayTracingCars={} optimizedRendering={} nearest={} distance={} models=[{}] carPos=({}) rayTracing={} player=({}, {}, {}) path({})", vehicles.size(), rayTracingCars, OptimizedRenderer.hasOptimizedRendering(), nearestId, nearest < 0 ? "-" : String.format("%.1f", nearest), nearestModels, nearestCarPosition, nearestRayTracing, String.format("%.1f", player.getX()), String.format("%.1f", player.getY()), String.format("%.1f", player.getZ()), nearestPathDebug);
+		Init.LOGGER.info("[MMTR-DBG] client vehicles={} rayTracingCars={} optimizedRendering={} nearest={} distance={} models=[{}] carPos=({}) rayTracing={} player=({}, {}, {})", vehicles.size(), rayTracingCars, OptimizedRenderer.hasOptimizedRendering(), nearestId, nearest < 0 ? "-" : String.format("%.1f", nearest), nearestModels, nearestCarPosition, nearestRayTracing, String.format("%.1f", player.getX()), String.format("%.1f", player.getY()), String.format("%.1f", player.getZ()));
 	}
 
 	private static void handle(ClientPlayerEntity player, @Nullable AimTarget target) {
