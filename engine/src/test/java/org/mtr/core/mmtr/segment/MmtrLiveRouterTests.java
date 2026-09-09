@@ -14,6 +14,7 @@ import org.mtr.core.tool.Angle;
 import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -207,6 +208,33 @@ public final class MmtrLiveRouterTests {
 		assertEquals(true, w.haltedAtAuthority());
 		assertEquals(n.rIn.getHexId(), w.railHex());
 		assertEquals(20, w.offsetM(), 1e-6, "stopped at the far end of the approach rail, before the unset fork");
+	}
+
+	/**
+	 * ③ 车尾清岔 on the LEGACY single-point walker: the point a train has crossed stays held until the
+	 * train's tail (plus the ② junction clearance margin) is past the node, instead of being released
+	 * the instant the head crosses.
+	 */
+	@Test
+	public void theLegacyWalkerHoldsACrossedPointUntilTheTailHasCleared() {
+		final Net n = new Net();
+		final org.mtr.core.mmtr.point.MmtrPointAuthority authority = new org.mtr.core.mmtr.point.MmtrPointAuthority(() -> 0L);
+		final MmtrMotionWalker w = MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), n.branch0(), null);
+		w.setPointAuthority(authority, "v1");
+		w.setTailLengthM(6.0);
+		assertEquals(org.mtr.core.mmtr.point.MmtrPointAuthority.Result.GRANTED,
+			authority.request(n.node0.getX(), n.node0.getY(), n.node0.getZ(), n.rIn.getHexId(), "v1", 0, 60_000L));
+
+		// Cross the node: the head is 3 m onto the straight rail, the 6 m tail has NOT cleared.
+		assertTrue(w.advance(23));
+		assertEquals(n.rStraight.getHexId(), w.railHex(), "head crossed onto the straight branch");
+		assertTrue(authority.isGrantedTo(n.node0.getX(), n.node0.getY(), n.node0.getZ(), n.rIn.getHexId(), "v1"), "head crossed, tail has not");
+		assertEquals(1, w.pendingReleaseCount());
+
+		// Tail clear + junction clearance: now the hold is released.
+		assertTrue(w.advance(6.0 + org.mtr.core.data.Vehicle.MMTR_JUNCTION_CLEARANCE_M));
+		assertFalse(authority.isGrantedTo(n.node0.getX(), n.node0.getY(), n.node0.getZ(), n.rIn.getHexId(), "v1"), "released once the tail cleared the clearance zone");
+		assertEquals(0, w.pendingReleaseCount());
 	}
 
 	@Test

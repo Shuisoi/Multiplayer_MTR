@@ -1612,6 +1612,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * rail the consist stands on. Clientside mirrors must never engage this mode.
 	 */
 	public void engageMmtrMotion(@Nullable MmtrMotionWalker walker) {
+		if (walker != null) {
+			// ③ 车尾清岔: the walker releases a crossed point only once this consist's tail has cleared it.
+			walker.setTailLengthM(vehicleExtraData.getTotalVehicleLength());
+		}
 		engageMmtrMotionPosition(walker);
 	}
 

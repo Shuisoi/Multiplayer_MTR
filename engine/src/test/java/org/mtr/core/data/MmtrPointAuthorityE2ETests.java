@@ -202,8 +202,13 @@ public final class MmtrPointAuthorityE2ETests {
 			n.siding.simulateVehicles(1000, null);
 		}
 		assertEquals(n.rY.getHexId(), v.getMmtrMotionWalker().railHex(), "manual operator branch outranks the mission's own grant at runtime");
-		// Its (unused) grant was still consumed at the crossing so the point is free again.
-		assertNull(authority.holder(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId()), "crossing released the mission's hold even though the operator decided");
+		// ③ 车尾清岔: the (unused) grant is consumed at the crossing, but the hold lasts until the tail
+		// has cleared the junction's clearance zone - the points must not move under the trailing cars.
+		guard = 0;
+		while (guard++ < 4000 && authority.holder(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId()) != null) {
+			n.siding.simulateVehicles(1000, null);
+		}
+		assertNull(authority.holder(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId()), "the hold was released once the consist cleared the junction");
 
 		// rY ends at a dead end: the mission cannot reach its platform - cancel to clean up.
 		v.getMmtrMission().cancel();
@@ -231,11 +236,16 @@ public final class MmtrPointAuthorityE2ETests {
 		assertTrue(w2.haltedAtAuthority(), "queued train waits at the fork");
 		assertEquals(12, w2.offsetM(), 1e-6, "stopped exactly at the mouth node");
 
-		// t1 arrives and crosses under its grant; the crossing releases the point to t2.
+		// t1 arrives and crosses under its grant; ③ 车尾清岔 keeps the point held until its tail (plus the
+		// junction clearance margin) has cleared the node, so t2 stays queued for now.
 		w1.advance(13);
 		assertEquals(n.rX.getHexId(), w1.railHex(), "holder train crossed onto the granted leg");
 		assertFalse(w1.haltedAtAuthority());
-		assertEquals("t2", authority.holder(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId()), "queued train promoted to holder by the crossing release");
+		assertEquals("t1", authority.holder(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId()), "still held: t1's tail is inside the clearance zone");
+
+		// Once t1's tail clears the clearance zone the point is released and t2 is promoted.
+		w1.advance(org.mtr.core.data.Vehicle.MMTR_JUNCTION_CLEARANCE_M);
+		assertEquals("t2", authority.holder(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), n.yardRail.getHexId()), "queued train promoted to holder by the clearance release");
 
 		// t2 retries the fork on its next advance and crosses in order.
 		w2.advance(13);

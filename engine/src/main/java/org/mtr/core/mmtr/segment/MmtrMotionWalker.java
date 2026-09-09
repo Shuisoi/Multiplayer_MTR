@@ -41,6 +41,17 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 	 * drain, as point keys x,y,z|viaHex - lets the owner stop refreshing crossed holds. */
 	private final ObjectArrayList<String> crossedPointKeys = new ObjectArrayList<>();
 
+	/**
+	 * ③ 车尾清岔: points whose head has crossed but whose TAIL has not yet cleared. The hold is released
+	 * only once the tail is past the node (plus the junction clearance margin), so the points cannot be
+	 * moved under the trailing cars of a consist this walker drives.
+	 */
+	private final ObjectArrayList<PendingRelease> pendingReleases = new ObjectArrayList<>();
+	private double tailLengthM;
+
+	private record PendingRelease(long x, long y, long z, String viaRailHex, double rearClearsAtDistanceM) {
+	}
+
 	/** Ordered engine-runnable legs (PathData) over the rails the walker has traversed/boarded. */
 	private final ObjectArrayList<PathData> legs = new ObjectArrayList<>();
 
@@ -169,6 +180,33 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 		return out;
 	}
 
+	/**
+	 * ③: the length of the vehicle/consist this walker drives, used to delay a crossed point's release
+	 * until the tail has cleared it (0 = head-only walker, the pre-③ behaviour).
+	 */
+	public void setTailLengthM(double tailLengthM) {
+		this.tailLengthM = Math.max(0, tailLengthM);
+	}
+
+	/** Points whose head crossed but whose tail has not cleared yet (diagnostics/tests). */
+	public int pendingReleaseCount() {
+		return pendingReleases.size();
+	}
+
+	/** ③/②: release every crossed point whose tail (plus junction clearance) has now cleared it. */
+	private void releaseClearedPoints() {
+		if (pointAuthority == null || pointAuthorityOwner == null || pendingReleases.isEmpty()) {
+			return;
+		}
+		pendingReleases.removeIf(pending -> {
+			if (distanceM + 1e-9 < pending.rearClearsAtDistanceM()) {
+				return false;
+			}
+			pointAuthority.passed(pending.x(), pending.y(), pending.z(), pending.viaRailHex(), pointAuthorityOwner);
+			return true;
+		});
+	}
+
 	public boolean endOfLine() {
 		return endOfLine;
 	}
@@ -211,6 +249,7 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 		// A halt at an unset fork is a "waiting for the operator/任务 to decide", not terminal: a fresh
 		// advance() re-attempts the node (自由开). End-of-line / target stay terminal.
 		haltedAtAuthority = false;
+		releaseClearedPoints();
 		double remaining = Math.max(0, deltaM);
 		while (remaining > 0 && !haltedAtAuthority && !endOfLine && !atTarget) {
 			final double len = rail.railMath.getLength();
@@ -218,6 +257,7 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 			if (remaining < toNode) {
 				offsetM += remaining;
 				distanceM += remaining;
+				releaseClearedPoints();
 				return true;
 			}
 			remaining -= toNode;
@@ -250,11 +290,16 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 					haltedAtAuthority = true;
 					break;
 				}
-				// The train has crossed the fork node onto the elected continuation: its authority
-				// hold (if any) is consumed and the queue advances (over-release is a no-op).
+				// The train has crossed the fork node onto the elected continuation: its authority hold
+				// (if any) is consumed and the queue advances (over-release is a no-op) - but only once the
+				// TAIL has cleared (③ 车尾清岔 + ② 岔区清限), not at this instant.
 				crossedPointKeys.add(ahead.getX() + "," + ahead.getY() + "," + ahead.getZ() + "|" + rail.getHexId());
 				if (pointAuthority != null && pointAuthorityOwner != null) {
-					pointAuthority.passed(ahead.getX(), ahead.getY(), ahead.getZ(), rail.getHexId(), pointAuthorityOwner);
+					final Position crossedNode = ahead;
+					final double clearanceM = data.positionsToRail.get(crossedNode) == null || data.positionsToRail.get(crossedNode).size() < 3
+						? 0
+						: org.mtr.core.data.Vehicle.MMTR_JUNCTION_CLEARANCE_M;
+					pendingReleases.add(new PendingRelease(crossedNode.getX(), crossedNode.getY(), crossedNode.getZ(), rail.getHexId(), distanceM + tailLengthM + clearanceM));
 				}
 			}
 
@@ -270,6 +315,7 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 				break;
 			}
 		}
+		releaseClearedPoints();
 		return remaining < deltaM;
 	}
 
