@@ -324,4 +324,36 @@ public final class MmtrConsistVehicleMotionTests {
 		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_A, java.util.UUID.randomUUID()));
 		assertFalse(v.isMmtrMotionAuto(), "the crew is driving by hand now");
 	}
+
+	/**
+	 * 实机缺陷 (2026-09-09)「端2 没法开车」: the crew drove the train into a dead end, walked to the
+	 * other cab and took it — and the throttle then did nothing. {@code endOfLine}/{@code atTarget}
+	 * describe the OLD direction of travel and used to survive a cab change made by walking (only the
+	 * 换端 command cleared them), so every advance was refused.
+	 */
+	@Test
+	public void takingTheOtherCabAtTheDeadEndLetsTheConsistDriveBack() {
+		final Line line = new Line();
+		// Near the far end of r2 (the last rail) so the B-end cab runs into the dead end at once.
+		final Vehicle v = consistVehicle(line.sim, line.r2, line.nC, line.r2.railMath.getLength() - 4, new BranchStore());
+		final java.util.UUID crew = java.util.UUID.randomUUID();
+		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_B, crew), "the crew takes the B-end cab");
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 300, positions());
+
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		assertTrue(walker.endOfLine(), "the B end reached the dead end of r2");
+		assertEquals(0, v.getSpeed(), 1e-9, "the consist is at rest against the dead end");
+
+		// The crew walks to the other cab of the same car and takes it: the dead end is now BEHIND the
+		// leading end, so the train must be able to drive away.
+		assertTrue(v.enterMmtrCabAtCar(0, true, crew), "the same crew moves to the A-end cab");
+		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrActiveCab());
+		assertFalse(walker.endOfLine(), "the old direction's dead end no longer applies");
+
+		final double before = walker.distanceM();
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 60, positions());
+		assertTrue(walker.distanceM() > before + 0.5, "the consist drove back out of the dead end");
+	}
 }

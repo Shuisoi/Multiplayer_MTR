@@ -50,6 +50,13 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	/** The leading end has boarded {@link #targetRailHex} and the run rests there (task arrival). */
 	private boolean atTarget;
 	/**
+	 * The manned cab {@link #endOfLine}/{@link #atTarget} were computed for. Both flags describe the
+	 * DIRECTION of travel ("the front reached a dead end" / "the front boarded the target"), so they
+	 * are meaningless once the crew mans the other cab — walking into the other cab (or an operator
+	 * command) changes the direction without going through {@link #changeEnds(boolean)}.
+	 */
+	private MmtrCabState.Cab flagsCab = MmtrCabState.Cab.NONE;
+	/**
 	 * B5 rear-clear: a point the consist's front has crossed but whose hold must survive until the
 	 * <em>rear</em> has cleared it. Keyed by the cumulative distance at which that happens, so it
 	 * survives spine trimming (arc coordinates shift, cumulative distance does not).
@@ -136,6 +143,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	}
 
 	public boolean endOfLine() {
+		syncDirectionFlags();
 		return endOfLine;
 	}
 
@@ -148,6 +156,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 
 	/** Whether the leading end has boarded the task target rail (the run rests there). */
 	public boolean atTarget() {
+		syncDirectionFlags();
 		return atTarget;
 	}
 
@@ -307,6 +316,23 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	}
 
 	/**
+	 * Drops the direction-dependent halt flags when the manned cab changed. Without this, a crew that
+	 * takes the OTHER cab of a train standing at a dead end (or on its task target) could not drive
+	 * away: {@code endOfLine}/{@code atTarget} describe the old direction and would block every
+	 * advance. 换端 clears them explicitly; this covers every other way the cab can change (the crew
+	 * walking into the other cab via {@code enterMmtrCabAtCar}, an operator {@code cab} command, or a
+	 * key inserted directly through {@link MmtrCabState}).
+	 */
+	private void syncDirectionFlags() {
+		final MmtrCabState.Cab active = cabs.activeCab();
+		if (active != flagsCab) {
+			flagsCab = active;
+			endOfLine = false;
+			atTarget = false;
+		}
+	}
+
+	/**
 	 * Advance the consist by up to {@code deltaM} metres in the manned cab's direction. The leading
 	 * face moves first, the trailing face follows at the fixed consist length; at a node the spine is
 	 * extended by electing the next rail (operator &gt; auto grant &gt; task target &gt; single
@@ -316,6 +342,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 */
 	public boolean advance(double deltaM) {
 		haltedAtAuthority = false;
+		syncDirectionFlags();
 		if (!cabs.isManned() || deltaM <= EPSILON_M || atTarget) {
 			return false;
 		}
