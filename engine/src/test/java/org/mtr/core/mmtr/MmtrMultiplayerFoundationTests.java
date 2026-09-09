@@ -82,6 +82,31 @@ public final class MmtrMultiplayerFoundationTests {
 		assertEquals(0, simulator.getWatchdogMmtrOverrides());
 	}
 
+	/**
+	 * 日志降噪 (notes/77): the 5 s recount stays, but an idle simulator prints its summary at most once
+	 * a minute - otherwise three simulators put 36 heartbeat lines a minute into the real-machine log.
+	 * A non-zero counter is the state an operator must see, so that prints immediately.
+	 */
+	@Test
+	public void testWatchdogHeartbeatIsThrottledButDefectsPrintImmediately() throws Exception {
+		final Simulator simulator = createSimulator();
+		final java.io.PrintStream originalOut = System.out;
+		final java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+		try {
+			System.setOut(new java.io.PrintStream(buffer, true, java.nio.charset.StandardCharsets.UTF_8));
+			simulator.watchdogHealthCheck();
+			final int afterFirstCheck = buffer.size();
+			assertTrue(afterFirstCheck > 0, "the first health summary is printed");
+			simulator.watchdogHealthCheck();
+			assertEquals(afterFirstCheck, buffer.size(), "a second idle summary inside the same minute is silent");
+			simulator.markRouteJammed(7L);
+			simulator.watchdogHealthCheck();
+			assertTrue(buffer.size() > afterFirstCheck, "a jammed route prints immediately instead of waiting for the heartbeat");
+		} finally {
+			System.setOut(originalOut);
+		}
+	}
+
 	@Test
 	public void testVehicleSnapshotMmtrFieldsRoundTrip() throws Exception {
 		final Simulator simulator = createSimulator();

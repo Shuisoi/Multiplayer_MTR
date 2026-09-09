@@ -163,8 +163,11 @@ public class Simulator extends Data implements Utilities {
 	 * routes, so an operator (or an external process) can detect stuck trains early.
 	 */
 	private static final int MMTR_WATCHDOG_INTERVAL_TICKS = 100;
+	/** 日志降噪: the summary is RECOUNTED every 5 s but only PRINTED this often while everything is idle. */
+	private static final long MMTR_WATCHDOG_LOG_INTERVAL_MILLIS = 60_000L;
 	private int watchdogTickCounter;
 	private long watchdogLastCheckAt;
+	private long watchdogLastLogAtMillis;
 	private int watchdogVehicles;
 	private int watchdogRiders;
 	private int watchdogDrivers;
@@ -1174,9 +1177,17 @@ public class Simulator extends Data implements Utilities {
 		watchdogMmtrOverrides = overrides[0];
 		watchdogProtections = protections[0];
 		watchdogJammedRoutes = jammedRouteIds.size();
-		System.out.println("[MMTR-HLTH] t=" + getCurrentMillis()
-			+ " vehicles=" + watchdogVehicles + " riders=" + watchdogRiders + " drivers=" + watchdogDrivers
-			+ " mmtrOverrides=" + watchdogMmtrOverrides + " protections=" + watchdogProtections + " jammedRoutes=" + watchdogJammedRoutes);
+		// 日志降噪 (notes/77): the counts are refreshed every 5 s for the ops UI and tests, but printing
+		// them every 5 s made the heartbeat the last per-tick-ish noise in the real-machine log (three
+		// simulators = 36 lines a minute). Print immediately whenever a counter is non-zero - that is
+		// the state an operator must see - and otherwise at most once a minute.
+		final boolean watchdogInteresting = watchdogRiders > 0 || watchdogDrivers > 0 || watchdogMmtrOverrides > 0 || watchdogProtections > 0 || watchdogJammedRoutes > 0;
+		if (watchdogInteresting || getCurrentMillis() - watchdogLastLogAtMillis >= MMTR_WATCHDOG_LOG_INTERVAL_MILLIS) {
+			watchdogLastLogAtMillis = getCurrentMillis();
+			System.out.println("[MMTR-HLTH] t=" + getCurrentMillis()
+				+ " vehicles=" + watchdogVehicles + " riders=" + watchdogRiders + " drivers=" + watchdogDrivers
+				+ " mmtrOverrides=" + watchdogMmtrOverrides + " protections=" + watchdogProtections + " jammedRoutes=" + watchdogJammedRoutes);
+		}
 	}
 
 	public long getWatchdogLastCheckAt() { return watchdogLastCheckAt; }

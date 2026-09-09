@@ -80,9 +80,10 @@
   - **74 = C10 调车进路增强（一）：换端重规划**（进路朝向反了时每个任务换端一次再规划；实机已触发，但 aassdd 车场还需"牵出—推进"式中折返，见笔记里的拓扑分析）；
   - **75 = C10 调车进路增强（二）：调车授权覆盖整条进路**（`Plan.routeRailHexes` + `grantRoute`，S1 不再在中途被占用的轨上拦停；实机 987654 L1→L2 已走通，440/0/2）；
   - **76 = C10 收尾：实机复验 + 调车进路等待诊断**（世界重置后 aassdd 作业单自己开过去挂上 3 节、C8 自动车钩实机项补齐；等待道岔授权的信息改为点名道岔 + 持有人/人工位，441/0/2）。
-  - **77 = 日志开关：每 tick 走行/同步日志按需开启**（`MmtrTrace` 默认关；`-Dmmtr.trace=true` 或 OP 指令 `trace on|off`；实机日志从"1600/2000 行噪声"回到可读；附"服务器运行时别覆盖 libs jar"红线）。
+  - **77 = 日志开关：每 tick 走行/同步日志按需开启**（`MmtrTrace` 默认关；`-Dmmtr.trace=true` 或 OP 指令 `trace on|off`；`[MMTR-HLTH]` 心跳空闲时降到 1 次/分钟、计数非零立即打印；附"服务器运行时别覆盖 libs jar"红线）。
   - **78 = 信号×道岔×任务集成立项 + S5 进路对象**（`MmtrRoute`/`MmtrRouteRegistry`：进路成为一等对象，SET/PENDING 由道岔权威派生、每 tick 刷新、终态/删车释放；每列车 feed 带 `route`、顶层 `routes[]`；A2 信号与联锁的读源；454/0/2）。
   - **79 = A2 信号 = 进路 × 闭塞（单一真源）**（`MmtrSignalAspect`：闭塞链为底、SET MAIN 进路收窄分岔、PENDING 进路压红起点、调车不清主灯、无进路退回原链；`SystemMapServlet` 删掉重复的链走行，460/0/2）。
+  - **80 = A2 游戏内信号灯读进路（镜像通道）**（引擎派生视图 `nextRails`/`pendingEntries` → `PacketMmtrRoutes` + `MmtrClientRoutes` + `MmtrRouteMirror`（变化才推）→ `RenderSignalBase` 收窄/压红；引擎 461/0/2、fabric 编译通过；实机目视待做）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）

@@ -23,6 +23,13 @@
 开启方式：服务器启动加 `-Dmmtr.trace=true`，或在 Web 指令栏发 `trace on`（立即生效，不用重启）。
 客户端要开就走启动参数（客户端 JVM 的 `-Dmmtr.trace=true`）。
 
+### 心跳降噪（同一片）
+
+关掉每 tick 日志后，实机日志剩下的噪声就是 `[MMTR-HLTH]` 心跳：每 5 秒一次、三个模拟器各一行
+= **36 行/分钟**，21 分钟的会话里占满整个文件。改法：**计数照旧每 5 秒刷新**（ops UI 与测试读同一份），
+但只在两种情况下打印——**任一计数非零**（有乘客/司机/MMTR 覆盖/保护/堵路，正是运维要看的状态）或
+**空闲时最多每分钟一次**。用例 `MmtrMultiplayerFoundationTests.testWatchdogHeartbeatIsThrottledButDefectsPrintImmediately`。
+
 ## 操作红线（本次踩到的）
 
 **服务器/客户端运行时不要覆盖 `game/libs/Transport-Simulation-Core-0.0.1.jar`**：本次在服务器运行时同步 jar，
