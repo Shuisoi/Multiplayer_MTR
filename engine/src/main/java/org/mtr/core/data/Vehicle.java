@@ -1430,8 +1430,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrManualOverride = true;
 		// Signal S3 (AWS): a driver acknowledgement press is a one-shot intent - queue it for the
 		// warning state machine and clear it from the stored control state (no repeat semantics).
+		// Only a press made WHILE THE WARNING IS SHOWING counts: a press with no warning up (a driver
+		// testing the key, or an operator command) must not be remembered and silently cancel the next
+		// warning - that turned the 2.5 s window into a no-op (实机 2026-09-09: warning then
+		// "acknowledged" on the very next tick, no SPAD).
 		if (mmtrActiveControl.isAcknowledge()) {
-			mmtrAwsAckQueued = true;
+			if (mmtrAwsState == MMTR_AWS_WARN) {
+				mmtrAwsAckQueued = true;
+			}
 			mmtrActiveControl.setAcknowledge(false);
 		}
 		if (!wasOverride && driverUuid != null) {
@@ -2968,10 +2974,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final boolean restricted = signalInLead
 			|| boundaryM < Double.MAX_VALUE / 2 && boundaryM - mmtrMotionWalker.distanceM() <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
 		if (!restricted) {
+			// A press with no warning showing is not an acknowledgement (see applyMmtrControl).
+			mmtrAwsAckQueued = false;
 			if (mmtrAwsState != MMTR_AWS_NONE) {
 				mmtrAwsState = MMTR_AWS_NONE;
 				mmtrAwsWarnElapsedMillis = 0;
-				mmtrAwsAckQueued = false;
 				System.out.println("[MMTR-AWS] warning cleared (restriction gone)");
 			}
 			return;
@@ -2979,6 +2986,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrAwsState == MMTR_AWS_NONE) {
 			mmtrAwsState = MMTR_AWS_WARN;
 			mmtrAwsWarnElapsedMillis = 0;
+			mmtrAwsAckQueued = false;
 			System.out.println("[MMTR-AWS] warning on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.distanceM() * 10.0) / 10.0 + "m - signal " + signalAspect + " on " + signalRailHex + " in " + Math.round(remainingToSignalM * 10.0) / 10.0 + "m, boundary at " + Math.round(boundaryM * 10.0) / 10.0 + "m");
 			return; // the acknowledgement window starts counting on the NEXT tick
 		}

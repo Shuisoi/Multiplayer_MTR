@@ -313,6 +313,38 @@ public final class MmtrAwsWarningTests {
 		assertFalse(v.isMmtrAwsWarningAcknowledged(), "green signal: the acknowledged indicator clears");
 	}
 
+	/**
+	 * 实机 2026-09-09: the driver pressed the acknowledge key while NO warning was showing; the engine
+	 * remembered it, and the next warning was acknowledged on its very first tick - the 2.5 s window
+	 * never ran, so the SPAD never fired. A press outside a warning must be ignored.
+	 */
+	@Test
+	public void anAcknowledgePressedBeforeTheWarningDoesNotCancelIt() {
+		final AwsNet n = new AwsNet("build/mmtr-aws-stale-ack");
+		final Vehicle v = n.spawn();
+		final UUID driver = UUID.randomUUID();
+		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
+		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		v.updateRidingEntities(entities);
+
+		// The driver tests the key early (nothing restricted yet), then drives normally.
+		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1).setAcknowledge(true), driver).apply(n.sim);
+		assertFalse(v.isMmtrAwsWarningPending(), "no warning is showing yet");
+		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
+
+		boolean warned = false;
+		boolean spad = false;
+		for (int i = 0; i < 500 && !spad; i++) {
+			n.tickWithOccupiedB();
+			if (v.isMmtrAwsWarningPending()) {
+				warned = true;
+			}
+			spad = v.isMmtrProtectionFromSync();
+		}
+		assertTrue(warned, "the warning still engages");
+		assertTrue(spad, "a press made before the warning must not acknowledge it");
+	}
+
 	@Test
 	public void autoRunNeverSeesDriverWarnings() {
 		final AwsNet n = new AwsNet("build/mmtr-aws-auto");
