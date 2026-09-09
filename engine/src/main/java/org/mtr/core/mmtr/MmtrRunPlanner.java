@@ -85,7 +85,226 @@ public final class MmtrRunPlanner {
 			}
 			return viaFlip;
 		}
+		final Plan viaSetback = planToRailViaSetback(sim, vehicle, targetRailHex, stopFraction);
+		if (viaSetback.feasible) {
+			final long now = System.currentTimeMillis();
+			if (now - mmtrLastFlipPlanLogMillis >= FLIP_PLAN_LOG_INTERVAL_MILLIS) {
+				mmtrLastFlipPlanLogMillis = now;
+				System.out.println("[MMTR-RUN] planned via 牵出—推进 setback @" + Math.round(viaSetback.flipCumulativeM) + "m (rail " + viaSetback.flipRailHex + ") - " + forward.reason);
+			}
+			return viaSetback;
+		}
+		// An unplannable movement is an operator-visible event (a task will fail), so report all three
+		// attempts' reasons once: the forward search, the terminal flip and the setback search.
+		System.out.println("[MMTR-RUN] no plan for " + targetRailHex + ": forward=" + forward.reason + " | flip=" + viaFlip.reason + " | setback=" + viaSetback.reason);
 		return forward;
+	}
+
+	/** How far short of the reversal node the train stops, so the walker does not cross onto the next rail. */
+	private static final double SETBACK_EPS_M = 0.2;
+
+	/** One search state: where the train is, which rail it arrived on, and whether it has reversed. */
+	private static final class SetbackState {
+		final Position node;
+		final @Nullable Rail arrival;
+		final int reversals;
+
+		SetbackState(Position node, @Nullable Rail arrival, int reversals) {
+			this.node = node;
+			this.arrival = arrival;
+			this.reversals = reversals;
+		}
+
+		String key() {
+			return node.getX() + "," + node.getY() + "," + node.getZ() + "|" + (arrival == null ? "" : arrival.getHexId()) + "|" + reversals;
+		}
+	}
+
+	/** How a {@link SetbackState} was reached: from where, along which rail, and by reversing there. */
+	private static final class SetbackRec {
+		final @Nullable SetbackState from;
+		final @Nullable Rail rail;
+		final boolean reversedHere;
+
+		SetbackRec(@Nullable SetbackState from, @Nullable Rail rail, boolean reversedHere) {
+			this.from = from;
+			this.rail = rail;
+			this.reversedHere = reversedHere;
+		}
+	}
+
+	/**
+	 * C10 牵出—推进 (pull out, then set back): when neither a straight run nor a terminal flip can reach
+	 * the target, a real shunt reverses ONCE mid-route - the train runs past the junction into the lead,
+	 * stops, changes ends and comes back into the branch that leads to the target. This is the normal way
+	 * into a stub siding whose only entry faces the wrong way (实机 2026-09-09: the aassdd long track).
+	 *
+	 * <p>Search: BFS over (node, arrival rail, reversals used) with at most one reversal, where a
+	 * reversal is a zero-length transition at a node onto a different rail (including back along the
+	 * arrival rail). The plan is a normal plan plus {@code flipRailHex}/{@code flipCumulativeM} at the
+	 * reversal point, so the existing vehicle-side flip handling stops the train there, changes ends and
+	 * continues with the forks already preset for the second leg.
+	 */
+	private static Plan planToRailViaSetback(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
+		final Plan plan = new Plan();
+		plan.targetRailHex = targetRailHex;
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		if (walker == null) {
+			plan.reason = "setback: vehicle is not in live Motion-Core mode";
+			return plan;
+		}
+		final Rail target = findRail(sim, targetRailHex);
+		final Rail currentRail = findRail(sim, walker.railHex());
+		final Position startNode = walker.aheadNode();
+		if (target == null || currentRail == null || startNode == null) {
+			plan.reason = "setback: walker or target rail unavailable";
+			return plan;
+		}
+		if (currentRail == target) {
+			plan.reason = "setback: target is the rail the vehicle is already on";
+			return plan;
+		}
+
+		final Object2ObjectOpenHashMap<String, SetbackRec> prev = new Object2ObjectOpenHashMap<>();
+		final ObjectArrayList<SetbackState> queue = new ObjectArrayList<>();
+		final SetbackState start = new SetbackState(startNode, currentRail, 0);
+		prev.put(start.key(), new SetbackRec(null, null, false));
+		queue.add(start);
+		SetbackState goalFrom = null;
+		Position goalFar = null;
+		boolean goalReversed = false;
+		while (!queue.isEmpty() && goalFrom == null) {
+			final SetbackState state = queue.remove(0);
+			final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(state.node);
+			if (neighbors == null) {
+				continue;
+			}
+			final ObjectArrayList<SetbackState> nextStates = new ObjectArrayList<>();
+			final ObjectArrayList<Rail> nextRails = new ObjectArrayList<>();
+			final ObjectArrayList<Boolean> nextReversed = new ObjectArrayList<>();
+			neighbors.forEach((other, rail) -> {
+				if (rail != state.arrival) {
+					nextStates.add(new SetbackState(other, rail, state.reversals));
+					nextRails.add(rail);
+					nextReversed.add(false);
+				}
+				if (state.reversals == 0 && !state.node.equals(startNode)) {
+					// Reverse at this node (change ends) and depart along `rail` - which may be the rail
+					// the train arrived on (backing out of the lead) or another branch at the junction.
+					// Reversing AT THE START node is deliberately excluded: that is the "parked facing the
+					// wrong way" case, which the mission handles by changing ends before planning again -
+					// the forward search must never quietly route a parked train backwards out of its own
+					// siding (see MmtrRunPlannerTests.plannerRefusesBackwardsRoutesThroughTheYardRear).
+					nextStates.add(new SetbackState(other, rail, 1));
+					nextRails.add(rail);
+					nextReversed.add(true);
+				}
+			});
+			for (int i = 0; i < nextStates.size(); i++) {
+				final SetbackState next = nextStates.get(i);
+				if (nextRails.get(i) == target) {
+					goalFrom = state;
+					goalFar = next.node;
+					goalReversed = nextReversed.get(i);
+					break;
+				}
+				if (!prev.containsKey(next.key())) {
+					prev.put(next.key(), new SetbackRec(state, nextRails.get(i), nextReversed.get(i)));
+					queue.add(next);
+				}
+			}
+		}
+		if (goalFrom == null) {
+			plan.reason = "setback: target rail " + targetRailHex + " is not reachable with one reversal";
+			return plan;
+		}
+
+		// Reconstruct the rail traversal (goal edge last) and reverse it into run order.
+		final ObjectArrayList<Rail> rails = new ObjectArrayList<>();
+		final ObjectArrayList<Boolean> reversedAt = new ObjectArrayList<>();
+		rails.add(target);
+		reversedAt.add(goalReversed);
+		SetbackState cursor = goalFrom;
+		while (cursor != null) {
+			final SetbackRec rec = prev.get(cursor.key());
+			if (rec == null || rec.from == null) {
+				break;
+			}
+			rails.add(rec.rail);
+			reversedAt.add(rec.reversedHere);
+			cursor = rec.from;
+		}
+		final ObjectArrayList<Rail> orderedRails = new ObjectArrayList<>();
+		final ObjectArrayList<Boolean> orderedReversed = new ObjectArrayList<>();
+		for (int i = rails.size() - 1; i >= 0; i--) {
+			orderedRails.add(rails.get(i));
+			orderedReversed.add(reversedAt.get(i));
+		}
+
+		// Node chain: startNode, then the far endpoint of every traversed rail.
+		final ObjectArrayList<Position> nodes = new ObjectArrayList<>();
+		nodes.add(startNode);
+		for (int i = 0; i < orderedRails.size(); i++) {
+			final Position from = nodes.get(i);
+			final Position to = otherEndOf(sim, from, orderedRails.get(i));
+			if (to == null) {
+				plan.reason = "setback: rail endpoint missing in the route";
+				return plan;
+			}
+			nodes.add(to);
+		}
+		if (!nodes.get(nodes.size() - 1).equals(goalFar)) {
+			plan.reason = "setback: route reconstruction ended on the wrong node";
+			return plan;
+		}
+
+		// Distances: the remainder of the current rail, then every traversed rail (the last one only
+		// up to the stop fraction). The reversal stops SETBACK_EPS_M short of its node.
+		final double toStartNodeM = Math.max(0, currentRail.railMath.getLength() - walker.offsetM());
+		final double clamp = Math.max(0.0, Math.min(1.0, stopFraction));
+		double travelledM = toStartNodeM;
+		double flipAtM = -1;
+		for (int i = 0; i < orderedRails.size(); i++) {
+			if (orderedReversed.get(i)) {
+				flipAtM = walker.distanceM() + travelledM - SETBACK_EPS_M;
+			}
+			travelledM += i == orderedRails.size() - 1 ? orderedRails.get(i).railMath.getLength() * clamp : orderedRails.get(i).railMath.getLength();
+		}
+		plan.stopCumulativeM = walker.distanceM() + travelledM;
+		if (flipAtM > 0) {
+			plan.flipCumulativeM = flipAtM;
+			final int flipRailIndex = orderedReversed.indexOf(true);
+			plan.flipRailHex = (flipRailIndex <= 0 ? currentRail : orderedRails.get(flipRailIndex - 1)).getHexId();
+		}
+		if (plan.stopCumulativeM <= walker.distanceM() + 1e-6) {
+			plan.reason = "setback: stop would lie at or behind the vehicle position";
+			return plan;
+		}
+
+		// Turnout decisions: the fork at each rail's entry node, in the order the walker will meet them.
+		double cumulM = toStartNodeM;
+		for (int i = 0; i < orderedRails.size(); i++) {
+			final Position node = nodes.get(i);
+			final Rail incoming = i == 0 ? currentRail : orderedRails.get(i - 1);
+			final Rail desired = orderedRails.get(i);
+			final Position approach = i == 0 ? walker.enteredFromPosition() : nodes.get(i - 1);
+			if (desired != incoming && approach != null) {
+				final ObjectArrayList<Rail> forwards = forwardRails(sim, node, incoming);
+				if (forwards.size() >= 2) {
+					final int op = branchOperator(sim, approach, node, incoming, forwards, desired);
+					if (op < 0) {
+						plan.reason = "setback: turnout at " + node + " requires a branch outside the walker's choice";
+						return plan;
+					}
+					plan.forkOps.add(new String[]{String.valueOf(node.getX()), String.valueOf(node.getY()), String.valueOf(node.getZ()), incoming.getHexId(), String.valueOf(op)});
+					plan.forkMeters.add(walker.distanceM() + cumulM);
+				}
+			}
+			cumulM += i == orderedRails.size() - 1 ? desired.railMath.getLength() * clamp : desired.railMath.getLength();
+		}
+		plan.feasible = true;
+		plan.reason = "ok";
+		return plan;
 	}
 
 	/** Minimum gap between two flip-plan reports, ms. */

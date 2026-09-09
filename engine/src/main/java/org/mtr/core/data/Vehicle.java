@@ -485,16 +485,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), 1.0);
-		if (!plan.feasible && speed <= 1e-9 && !mmtrMissionFlippedForTarget && mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker && consistWalker.changeEnds(true)) {
-			// C10 换端重规划: the plan could not be made in the direction the train happens to face - the
-			// classic case is a stub siding whose only way out is behind the train. A real crew changes
-			// ends (a double-cab unit) and tries again, so do that ONCE per mission and let the self-arm
-			// below run again next tick with the new orientation. The flag stops an A/B/A flip loop: a
-			// second failure is reported.
+		final MmtrConsistWalker selfArmConsistWalker = getMmtrConsistWalker();
+		if (!plan.feasible && speed <= 1e-9 && !mmtrMissionFlippedForTarget && selfArmConsistWalker != null) {
+			// C10 反向行驶: the plan could not be made in the direction the train happens to face - the
+			// classic case is a stub siding whose only way out is behind the train. Flip the consist's
+			// direction of travel (the REV mechanism: same manned cab, tail-first) ONCE per mission and
+			// let the self-arm below run again next tick with the new orientation. The flag stops an
+			// A/B/A loop: a second failure is reported.
 			mmtrMissionFlippedForTarget = true;
+			applyMmtrTravelReversed(!selfArmConsistWalker.travelReversed());
 			mmtrMotionLegCount = mmtrMotionWalker.legCount();
 			refreshMmtrMotionLegs();
-			System.out.println("[MMTR-MSG] motion mission could not be planned facing this way (" + plan.reason + ") - changed ends on " + mmtrMotionWalker.railHex() + " and retrying");
+			System.out.println("[MMTR-MSG] motion mission could not be planned facing this way (" + plan.reason + ") - reversed the travel direction on " + mmtrMotionWalker.railHex() + " and retrying");
 			return;
 		}
 		if (!plan.feasible) {

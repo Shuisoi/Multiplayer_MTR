@@ -138,19 +138,23 @@ public final class MmtrRunPlannerTests {
 	}
 
 	@Test
-	public void plannerRefusesBackwardsRoutesThroughTheYardRear() {
+	public void plannerReachesTheYardRearOnlyThroughAnExplicitReversal() {
 		final RearNet n = new RearNet();
 		final Vehicle v = n.spawn();
 
-		// The rear platform is only reachable by going back out of the yard's rear end - the walker
-		// faces the mouth and can never reverse: the plan must be infeasible, never a backward route.
+		// The rear platform is only reachable by going back out of the yard's rear end. The forward
+		// search must never quietly route the parked train backwards; since C10 the engine may plan it,
+		// but ONLY as an explicit 牵出—推进 reversal - the plan carries the flip point, so the train
+		// stops, changes ends and runs back instead of "driving" backwards.
 		final MmtrRunPlanner.Plan behind = MmtrRunPlanner.planToRail(n.sim, v, n.rearPlatformRail.getHexId(), 0.5);
-		assertFalse(behind.feasible, "target behind the parked rail must not be routed backwards: " + behind.reason);
-		assertTrue(behind.reason.contains("not reachable"), "reason explains the unreachability: " + behind.reason);
+		assertTrue(behind.feasible, "the rear is reachable through an explicit reversal: " + behind.reason);
+		assertFalse(behind.flipRailHex.isEmpty(), "a backwards target must be planned as a reversal, never a silent backwards run");
+		assertTrue(behind.flipCumulativeM > 0, "the reversal point is planned in walker space");
 
-		// The forward target stays perfectly feasible (regression guard for the guard).
+		// The forward target stays perfectly feasible and needs no reversal (regression guard).
 		final MmtrRunPlanner.Plan ahead = MmtrRunPlanner.planToRail(n.sim, v, n.rX.getHexId(), 0.5);
 		assertTrue(ahead.feasible, "forward target still planned: " + ahead.reason);
+		assertTrue(ahead.flipRailHex.isEmpty(), "a forward target must not invent a reversal");
 		assertEquals(1, ahead.forkOps.size(), "one en-route turnout (the yard mouth)");
 	}
 
