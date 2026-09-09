@@ -10,7 +10,6 @@ import org.mtr.mod.Init;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
 import org.mtr.mod.client.VehicleRidingMovement;
-import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.StoredMatrixTransformations;
 
@@ -22,8 +21,10 @@ import org.mtr.mod.render.StoredMatrixTransformations;
  * value changes ({@link #signature}), so a parked train costs nothing per frame.</p>
  *
  * <p>C6: a car can carry ONE DASHBOARD PER CAB (a double-ended locomotive has {@code mmtr_hud_1} and
- * {@code mmtr_hud_2} in the same car), and the two cabs do not share a desk layout. Every HUD anchor
- * of the car therefore gets its own panel, painted for its own cab (see {@link #paint}).</p>
+ * {@code mmtr_hud_2} in the same car), so every HUD anchor of the car gets its own panel - before
+ * this the second face stayed blank. The IMAGE is per MODEL, not per cab: different rolling stock
+ * authors its own layout ({@link MmtrHudLayout}, read from the anchor file), and both ends of one car
+ * paint the same one.</p>
  */
 public final class MmtrCabDashboard {
 
@@ -32,13 +33,6 @@ public final class MmtrCabDashboard {
 
 	/** Texture resolution of the panel; the canvas clamps it so the image stays small. */
 	private static final int DEFAULT_PX_PER_METRE = 256;
-	private static final int BACKGROUND_COLOR = 0xFF05080C;
-	private static final int PANEL_COLOR = 0xFF0E141C;
-	private static final int TEXT_COLOR = 0xFFFFFFFF;
-	private static final int UNIT_COLOR = 0xFFD2E6F7;
-	/** Per-end accent, so the two cabs of a double-ended locomotive read as different desks. */
-	private static final int ACCENT_A_END = 0xFF3FE0FF;
-	private static final int ACCENT_B_END = 0xFFFFB03A;
 
 	/** Model IDs already reported as having no anchors, so the log is written once per model. */
 	private static final ObjectOpenHashSet<String> MISSING_ANCHORS_LOGGED = new ObjectOpenHashSet<>();
@@ -98,14 +92,18 @@ public final class MmtrCabDashboard {
 		}
 
 		final int speedKmh = (int) Math.round(vehicle.getSpeed() * 3600);
+		final long limitKmh = vehicle.getMmtrSpeedLimitKmhFromSync();
+		// The layout belongs to the MODEL (see MmtrHudLayout), so both dashboards of a double-ended
+		// locomotive paint the same image; only the face they sit on differs.
+		final MmtrHudLayout layout = MmtrHudLayout.get(vehicleId);
+
 		for (final Anchor hud : huds) {
-			final int cab = hud.cab <= 0 ? 1 : hud.cab;
-			final String signature = signature(hud, cab, speedKmh);
+			final String signature = signature(hud, layout, speedKmh, limitKmh);
 			final MmtrPanelTexture slot = MmtrPanelTexture.get(vehicle.getId() + ":" + carNumber + ":" + hud.name);
 
 			if (slot.needsRedraw(signature)) {
 				final MmtrPanelCanvas canvas = MmtrPanelCanvas.create(hud.widthM, hud.heightM, hud.panelPxPerMetre > 0 ? hud.panelPxPerMetre : DEFAULT_PX_PER_METRE);
-				paint(canvas, cab, speedKmh);
+				layout.paint(canvas, speedKmh, limitKmh);
 				slot.redraw(canvas, signature);
 			}
 
@@ -114,39 +112,12 @@ public final class MmtrCabDashboard {
 	}
 
 	/**
-	 * Every value {@link #paint} displays must appear here, otherwise the panel keeps showing stale
-	 * numbers. Geometry (the modelled face size and the pixel density) is included too so a reloaded
-	 * model repaints at the new size, and the cab decides the layout.
+	 * Every value the panel displays must appear here, otherwise it keeps showing stale numbers. The
+	 * layout id changes when the authored layout changes, and the geometry (modelled face size and
+	 * pixel density) so a reloaded model repaints at the new size.
 	 */
-	private static String signature(Anchor hud, int cab, int speedKmh) {
-		return cab + "|" + speedKmh + "|" + hud.widthM + "x" + hud.heightM + "@" + hud.panelPxPerMetre;
-	}
-
-	/**
-	 * Paints the panel of ONE cab. The two ends of a double-ended locomotive do not share a desk
-	 * layout, so the panel is not one image reused on both faces: the readout sits on the half where
-	 * that cab's desk is, the cab's own label sits on the other half, and the accent colour identifies
-	 * the end. Cab 1 = A end, cab 2 = B end; a single unnamed dashboard is cab 1.
-	 */
-	private static void paint(MmtrPanelCanvas canvas, int cab, int speedKmh) {
-		final boolean bEnd = cab >= 2;
-		final double width = canvas.widthM();
-		final double height = canvas.heightM();
-
-		canvas.fill(0, 0, width, height, BACKGROUND_COLOR);
-		canvas.fillRoundRect(width * 0.015, height * 0.06, width * 0.97, height * 0.88, height * 0.08, PANEL_COLOR);
-
-		// Speed readout on the desk side of this cab.
-		final double readoutX = bEnd ? width * 0.72 : width * 0.28;
-		canvas.text(String.valueOf(speedKmh), readoutX, height * 0.46, height * 0.44, TEXT_COLOR, IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
-		canvas.text("km/h", readoutX, height * 0.14, height * 0.16, UNIT_COLOR, IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
-
-		// Cab identity on the other half, plus an accent strip along the bottom edge.
-		final int accent = bEnd ? ACCENT_B_END : ACCENT_A_END;
-		final double labelX = bEnd ? width * 0.05 : width * 0.95;
-		canvas.text(bEnd ? "B端" : "A端", labelX, height * 0.52, height * 0.28, accent,
-				bEnd ? IGui.HorizontalAlignment.LEFT : IGui.HorizontalAlignment.RIGHT, IGui.VerticalAlignment.CENTER);
-		canvas.fill(width * 0.02, height * 0.02, width * 0.96, height * 0.035, accent);
+	private static String signature(Anchor hud, MmtrHudLayout layout, int speedKmh, long limitKmh) {
+		return layout.id() + "|" + speedKmh + "|" + limitKmh + "|" + hud.widthM + "x" + hud.heightM + "@" + hud.panelPxPerMetre;
 	}
 
 	/** Index of a consist car inside its own model (a model can be used several times). */
