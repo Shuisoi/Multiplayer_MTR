@@ -523,7 +523,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final long now = System.currentTimeMillis();
 			if (now - mmtrLastTurnoutWaitLogMillis >= MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS) {
 				mmtrLastTurnoutWaitLogMillis = now;
-				System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " waiting for turnout authority on rail " + plan.targetRailHex);
+				// Name the blocking point (operator park / other holder / queue): a wait that never ends
+				// is only diagnosable from the log if the log says WHICH point and WHO holds it.
+				System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " waiting for turnout authority on rail " + plan.targetRailHex
+					+ " - " + org.mtr.core.mmtr.MmtrRunPlanner.describeForkWait(mmtrPendingPointOps, simulator.mmtrPointAuthority, mmtrPointOwner));
 			}
 			return;
 		}

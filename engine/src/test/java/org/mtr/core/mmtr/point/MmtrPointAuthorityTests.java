@@ -1,6 +1,8 @@
 package org.mtr.core.mmtr.point;
 
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
+import org.mtr.core.mmtr.MmtrRunPlanner;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -99,5 +101,33 @@ public final class MmtrPointAuthorityTests {
 		assertNull(a.holder(0, 0, 0, VIA), "terminal owner dropped its first hold");
 		assertEquals("waiter", a.holder(5, 0, 0, VIA), "the queued waiter took the freed point immediately");
 		assertTrue(a.isGrantedTo(5, 0, 0, VIA, "waiter"));
+	}
+
+	/**
+	 * The self-arm of a mission retries every tick and never gives up (an operator may unlock the point
+	 * at any time), so the throttled wait message is the only trace of a stuck job - it must name the
+	 * blocking point and why (operator park / other holder), not just the target rail.
+	 */
+	@Test
+	public void describeForkWaitNamesTheBlockingPointAndItsHolder() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final ObjectArrayList<String[]> ops = new ObjectArrayList<>();
+		ops.add(new String[]{"0", "0", "0", VIA, "1"});
+
+		assertEquals("no fork inside the approach window", MmtrRunPlanner.describeForkWait(new ObjectArrayList<>(), a, "v1"), "nothing to wait on");
+
+		a.lock(0, 0, 0, VIA);
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.request(0, 0, 0, VIA, "v1", 1, 5000));
+		final String locked = MmtrRunPlanner.describeForkWait(ops, a, "v1");
+		assertTrue(locked.contains("lock=true"), "an operator park is named as the reason: " + locked);
+		assertTrue(locked.contains("wantLeg=1"), "the wait names the leg the plan asked for: " + locked);
+
+		a.unlock(0, 0, 0, VIA);
+		assertEquals("all requested forks granted", MmtrRunPlanner.describeForkWait(ops, a, "v1"), "own grant is not a wait");
+
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.request(0, 0, 0, VIA, "v2", 1, 5000));
+		final String held = MmtrRunPlanner.describeForkWait(ops, a, "v2");
+		assertTrue(held.contains("holder=v1@1"), "another train's hold is named: " + held);
 	}
 }

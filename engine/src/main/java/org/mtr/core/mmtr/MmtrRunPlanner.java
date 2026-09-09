@@ -777,6 +777,29 @@ public final class MmtrRunPlanner {
 		return all;
 	}
 
+	/**
+	 * P3: describe the first fork of {@code forkOps} that {@code owner} does NOT hold right now, for the
+	 * throttled "waiting for turnout authority" message. A mission whose arm keeps failing retries every
+	 * tick and never gives up (an operator may unlock the point at any time), so the only thing that
+	 * makes such a wait actionable is naming the blocking point and why: operator park, another holder,
+	 * or the queue. Returns a short reason when nothing is blocked.
+	 */
+	public static String describeForkWait(ObjectArrayList<String[]> forkOps, org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner) {
+		if (forkOps.isEmpty()) {
+			return "no fork inside the approach window";
+		}
+		for (final String[] op : forkOps) {
+			final long x = Long.parseLong(op[0]);
+			final long y = Long.parseLong(op[1]);
+			final long z = Long.parseLong(op[2]);
+			final String viaHex = op[3];
+			if (!authority.isGrantedTo(x, y, z, viaHex, owner)) {
+				return "point " + x + "," + y + "," + z + " via=" + viaHex + " wantLeg=" + op[4] + " " + authority.state(x, y, z, viaHex);
+			}
+		}
+		return "all requested forks granted";
+	}
+
 	private static ObjectArrayList<Rail> forwardRails(Simulator sim, Position node, Rail current) {
 		final ObjectArrayList<Rail> out = new ObjectArrayList<>();
 		final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(node);
