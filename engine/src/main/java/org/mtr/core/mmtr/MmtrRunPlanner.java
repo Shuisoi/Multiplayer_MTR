@@ -6,7 +6,9 @@ import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
 import org.mtr.core.data.Vehicle;
+import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
+import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.simulation.Simulator;
 
 /**
@@ -56,6 +58,41 @@ public final class MmtrRunPlanner {
 	}
 
 	private MmtrRunPlanner() {
+	}
+
+	/**
+	 * Whether the walker can leave {@code node} on {@code desired} after arriving on {@code incoming}
+	 * from {@code approachNode}: a node with a single forward rail needs no turnout decision, a real fork
+	 * must offer {@code desired} among its drivable legs (a doubling-back leg is not one).
+	 */
+	private static boolean turnoutAllows(Simulator sim, Position node, @Nullable Position approachNode, @Nullable Rail incoming, Rail desired) {
+		if (incoming == null || desired == incoming || approachNode == null) {
+			return true;
+		}
+		final ObjectArrayList<Rail> forwards = forwardRails(sim, node, incoming);
+		return forwards.size() < 2 || branchOperator(sim, approachNode, node, incoming, forwards, desired) >= 0;
+	}
+
+	/**
+	 * The node the consist is really heading toward. A consist body's {@code aheadNode()} is the B side
+	 * of its leading spine leg, which is only the travel direction when the train runs toward B; a train
+	 * running A-end-first (the common yard parking: system key at the A cab) travels the other way, so
+	 * its raw ahead/entry nodes are swapped. Planning from the wrong end made a parked locomotive's
+	 * route start at the dead end of its own siding (实机 2026-09-09, aassdd).
+	 */
+	private static @Nullable Position travelAheadNode(MmtrMotionPosition walker) {
+		if (walker instanceof final MmtrConsistWalker consistWalker && !consistWalker.travelsTowardB()) {
+			return walker.enteredFromPosition();
+		}
+		return walker.aheadNode();
+	}
+
+	/** The node the consist is really coming from (see {@link #travelAheadNode}). */
+	private static @Nullable Position travelEntryNode(MmtrMotionPosition walker) {
+		if (walker instanceof final MmtrConsistWalker consistWalker && !consistWalker.travelsTowardB()) {
+			return walker.aheadNode();
+		}
+		return walker.enteredFromPosition();
 	}
 
 	/**
@@ -155,7 +192,7 @@ public final class MmtrRunPlanner {
 		}
 		final Rail target = findRail(sim, targetRailHex);
 		final Rail currentRail = findRail(sim, walker.railHex());
-		final Position startNode = walker.aheadNode();
+		final Position startNode = travelAheadNode(walker);
 		if (target == null || currentRail == null || startNode == null) {
 			plan.reason = "setback: walker or target rail unavailable";
 			return plan;
@@ -182,7 +219,16 @@ public final class MmtrRunPlanner {
 			final ObjectArrayList<SetbackState> nextStates = new ObjectArrayList<>();
 			final ObjectArrayList<Rail> nextRails = new ObjectArrayList<>();
 			final ObjectArrayList<Boolean> nextReversed = new ObjectArrayList<>();
+			final Position approach = state.arrival == null ? null : otherEndOf(sim, state.node, state.arrival);
 			neighbors.forEach((other, rail) -> {
+				// A turnout only offers branches the walker can actually drive (a leg that doubles back
+				// is a 人字 move and is not in the ordered legs). Validate every transition here, during
+				// the search: aborting only after a route is reconstructed would reject the whole plan
+				// even though a longer route - e.g. pull out past the fork and set back into it - is
+				// perfectly drivable (实机 2026-09-09, the aassdd junction).
+				if (rail != state.arrival && !turnoutAllows(sim, state.node, approach, state.arrival, rail)) {
+					return;
+				}
 				if (rail != state.arrival) {
 					nextStates.add(new SetbackState(other, rail, state.reversals));
 					nextRails.add(rail);
@@ -192,9 +238,9 @@ public final class MmtrRunPlanner {
 					// Reverse at this node (change ends) and depart along `rail` - which may be the rail
 					// the train arrived on (backing out of the lead) or another branch at the junction.
 					// Reversing AT THE START node is deliberately excluded: that is the "parked facing the
-					// wrong way" case, which the mission handles by changing ends before planning again -
-					// the forward search must never quietly route a parked train backwards out of its own
-					// siding (see MmtrRunPlannerTests.plannerRefusesBackwardsRoutesThroughTheYardRear).
+					// wrong way" case, which the mission handles by reversing the travel direction before
+					// planning again - the forward search must never quietly route a parked train backwards
+					// out of its own siding (see MmtrRunPlannerTests.plannerReachesTheYardRearOnlyThroughAnExplicitReversal).
 					nextStates.add(new SetbackState(other, rail, 1));
 					nextRails.add(rail);
 					nextReversed.add(true);
@@ -287,7 +333,7 @@ public final class MmtrRunPlanner {
 			final Position node = nodes.get(i);
 			final Rail incoming = i == 0 ? currentRail : orderedRails.get(i - 1);
 			final Rail desired = orderedRails.get(i);
-			final Position approach = i == 0 ? walker.enteredFromPosition() : nodes.get(i - 1);
+			final Position approach = i == 0 ? travelEntryNode(walker) : nodes.get(i - 1);
 			if (desired != incoming && approach != null) {
 				final ObjectArrayList<Rail> forwards = forwardRails(sim, node, incoming);
 				if (forwards.size() >= 2) {
@@ -324,7 +370,7 @@ public final class MmtrRunPlanner {
 			plan.reason = "target rail " + targetRailHex + " not found";
 			return plan;
 		}
-		final Position startNode = walker.aheadNode();
+		final Position startNode = travelAheadNode(walker);
 		final Rail currentRail = findRail(sim, walker.railHex());
 		if (startNode == null || currentRail == null) {
 			plan.reason = "walker has no current rail / ahead node";
@@ -346,7 +392,7 @@ public final class MmtrRunPlanner {
 		final ObjectArrayList<Position> queue = new ObjectArrayList<>();
 		queue.add(startNode);
 		prev.put(startNode, new NodeRec(null, null));
-		final Position behind = walker.enteredFromPosition();
+		final Position behind = travelEntryNode(walker);
 		Position entry = null;
 		while (!queue.isEmpty()) {
 			final Position node = queue.remove(0);
@@ -420,7 +466,7 @@ public final class MmtrRunPlanner {
 		double cumulM = fromCurrentToStartNode;
 		for (int i = 0; i + 1 < plan.nodes.size(); i++) {
 			final Position node = plan.nodes.get(i);
-			final Position approach = i == 0 ? walker.enteredFromPosition() : plan.nodes.get(i - 1);
+			final Position approach = i == 0 ? travelEntryNode(walker) : plan.nodes.get(i - 1);
 			if (approach == null && i == 0) {
 				plan.reason = "walker has no entry node for the first turnout";
 				return plan;
@@ -481,8 +527,8 @@ public final class MmtrRunPlanner {
 			plan.reason = "flip: target is the rail the vehicle is already on";
 			return plan;
 		}
-		final Position startNode = walker.aheadNode();
-		final Position entryEnd = walker.enteredFromPosition();
+		final Position startNode = travelAheadNode(walker);
+		final Position entryEnd = travelEntryNode(walker);
 		if (startNode == null || entryEnd == null) {
 			plan.reason = "flip: walker has no ahead/entry node";
 			return plan;
