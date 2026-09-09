@@ -13,6 +13,7 @@ import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Utilities;
+import org.mtr.core.tool.Vector;
 
 /**
  * C4: the real coupling surgery (连挂真手术).
@@ -94,26 +95,32 @@ public final class MmtrCoupleSurgery {
 			return Result.fail("调车授权未授或已过期");
 		}
 
-		// Which train physically leads: compare the leading faces along the direction of travel (C5 -
-		// a consist body's offsetM() is its leading face, and its body extends BEHIND that face, which
-		// is the opposite side from a legacy walker's offset arithmetic).
-		final double[] initiatorFrame = initiator.mmtrTravelFrame();
-		final double[] targetFrame = target.mmtrTravelFrame();
-		if (initiatorFrame == null || targetFrame == null) {
+		// The contact gap: the distance between the two facing ends, measured geometrically for consist
+		// bodies. The travel-frame arithmetic (same-direction trains only) is kept as the legacy fallback
+		// - it reports "还差 2.1 m" on a head-on approach while the couplers are actually 0.3 m apart
+		// (实机 2026-09-09).
+		final double gap = couplerGapM(initiator, target);
+		if (!Double.isFinite(gap)) {
 			return Result.fail("无法确定两车的走行坐标");
 		}
-		final boolean initiatorLeads = initiatorFrame[0] > targetFrame[0];
-		final Vehicle leading = initiatorLeads ? initiator : target;
-		final Vehicle trailing = initiatorLeads ? target : initiator;
-		final double[] leadingFrame = initiatorLeads ? initiatorFrame : targetFrame;
-		final double[] trailingFrame = initiatorLeads ? targetFrame : initiatorFrame;
-		final double gap = leadingFrame[0] - leadingFrame[1] - trailingFrame[0];
 		if (gap > COUPLER_CONTACT_M) {
 			return Result.fail("两车车钩还差 " + Math.round(gap * 100.0) / 100.0 + " m，未接触");
 		}
 		if (gap < -0.05) {
 			return Result.fail("两车已经重叠 " + Math.round(-gap * 100.0) / 100.0 + " m");
 		}
+
+		// Which train sits at the A side of the merged body (i.e. comes first in the car list)? The
+		// joint always connects one train's B end to the other's A end, so the train whose B end faces
+		// the joint keeps its A end as the merged A end. Decided geometrically: the facing ends are the
+		// closest pair of ends (the trains touch, so it is the coupler gap) while every other pairing is
+		// a whole train length apart. The travel frames cannot decide this: a train running on the
+		// reverser approaches head-on, so BOTH leading faces meet at the joint (实机 2026-09-09: the
+		// merged body was anchored on the wrong train and could not be placed).
+		final boolean consistBodies = initiator.getMmtrConsistWalker() != null && target.getMmtrConsistWalker() != null;
+		final boolean initiatorBEndFacesJoint = consistBodies ? bEndFacesJoint(initiator, target) : initiatorFrameLeads(initiator, target);
+		final Vehicle leading = initiatorBEndFacesJoint ? initiator : target;
+		final Vehicle trailing = initiatorBEndFacesJoint ? target : initiator;
 
 		final ObjectArrayList<VehicleCar> leadingCars = new ObjectArrayList<>(leading.vehicleExtraData.immutableVehicleCars);
 		final ObjectArrayList<VehicleCar> trailingCars = new ObjectArrayList<>(trailing.vehicleExtraData.immutableVehicleCars);
@@ -158,6 +165,14 @@ public final class MmtrCoupleSurgery {
 		final double trailingCabArc = trailingWalker == null ? 0 : cabArcOf(trailingWalker);
 		final boolean trailingCabFacesA = trailingWalker != null && trailingWalker.cabs().activeCab() == MmtrCabState.Cab.CAB_A;
 		final java.util.UUID trailingCrewUuid = trailingWalker == null ? null : trailingWalker.cabs().crewUuid();
+		// 实机 (2026-09-09): the crew may be on the LEADING train (a locomotive pushing a rake on the
+		// reverser). Its key must survive too - its body is anchored at the merged A end, so its cab arc
+		// is unchanged.
+		final MmtrConsistWalker leadingWalkerForCrew = leading.getMmtrConsistWalker();
+		final boolean leadingHasCrewKey = leadingWalkerForCrew != null && leadingWalkerForCrew.cabs().isCrewKey();
+		final double leadingCabArc = leadingWalkerForCrew == null ? 0 : cabArcOf(leadingWalkerForCrew);
+		final boolean leadingCabFacesA = leadingWalkerForCrew != null && leadingWalkerForCrew.cabs().activeCab() == MmtrCabState.Cab.CAB_A;
+		final java.util.UUID leadingCrewUuid = leadingWalkerForCrew == null ? null : leadingWalkerForCrew.cabs().crewUuid();
 		// C5: a consist body must be rebuilt too - its car lengths and coupler seams are part of the
 		// body, and the spine has to cover the trailing train's rails. Do this BEFORE any mutation so
 		// a formation that cannot be placed leaves the world untouched.
@@ -180,6 +195,11 @@ public final class MmtrCoupleSurgery {
 		if (mergedConsistWalker != null) {
 			merged.engageMmtrConsistMotion(mergedConsistWalker, MmtrCabState.Cab.NONE);
 			mergedConsistWalker.removeKey();
+			if (leadingHasCrewKey) {
+				// The leading train's crew keeps its key at the SAME arc: its body is anchored at the
+				// merged A end, so nothing about that cab moved.
+				mergedConsistWalker.cabs().insertKeyAtArc(leadingCabArc, leadingCabFacesA, true, true, leadingCrewUuid);
+			}
 			if (trailingHasCrewKey) {
 				// C5b: the crew keeps its key - it is now in an interior cab (the locomotive's cab
 				// inside the merged formation), which the state machine expresses with an arc position.
@@ -252,9 +272,80 @@ public final class MmtrCoupleSurgery {
 		);
 	}
 
+	/**
+	 * The distance between the two trains' facing ends (the coupler gap), or {@code NaN} when neither a
+	 * geometric nor a travel-frame measurement is possible.
+	 */
+	private static double couplerGapM(Vehicle initiator, Vehicle target) {
+		final Vector initiatorA = endWorldPosition(initiator, true);
+		final Vector initiatorB = endWorldPosition(initiator, false);
+		final Vector targetA = endWorldPosition(target, true);
+		final Vector targetB = endWorldPosition(target, false);
+		if (initiatorA != null && initiatorB != null && targetA != null && targetB != null) {
+			return Math.min(
+					Math.min(Math.sqrt(distanceSquared(initiatorB, targetA)), Math.sqrt(distanceSquared(initiatorB, targetB))),
+					Math.min(Math.sqrt(distanceSquared(initiatorA, targetA)), Math.sqrt(distanceSquared(initiatorA, targetB))));
+		}
+		final double[] initiatorFrame = initiator.mmtrTravelFrame();
+		final double[] targetFrame = target.mmtrTravelFrame();
+		if (initiatorFrame == null || targetFrame == null) {
+			return Double.NaN;
+		}
+		final boolean initiatorLeads = initiatorFrame[0] > targetFrame[0];
+		final double[] leadingFrame = initiatorLeads ? initiatorFrame : targetFrame;
+		final double[] trailingFrame = initiatorLeads ? targetFrame : initiatorFrame;
+		return leadingFrame[0] - leadingFrame[1] - trailingFrame[0];
+	}
+
+	/** Legacy-walker ordering: the train whose leading face is further along its travel direction leads. */
+	private static boolean initiatorFrameLeads(Vehicle initiator, Vehicle target) {
+		final double[] initiatorFrame = initiator.mmtrTravelFrame();
+		final double[] targetFrame = target.mmtrTravelFrame();
+		return initiatorFrame == null || targetFrame == null || initiatorFrame[0] > targetFrame[0];
+	}
+
+	/**
+	 * Whether {@code candidate}'s B end is the end facing {@code other}: the trains touch B-to-A, so the
+	 * candidate sits at the A side of the merged body. The facing ends are the closest pair among the
+	 * four ends (the coupler gap), while every other pairing is a whole train length apart.
+	 *
+	 * <p>Only meaningful for consist bodies; the caller falls back to the travel frames for the legacy
+	 * single-point walker (which has no body orientation).</p>
+	 */
+	private static boolean bEndFacesJoint(Vehicle candidate, Vehicle other) {
+		final Vector candidateA = endWorldPosition(candidate, true);
+		final Vector candidateB = endWorldPosition(candidate, false);
+		final Vector otherA = endWorldPosition(other, true);
+		final Vector otherB = endWorldPosition(other, false);
+		if (candidateA == null || candidateB == null || otherA == null || otherB == null) {
+			return true;
+		}
+		final double bToOther = Math.min(distanceSquared(candidateB, otherA), distanceSquared(candidateB, otherB));
+		final double aToOther = Math.min(distanceSquared(candidateA, otherA), distanceSquared(candidateA, otherB));
+		return bToOther < aToOther;
+	}
+
+	/** World position of a consist body's A ({@code aEnd}) or B end, or {@code null} when unavailable. */
+	private static @Nullable Vector endWorldPosition(Vehicle vehicle, boolean aEnd) {
+		if (vehicle.getMmtrConsistWalker() == null) {
+			return null;
+		}
+		final MmtrConsistWalker walker = vehicle.getMmtrConsistWalker();
+		final MmtrConsistBody body = walker.body();
+		final double arcM = aEnd ? body.aEndArcM() : body.bEndArcM();
+		final Rail rail = walker.railAtArcM(arcM);
+		return rail == null ? null : rail.railMath.getPosition(body.legOffsetM(arcM), false);
+	}
+
+	private static double distanceSquared(Vector a, Vector b) {
+		final double dx = a.x() - b.x();
+		final double dy = a.y() - b.y();
+		final double dz = a.z() - b.z();
+		return dx * dx + dy * dy + dz * dz;
+	}
+
 	/** C5b: the manned cab's arc from the formation's A end (0 / body length for the named ends). */
-	private static double cabArcOf(MmtrConsistWalker walker) {
-		final MmtrCabState cabs = walker.cabs();
+	private static double cabArcOf(MmtrConsistWalker walker) {		final MmtrCabState cabs = walker.cabs();
 		if (!Double.isNaN(cabs.cabArcM())) {
 			return cabs.cabArcM();
 		}

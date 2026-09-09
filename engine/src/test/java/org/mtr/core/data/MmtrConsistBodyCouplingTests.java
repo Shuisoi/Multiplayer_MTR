@@ -19,6 +19,7 @@ import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -280,5 +281,70 @@ public final class MmtrConsistBodyCouplingTests {
 		}
 		assertNotNull(a.n.sim.mmtrFindVehicle(head.getId()), "the head half survives");
 		assertNotNull(a.n.sim.mmtrFindVehicle(tail.getId()), "the tail half survives");
+	}
+
+	/**
+	 * 实机 2026-09-09: the dev-world shunt — a locomotive running on the REVERSER (tail-first) pushes up
+	 * to a rake whose A end faces it, so the two LEADING faces meet head-on at the joint. The old merge
+	 * decided the A side from the travel frames, which are not comparable when the trains face opposite
+	 * ways; it anchored the merged body on the wrong train and the coupling was refused with "合并后的
+	 * 编组体无法放在当前轨道上". The joint connects one train's B end to the other's A end, so the train
+	 * whose B end faces the joint must come FIRST in the merged car list.
+	 */
+	@Test
+	public void aReversedLocomotiveCouplesHeadOnWithTheRakesAEnd() {
+		final Net n = new Net("build/mmtr-consist-body-headon");
+		// Rake placed with its A end toward y1Back, i.e. facing the locomotive coming from y2.
+		final Vehicle rake = placeConsist(n, n.siding1, n.y1, n.y1Back, 3.0, cars("wagon", 2, false, "wagon"), Cab.CAB_A);
+		// Locomotive placed with its B end at y2's mouth (facing y1) and manned in the B-end cab, so
+		// driving forward leads with the B end - the dev shunt's head-on approach.
+		final Vehicle loco = placeConsist(n, n.siding2, n.y2, n.y2Back, 9.9, cars("loco", 1, true, "loco"), Cab.CAB_B);
+		n.tick();
+		n.tick();
+		n.sim.mmtrShuntAuthorities.grant(loco.getId(), n.x2.getHexId(), n.y1.getHexId(), Kind.SUBSIDIARY_SHUNT, 0, 10 * 60 * 1000L);
+
+		final UUID driver = UUID.randomUUID();
+		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
+		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		loco.updateRidingEntities(entities);
+		assertTrue(loco.enterMmtrCab(Cab.CAB_B, driver), "the crew takes the B-end cab");
+		new MmtrDriveControl(loco.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
+		n.tickUntil(() -> n.y1.getHexId().equals(loco.getMmtrMotionWalker().railHex()) && loco.getSpeed() == 0, 4000);
+		assertFalse(loco.getMmtrConsistWalker().travelReversed(), "the locomotive drew up B-end first");
+
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(n.sim, loco.getId(), rake.getId());
+		assertTrue(result.ok(), "head-on B-to-A coupling must work: " + result.reason());
+		assertEquals(3, result.mergedCarCount(), "the locomotive + the rake's 2 cars");
+
+		final Vehicle merged = result.vehicle();
+		// The locomotive's B end is at the joint, so its A end is the merged A end: the LOCO comes first.
+		assertEquals("loco", merged.vehicleExtraData.immutableVehicleCars.get(0).getVehicleId(), "the locomotive keeps the A side");
+		assertEquals("wagon", merged.vehicleExtraData.immutableVehicleCars.get(1).getVehicleId());
+		assertEquals("wagon", merged.vehicleExtraData.immutableVehicleCars.get(2).getVehicleId());
+		assertTrue(merged.vehicleExtraData.immutableVehicleCars.get(0).getMmtrCouplerAfter(), "the joint is a coupler seam");
+
+		// The crew key was on the LEADING train this time and must survive at its unchanged arc.
+		assertNotNull(merged.getMmtrConsistWalker(), "the merged train is a consist body");
+		assertTrue(merged.getMmtrConsistWalker().cabs().isCrewKey(), "the driver keeps the key across a head-on coupling");
+		assertEquals(Cab.CAB_B, merged.getMmtrConsistWalker().cabs().activeCab(), "the driver still faces the B end");
+	}
+
+	/** Place a consist body with its A end {@code aEndOffsetM} into {@code rail} from {@code entry}. */
+	private static Vehicle placeConsist(Net n, Siding siding, Rail rail, Position entry, double aEndOffsetM, ObjectArrayList<VehicleCar> cars, Cab cab) {
+		siding.setVehicleCars(cars);
+		siding.clearParkedVehicles();
+		final double[] carLengthsM = new double[cars.size()];
+		final boolean[] couplerAfter = new boolean[cars.size()];
+		for (int i = 0; i < cars.size(); i++) {
+			carLengthsM[i] = cars.get(i).getTotalLength(i == 0, i == cars.size() - 1);
+			couplerAfter[i] = cars.get(i).getMmtrCouplerAfter();
+		}
+		final MmtrConsistWalker walker = MmtrConsistWalker.place(n.sim, new BranchStore(), rail, entry, aEndOffsetM, carLengthsM, null,
+				MmtrConsistBody.seamArcMsFrom(aEndOffsetM, carLengthsM, couplerAfter),
+				MmtrConsistBody.seamCarIndexesFrom(carLengthsM, couplerAfter));
+		assertNotNull(walker, "the consist body must fit the rail");
+		final Vehicle vehicle = siding.spawnMmtrConsistVehicle(walker, cab);
+		assertNotNull(vehicle, "the consist body must spawn");
+		return vehicle;
 	}
 }
