@@ -631,8 +631,24 @@ public final class Siding extends SidingSchema implements Utilities {
 		return true;
 	}
 
-	public void startGeneratingDepartures() {
-		departures.clear();
+	/**
+	 * C4: drop a vehicle's registration here without touching the siding template. Unlike
+	 * {@link #removeVehicleById(long)} this is not a "delete the train" operation - the coupling
+	 * surgery removes two vehicles and registers one merged replacement, and the siding must keep
+	 * its stock definition.
+	 */
+	public boolean unregisterVehicle(Vehicle vehicle) {
+		return vehicle != null && vehicleIdMap.remove(vehicle.getId()) != null;
+	}
+
+	/** C4: register an already-built vehicle here (the merged consist produced by coupling). */
+	public void adoptVehicle(Vehicle vehicle) {
+		if (vehicle != null) {
+			vehicleIdMap.put(vehicle.getId(), vehicle);
+		}
+	}
+
+	public void startGeneratingDepartures() {		departures.clear();
 		tempReturnTimes.clear();
 		for (int i = 0; i < maxVehicles; i++) {
 			tempReturnTimes.add(0);

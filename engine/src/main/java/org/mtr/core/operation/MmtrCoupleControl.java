@@ -64,37 +64,16 @@ public final class MmtrCoupleControl implements SerializedDataBase {
 		writerBase.writeString("driverUuid", driverUuid == null ? "" : driverUuid.toString());
 	}
 
-	/** Couples {@code tailVehicleId} onto {@code headVehicleId} (guard checks + plan logging). */
+	/** Couples {@code tailVehicleId} onto {@code headVehicleId} (C4: the real surgery). */
 	public void couple(Simulator simulator) {
-		final Vehicle[] head = {null};
-		final Vehicle[] tail = {null};
-		final Siding[] siding = {null};
-		simulator.sidings.forEach(currentSiding -> currentSiding.iterateVehicles(vehicle -> {
-			if (vehicle.getId() == headVehicleId) {
-				head[0] = vehicle;
-				siding[0] = currentSiding;
-			} else if (vehicle.getId() == tailVehicleId) {
-				tail[0] = vehicle;
-			}
-		}));
-		if (head[0] == null || tail[0] == null) {
-			System.out.println("[MMTR-COUP] fail: head or tail vehicle not found (" + headVehicleId + "/" + tailVehicleId + ")");
-			return;
+		final org.mtr.core.data.MmtrCoupleSurgery.Result result = org.mtr.core.data.MmtrCoupleSurgery.couple(simulator, headVehicleId, tailVehicleId);
+		if (result.ok()) {
+			simulator.mmtrCommandResult("[MMTR-COUP] 连挂完成: " + headVehicleId + " + " + tailVehicleId + " -> " + result.merged().getId()
+					+ "（" + result.mergedCarCount() + " 节）");
+		} else {
+			simulator.mmtrCommandResult("[MMTR-COUP] 连挂被拒: " + result.reason());
+			System.out.println("[MMTR-COUP] denied: " + result.reason());
 		}
-		final Siding sharedSiding = siding[0];
-		final int headCars = sharedSiding == null ? 0 : sharedSiding.getVehicleCars().size();
-		final int tailCars = sharedSiding == null ? 0 : sharedSiding.getVehicleCars().size();
-		final boolean headManual = sharedSiding != null && sharedSiding.getIsManual();
-		final MmtrCoupling.Check check = MmtrCoupling.canCoupleAtDepot(
-			sharedSiding == null ? 0 : sharedSiding.getId(), sharedSiding == null ? 0 : sharedSiding.getId(),
-			head[0].closeToDepot(), tail[0].closeToDepot(), 0, 0, headCars, tailCars, Integer.MAX_VALUE, headManual, headManual);
-		if (!check.allowed) {
-			System.out.println("[MMTR-COUP] denied: " + check.reason);
-			return;
-		}
-		System.out.println("[MMTR-COUP] ok: head=" + headVehicleId + " tail=" + tailVehicleId
-			+ " combinedCars=" + (headCars + tailCars)
-			+ " (registry merge / siding free / empty-pipe seeding pending the world executor)");
 	}
 
 	/** Uncoupled {@code headVehicleId} after {@code cutAfterCarIndex} (guard checks + plan logging). */

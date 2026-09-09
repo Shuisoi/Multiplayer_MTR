@@ -1768,6 +1768,27 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * C4: after a coupling merge, the newly attached cars' air pipe starts EMPTY (the rake was not
+	 * connected to a running compressor): unpowered added units are seeded to pipe 0 / cylinder 0 and
+	 * charge up at the consist type's {@code airPipeChargeRatePerSecond} on the following ticks. A
+	 * powered added unit brings its own compressor, so it keeps a charged pipe.
+	 *
+	 * @param firstAddedUnitIndex index of the first unit that came from the coupled-on train
+	 */
+	public void mmtrSeedAirStateAfterCoupling(int firstAddedUnitIndex) {
+		final MmtrComposition composition = getMmtrComposition();
+		if (composition == null) {
+			return;
+		}
+		for (int i = Math.max(0, firstAddedUnitIndex); i < composition.size(); i++) {
+			if (!composition.unit(i).isPowered()) {
+				composition.unit(i).setAirState(0, 0);
+			}
+		}
+		mmtrAirState = MmtrComposition.encodeAirStates(composition);
+	}
+
+	/**
 	 * Server-side: writes the current MMTR drive state + consist parameters into the synced
 	 * vehicle fields so clients can mirror the physics and show the authoritative state.
 	 */

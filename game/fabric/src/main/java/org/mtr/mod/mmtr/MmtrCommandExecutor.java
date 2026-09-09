@@ -62,7 +62,34 @@ public final class MmtrCommandExecutor {
 			executeShuntCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE])");
+		// C4 连挂/解挂: couple <initiatorId> <targetId> | uncouple <vehicleId> <cutAfterCarIndex>
+		if (parts.length >= 3 && (parts[0].equals("couple") || parts[0].equals("uncouple"))) {
+			executeCoupleCommand(simulator, parts);
+			return;
+		}
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex>)");
+	}
+
+	/**
+	 * C4: {@code couple <initiatorId> <targetId>} performs the real coupling surgery (the initiator is
+	 * the train that drove up under a 调车授权), {@code uncouple <vehicleId> <cutAfterCarIndex>} cuts a
+	 * formation after a car. The engine enforces every gate; this layer only parses and reports.
+	 */
+	private static void executeCoupleCommand(Simulator simulator, String[] parts) {
+		final long firstId;
+		final long secondId;
+		try {
+			firstId = Long.parseLong(parts[1]);
+			secondId = Long.parseLong(parts[2]);
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[" + parts[0] + "] 参数必须是数字: " + parts[1] + " " + parts[2]);
+			return;
+		}
+		if (parts[0].equals("couple")) {
+			new org.mtr.core.operation.MmtrCoupleControl(firstId, secondId, -1).couple(simulator);
+		} else {
+			new org.mtr.core.operation.MmtrCoupleControl(firstId, 0, (int) secondId).uncouple(simulator);
+		}
 	}
 
 	/**
