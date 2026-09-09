@@ -117,4 +117,36 @@ public final class MmtrManifestMotionSpawnTests {
 		assertTrue(vehicle.getIsOnRoute(), "departed vehicle is on route");
 		assertEquals(n.mouthRail.getHexId(), vehicle.getMmtrMotionWalker().railHex(), "vehicle runs on the network rail after leaving the yard");
 	}
+
+	/**
+	 * C6: the manifest (like a job or a template) can now declare the coupling seams of the stock it
+	 * stages. Without {@code mmtrCouplerAfter} every multi-car consist spawned from the yard was one
+	 * rigid unit (an EMU rake), so the 机辆 pairs in the dev world could not be uncoupled at all.
+	 */
+	@Test
+	public void manifestStockDeclaresItsCouplingSeams() {
+		final Net n = new Net();
+		final String manifest = "{"
+			+ "\"depots\":[{\"depotId\":\"" + n.depot.getId() + "\",\"name\":\"Yard\",\"sidings\":[{\"sidingId\":\"" + n.siding.getId()
+			+ "\",\"name\":\"1\",\"cars\":["
+			+ "{\"vehicleId\":\"loco\",\"length\":2,\"width\":1,\"capacity\":10,\"bogie1Position\":0,\"bogie2Position\":1,\"couplingPadding1\":0.1,\"couplingPadding2\":0.1,\"powered\":true,\"mmtrCouplerAfter\":true},"
+			+ "{\"vehicleId\":\"wagon\",\"length\":2,\"width\":1,\"capacity\":10,\"bogie1Position\":0,\"bogie2Position\":1,\"couplingPadding1\":0.1,\"couplingPadding2\":0.1,\"powered\":false}"
+			+ "]}]}]}";
+		n.sim.mmtrRollingStock = MmtrRollingStockManifest.parse(manifest);
+		assertEquals(1, n.sim.mmtrResetAndApplyRollingStock());
+		n.siding.simulateVehicles(1000, null);
+
+		final Vehicle[] found = {null};
+		n.siding.iterateVehicles(vehicle -> found[0] = vehicle);
+		assertNotNull(found[0], "the two-car consist spawned");
+		final Vehicle vehicle = found[0];
+		assertEquals(2, vehicle.getVehicleCarsAndPositions().size(), "both manifest cars are in the consist");
+		assertTrue(vehicle.getVehicleCarsAndPositions().get(0).left().getMmtrCouplerAfter(), "the declared seam reaches the spawned car");
+		assertFalse(vehicle.getVehicleCarsAndPositions().get(1).left().getMmtrCouplerAfter(), "the last car has no coupler after it");
+		assertEquals(1, vehicle.getMmtrConsistWalker().body().seamCount(), "exactly one coupling seam");
+
+		final MmtrCoupleSurgery.Result cut = MmtrCoupleSurgery.uncouple(n.sim, vehicle.getId(), 0);
+		assertTrue(cut.ok(), "the declared seam is a legal cut: " + cut.reason());
+		assertEquals(1, cut.mergedCarCount(), "the head half keeps the locomotive");
+	}
 }

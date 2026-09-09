@@ -15,6 +15,12 @@ import org.mtr.core.serializer.WriterBase;
  * wagon contributes mass and brake-pipe volume but no traction) and {@link #consistTypeId}
  * (a per-car override of the consist's default ConsistType). Both default to the previous
  * behaviour — powered, inheriting the consist default — so existing jobs are unchanged.</p>
+ *
+ * <p>C6 answers the open question "who declares the coupling seams" (design §8 O3): all three
+ * authoring paths — the rolling-stock manifest, a consist job and a consist template — go through
+ * this spec, so {@link #mmtrCouplerAfter} is the single place a seam is declared. It maps straight
+ * onto {@link VehicleCar#getMmtrCouplerAfter()} (default {@code false} = a fixed unit such as an
+ * 8-car EMU, no uncoupling inside it).</p>
  */
 public final class MmtrCarSpec implements SerializedDataBase {
 
@@ -31,6 +37,13 @@ public final class MmtrCarSpec implements SerializedDataBase {
 	public double couplingPadding2;
 	public boolean powered = true;
 	public String consistTypeId = "";
+	/**
+	 * Whether a COUPLER sits between this car and the next one — i.e. whether this boundary is a legal
+	 * uncoupling seam. {@code false} (default) keeps the previous behaviour: the cars form one fixed
+	 * unit (an EMU rake), which cannot be cut. Set it on the last car of each haulable group so
+	 * "locomotive + wagons" and 重联 8+8 can be uncoupled at exactly those boundaries.
+	 */
+	public boolean mmtrCouplerAfter;
 
 	public MmtrCarSpec() {
 	}
@@ -51,6 +64,7 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		couplingPadding2 = readerBase.getDouble("couplingPadding2", 0);
 		powered = readerBase.getBoolean("powered", true);
 		consistTypeId = readerBase.getString("consistTypeId", "");
+		mmtrCouplerAfter = readerBase.getBoolean("mmtrCouplerAfter", false);
 	}
 
 	@Override
@@ -65,11 +79,14 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		writerBase.writeDouble("couplingPadding2", couplingPadding2);
 		writerBase.writeBoolean("powered", powered);
 		writerBase.writeString("consistTypeId", consistTypeId);
+		writerBase.writeBoolean("mmtrCouplerAfter", mmtrCouplerAfter);
 	}
 
 	/** Converts this authoring spec into MTR's runtime car, carrying the MMTR metadata with it. */
 	public VehicleCar toVehicleCar() {
-		return new VehicleCar(vehicleId, length, width, capacity, bogie1Position, bogie2Position, couplingPadding1, couplingPadding2, powered, consistTypeId);
+		final VehicleCar car = new VehicleCar(vehicleId, length, width, capacity, bogie1Position, bogie2Position, couplingPadding1, couplingPadding2, powered, consistTypeId);
+		car.setMmtrCouplerAfter(mmtrCouplerAfter);
+		return car;
 	}
 
 	/** Converts this authoring spec into the consist core's immutable car (job → consist). */

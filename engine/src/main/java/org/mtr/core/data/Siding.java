@@ -10,6 +10,7 @@ import org.mtr.core.generated.data.SidingSchema;
 import org.mtr.core.oba.*;
 import org.mtr.core.operation.ArrivalResponse;
 import org.mtr.core.mmtr.consist.MmtrCabState;
+import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
@@ -495,12 +496,19 @@ public final class Siding extends SidingSchema implements Utilities {
 		final Position front = rear.equals(end1) ? end2 : end1;
 		final double headOffset = Math.max(trainLength, Math.min((railLengthM + trainLength) / 2, railLengthM));
 		final double[] carLengthsM = new double[vehicleCars.size()];
+		final boolean[] couplerAfter = new boolean[vehicleCars.size()];
 		for (int i = 0; i < carLengthsM.length; i++) {
 			carLengthsM[i] = vehicleCars.get(i).getTotalLength(i == 0, i == carLengthsM.length - 1);
+			couplerAfter[i] = vehicleCars.get(i).getMmtrCouplerAfter();
 		}
 		final BranchStore store = branches == null && data instanceof final Simulator simulator ? simulator.mmtrPointBranches : branches;
 		// The spine runs from the A end toward the rear node: measure the A end from the front node.
-		return MmtrConsistWalker.place(data, store, rail, front, railLengthM - headOffset, carLengthsM, targetRailHex);
+		// C6: the stock's declared coupling seams (manifest / job / template) have to reach the walker
+		// here as well — otherwise a spawned 机辆 consist is a rigid unit that cannot be uncoupled.
+		final double aEndOffsetM = railLengthM - headOffset;
+		return MmtrConsistWalker.place(data, store, rail, front, aEndOffsetM, carLengthsM, targetRailHex,
+				MmtrConsistBody.seamArcMsFrom(aEndOffsetM, carLengthsM, couplerAfter),
+				MmtrConsistBody.seamCarIndexesFrom(carLengthsM, couplerAfter));
 	}
 
 	/**

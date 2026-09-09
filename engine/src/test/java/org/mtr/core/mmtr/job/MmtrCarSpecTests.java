@@ -63,6 +63,31 @@ public final class MmtrCarSpecTests {
 		assertEquals(11.0, car.getTotalLength(false, false), 1e-9, "geometry is unchanged by the metadata");
 	}
 
+	/**
+	 * C6: the authoring DTO is the one place a coupling seam is declared (manifest / job / template all
+	 * go through it), and it must survive the JSON round trip and reach the runtime car.
+	 */
+	@Test
+	public void couplerAfterRoundTripsAndReachesTheVehicleCar() {
+		final MmtrCarSpec hauler = spec("loco", true, "");
+		hauler.mmtrCouplerAfter = true;
+		final MmtrCarSpec parsed = new MmtrCarSpec(new JsonReader(Utilities.getJsonObjectFromData(hauler)));
+		assertTrue(parsed.mmtrCouplerAfter, "the declared seam survives the round trip");
+		assertTrue(parsed.toVehicleCar().getMmtrCouplerAfter(), "and it reaches the runtime car");
+
+		final MmtrCarSpec fixedUnit = spec("emu", true, "");
+		assertFalse(fixedUnit.mmtrCouplerAfter, "a car without the field is part of a fixed unit");
+		assertFalse(fixedUnit.toVehicleCar().getMmtrCouplerAfter());
+	}
+
+	@Test
+	public void legacyPayloadWithoutCouplerAfterStaysAFixedUnit() {
+		final JsonObject legacy = Utilities.getJsonObjectFromData(spec("emu", true, ""));
+		legacy.remove("mmtrCouplerAfter");
+		final MmtrCarSpec parsed = new MmtrCarSpec(new JsonReader(legacy));
+		assertFalse(parsed.mmtrCouplerAfter, "jobs written before C6 keep the previous behaviour: no seam");
+	}
+
 	@Test
 	public void toUnitCarMapsAnEmptyConsistTypeToNull() {
 		final MmtrUnitCar loco = spec("loco", true, "").toUnitCar();
