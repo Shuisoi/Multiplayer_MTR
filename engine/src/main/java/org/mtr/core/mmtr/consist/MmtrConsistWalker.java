@@ -12,6 +12,8 @@ import org.mtr.core.mmtr.point.MmtrForkElection;
 import org.mtr.core.mmtr.point.MmtrPointAuthority;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 
+import java.util.UUID;
+
 /**
  * B3: the double-ended Motion Core walker. It replaces the single-point {@code MmtrMotionWalker}
  * for Motion-Core-driven consists: the train is a {@link MmtrConsistBody} (an oriented interval on
@@ -237,8 +239,23 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		return cabs.insertKey(cab, trainStopped, driverAtCab);
 	}
 
+	/** Crew key insert, identifying the crew member (a system key in the cab is displaced). */
+	public boolean insertKey(MmtrCabState.Cab cab, boolean trainStopped, boolean driverAtCab, @Nullable UUID crewUuid) {
+		return cabs.insertKey(cab, trainStopped, driverAtCab, crewUuid);
+	}
+
+	/** Engine placeholder key (yard spawn / auto run); refused while a key is already in the cab. */
+	public boolean insertSystemKey(MmtrCabState.Cab cab, boolean trainStopped) {
+		return cabs.insertSystemKey(cab, trainStopped);
+	}
+
 	public boolean removeKey() {
 		return cabs.removeKey();
+	}
+
+	/** Crew key pull, restricted to the key {@code crewUuid} actually holds. */
+	public boolean removeKey(@Nullable UUID crewUuid) {
+		return cabs.removeKey(crewUuid);
 	}
 
 	/**

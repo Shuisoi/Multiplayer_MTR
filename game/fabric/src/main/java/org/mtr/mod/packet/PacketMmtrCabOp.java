@@ -55,12 +55,15 @@ public final class PacketMmtrCabOp extends PacketHandler {
 			return;
 		}
 		// The vehicle may live in any dimension; push the command into the engine that owns it.
+		// 钥匙归属: the command carries the crew member's uuid so the engine can remember whose key is
+		// in the cab - the drive gate then checks that identity instead of trusting the client.
+		final String crew = serverPlayerEntity == null || serverPlayerEntity.getUuid() == null ? "" : serverPlayerEntity.getUuid().toString();
 		for (final net.minecraft.server.world.ServerWorld serverWorld : minecraftServer.data.getWorlds()) {
 			final Simulator simulator = main.getSimulator(Init.getWorldId(new World(serverWorld)));
 			if (simulator == null || simulator.mmtrFindVehicle(vehicleId) == null) {
 				continue;
 			}
-			simulator.mmtrPushCommand(op == Op.ENTER ? "cab " + vehicleId + " " + cab : op == Op.LEAVE ? "cab " + vehicleId + " out" : "doors " + vehicleId + " toggle");
+			simulator.mmtrPushCommand(op == Op.ENTER ? "cab " + vehicleId + " " + cab + " " + crew : op == Op.LEAVE ? "cab " + vehicleId + " out " + crew : "doors " + vehicleId + " toggle");
 			return;
 		}
 	}

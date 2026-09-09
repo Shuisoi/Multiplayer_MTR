@@ -49,6 +49,18 @@
 			"type": "string",
 			"default": ""
 		},
+		"mmtrActiveCab": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrCabKeyHolder": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrCabCrew": {
+			"type": "string",
+			"default": ""
+		},
 		"mmtrThrottleNotch": {
 			"type": "integer",
 			"default": 0

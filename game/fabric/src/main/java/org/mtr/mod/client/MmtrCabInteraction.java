@@ -54,9 +54,23 @@ public final class MmtrCabInteraction {
 	/** The cab this client believes it holds; the engine is still the authority. */
 	private static long heldVehicleId = 0;
 	private static int heldCab = 0;
+	/** When the current claim was made; reconciliation waits for the server's mirrored answer. */
+	private static long claimMillis = 0;
 
 	/** Throttle for the temporary "what does this client actually see" diagnostic. */
 	private static long lastVehicleDebugMillis = 0;
+
+	/**
+	 * Grace period before the mirrored cab state may contradict a fresh claim: the request is a packet
+	 * plus one engine tick plus the vehicle update back, so an immediate check would drop a cab that
+	 * was in fact granted.
+	 */
+	private static final long CLAIM_GRACE_MILLIS = 1500;
+
+	/** Whether this client is (still) the crew member holding {@code vehicleId}'s cab key. */
+	public static boolean holdsCab(long vehicleId) {
+		return heldVehicleId != 0 && heldVehicleId == vehicleId;
+	}
 
 	public static void tick() {
 		final boolean pressed = KeyBindings.MMTR_CAB_INTERACT.isPressed();
@@ -72,9 +86,13 @@ public final class MmtrCabInteraction {
 
 		// Forget a stale hold as soon as the player is no longer riding that consist.
 		if (heldVehicleId != 0 && !VehicleRidingMovement.isRiding(heldVehicleId)) {
-			heldVehicleId = 0;
-			heldCab = 0;
-			VehicleRidingMovement.mmtrSetCabLock(false);
+			forget(player, null);
+		} else {
+			// 钥匙归属: the client only claims a cab the engine actually gave it. The key holder is
+			// mirrored in every vehicle update (mmtrActiveCab / mmtrCabKeyHolder / mmtrCabCrew), so a
+			// refused or stolen cab is corrected on the next snapshot instead of leaving this client
+			// convinced it may drive.
+			reconcile(player);
 		}
 
 		final AimTarget target = findAimTarget();
@@ -165,11 +183,60 @@ public final class MmtrCabInteraction {
 
 	private static void leaveCab(ClientPlayerEntity player) {
 		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(heldVehicleId, PacketMmtrCabOp.Op.LEAVE, ""));
+		forget(player, "拔出钥匙，离开驾驶室 / key out");
+	}
+
+	/** Drops the local cab claim (and the seat lock); {@code message} is shown when not {@code null}. */
+	private static void forget(@Nullable ClientPlayerEntity player, @Nullable String message) {
 		heldVehicleId = 0;
 		heldCab = 0;
+		claimMillis = 0;
 		// Back to being a passenger: free to walk again.
 		VehicleRidingMovement.mmtrSetCabLock(false);
-		player.sendMessage(new Text(TextHelper.literal("拔出钥匙，离开驾驶室 / key out").data), true);
+		if (player != null && message != null) {
+			player.sendMessage(new Text(TextHelper.literal(message).data), true);
+		}
+	}
+
+	/**
+	 * Checks the local cab claim against the authoritative mirrored cab state of the vehicle. The
+	 * server mirrors {@code mmtrActiveCab} / {@code mmtrCabKeyHolder} / {@code mmtrCabCrew} with every
+	 * update, so this needs no extra packet: if the cab is no longer ours (the engine refused the key,
+	 * another crew member took it, or the consist changed ends under us), the claim is dropped and the
+	 * player is told why instead of silently driving nothing.
+	 */
+	private static void reconcile(ClientPlayerEntity player) {
+		if (heldVehicleId == 0 || System.currentTimeMillis() - claimMillis < CLAIM_GRACE_MILLIS) {
+			return;
+		}
+		final VehicleExtension vehicle = findVehicle(heldVehicleId);
+		if (vehicle == null) {
+			return;
+		}
+		final String activeCab = vehicle.getMmtrActiveCabFromSync();
+		final String expectedCab = heldCab == 2 ? "CAB_B" : "CAB_A";
+		final String holder = vehicle.getMmtrCabKeyHolderFromSync();
+		final String crew = vehicle.getMmtrCabCrewFromSync();
+		final String localUuid = player.getUuid() == null ? "" : player.getUuid().toString();
+		if (activeCab.equals(expectedCab) && "CREW".equals(holder) && (crew.isEmpty() || crew.equals(localUuid))) {
+			return;
+		}
+		if (activeCab.isEmpty() && holder.isEmpty()) {
+			// No cab state mirrored at all (legacy path vehicle / older server): keep the old behaviour.
+			return;
+		}
+		final String reason = "CREW".equals(holder) ? "钥匙在 " + crew : "SYSTEM".equals(holder) ? "自动运行持有钥匙" : activeCab.isEmpty() || "NONE".equals(activeCab) ? "无人持钥匙" : "已换到 " + activeCab;
+		forget(player, "驾驶室已不属于你（" + reason + "）");
+	}
+
+	@Nullable
+	private static VehicleExtension findVehicle(long vehicleId) {
+		for (final VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
+			if (vehicle.getId() == vehicleId) {
+				return vehicle;
+			}
+		}
+		return null;
 	}
 
 	private static void enterCab(ClientPlayerEntity player, AimTarget target) {
@@ -183,6 +250,7 @@ public final class MmtrCabInteraction {
 		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(target.vehicle.getId(), PacketMmtrCabOp.Op.ENTER, cabName));
 		heldVehicleId = target.vehicle.getId();
 		heldCab = cab;
+		claimMillis = System.currentTimeMillis();
 
 		final boolean snapped = placeAtCabView(target.vehicle, cab);
 		player.sendMessage(new Text(TextHelper.literal((changing ? "换到 " : "") + enterPrompt(cab) + (snapped ? "" : "（该模型缺少 mmtr_ 锚点，未移动视角）")).data), true);

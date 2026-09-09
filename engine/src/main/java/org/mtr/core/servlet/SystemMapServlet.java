@@ -387,6 +387,10 @@ public final class SystemMapServlet extends ServletBase {
 				if (consistWalker != null) {
 					train.addProperty("activeCab", consistWalker.cabs().activeCab().name());
 					train.addProperty("cabManned", consistWalker.cabs().isManned());
+					// 钥匙归属: "SYSTEM" is the engine's placeholder key on a staged consist (nobody
+					// may drive from it), "CREW" is a player's key - with the holder's uuid.
+					train.addProperty("cabKeyHolder", consistWalker.cabs().keyHolder().name());
+					train.addProperty("cabCrew", consistWalker.cabs().crewUuid() == null ? "" : consistWalker.cabs().crewUuid().toString());
 					// B7.6: a consist body has no legacy head position - report the leading face, which
 					// is what the map draws the train marker at (and what the driver is looking along).
 					final org.mtr.core.mmtr.MmtrMotionSnapshot consistSnapshot = org.mtr.core.mmtr.MmtrMotionSnapshot.ofConsistWalker(consistWalker);

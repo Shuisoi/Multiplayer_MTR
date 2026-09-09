@@ -256,13 +256,72 @@ public final class MmtrConsistVehicleMotionTests {
 	}
 
 	@Test
-	public void aMovingConsistVehicleRefusesToChangeEnds() {
-		final Line line = new Line();
+	public void aMovingConsistVehicleRefusesToChangeEnds() {		final Line line = new Line();
 		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
 		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
 		driveTicks(v, 5, positions());
 		assertTrue(v.getSpeed() > 0, "the consist is rolling");
 		assertFalse(v.changeEndsMmtrMotion(), "no change-ends while moving");
 		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrConsistWalker().cabs().activeCab());
+	}
+
+	/**
+	 * 钥匙归属 (2026-09-10): a consist staged from the yard manifest is manned by the engine's
+	 * <em>system key</em> so the model knows which end leads. That placeholder used to be
+	 * indistinguishable from a crew key, so every player who spawned a train was locked out of its
+	 * cab ("无法进入（需停稳且该驾驶室空闲）"). These tests pin the replacement contract: the crew
+	 * displaces the system key, the engine never displaces a crew, and only the crew member whose key
+	 * is in the cab may drive.
+	 */
+	@Test
+	public void theCrewTakesTheStagedCabFromTheSystemKeyAndThenOwnsTheThrottle() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		final java.util.UUID crew = java.util.UUID.randomUUID();
+		final java.util.UUID other = java.util.UUID.randomUUID();
+
+		assertEquals(MmtrCabState.KeyHolder.SYSTEM, v.getMmtrCabKeyHolder(), "the staging seam holds the system key");
+		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrActiveCab());
+		assertFalse(v.canTakeMmtrControl(crew), "the system key drives nobody");
+
+		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_A, crew), "the crew takes the cab the system key held");
+		assertEquals(MmtrCabState.KeyHolder.CREW, v.getMmtrCabKeyHolder());
+		assertEquals("CAB_A", v.getMmtrActiveCabFromSync(), "the cab state is mirrored for clients");
+		assertEquals(crew.toString(), v.getMmtrCabCrewFromSync());
+		// Both players ride as cab drivers; only the one whose key is in the cab may actually drive.
+		final ObjectArrayList<VehicleRidingEntity> riders = new ObjectArrayList<>();
+		riders.add(new VehicleRidingEntity(crew, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		riders.add(new VehicleRidingEntity(other, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		v.updateRidingEntities(riders);
+		assertTrue(v.canTakeMmtrControl(crew));
+		assertFalse(v.canTakeMmtrControl(other), "another crew member cannot drive someone else's consist");
+
+		// The engine's own insert is refused while the crew holds the key, and the crew key cannot be
+		// pulled by anyone else.
+		assertFalse(v.getMmtrConsistWalker().insertSystemKey(MmtrCabState.Cab.CAB_B, true));
+		assertFalse(v.leaveMmtrCab(other));
+		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrActiveCab());
+
+		// The crew can drive; pulling the key drops the override on the next tick (no key, no traction).
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1), crew);
+		assertTrue(v.isMmtrManualOverride());
+		driveTicks(v, 2, positions());
+		assertTrue(v.getSpeed() > 0);
+		assertTrue(v.leaveMmtrCab(crew));
+		driveTicks(v, 1, positions());
+		assertFalse(v.isMmtrManualOverride(), "pulling the key releases the driving authority");
+		assertEquals(MmtrCabState.Cab.NONE, v.getMmtrActiveCab());
+		assertEquals(MmtrCabState.KeyHolder.NONE, v.getMmtrCabKeyHolder());
+	}
+
+	/** Taking a cab also disarms an auto run that was armed under the system key. */
+	@Test
+	public void takingTheCabDropsTheArmedAutoRun() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(line.r0.railMath.getLength() - 2, false);
+		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_A, java.util.UUID.randomUUID()));
+		assertFalse(v.isMmtrMotionAuto(), "the crew is driving by hand now");
 	}
 }

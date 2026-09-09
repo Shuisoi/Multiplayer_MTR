@@ -97,13 +97,28 @@ public final class MmtrCommandExecutor {
 			return;
 		}
 		final String what = parts.length >= 3 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "a";
+		// 钥匙归属: the game-side packet appends the crew member's uuid; a web OP command has none and
+		// acts as an operator (may take/release any key).
+		final java.util.UUID crew = parseCrewUuid(parts.length >= 4 ? parts[3] : null);
 		if (what.equals("out") || what.equals("leave")) {
-			final boolean ok = vehicle.leaveMmtrCab();
-			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已拔钥匙" : " 无钥匙可拔"));
+			final boolean ok = vehicle.leaveMmtrCab(crew);
+			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已拔钥匙" : " 无钥匙可拔（或钥匙在他人手中）"));
 		} else {
 			final org.mtr.core.mmtr.consist.MmtrCabState.Cab cab = what.equals("b") ? org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_B : org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_A;
-			final boolean ok = vehicle.enterMmtrCab(cab);
-			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已进入 " + cab : " 无法进入（需停稳且该驾驶室空闲）"));
+			final boolean ok = vehicle.enterMmtrCab(cab, crew);
+			simulator.mmtrCommandResult("[" + parts[0] + "] " + vehicleId + (ok ? " 已进入 " + cab + "（钥匙归属 " + vehicle.getMmtrCabKeyHolder() + (crew == null ? "" : " " + crew) + "）" : " 无法进入（需停稳且该驾驶室空闲）"));
+		}
+	}
+
+	/** Parses the optional crew uuid argument; {@code null} when absent or malformed (operator). */
+	private static java.util.UUID parseCrewUuid(@javax.annotation.Nullable String value) {
+		if (value == null || value.isEmpty()) {
+			return null;
+		}
+		try {
+			return java.util.UUID.fromString(value);
+		} catch (IllegalArgumentException e) {
+			return null;
 		}
 	}
 

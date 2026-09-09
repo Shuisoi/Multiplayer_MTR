@@ -96,12 +96,14 @@ public class VehicleRidingMovement {
 		// occupation lock (MmtrDriveAccess.canControl) only honours control from a rider it sees as
 		// isDriver, and that flag is exactly what this client reports to the server - so taking a cab
 		// with the interact key must set it, otherwise the throttle only worked while holding the key.
-		final boolean mmtrCabDriver = mmtrCabLocked && ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId);
+		final boolean mmtrCabDriver = mmtrCabLocked && ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId) && MmtrCabInteraction.holdsCab(ridingVehicleId);
 		final boolean isHoldingDriverKeyNew = driverKey != null || mmtrCabDriver;
 		// MMTR: the driver key still grants control, but the permission seam can grant it as well, so
 		// boarding a cab no longer requires holding the creative/depot key.
 		final boolean canDrive = driverKey != null && driverKey.canDrive || ridingVehicleId != 0 && MmtrCabPermissions.canDrive(permissionPlayer, ridingVehicleId);
-		final boolean canOpenDoors = isHoldingDriverKeyNew && driverKey.canOpenDoors || ridingVehicleId != 0 && MmtrCabPermissions.canOpenDoors(permissionPlayer, ridingVehicleId);
+		// A null key item must not be dereferenced here: a crew member sitting in a cab (no key item in
+		// hand) is the normal case now, and this used to throw every tick for exactly that player.
+		final boolean canOpenDoors = driverKey != null && isHoldingDriverKeyNew && driverKey.canOpenDoors || ridingVehicleId != 0 && MmtrCabPermissions.canOpenDoors(permissionPlayer, ridingVehicleId);
 		pressingAccelerateTicks = canDrive && KeyBindings.TRAIN_ACCELERATE.isPressed() ? pressingAccelerateTicks + 1 : 0;
 		pressingBrakeTicks = canDrive && KeyBindings.TRAIN_BRAKE.isPressed() ? pressingBrakeTicks + 1 : 0;
 		pressingDoorsTicks = canOpenDoors && KeyBindings.TRAIN_TOGGLE_DOORS.isPressed() ? pressingDoorsTicks + 1 : 0;

@@ -618,7 +618,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// MMTR: release the explicit override as soon as its driver no longer rides as a cab
 		// driver (occupation lock), so a stale ControlState never keeps a consist moving and a
 		// new driver can take over.
-		if (!isClientside && MmtrDriveAccess.shouldAutoRelease(mmtrManualOverride, mmtrDriverUuid, mmtrDriverUuid != null && hasMmtrDriverRiding(mmtrDriverUuid))) {
+		if (!isClientside && MmtrDriveAccess.shouldAutoRelease(mmtrManualOverride, mmtrDriverUuid, mmtrDriverUuid != null && hasMmtrDriverRiding(mmtrDriverUuid) && holdsMmtrCabKey(mmtrDriverUuid))) {
 			releaseMmtrManualOverride();
 		}
 
@@ -1405,14 +1405,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/**
 	 * B7.2a (加性): engage the consist-body motion model. The train is a {@code MmtrConsistWalker}
 	 * (double-ended body + manned cab); the vehicle ticks it exactly like the legacy walker because
-	 * both implement {@link org.mtr.core.mmtr.segment.MmtrMotionPosition}. The engine inserts the key
-	 * (system key) so the consist can move; a real driver path replaces this in B7.6.
+	 * both implement {@link org.mtr.core.mmtr.segment.MmtrMotionPosition}. The engine inserts its own
+	 * <em>system key</em> so a staged consist has a leading end before any crew boards; a crew key
+	 * later displaces it ({@link #enterMmtrCab(MmtrCabState.Cab, java.util.UUID)}).
 	 */
 	public void engageMmtrConsistMotion(MmtrConsistWalker walker, MmtrCabState.Cab cab) {
 		if (walker != null && cab != MmtrCabState.Cab.NONE) {
-			walker.insertKey(cab, true, true);
+			walker.insertSystemKey(cab, true);
 		}
 		engageMmtrMotionPosition(walker);
+		updateMmtrCabSyncFields();
 	}
 
 	/**
@@ -1421,8 +1423,33 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * already checked that the player really stands at that cab and holds a driver key.
 	 */
 	public boolean enterMmtrCab(MmtrCabState.Cab cab) {
+		return enterMmtrCab(cab, null);
+	}
+
+	/**
+	 * B7.6: the crew takes a cab, identified by {@code crewUuid} ({@code null} = operator command).
+	 *
+	 * <p>Taking a cab releases the engine's system key — a staged consist waiting for a crew must
+	 * never lock its driver out — and drops any auto run that was armed under that system key: the
+	 * crew is now driving by hand (the same reason 换端 clears the armed run).</p>
+	 */
+	public boolean enterMmtrCab(MmtrCabState.Cab cab, @Nullable UUID crewUuid) {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
-		return consistWalker != null && consistWalker.insertKey(cab, speed == 0, true);
+		if (consistWalker == null || !consistWalker.insertKey(cab, speed == 0, true, crewUuid)) {
+			return false;
+		}
+		if (consistWalker.cabs().isCrewKey()) {
+			releaseMmtrPointRequests();
+			mmtrMotionPlan = null;
+			mmtrMotionAuto = false;
+			mmtrMotionStopTargetM = -1;
+			mmtrMotionStoppedAtTarget = false;
+			mmtrMotionStopOpenDoors = false;
+			mmtrMotionArrivalControlSeq = -1;
+			mmtrRunStopTarget = -1;
+		}
+		updateMmtrCabSyncFields();
+		return true;
 	}
 
 	/**
@@ -1430,14 +1457,50 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * simply loses traction and the motion branch brakes it to a stand (§3.3).
 	 */
 	public boolean leaveMmtrCab() {
+		return leaveMmtrCab(null);
+	}
+
+	/** @see #leaveMmtrCab() — {@code crewUuid} can only pull the key it holds ({@code null} = operator). */
+	public boolean leaveMmtrCab(@Nullable UUID crewUuid) {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
-		return consistWalker != null && consistWalker.removeKey();
+		if (consistWalker == null || !consistWalker.removeKey(crewUuid)) {
+			return false;
+		}
+		updateMmtrCabSyncFields();
+		return true;
 	}
 
 	/** @return the manned cab of a consist-body vehicle, or {@code NONE}. */
 	public MmtrCabState.Cab getMmtrActiveCab() {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
 		return consistWalker == null ? MmtrCabState.Cab.NONE : consistWalker.cabs().activeCab();
+	}
+
+	/** @return who holds the key ("NONE" / "SYSTEM" / "CREW") of a consist-body vehicle. */
+	public MmtrCabState.KeyHolder getMmtrCabKeyHolder() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		return consistWalker == null ? MmtrCabState.KeyHolder.NONE : consistWalker.cabs().keyHolder();
+	}
+
+	/**
+	 * Whether {@code uuid} may drive this consist from the cab: a consist-body train is only
+	 * controllable by the crew member whose key is actually in the cab (the engine's placeholder key
+	 * drives nobody). Legacy path vehicles without a cab model keep the old riding-driver rule.
+	 */
+	public boolean holdsMmtrCabKey(@Nullable UUID uuid) {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		return consistWalker == null || consistWalker.cabs().isHeldBy(uuid);
+	}
+
+	/** Mirrors the cab state into the synced vehicle fields so clients/ops see who holds the key. */
+	private void updateMmtrCabSyncFields() {
+		final MmtrCabState.Cab cab = getMmtrActiveCab();
+		mmtrActiveCab = cab.name();
+		mmtrCabKeyHolder = getMmtrCabKeyHolder().name();
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		final UUID crew = consistWalker == null ? null : consistWalker.cabs().crewUuid();
+		mmtrCabCrew = crew == null ? "" : crew.toString();
+		vehicleExtraData.mmtrMarkSyncDirty();
 	}
 
 	/** 换端 (change ends) for a motion vehicle: legal only at a stand, and only on the consist model
@@ -1465,6 +1528,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// B7.2b: the mirror path is oriented by the manned cab, so re-publish it (same rails, opposite
 		// order, anchored to the same railProgress) - the client re-renders the consist in place.
 		syncMmtrConsistMirror();
+		updateMmtrCabSyncFields();
 		return true;
 	}
 
@@ -1571,7 +1635,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			});
 			return anyDriverRiding[0];
 		}
-		final boolean senderIsRidingDriver = hasMmtrDriverRiding(uuid);
+		final boolean senderIsRidingDriver = hasMmtrDriverRiding(uuid) && holdsMmtrCabKey(uuid);
 		final boolean holderStillRiding = mmtrDriverUuid == null || hasMmtrDriverRiding(mmtrDriverUuid);
 		return MmtrDriveAccess.canControl(senderIsRidingDriver, mmtrManualOverride, mmtrDriverUuid, uuid, holderStillRiding);
 	}
@@ -1681,6 +1745,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrActive = mmtrManualOverride && mmtrConsistType != null;
 		mmtrMode = mmtrConsistType == null ? "" : mmtrConsistType.getControlMode().name();
 		mmtrDriver = mmtrDriverUuid == null ? "" : mmtrDriverUuid.toString();
+		// Cab/key ownership (who may drive) is mirrored every time the drive state is published; the
+		// enter/leave/change-ends paths mark the vehicle dirty themselves, so no extra update is sent.
+		final MmtrConsistWalker cabWalker = getMmtrConsistWalker();
+		mmtrActiveCab = getMmtrActiveCab().name();
+		mmtrCabKeyHolder = getMmtrCabKeyHolder().name();
+		mmtrCabCrew = cabWalker == null || cabWalker.cabs().crewUuid() == null ? "" : cabWalker.cabs().crewUuid().toString();
 		if (mmtrActiveControl != null) {
 			mmtrThrottleNotch = mmtrActiveControl.getThrottleNotch();
 			mmtrBrakeNotch = mmtrActiveControl.getBrakeNotch();
@@ -1766,6 +1836,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public long getMmtrLzbTargetKmhFromSync() { return mmtrLzbTargetKmh; }
 	/** Signal S4 (LZB): distance to the cab target in metres (mirrored); -1 = no bounded target. */
 	public double getMmtrLzbTargetDistanceMFromSync() { return mmtrLzbTargetDistanceM; }
+	/** 钥匙归属: the manned cab from the last snapshot ("NONE" / "CAB_A" / "CAB_B"). */
+	public String getMmtrActiveCabFromSync() { return mmtrActiveCab == null ? "" : mmtrActiveCab; }
+	/** 钥匙归属: who holds the key ("NONE" / "SYSTEM" / "CREW") from the last snapshot. */
+	public String getMmtrCabKeyHolderFromSync() { return mmtrCabKeyHolder == null ? "" : mmtrCabKeyHolder; }
+	/** 钥匙归属: the crew member whose key is in the cab (empty for a system key), from the snapshot. */
+	public String getMmtrCabCrewFromSync() { return mmtrCabCrew == null ? "" : mmtrCabCrew; }
 
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
 		// Tracks the distance

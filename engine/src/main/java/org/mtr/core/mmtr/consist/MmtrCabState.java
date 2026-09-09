@@ -2,6 +2,8 @@ package org.mtr.core.mmtr.consist;
 
 import org.jspecify.annotations.Nullable;
 
+import java.util.UUID;
+
 /**
  * 双驾驶室换端状态机 (double-cab change-ends state machine).
  *
@@ -21,6 +23,15 @@ import org.jspecify.annotations.Nullable;
  *   <li>{@link #removeKey} is legal at any time. Pulling the key while moving drops the driving
  *       authority immediately; the caller must then cut traction and service-brake to a stand.</li>
  * </ul>
+ *
+ * <p><strong>钥匙归属 (key ownership, 2026-09-10).</strong> A stabled train that is waiting for a
+ * crew has no driver, yet the consist model still needs to know which end leads — so the engine
+ * itself holds a <em>system key</em> ({@link KeyHolder#SYSTEM}) in the A-end cab when the stock is
+ * staged from the yard manifest. That placeholder must never lock a real crew out: taking a cab
+ * with a crew key displaces an unattended system key, exactly like a driver boarding a train that
+ * the depot computer had been holding. Two crew members, however, can never hold the same consist
+ * — the second one is refused. The holder is remembered so the server can check a driving request
+ * against the key that is actually in the cab instead of trusting the client.</p>
  */
 public final class MmtrCabState {
 
@@ -36,40 +47,131 @@ public final class MmtrCabState {
 		CAB_B
 	}
 
+	/**
+	 * Who holds the key that makes the consist manned. {@link #NONE} when no key is inserted.
+	 */
+	public enum KeyHolder {
+		/** No key inserted. */
+		NONE,
+		/** The engine's placeholder key: a staged consist waiting for a crew, or an auto run. */
+		SYSTEM,
+		/** A crew member's key (a player took the cab). */
+		CREW
+	}
+
 	private Cab activeCab = Cab.NONE;
+	private KeyHolder keyHolder = KeyHolder.NONE;
+	private @Nullable UUID crewUuid;
 
 	public Cab activeCab() {
 		return activeCab;
+	}
+
+	public KeyHolder keyHolder() {
+		return keyHolder;
+	}
+
+	/** The crew member whose key is in the cab, or {@code null} (system key / operator command). */
+	public @Nullable UUID crewUuid() {
+		return crewUuid;
 	}
 
 	public boolean isManned() {
 		return activeCab != Cab.NONE;
 	}
 
+	/** Whether the engine's own placeholder key is in the cab (no player behind it). */
+	public boolean isSystemKey() {
+		return isManned() && keyHolder == KeyHolder.SYSTEM;
+	}
+
+	/** Whether a player's key is in the cab. */
+	public boolean isCrewKey() {
+		return isManned() && keyHolder == KeyHolder.CREW;
+	}
+
 	/**
 	 * Insert the key in {@code cab}. The train must be at rest and the driver must be standing at
 	 * that cab; a consist can hold exactly one key at a time.
-	 * @return whether the cab is now manned
+	 *
+	 * <p>An unattended <em>system</em> key is displaced (the crew takes over from the engine); a key
+	 * already held by another crew member is not. {@code crewUuid} identifies the player taking the
+	 * cab and may be {@code null} for an operator command.</p>
+	 *
+	 * @return whether the cab is now manned by the crew
 	 */
 	public boolean insertKey(Cab cab, boolean trainStopped, boolean driverAtCab) {
-		if (cab == Cab.NONE || isManned() || !trainStopped || !driverAtCab) {
+		return insertKey(cab, trainStopped, driverAtCab, null);
+	}
+
+	/** @see #insertKey(Cab, boolean, boolean) */
+	public boolean insertKey(Cab cab, boolean trainStopped, boolean driverAtCab, @Nullable UUID crewUuid) {
+		if (cab == Cab.NONE || !trainStopped || !driverAtCab) {
+			return false;
+		}
+		// A system key is a placeholder: the crew may always take the cab from it. A key that is
+		// already in a crew member's hands is not displaced - only that same member may re-enter.
+		if (isCrewKey() && (crewUuid == null || !crewUuid.equals(this.crewUuid))) {
 			return false;
 		}
 		activeCab = cab;
+		keyHolder = KeyHolder.CREW;
+		this.crewUuid = crewUuid;
+		return true;
+	}
+
+	/**
+	 * The engine stages its own placeholder key (yard manifest spawn / auto run). Refused while any
+	 * key is already in the cab — a running crew always wins over the engine.
+	 *
+	 * @return whether the system key is now in {@code cab}
+	 */
+	public boolean insertSystemKey(Cab cab, boolean trainStopped) {
+		if (cab == Cab.NONE || isManned() || !trainStopped) {
+			return false;
+		}
+		activeCab = cab;
+		keyHolder = KeyHolder.SYSTEM;
+		crewUuid = null;
 		return true;
 	}
 
 	/**
 	 * Pull the key out of the active cab. Always legal (a driver can pull the key while the train is
 	 * still rolling); the caller must drop traction and brake to a stand when that happens.
+	 *
 	 * @return whether a key was actually removed
 	 */
 	public boolean removeKey() {
+		return removeKey(null);
+	}
+
+	/**
+	 * Pull the key out of the active cab, as {@code crewUuid}.
+	 *
+	 * <p>A crew member can only pull their own key; the engine's placeholder key can only be released
+	 * by the engine itself or by an operator command ({@code crewUuid == null}).</p>
+	 *
+	 * @return whether a key was actually removed
+	 */
+	public boolean removeKey(@Nullable UUID crewUuid) {
 		if (!isManned()) {
 			return false;
 		}
+		// A crew member can only pull the key they themselves inserted (and never the engine's
+		// placeholder key); an operator command ({@code null}) may release whatever is in the cab.
+		if (crewUuid != null && (!isCrewKey() || !crewUuid.equals(this.crewUuid))) {
+			return false;
+		}
 		activeCab = Cab.NONE;
+		keyHolder = KeyHolder.NONE;
+		this.crewUuid = null;
 		return true;
+	}
+
+	/** Whether {@code crewUuid} holds the key of this consist ({@code null} = any crew / operator). */
+	public boolean isHeldBy(@Nullable UUID crewUuid) {
+		return isManned() && (crewUuid == null || isCrewKey() && crewUuid.equals(this.crewUuid));
 	}
 
 	/**

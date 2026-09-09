@@ -45,6 +45,10 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 	public String activeCab = "NONE";
 	/** Whether a key is inserted at all (an unmanned consist cannot move). */
 	public boolean cabManned;
+	/** Who holds that key ("NONE" / "SYSTEM" / "CREW"): the engine's placeholder or a player. */
+	public String cabKeyHolder = "NONE";
+	/** The crew member whose key is in the cab (empty for a system key or an operator command). */
+	public String cabCrew = "";
 
 	public MmtrMotionSnapshot() {
 	}
@@ -175,6 +179,8 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		final MmtrMotionSnapshot out = new MmtrMotionSnapshot();
 		out.activeCab = walker.cabs().activeCab().name();
 		out.cabManned = walker.cabs().isManned();
+		out.cabKeyHolder = walker.cabs().keyHolder().name();
+		out.cabCrew = walker.cabs().crewUuid() == null ? "" : walker.cabs().crewUuid().toString();
 		out.moving = walker.cabs().isManned() && !walker.haltedAtAuthority() && !walker.endOfLine();
 		out.cars = walker.body().carCount();
 		out.segmentLengthM = walker.body().spineLengthM();
@@ -237,6 +243,8 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		rearZ = readerBase.getDouble("rearZ", 0);
 		activeCab = readerBase.getString("activeCab", "NONE");
 		cabManned = readerBase.getBoolean("cabManned", false);
+		cabKeyHolder = readerBase.getString("cabKeyHolder", "NONE");
+		cabCrew = readerBase.getString("cabCrew", "");
 	}
 
 	@Override
@@ -266,5 +274,7 @@ public final class MmtrMotionSnapshot implements SerializedDataBase {
 		writerBase.writeDouble("rearZ", rearZ);
 		writerBase.writeString("activeCab", activeCab);
 		writerBase.writeBoolean("cabManned", cabManned);
+		writerBase.writeString("cabKeyHolder", cabKeyHolder);
+		writerBase.writeString("cabCrew", cabCrew);
 	}
 }

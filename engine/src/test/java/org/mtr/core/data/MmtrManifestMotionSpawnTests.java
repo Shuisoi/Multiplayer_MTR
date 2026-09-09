@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -92,10 +93,17 @@ public final class MmtrManifestMotionSpawnTests {
 		assertTrue(syncedCopy.immutablePath.size() > 0, "synced VED path carries the motion leg shadow (" + syncedCopy.immutablePath.size() + " legs)");
 
 		// Drive with the existing cab control: throttle + forward reverser, like the game client keys.
+		// 钥匙归属 (2026-09-10): the staged consist holds the engine's system key, which drives nobody -
+		// the crew member has to take the cab first, exactly as the in-game interact key does.
 		final UUID driver = UUID.randomUUID();
+		assertEquals(org.mtr.core.mmtr.consist.MmtrCabState.KeyHolder.SYSTEM, vehicle.getMmtrCabKeyHolder(), "the yard staged the stock under the system key");
+		assertFalse(vehicle.canTakeMmtrControl(driver), "the system key cannot drive; the crew has to take the cab");
 		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
 		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
 		vehicle.updateRidingEntities(entities);
+		assertTrue(vehicle.enterMmtrCab(org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_A, driver), "the crew takes the staged cab from the system key");
+		assertEquals(org.mtr.core.mmtr.consist.MmtrCabState.KeyHolder.CREW, vehicle.getMmtrCabKeyHolder());
+		assertTrue(vehicle.canTakeMmtrControl(driver));
 		new MmtrDriveControl(vehicle.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
 		assertTrue(vehicle.isMmtrManualOverride(), "cab control holds the override");
 
