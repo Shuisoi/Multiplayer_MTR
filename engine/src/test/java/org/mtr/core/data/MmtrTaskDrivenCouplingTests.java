@@ -240,6 +240,17 @@ public final class MmtrTaskDrivenCouplingTests {
 		}
 		assertTrue(n.sim.mmtrRoutes.snapshot().isEmpty(), "no orphan route survives the coupling surgery");
 		assertEquals(0, n.sim.mmtrShuntAuthorities.size(), "the shunt authority of both trains is withdrawn");
+
+		// 实机 2026-09-09: a merge of two engine-staged consists left the merged train UNMANNED, so
+		// MmtrConsistWalker.railHex() was null and the task layer could never plan for it again
+		// ("walker has no current rail / ahead node"). The surgery now stages the placeholder key.
+		assertNotNull(merged, "the merged consist exists");
+		assertTrue(merged.getMmtrConsistWalker().cabs().isSystemKey(), "the merged consist keeps the engine's placeholder key");
+		assertNotNull(merged.getMmtrConsistWalker().railHex(), "a manned consist reports its leading rail");
+		final Rail nextTarget = org.mtr.core.mmtr.MmtrRunPlanner.findSavedRailRail(n.sim, n.siding2.getId());
+		assertNotNull(nextTarget, "the next mission's target rail resolves");
+		final org.mtr.core.mmtr.MmtrRunPlanner.Plan nextPlan = org.mtr.core.mmtr.MmtrRunPlanner.planToRail(n.sim, merged, nextTarget.getHexId(), 1.0);
+		assertTrue(nextPlan.feasible, "the merged consist can be given another mission: " + nextPlan.reason);
 	}
 
 	private static boolean coupled(Net n, Vehicle rake, Vehicle loco) {

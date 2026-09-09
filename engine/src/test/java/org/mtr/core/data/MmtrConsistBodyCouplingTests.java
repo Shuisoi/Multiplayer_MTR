@@ -286,7 +286,10 @@ public final class MmtrConsistBodyCouplingTests {
 		// The crew's key followed the locomotive into the tail half, at its A end.
 		assertTrue(tail.getMmtrConsistWalker().cabs().isCrewKey(), "the driver stays in the loco");
 		assertEquals(0, tail.getMmtrConsistWalker().cabs().cabArcM(), 1e-6, "the loco's cab is the tail's A end");
-		assertTrue(!head.getMmtrConsistWalker().cabs().isManned(), "the rake half is unmanned");
+		// 实机 2026-09-09: a half with no key cannot be planned for by the task layer (railHex() is null
+		// while unmanned), so the rake half is not left unmanned - it keeps the engine's placeholder key.
+		assertTrue(head.getMmtrConsistWalker().cabs().isSystemKey(), "the rake half keeps the engine's placeholder key");
+		assertFalse(head.getMmtrConsistWalker().cabs().isCrewKey(), "the rake half holds no crew key");
 		assertEquals(0, head.getSpeed(), 1e-9);
 		assertEquals(0, tail.getSpeed(), 1e-9);
 

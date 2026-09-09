@@ -214,6 +214,19 @@ public final class MmtrCoupleSurgery {
 				System.out.println("[MMTR-COUP] 连挂后钥匙留在机车驾驶室（编组内 " + Math.round((jointArc + trailingCabArc) * 10.0) / 10.0 + " m 处，朝向 "
 						+ (trailingCabFacesA ? "A" : "B") + " 端）");
 			}
+			// The merged train must stay DISPATCHABLE. The task layer plans from a manned leading end
+			// (MmtrConsistWalker.railHex()/offsetM() are null/0 while no cab is manned), so a merge of
+			// two engine-staged consists (the normal task-driven shunt: both carry the placeholder key,
+			// neither carries a crew key) used to leave the merged consist unmanned - and it could never
+			// be given another mission (实机 2026-09-09: "walker has no current rail / ahead node").
+			// Give it the engine's placeholder key in the cab the leading train was driving from, the
+			// same convention yard staging uses; the C10 reverse-once fallback covers the other way.
+			if (!mergedConsistWalker.cabs().isManned()) {
+				final MmtrCabState.Cab stagedCab = leadingWalkerForCrew == null || leadingCabFacesA ? MmtrCabState.Cab.CAB_A : MmtrCabState.Cab.CAB_B;
+				if (mergedConsistWalker.cabs().insertSystemKey(stagedCab, true)) {
+					System.out.println("[MMTR-COUP] 连挂后合并车获得系统钥匙（" + stagedCab + "），保持可派车");
+				}
+			}
 		} else if (walker instanceof final MmtrMotionWalker legacyWalker) {
 			merged.engageMmtrMotion(legacyWalker);
 		} else {
@@ -577,8 +590,7 @@ public final class MmtrCoupleSurgery {
 		siding.adoptVehicle(tail);
 
 		// C5b: the crew's key stays with the half that contains the cab.
-		if (consistWalker != null && consistWalker.cabs().isCrewKey()) {
-			final double cabArc = cabArcOf(consistWalker);
+		if (consistWalker != null && consistWalker.cabs().isCrewKey()) {			final double cabArc = cabArcOf(consistWalker);
 			final boolean towardA = consistWalker.cabs().activeCab() == MmtrCabState.Cab.CAB_A;
 			final java.util.UUID crew = consistWalker.cabs().crewUuid();
 			// The cab arc is at or behind the seam: the driver's cab belongs to the tail half (a cab
@@ -590,6 +602,16 @@ public final class MmtrCoupleSurgery {
 			} else {
 				headConsistWalker.cabs().insertKeyAtArc(cabArc, towardA, true, true, crew);
 			}
+		}
+
+		// Same dispatchability rule as the merge: a half that ends up with no key cannot be planned for
+		// by the task layer (railHex()/offsetM() are null/0 while unmanned), so each unmanned half gets
+		// the engine's placeholder key at its A cab - the convention yard staging uses.
+		if (headConsistWalker != null && !headConsistWalker.cabs().isManned()) {
+			headConsistWalker.cabs().insertSystemKey(MmtrCabState.Cab.CAB_A, true);
+		}
+		if (tailConsistWalker != null && !tailConsistWalker.cabs().isManned()) {
+			tailConsistWalker.cabs().insertSystemKey(MmtrCabState.Cab.CAB_A, true);
 		}
 
 		if (airUnits.length == cars.size()) {
