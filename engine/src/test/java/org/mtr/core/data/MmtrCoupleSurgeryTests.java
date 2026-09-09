@@ -167,9 +167,8 @@ public final class MmtrCoupleSurgeryTests {
 
 		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(a.n.sim, a.loco.getId(), a.rake.getId());
 		assertTrue(result.ok(), result.reason());
-		final Vehicle merged = result.merged();
-		assertNotNull(merged);
-		assertEquals(3, result.mergedCarCount(), "2 rake cars + 1 loco car");
+		final Vehicle merged = result.vehicle();
+		assertNotNull(merged);		assertEquals(3, result.mergedCarCount(), "2 rake cars + 1 loco car");
 		assertEquals(3, merged.vehicleExtraData.immutableVehicleCars.size());
 
 		// Car 0 = the front of the train: the rake leads physically, so its cars come first, then the loco.
@@ -185,8 +184,9 @@ public final class MmtrCoupleSurgeryTests {
 		assertEquals(a.n.y1.getHexId(), merged.getMmtrMotionWalker().railHex());
 		assertEquals(0, merged.getSpeed(), 1e-9);
 
-		// The two originals are gone from the world; only the merged train remains.
-		assertNull(a.n.sim.mmtrFindVehicle(a.rake.getId()), "the rake vehicle is unregistered");
+		// The two originals are gone as separate trains; the leading train's identity survives as the
+		// merged train (clients keep their mirror and just see the formation grow).
+		assertSame(merged, a.n.sim.mmtrFindVehicle(a.rake.getId()), "the merged train keeps the leading train's id");
 		assertNull(a.n.sim.mmtrFindVehicle(a.loco.getId()), "the loco vehicle is unregistered");
 		assertSame(merged, a.n.siding1.getVehicleById(merged.getId()), "the merged train is registered on the leading train's siding");
 
@@ -200,7 +200,7 @@ public final class MmtrCoupleSurgeryTests {
 		final Approached a = new Approached();
 		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(a.n.sim, a.loco.getId(), a.rake.getId());
 		assertTrue(result.ok(), result.reason());
-		final Vehicle merged = result.merged();
+		final Vehicle merged = result.vehicle();
 
 		// The driver rode the loco (car 0 of the loco) and now rides merged car 2.
 		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
@@ -256,5 +256,101 @@ public final class MmtrCoupleSurgeryTests {
 		final MmtrCoupleSurgery.Result moving = MmtrCoupleSurgery.couple(b.n.sim, b.loco.getId(), b.rake.getId());
 		assertFalse(moving.ok());
 		assertTrue(moving.reason().contains("停稳"), "reason: " + moving.reason());
+	}
+
+	/** Couples the loco onto the rake and returns the merged (3-car) train. */
+	private static Vehicle coupled(final Approached a) {
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(a.n.sim, a.loco.getId(), a.rake.getId());
+		assertTrue(result.ok(), result.reason());
+		return result.vehicle();
+	}
+
+	@Test
+	public void uncouplingCutsTheFormationAtTheSeam() {
+		final Approached a = new Approached();
+		final Vehicle merged = coupled(a);
+		assertEquals(3, merged.vehicleExtraData.immutableVehicleCars.size());
+		assertTrue(merged.vehicleExtraData.immutableVehicleCars.get(1).getMmtrCouplerAfter(), "the joint after the rake is a coupler seam");
+		assertFalse(merged.vehicleExtraData.immutableVehicleCars.get(0).getMmtrCouplerAfter(), "the rake has no internal coupler");
+
+		final double headOffsetBefore = merged.getMmtrMotionWalker().offsetM();
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.uncouple(a.n.sim, merged.getId(), 1);
+		assertTrue(result.ok(), result.reason());
+		final Vehicle head = result.vehicle();
+		final Vehicle tail = result.other();
+		assertNotNull(head);
+		assertNotNull(tail, "the cut produces a second vehicle");
+
+		assertEquals(2, head.vehicleExtraData.immutableVehicleCars.size(), "the head keeps the rake");
+		assertEquals(1, tail.vehicleExtraData.immutableVehicleCars.size(), "the tail is the loco");
+		assertEquals("loco", tail.vehicleExtraData.immutableVehicleCars.get(0).getVehicleId());
+		assertFalse(head.vehicleExtraData.immutableVehicleCars.get(1).getMmtrCouplerAfter(), "the head's new rear end has no coupler");
+		assertEquals(headOffsetBefore, head.getMmtrMotionWalker().offsetM(), 1e-9, "the head does not move");
+
+		// The tail stands directly behind the head on the same rail, nose to tail.
+		assertEquals(a.n.y1.getHexId(), tail.getMmtrMotionWalker().railHex());
+		assertEquals(a.n.y1.getHexId(), head.getMmtrMotionWalker().railHex());
+		assertTrue(tail.getMmtrMotionWalker().offsetM() < head.getMmtrMotionWalker().offsetM(), "the tail is behind the head");
+		assertEquals(0, head.getSpeed(), 1e-9);
+		assertEquals(0, tail.getSpeed(), 1e-9);
+		assertEquals(merged.getId(), head.getId(), "the head keeps the original vehicle id");
+		assertTrue(tail.getId() != head.getId(), "the tail is a new vehicle");
+
+		// Both halves are parked on one siding and must survive the yard's duplicate rule (they do not
+		// overlap, so they are a legal yard state).
+		for (int i = 0; i < 60; i++) {
+			a.n.tick();
+		}
+		assertSame(head, a.n.siding1.getVehicleById(head.getId()), "the head half survives");
+		assertSame(tail, a.n.siding1.getVehicleById(tail.getId()), "the tail half survives (nose to tail is not a duplicate)");
+		assertEquals(2, countVehicles(a.n.sim), "the world holds exactly the two halves");
+	}
+
+	@Test
+	public void cuttingAnywhereElseIsRefused() {
+		final Approached a = new Approached();
+		final Vehicle merged = coupled(a);
+		final MmtrCoupleSurgery.Result noSeam = MmtrCoupleSurgery.uncouple(a.n.sim, merged.getId(), 0);
+		assertFalse(noSeam.ok());
+		assertTrue(noSeam.reason().contains("没有车钩"), "reason: " + noSeam.reason());
+		final MmtrCoupleSurgery.Result outOfRange = MmtrCoupleSurgery.uncouple(a.n.sim, merged.getId(), 2);
+		assertFalse(outOfRange.ok());
+		assertTrue(outOfRange.reason().contains("至少一节"), "reason: " + outOfRange.reason());
+
+		// A fixed unit (a freshly staged rake that was never coupled) has no seam at all.
+		final Net n = new Net("build/mmtr-couple-fixed-unit");
+		final Vehicle fixedUnit = n.spawn(n.siding1, cars("wagon", 2, false, "wagon"));
+		n.tick();
+		final MmtrCoupleSurgery.Result fixed = MmtrCoupleSurgery.uncouple(n.sim, fixedUnit.getId(), 0);
+		assertFalse(fixed.ok());
+		assertTrue(fixed.reason().contains("没有车钩"), "reason: " + fixed.reason());
+	}
+
+	@Test
+	public void theCrewStaysWithItsOwnCar() {
+		final Approached a = new Approached();
+		final Vehicle merged = coupled(a);
+		// The driver rode the loco (now merged car 2).
+		final ObjectArrayList<VehicleRidingEntity> mergedRiders = new ObjectArrayList<>();
+		merged.vehicleExtraData.iterateRidingEntities(mergedRiders::add);
+		assertEquals(1, mergedRiders.size());
+		assertEquals(2, mergedRiders.get(0).getRidingCar());
+
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.uncouple(a.n.sim, merged.getId(), 1);
+		assertTrue(result.ok(), result.reason());
+		final ObjectArrayList<VehicleRidingEntity> headRiders = new ObjectArrayList<>();
+		result.vehicle().vehicleExtraData.iterateRidingEntities(headRiders::add);
+		assertEquals(0, headRiders.size(), "nobody rides the rake half");
+		final ObjectArrayList<VehicleRidingEntity> tailRiders = new ObjectArrayList<>();
+		result.other().vehicleExtraData.iterateRidingEntities(tailRiders::add);
+		assertEquals(1, tailRiders.size(), "the driver stays in the loco");
+		assertEquals(0, tailRiders.get(0).getRidingCar(), "the loco's cab is car 0 of the tail again");
+		assertTrue(tailRiders.get(0).isDriver());
+	}
+
+	private static int countVehicles(Simulator simulator) {
+		final int[] count = {0};
+		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> count[0]++));
+		return count[0];
 	}
 }

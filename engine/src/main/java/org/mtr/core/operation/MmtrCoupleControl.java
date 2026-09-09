@@ -68,7 +68,7 @@ public final class MmtrCoupleControl implements SerializedDataBase {
 	public void couple(Simulator simulator) {
 		final org.mtr.core.data.MmtrCoupleSurgery.Result result = org.mtr.core.data.MmtrCoupleSurgery.couple(simulator, headVehicleId, tailVehicleId);
 		if (result.ok()) {
-			simulator.mmtrCommandResult("[MMTR-COUP] 连挂完成: " + headVehicleId + " + " + tailVehicleId + " -> " + result.merged().getId()
+			simulator.mmtrCommandResult("[MMTR-COUP] 连挂完成: " + headVehicleId + " + " + tailVehicleId + " -> " + result.vehicle().getId()
 					+ "（" + result.mergedCarCount() + " 节）");
 		} else {
 			simulator.mmtrCommandResult("[MMTR-COUP] 连挂被拒: " + result.reason());
@@ -76,27 +76,15 @@ public final class MmtrCoupleControl implements SerializedDataBase {
 		}
 	}
 
-	/** Uncoupled {@code headVehicleId} after {@code cutAfterCarIndex} (guard checks + plan logging). */
+	/** Uncoupled {@code headVehicleId} after {@code cutAfterCarIndex} (C4b: the real cut at a seam). */
 	public void uncouple(Simulator simulator) {
-		final Vehicle[] vehicle = {null};
-		final Siding[] siding = {null};
-		simulator.sidings.forEach(currentSiding -> currentSiding.iterateVehicles(train -> {
-			if (train.getId() == headVehicleId) {
-				vehicle[0] = train;
-				siding[0] = currentSiding;
-			}
-		}));
-		if (vehicle[0] == null || siding[0] == null) {
-			System.out.println("[MMTR-COUP] fail: vehicle not found (" + headVehicleId + ")");
-			return;
+		final org.mtr.core.data.MmtrCoupleSurgery.Result result = org.mtr.core.data.MmtrCoupleSurgery.uncouple(simulator, headVehicleId, cutAfterCarIndex);
+		if (result.ok()) {
+			simulator.mmtrCommandResult("[MMTR-COUP] 解挂完成: " + headVehicleId + " 在接缝 " + cutAfterCarIndex + " 切分 → 前段 " + result.vehicle().getId()
+					+ "（" + result.mergedCarCount() + " 节）+ 后段 " + (result.other() == null ? "-" : result.other().getId()));
+		} else {
+			simulator.mmtrCommandResult("[MMTR-COUP] 解挂被拒: " + result.reason());
+			System.out.println("[MMTR-COUP] uncouple denied: " + result.reason());
 		}
-		final int cars = siding[0].getVehicleCars().size();
-		final MmtrCoupling.Check check = MmtrCoupling.canUncouple(cars, cutAfterCarIndex);
-		if (!check.allowed) {
-			System.out.println("[MMTR-COUP] denied: " + check.reason);
-			return;
-		}
-		System.out.println("[MMTR-COUP] ok: split vehicle=" + headVehicleId + " after car " + cutAfterCarIndex
-			+ " of " + cars + " (spawn-tail pending the world executor)");
 	}
 }

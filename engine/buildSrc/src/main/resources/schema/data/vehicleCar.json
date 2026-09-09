@@ -41,6 +41,10 @@
 		"mmtrConsistTypeId": {
 			"type": "string",
 			"default": ""
+		},
+		"mmtrCouplerAfter": {
+			"type": "boolean",
+			"default": false
 		}
 	},
 	"required": [

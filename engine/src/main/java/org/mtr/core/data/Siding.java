@@ -269,6 +269,7 @@ public final class Siding extends SidingSchema implements Utilities {
 
 		int trainsAtDepot = 0;
 		boolean spawnTrain = true;
+		final ObjectArrayList<Vehicle> keptParkedVehicles = new ObjectArrayList<>();
 
 		final ObjectArraySet<Vehicle> trainsToRemove = new ObjectArraySet<>();
 		for (final Vehicle vehicle : vehicleIdMap.values()) {
@@ -296,9 +297,13 @@ public final class Siding extends SidingSchema implements Utilities {
 				// auto-re-cycles it by a timetable departure index.
 			} else {
 				trainsAtDepot++;
-				final boolean allowDoublePark = mmtrCoexistenceAuthorized() && trainsAtDepot <= 2;
-				if (trainsAtDepot > 1 && !allowDoublePark) {
+				// C4b: two parked trains on one siding are legitimate when they stand at DIFFERENT
+				// positions of the rail (that is what uncoupling produces); only overlapping duplicates
+				// are culled, and a live 调车授权 keeps both while a coupling movement is in progress.
+				if (!mmtrCoexistenceAuthorized() && mmtrOverlapsKeptParkedVehicle(vehicle, keptParkedVehicles)) {
 					trainsToRemove.add(vehicle);
+				} else {
+					keptParkedVehicles.add(vehicle);
 				}
 			}
 		}
@@ -646,6 +651,34 @@ public final class Siding extends SidingSchema implements Utilities {
 		if (vehicle != null) {
 			vehicleIdMap.put(vehicle.getId(), vehicle);
 		}
+	}
+
+	/**
+	 * C4b: whether {@code candidate} physically overlaps a parked train already kept this tick. Trains
+	 * stabled nose to tail on one rail do NOT overlap (that is a legal yard state after uncoupling);
+	 * two copies spawned at the same yard position do. When either train's geometry is unknown (legacy
+	 * baked stock) the historical "one parked train per siding" answer is returned.
+	 */
+	private boolean mmtrOverlapsKeptParkedVehicle(Vehicle candidate, ObjectArrayList<Vehicle> kept) {
+		final Vehicle.RailSpan candidateSpan = candidate.mmtrRailSpan();
+		for (final Vehicle other : kept) {
+			if (other == candidate) {
+				continue;
+			}
+			if (candidateSpan == null) {
+				return true;
+			}
+			final Vehicle.RailSpan otherSpan = other.mmtrRailSpan();
+			if (otherSpan == null) {
+				return true;
+			}
+			if (candidateSpan.railHex().equals(otherSpan.railHex())
+					&& candidateSpan.startM() < otherSpan.endM() - 1e-6
+					&& otherSpan.startM() < candidateSpan.endM() - 1e-6) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public void startGeneratingDepartures() {		departures.clear();

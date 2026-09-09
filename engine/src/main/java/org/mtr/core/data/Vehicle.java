@@ -1768,6 +1768,48 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * C4b: the rail interval this vehicle currently stands on (rail hex + rail-local start/end of its
+	 * body), or {@code null} when the geometry is not known (legacy baked stock). Used by the yard to
+	 * tell two trains stabled at different positions of one rail (legal, uncoupling produces it) from
+	 * overlapping duplicates (culled).
+	 */
+	public record RailSpan(String railHex, double startM, double endM) {
+	}
+
+	public @Nullable RailSpan mmtrRailSpan() {
+		if (mmtrMotionWalker == null) {
+			return null;
+		}
+		final Rail rail = mmtrMotionWalker.currentRail();
+		if (rail == null) {
+			return null;
+		}
+		final double railLength = rail.railMath.getLength();
+		final double head = Math.min(railLength, Math.max(0, mmtrMotionWalker.offsetM()));
+		final double tail = Math.max(0, head - vehicleExtraData.getTotalVehicleLength());
+		return new RailSpan(rail.getHexId(), tail, head);
+	}
+
+	/**
+	 * Server-side: seed this vehicle's per-car air state from a string produced by
+	 * {@link MmtrComposition#encodeAirStates} (used by the coupling surgery, which splits the pipe
+	 * state of the two halves).
+	 */
+	public void mmtrApplyAirStateString(String airState) {
+		final MmtrComposition composition = getMmtrComposition();
+		if (composition != null && airState != null && !airState.isEmpty()) {
+			composition.applyAirStateString(airState);
+			mmtrAirState = MmtrComposition.encodeAirStates(composition);
+		}
+	}
+
+	/** C4b: the current per-unit air state string ({@code pipe,cyl;...}); empty when no composition. */
+	public String mmtrAirStateSnapshot() {
+		final MmtrComposition composition = getMmtrComposition();
+		return composition == null ? (mmtrAirState == null ? "" : mmtrAirState) : MmtrComposition.encodeAirStates(composition);
+	}
+
+	/**
 	 * C4: after a coupling merge, the newly attached cars' air pipe starts EMPTY (the rake was not
 	 * connected to a running compressor): unpowered added units are seeded to pipe 0 / cylinder 0 and
 	 * charge up at the consist type's {@code airPipeChargeRatePerSecond} on the following ticks. A

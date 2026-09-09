@@ -40,15 +40,22 @@ public final class MmtrCoupleSurgery {
 	/** How close the two couplers must be for the trains to count as touching (m). */
 	public static final double COUPLER_CONTACT_M = 0.75;
 
-	/** Outcome of a coupling attempt. */
-	public record Result(boolean ok, String reason, @Nullable Vehicle merged, int mergedCarCount) {
+	/**
+	 * Outcome of a coupling/uncoupling attempt. {@code vehicle} is the surviving (or head) train;
+	 * {@code other} is the uncoupled tail, {@code null} for a coupling.
+	 */
+	public record Result(boolean ok, String reason, @Nullable Vehicle vehicle, @Nullable Vehicle other, int mergedCarCount) {
 
 		static Result fail(String reason) {
-			return new Result(false, reason, null, 0);
+			return new Result(false, reason, null, null, 0);
 		}
 
 		static Result success(Vehicle merged) {
-			return new Result(true, "", merged, merged.vehicleExtraData.immutableVehicleCars.size());
+			return new Result(true, "", merged, null, merged.vehicleExtraData.immutableVehicleCars.size());
+		}
+
+		static Result split(Vehicle head, Vehicle tail) {
+			return new Result(true, "", head, tail, head.vehicleExtraData.immutableVehicleCars.size());
 		}
 	}
 
@@ -103,6 +110,8 @@ public final class MmtrCoupleSurgery {
 		final ObjectArrayList<VehicleCar> mergedCars = new ObjectArrayList<>(leadingCars.size() + trailingCars.size());
 		mergedCars.addAll(leadingCars);
 		mergedCars.addAll(trailingCars);
+		// C4b: the joint is a coupler seam - the only place this formation may be cut again.
+		mergedCars.get(leadingCars.size() - 1).setMmtrCouplerAfter(true);
 		if (mergedCars.size() > leading.getTransportMode().maxLength) {
 			return Result.fail("合并后 " + mergedCars.size() + " 节超过该运输方式的节数上限 " + leading.getTransportMode().maxLength);
 		}
@@ -133,7 +142,7 @@ public final class MmtrCoupleSurgery {
 			leadingSiding.unregisterVehicle(trailing);
 		}
 
-		final Vehicle merged = new Vehicle(mergedData, leadingSiding, transportMode, simulator);
+		final Vehicle merged = new Vehicle(mergedData, leadingSiding, new JsonReader(Utilities.getJsonObjectFromData(leading)), simulator);
 		if (walker instanceof final MmtrConsistWalker consistWalker) {
 			// The walker keeps its own cab state (which end leads); the crew's key from the trailing
 			// train does not transfer - after coupling the crew takes the leading cab.
@@ -176,5 +185,114 @@ public final class MmtrCoupleSurgery {
 			}
 		});
 		return found[0];
+	}
+
+	/**
+	 * C4b: cut a formation at coupler seam {@code seamIndex} (the car index after which to cut). The
+	 * head half keeps the train's position and identity; the tail half becomes a new vehicle standing
+	 * on the same rail behind the cut, with its own rolling-stock entry. Both halves must be stopped
+	 * (U5) and the cut must hit a seam (U6) - a fixed unit has none.
+	 */
+	public static Result uncouple(Simulator simulator, long vehicleId, int seamIndex) {
+		final Vehicle vehicle = simulator.mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			return Result.fail("找不到车辆 " + vehicleId);
+		}
+		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		if (walker == null) {
+			return Result.fail("解挂要求列车运行在 Motion Core 模式");
+		}
+		if (vehicle.getSpeed() > 1e-9) {
+			return Result.fail("列车必须停稳才能解挂");
+		}
+		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>(vehicle.vehicleExtraData.immutableVehicleCars);
+		if (seamIndex < 0 || seamIndex >= cars.size() - 1) {
+			return Result.fail("切分点必须两侧都留至少一节车厢（0.." + (cars.size() - 2) + "）");
+		}
+		if (!cars.get(seamIndex).getMmtrCouplerAfter()) {
+			return Result.fail("第 " + seamIndex + " 节之后没有车钩（切分只认接缝，EMU 内部与机车单车无接缝可切）");
+		}
+		if (walker instanceof MmtrConsistWalker) {
+			return Result.fail("编组体（双驾驶室）的解挂待 C5（接缝里程 seamArcM）");
+		}
+		final Rail rail = walker.currentRail();
+		final Position entry = walker.enteredFromPosition();
+		if (rail == null || entry == null) {
+			return Result.fail("找不到列车所在轨道");
+		}
+		final ObjectArrayList<VehicleCar> headCars = new ObjectArrayList<>(cars.subList(0, seamIndex + 1));
+		final ObjectArrayList<VehicleCar> tailCars = new ObjectArrayList<>(cars.subList(seamIndex + 1, cars.size()));
+		headCars.get(headCars.size() - 1).setMmtrCouplerAfter(false);
+		final double cutOffset = walker.offsetM() - Siding.getTotalVehicleLength(headCars);
+		final double railLength = rail.railMath.getLength();
+		if (cutOffset <= 0.05 || cutOffset >= railLength - 0.05) {
+			return Result.fail("切分点落在轨外（跨轨切分待 C5），cutOffset=" + Math.round(cutOffset * 100.0) / 100.0 + " m");
+		}
+		final Siding siding = sidingOf(simulator, vehicle);
+		if (siding == null) {
+			return Result.fail("找不到车辆所属股道");
+		}
+		if (!(walker instanceof final MmtrMotionWalker legacyWalker)) {
+			return Result.fail("未知的走行器类型，未做手术");
+		}
+
+		// Air: each half keeps the pipe state it had (the two halves are no longer connected).
+		final String airState = vehicle.mmtrAirStateSnapshot();
+		final String[] airUnits = airState.isEmpty() ? new String[0] : airState.split(";");
+
+		final JsonObject headJson = Utilities.getJsonObjectFromData(vehicle.vehicleExtraData);
+		headJson.add("vehicleCars", carsJson(headCars));
+		headJson.add("ridingEntities", ridingEntitiesJson(vehicle, seamIndex, false));
+		final VehicleExtraData headData = new VehicleExtraData(new JsonReader(headJson));
+
+		final JsonObject tailJson = Utilities.getJsonObjectFromData(vehicle.vehicleExtraData);
+		tailJson.add("vehicleCars", carsJson(tailCars));
+		tailJson.add("ridingEntities", ridingEntitiesJson(vehicle, seamIndex, true));
+		final VehicleExtraData tailData = new VehicleExtraData(new JsonReader(tailJson));
+
+		siding.unregisterVehicle(vehicle);
+		// The head keeps the original vehicle's identity (clients keep their mirror and just see the
+		// formation shrink); the tail is a genuinely new vehicle with a fresh id.
+		final Vehicle head = new Vehicle(headData, siding, new JsonReader(Utilities.getJsonObjectFromData(vehicle)), simulator);
+		head.engageMmtrMotion(legacyWalker);
+		siding.adoptVehicle(head);
+
+		final MmtrMotionWalker tailWalker = MmtrMotionWalker.startAtOffset(simulator, rail, entry, cutOffset, simulator.mmtrPointBranches, null);
+		final JsonObject tailVehicleJson = new JsonObject();
+		tailVehicleJson.addProperty("id", new java.util.Random().nextLong());
+		final Vehicle tail = new Vehicle(tailData, siding, new JsonReader(tailVehicleJson), simulator);
+		tail.engageMmtrMotion(tailWalker);
+		siding.adoptVehicle(tail);
+
+		if (airUnits.length == cars.size()) {
+			head.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, 0, seamIndex + 1)));
+			tail.mmtrApplyAirStateString(String.join(";", java.util.Arrays.copyOfRange(airUnits, seamIndex + 1, airUnits.length)));
+		}
+
+		System.out.println("[MMTR-COUP] 解挂完成: " + vehicleId + " 在接缝 " + seamIndex + " 切分 -> 前段 " + head.getId()
+				+ "（" + headCars.size() + " 节）+ 后段 " + tail.getId() + "（" + tailCars.size() + " 节，头端 "
+				+ Math.round(cutOffset * 100.0) / 100.0 + " m）");
+		return Result.split(head, tail);
+	}
+
+	private static JsonArray carsJson(ObjectArrayList<VehicleCar> cars) {
+		final JsonArray array = new JsonArray();
+		cars.forEach(car -> array.add(Utilities.getJsonObjectFromData(car)));
+		return array;
+	}
+
+	/** Riding entities of one side of the cut, rebased onto that side's car list. */
+	private static JsonArray ridingEntitiesJson(Vehicle vehicle, int seamIndex, boolean tailSide) {
+		final JsonArray entities = new JsonArray();
+		vehicle.vehicleExtraData.iterateRidingEntities(entity -> {
+			final boolean inTail = entity.getRidingCar() > seamIndex;
+			if (inTail != tailSide) {
+				return;
+			}
+			final JsonObject json = Utilities.getJsonObjectFromData(entity);
+			json.addProperty("ridingCar", inTail ? entity.getRidingCar() - seamIndex - 1 : entity.getRidingCar());
+			entities.add(json);
+		});
+		return entities;
 	}
 }

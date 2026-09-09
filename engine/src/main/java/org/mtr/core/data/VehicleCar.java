@@ -43,6 +43,20 @@ public final class VehicleCar extends VehicleCarSchema {
 		return mmtrConsistTypeId;
 	}
 
+	/**
+	 * C4b: whether a COUPLER sits between this car and the next one — i.e. whether this boundary is a
+	 * legal uncoupling seam. A fixed unit (a 8-car EMU) has no internal couplers, so it cannot be cut;
+	 * a coupled-on rake leaves exactly one seam behind (the joint the surgery created).
+	 */
+	public boolean getMmtrCouplerAfter() {
+		return mmtrCouplerAfter;
+	}
+
+	/** Marks (or clears) the coupler seam after this car. */
+	public void setMmtrCouplerAfter(boolean value) {
+		mmtrCouplerAfter = value;
+	}
+
 	public String getVehicleId() {
 		return vehicleId;
 	}
