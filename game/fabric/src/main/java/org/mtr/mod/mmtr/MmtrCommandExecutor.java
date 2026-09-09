@@ -58,6 +58,13 @@ public final class MmtrCommandExecutor {
 			executeInterlock(simulator, parts);
 			return;
 		}
+		// B3 闭塞区间诊断: blocks [all|<railHex>] - 哪些轨被灯切成多段、每架灯绑到哪根轨。
+		if (parts[0].equals("blocks")) {
+			simulator.mmtrCommandResult(parts.length >= 2 && !parts[1].equals("all")
+				? org.mtr.core.mmtr.signal.MmtrBlockReport.describe(simulator, parts[1])
+				: org.mtr.core.mmtr.signal.MmtrBlockReport.describeAll(simulator));
+			return;
+		}
 		if (parts.length >= 2 && (parts[0].equals("changeends") || parts[0].equals("cab") || parts[0].equals("doors"))) {
 			executeCabCommand(simulator, parts);
 			return;
@@ -77,7 +84,7 @@ public final class MmtrCommandExecutor {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | blocks [all|<railHex>] | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
 	}
 
 	/**

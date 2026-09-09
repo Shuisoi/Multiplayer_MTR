@@ -142,6 +142,17 @@ public final class MmtrBlockService {
 
 	/**
 	 * The rail a signal cuts: its bound {@code target} when set, otherwise the nearest rail within
+	 * {@link #SIGNAL_BIND_TOLERANCE_M} (AUTO placement inference). This overload resolves against the
+	 * simulator's current rails and is the operator-facing entry point ({@link MmtrBlockReport}).
+	 */
+	public @Nullable Rail resolveRail(SignalEntry entry) {
+		final Object2ObjectOpenHashMap<String, Rail> railByHex = new Object2ObjectOpenHashMap<>();
+		simulator.rails.forEach(rail -> railByHex.put(rail.getHexId(), rail));
+		return resolveRail(entry, railByHex);
+	}
+
+	/**
+	 * The rail a signal cuts: its bound {@code target} when set, otherwise the nearest rail within
 	 * {@link #SIGNAL_BIND_TOLERANCE_M} (AUTO placement inference).
 	 */
 	private @Nullable Rail resolveRail(SignalEntry entry, Object2ObjectOpenHashMap<String, Rail> railByHex) {
