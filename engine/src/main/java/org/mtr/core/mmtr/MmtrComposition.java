@@ -1,6 +1,10 @@
 package org.mtr.core.mmtr;
 
+import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.VehicleCar;
+
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Ordered, couplable set of units that move together along one path ("一列由多个单元连挂的编组").
@@ -131,6 +135,36 @@ public final class MmtrComposition {
 		}
 		units.subList(index + 1, units.size()).clear();
 		return tail;
+	}
+
+	/**
+	 * Builds the per-car composition from MTR's runtime car list (C2). Each car contributes one
+	 * unit carrying its own {@code mmtrPowered} flag and its own ConsistType — resolved from
+	 * {@code registry} by the car's {@code mmtrConsistTypeId}, falling back to {@code fallbackType}
+	 * (the consist default). A hauled wagon therefore adds mass and brake-pipe volume without
+	 * adding traction, which is what makes "locomotive + wagons" physically correct.
+	 *
+	 * @return the composition, or {@code null} when the list is empty or no type can be resolved
+	 * (the caller then behaves as before, i.e. without an MMTR composition)
+	 */
+	public static @Nullable MmtrComposition fromVehicleCars(List<VehicleCar> cars, @Nullable ConsistTypeRegistry registry, @Nullable ConsistType fallbackType) {
+		if (cars == null || cars.isEmpty()) {
+			return null;
+		}
+		final MmtrComposition composition = new MmtrComposition();
+		for (int i = 0; i < cars.size(); i++) {
+			final VehicleCar car = cars.get(i);
+			final String consistTypeId = car.getMmtrConsistTypeId();
+			ConsistType type = consistTypeId == null || consistTypeId.isEmpty() || registry == null ? null : registry.get(consistTypeId);
+			if (type == null) {
+				type = fallbackType;
+			}
+			if (type == null) {
+				return null;
+			}
+			composition.couple(new Unit("car" + i, type, car.getMmtrPowered()));
+		}
+		return composition;
 	}
 
 	/** Charges every unit's pipe to 1.0 and releases all cylinders (fresh train). */

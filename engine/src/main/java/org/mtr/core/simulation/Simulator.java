@@ -456,7 +456,7 @@ public class Simulator extends Data implements Utilities {
 				}
 				final ObjectArrayList<org.mtr.core.data.VehicleCar> cars = new ObjectArrayList<>();
 				for (final org.mtr.core.mmtr.job.MmtrCarSpec spec : sidingEntry.cars) {
-					cars.add(new org.mtr.core.data.VehicleCar(spec.vehicleId, spec.length, spec.width, spec.capacity, spec.bogie1Position, spec.bogie2Position, spec.couplingPadding1, spec.couplingPadding2));
+					cars.add(spec.toVehicleCar());
 				}
 				if (Siding.getTotalVehicleLength(cars) > siding.getRailLength()) {
 					System.out.println("[MMTR-MFST] manifest consist on siding " + sidingEntry.sidingId + " does not fit (rail " + siding.getRailLength() + " m) - skipped");

@@ -33,6 +33,14 @@
 		"couplingPadding2": {
 			"type": "number",
 			"minimum": 0
+		},
+		"mmtrPowered": {
+			"type": "boolean",
+			"default": true
+		},
+		"mmtrConsistTypeId": {
+			"type": "string",
+			"default": ""
 		}
 	},
 	"required": [

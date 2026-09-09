@@ -12,6 +12,7 @@ import org.jspecify.annotations.Nullable;
 import org.mtr.core.generated.data.VehicleSchema;
 import org.mtr.core.mmtr.ConsistDynamics;
 import org.mtr.core.mmtr.ConsistType;
+import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.DriveController;
 import org.mtr.core.mmtr.DriveOutput;
@@ -1647,19 +1648,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * Returns (and lazily builds) the per-car composition used by the AIR_BRAKE model: one unit
-	 * per vehicle car, all sharing the consist's ConsistType. Later (mixed formations) individual
-	 * cars may get their own ConsistType / powered flag.
+	 * Returns (and lazily builds) the per-car composition used by the AIR_BRAKE model: one unit per
+	 * vehicle car, each carrying its own powered flag and its own ConsistType (C2). A hauled wagon
+	 * therefore contributes mass and brake-pipe volume but no traction.
 	 */
 	@Nullable
 	private MmtrComposition getMmtrComposition() {
 		if (mmtrComposition == null && mmtrConsistType != null) {
-			final MmtrComposition composition = new MmtrComposition();
-			final int carCount = Math.max(1, vehicleExtraData.immutableVehicleCars.size());
-			for (int i = 0; i < carCount; i++) {
-				composition.couple(new MmtrComposition.Unit("car" + i, mmtrConsistType, true));
-			}
-			mmtrComposition = composition;
+			final ConsistTypeRegistry registry = data instanceof final Simulator simulator ? simulator.mmtrConsistTypes : null;
+			mmtrComposition = MmtrComposition.fromVehicleCars(vehicleExtraData.immutableVehicleCars, registry, mmtrConsistType);
 		}
 		return mmtrComposition;
 	}

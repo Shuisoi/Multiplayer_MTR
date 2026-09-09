@@ -920,7 +920,7 @@ public final class MmtrJobScheduler {
 	}
 
 	private static org.mtr.core.data.VehicleCar toVehicleCar(MmtrCarSpec spec) {
-		return new org.mtr.core.data.VehicleCar(spec.vehicleId, spec.length, spec.width, spec.capacity, spec.bogie1Position, spec.bogie2Position, spec.couplingPadding1, spec.couplingPadding2);
+		return spec.toVehicleCar();
 	}
 
 	@Nullable

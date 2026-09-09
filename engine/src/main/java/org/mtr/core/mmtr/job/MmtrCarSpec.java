@@ -1,5 +1,7 @@
 package org.mtr.core.mmtr.job;
 
+import org.mtr.core.data.VehicleCar;
+import org.mtr.core.mmtr.consist.MmtrUnitCar;
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.core.serializer.SerializedDataBase;
 import org.mtr.core.serializer.WriterBase;
@@ -8,6 +10,11 @@ import org.mtr.core.serializer.WriterBase;
  * Rolling-stock spec for one car of a job consist. Kept stable and independent of MTR's
  * VehicleCar so web-authored jobs do not leak engine schema details; the executor maps this
  * onto the engine's VehicleCar when the consist is spawned.
+ *
+ * <p>C2 adds the two fields that make a formation physically real: {@link #powered} (a hauled
+ * wagon contributes mass and brake-pipe volume but no traction) and {@link #consistTypeId}
+ * (a per-car override of the consist's default ConsistType). Both default to the previous
+ * behaviour — powered, inheriting the consist default — so existing jobs are unchanged.</p>
  */
 public final class MmtrCarSpec implements SerializedDataBase {
 
@@ -22,6 +29,8 @@ public final class MmtrCarSpec implements SerializedDataBase {
 	public double bogie2Position;
 	public double couplingPadding1;
 	public double couplingPadding2;
+	public boolean powered = true;
+	public String consistTypeId = "";
 
 	public MmtrCarSpec() {
 	}
@@ -40,6 +49,8 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		bogie2Position = readerBase.getDouble("bogie2Position", 0);
 		couplingPadding1 = readerBase.getDouble("couplingPadding1", 0);
 		couplingPadding2 = readerBase.getDouble("couplingPadding2", 0);
+		powered = readerBase.getBoolean("powered", true);
+		consistTypeId = readerBase.getString("consistTypeId", "");
 	}
 
 	@Override
@@ -52,5 +63,17 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		writerBase.writeDouble("bogie2Position", bogie2Position);
 		writerBase.writeDouble("couplingPadding1", couplingPadding1);
 		writerBase.writeDouble("couplingPadding2", couplingPadding2);
+		writerBase.writeBoolean("powered", powered);
+		writerBase.writeString("consistTypeId", consistTypeId);
+	}
+
+	/** Converts this authoring spec into MTR's runtime car, carrying the MMTR metadata with it. */
+	public VehicleCar toVehicleCar() {
+		return new VehicleCar(vehicleId, length, width, capacity, bogie1Position, bogie2Position, couplingPadding1, couplingPadding2, powered, consistTypeId);
+	}
+
+	/** Converts this authoring spec into the consist core's immutable car (job → consist). */
+	public MmtrUnitCar toUnitCar() {
+		return new MmtrUnitCar(vehicleId, length, couplingPadding1, couplingPadding2, powered, consistTypeId == null || consistTypeId.isEmpty() ? null : consistTypeId);
 	}
 }
