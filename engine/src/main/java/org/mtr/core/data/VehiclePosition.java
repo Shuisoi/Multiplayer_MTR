@@ -29,6 +29,21 @@ public class VehiclePosition {
 		return valueSet ? closestOverlap : -1;
 	}
 
+	/**
+	 * C5: every blocked interval on this rail except {@code id}'s own, as {@code [start, end]} pairs in
+	 * this rail's ordered-position-1 distance space. Callers that need the exact geometry (a consist
+	 * body measuring the gap to the train it is coupling to) work from these intervals directly.
+	 */
+	public ObjectArrayList<double[]> segmentsExcluding(long id) {
+		final ObjectArrayList<double[]> out = new ObjectArrayList<>(blockedSegments.size());
+		for (final BlockedSegment blockedSegment : blockedSegments) {
+			if (id != blockedSegment.id) {
+				out.add(new double[]{blockedSegment.startDistance, blockedSegment.endDistance});
+			}
+		}
+		return out;
+	}
+
 	private record BlockedSegment(double startDistance, double endDistance, long id) {
 	}
 }

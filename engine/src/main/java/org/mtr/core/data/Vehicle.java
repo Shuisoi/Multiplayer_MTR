@@ -2198,28 +2198,36 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// yard stock from the occupancy tree, so a coupling movement drawing up to a rake - or any
 		// other train entering the siding - saw an empty section and could drive straight through it.
 		if (vehiclePositions != null) {
-			int index = indexInMmtrMotionLegs(railProgress);
-			while (index >= 0) {
-				final PathData pathData = mmtrMotionLegs.get(index);
-				if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
-					break;
+			if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
+				// C5: a consist body writes its footprint from the BODY, in each rail's own coordinate.
+				// The leg shadow is anchored at the walker's start (tail-anchored for a consist body),
+				// so writing it here put the segment in a different distance space than every reader
+				// uses - which is why an authorised loco closed up 2.5 m short instead of 0.3 m.
+				writeMmtrConsistBodyOccupancy(consistWalker, vehiclePositions);
+			} else {
+				int index = indexInMmtrMotionLegs(railProgress);
+				while (index >= 0) {
+					final PathData pathData = mmtrMotionLegs.get(index);
+					if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
+						break;
+					}
+					// C3b: every leg the body actually reaches is written. The legacy "skip the first leg"
+					// guard hid a stabled train's whole footprint (its body sits on leg 0 and nowhere
+					// else), which is exactly the state a coupling movement has to see.
+					final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
+					if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
+						final Position position1 = pathData.getOrderedPosition1();
+						final Position position2 = pathData.getOrderedPosition2();
+						Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
+							final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+							newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
+							return newVehiclePosition;
+						}, Object2ObjectAVLTreeMap::new);
+					}
+					index--;
 				}
-				// C3b: every leg the body actually reaches is written. The legacy "skip the first leg"
-				// guard hid a stabled train's whole footprint (its body sits on leg 0 and nowhere
-				// else), which is exactly the state a coupling movement has to see.
-				final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
-				if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
-					final Position position1 = pathData.getOrderedPosition1();
-					final Position position2 = pathData.getOrderedPosition2();
-					Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
-						final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
-						newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
-						return newVehiclePosition;
-					}, Object2ObjectAVLTreeMap::new);
-				}
-				index--;
+				writeMmtrStandingFootprint(vehiclePositions);
 			}
-			writeMmtrStandingFootprint(vehiclePositions);
 		}
 
 		// MMTR (L3): push this motion vehicle to nearby clients on EVERY tick like the legacy path
@@ -2297,6 +2305,64 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			newVehiclePosition.addSegment(startDistance, endDistance, id);
 			return newVehiclePosition;
 		}, Object2ObjectAVLTreeMap::new);
+	}
+
+	/**
+	 * C5: write a consist body's footprint into the shared occupancy tree, per rail, in that rail's
+	 * own distance space (measured from its ordered position 1) — the space every reader uses.
+	 */
+	private void writeMmtrConsistBodyOccupancy(MmtrConsistWalker consistWalker, Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
+		final org.mtr.core.mmtr.consist.MmtrConsistBody body = consistWalker.body();
+		final double aEnd = body.aEndArcM();
+		final double bEnd = aEnd + body.lengthM();
+		for (int i = 0; i < body.legCount(); i++) {
+			final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg leg = body.leg(i);
+			final double legStart = body.legStartArcM(i);
+			final double fromM = Math.max(aEnd, legStart) - legStart;
+			final double toM = Math.min(bEnd, legStart + leg.lengthM()) - legStart;
+			if (toM - fromM <= 0.01) {
+				continue;
+			}
+			final Rail rail = data.railIdMap.get(leg.railHex());
+			if (rail == null) {
+				continue;
+			}
+			final Position position1 = rail.getPosition1();
+			final Position position2 = rail.getPosition2();
+			final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;
+			final Position orderedPosition2 = orderedPosition1 == position1 ? position2 : position1;
+			final double railLength = rail.railMath.getLength();
+			// The leg's coordinate runs entryNode -> exitNode; readers use ordered-position 1 space.
+			final boolean fromOrderedPosition1 = orderedPosition1.equals(leg.entryNode());
+			final double startM = fromOrderedPosition1 ? fromM : railLength - toM;
+			final double endM = fromOrderedPosition1 ? toM : railLength - fromM;
+			Data.put(vehiclePositions, orderedPosition1, orderedPosition2, vehiclePosition -> {
+				final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+				newVehiclePosition.addSegment(startM, endM, id);
+				return newVehiclePosition;
+			}, Object2ObjectAVLTreeMap::new);
+		}
+	}
+
+	/**
+	 * C5: this train's frame on the rail it stands on — {@code [progressM, bodyLengthM]} where
+	 * {@code progressM} is the leading face measured along the DIRECTION OF TRAVEL. Two trains heading
+	 * the same way are therefore directly comparable: the one with the larger progress is physically
+	 * ahead, and the coupler gap between them is {@code progressAhead - bodyLengthAhead - progressBehind}.
+	 */
+	public double[] mmtrTravelFrame() {
+		if (mmtrMotionWalker == null) {
+			return null;
+		}
+		final Rail rail = mmtrMotionWalker.currentRail();
+		if (rail == null) {
+			return null;
+		}
+		final double railLength = rail.railMath.getLength();
+		final double leadingOffset = Math.max(0, Math.min(railLength, mmtrMotionWalker.offsetM()));
+		final boolean towardExit = !(mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker)
+				|| consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+		return new double[]{towardExit ? leadingOffset : railLength - leadingOffset, vehicleExtraData.getTotalVehicleLength()};
 	}
 
 	/** Index of the leg whose cumulative range contains {@code progress} (last leg when beyond). */
@@ -2705,8 +2771,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final int index = indexInMmtrMotionLegs(railProgress);
 		final PathData segment = mmtrMotionLegs.get(index);
 		final boolean currentRailAuthorized = authority != null && authority.covers(segment.getRail() == null ? null : segment.getRail().getHexId());
-		if (railProgress < segment.getEndDistance() - 1e-9) {
-			final double gap = currentRailAuthorized ? MMTR_COUPLER_GAP_M : MMTR_BLOCK_TAIL_GAP_M;
+		final double gap = currentRailAuthorized ? MMTR_COUPLER_GAP_M : MMTR_BLOCK_TAIL_GAP_M;
+		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
+			// C5: a consist body's footprint lives in each rail's own coordinate, so the window has to
+			// be built there too (the leg shadow is anchored at the walker's start, not at the rail).
+			stop = Math.min(stop, mmtrConsistBodyBlockStop(consistWalker, vehiclePositions, gap));
+		} else if (railProgress < segment.getEndDistance() - 1e-9) {
 			final DoubleDoubleImmutablePair bounds = getBlockedBounds(segment, railProgress, segment.getEndDistance());
 			for (int i = 0; i < vehiclePositions.size(); i++) {
 				final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), segment.getOrderedPosition1(), segment.getOrderedPosition2());
@@ -2726,6 +2796,54 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			stop = Math.min(stop, mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M));
 		}
 		return stop;
+	}
+
+	/**
+	 * C5: rule (1) for a consist body — the distance (in walker space) to the nearest external
+	 * occupancy face ahead of the leading end on the rail it stands on. The window is built in the
+	 * rail's own ordered-position coordinate, which is where a consist body writes its footprint.
+	 */
+	private double mmtrConsistBodyBlockStop(MmtrConsistWalker consistWalker, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, double gapM) {
+		final Rail rail = consistWalker.currentRail();
+		final Position entry = consistWalker.enteredFromPosition();
+		final Position ahead = consistWalker.aheadNode();
+		if (rail == null || entry == null || ahead == null) {
+			return Double.MAX_VALUE;
+		}
+		final double railLength = rail.railMath.getLength();
+		final double leadingOffset = Math.max(0, Math.min(railLength, consistWalker.offsetM()));
+		// The body's leg coordinate runs entryNode -> exitNode, i.e. from the A side toward the B side.
+		// The consist travels toward its manned cab: CAB_A leads with the A end, so the leading face
+		// moves toward the leg's ENTRY (decreasing offset); CAB_B leads toward the EXIT. (The walker's
+		// aheadNode() is the spine's B-side node and says nothing about the direction of travel.)
+		final boolean towardExit = consistWalker.cabs().travelsToward(org.mtr.core.mmtr.consist.MmtrCabState.End.B);
+		final Position position1 = rail.getPosition1();
+		final Position position2 = rail.getPosition2();
+		final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;
+		final Position orderedPosition2 = orderedPosition1 == position1 ? position2 : position1;
+		final boolean legIsOrdered1 = orderedPosition1.equals(entry);
+		double nearestGapM = Double.MAX_VALUE;
+		for (int i = 0; i < vehiclePositions.size(); i++) {
+			final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), orderedPosition1, orderedPosition2);
+			if (vehiclePosition == null) {
+				continue;
+			}
+			for (final double[] segment : vehiclePosition.segmentsExcluding(id)) {
+				// Convert the stored (ordered-position-1) interval into the leg's own coordinate.
+				final double segmentStartLeg = legIsOrdered1 ? segment[0] : railLength - segment[1];
+				final double segmentEndLeg = legIsOrdered1 ? segment[1] : railLength - segment[0];
+				final double gap;
+				if (towardExit) {
+					gap = segmentStartLeg >= leadingOffset - 1e-6 ? segmentStartLeg - leadingOffset : Double.MAX_VALUE;
+				} else {
+					gap = segmentEndLeg <= leadingOffset + 1e-6 ? leadingOffset - segmentEndLeg : Double.MAX_VALUE;
+				}
+				if (gap < nearestGapM) {
+					nearestGapM = gap;
+				}
+			}
+		}
+		return nearestGapM == Double.MAX_VALUE ? Double.MAX_VALUE : consistWalker.distanceM() + Math.max(0, nearestGapM - gapM);
 	}
 
 	/** True when any OTHER vehicle occupies any part of {@code rail} (whole-rail block check). */

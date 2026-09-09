@@ -57,6 +57,10 @@ public final class MmtrConsistBody {
 
 	private final ObjectArrayList<SpineLeg> spine = new ObjectArrayList<>();
 	private final double[] carLengthsM;
+	/** C5: arc positions (from the A end) of the coupler seams; empty for a fixed unit (an EMU). */
+	private final double[] seamArcMs;
+	/** Car index in front of each seam (parallel to {@link #seamArcMs}). */
+	private final int[] seamCarIndexes;
 	private double aEndArcM;
 
 	/**
@@ -65,6 +69,17 @@ public final class MmtrConsistBody {
 	 * @param carLengthsM per-car length in consist order (index 0 = the A-end car); all positive
 	 */
 	public MmtrConsistBody(ObjectArrayList<SpineLeg> spine, double aEndArcM, double[] carLengthsM) {
+		this(spine, aEndArcM, carLengthsM, null, null);
+	}
+
+	/**
+	 * C5: the body also carries the formation's coupler seams, so a consist body can be cut at a
+	 * seam (U6) and its arc geometry stays the single source of truth.
+	 *
+	 * @param seamArcMs      arc position of each seam from the A end (ascending, inside the body)
+	 * @param seamCarIndexes the car index in front of each seam (parallel to {@code seamArcMs})
+	 */
+	public MmtrConsistBody(ObjectArrayList<SpineLeg> spine, double aEndArcM, double[] carLengthsM, @Nullable double[] seamArcMs, @Nullable int[] seamCarIndexes) {
 		if (spine == null || spine.isEmpty()) {
 			throw new IllegalArgumentException("consist body needs at least one spine leg");
 		}
@@ -79,7 +94,48 @@ public final class MmtrConsistBody {
 		this.spine.addAll(spine);
 		this.carLengthsM = carLengthsM.clone();
 		this.aEndArcM = aEndArcM;
+		this.seamArcMs = seamArcMs == null ? new double[0] : seamArcMs.clone();
+		this.seamCarIndexes = seamCarIndexes == null ? new int[0] : seamCarIndexes.clone();
+		if (this.seamArcMs.length != this.seamCarIndexes.length) {
+			throw new IllegalArgumentException("seam arcs and car indexes must be parallel");
+		}
 		validate();
+	}
+
+	/**
+	 * C5: seam arc positions (in spine space, like {@link #aEndArcM()}) derived from the per-car
+	 * coupler flags. A car's {@code mmtrCouplerAfter} marks a coupler between it and the next car, so
+	 * the seam sits at the end of that car.
+	 */
+	public static double[] seamArcMsFrom(double aEndArcM, double[] carLengthsM, boolean[] couplerAfter) {
+		final ObjectArrayList<Double> arcs = new ObjectArrayList<>();
+		double arc = aEndArcM;
+		for (int i = 0; i < carLengthsM.length; i++) {
+			arc += carLengthsM[i];
+			if (couplerAfter != null && i < couplerAfter.length && couplerAfter[i] && i < carLengthsM.length - 1) {
+				arcs.add(arc);
+			}
+		}
+		final double[] out = new double[arcs.size()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = arcs.get(i);
+		}
+		return out;
+	}
+
+	/** C5: the car index in front of each seam, parallel to {@link #seamArcMsFrom}. */
+	public static int[] seamCarIndexesFrom(double[] carLengthsM, boolean[] couplerAfter) {
+		final ObjectArrayList<Integer> indexes = new ObjectArrayList<>();
+		for (int i = 0; i < carLengthsM.length - 1; i++) {
+			if (couplerAfter != null && i < couplerAfter.length && couplerAfter[i]) {
+				indexes.add(i);
+			}
+		}
+		final int[] out = new int[indexes.size()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = indexes.get(i);
+		}
+		return out;
 	}
 
 	private void validate() {
@@ -152,6 +208,21 @@ public final class MmtrConsistBody {
 	/** Arc position of the centre of car {@code index} — the value the renderer places the car at. */
 	public double carCenterArcM(int index) {
 		return carStartArcM(index) + carLengthsM[index] / 2;
+	}
+
+	/** C5: number of coupler seams inside this body (0 for a fixed unit). */
+	public int seamCount() {
+		return seamArcMs.length;
+	}
+
+	/** C5: arc position of seam {@code index} from the A end. */
+	public double seamArcM(int index) {
+		return seamArcMs[index];
+	}
+
+	/** C5: car index in front of seam {@code index} (i.e. the cut keeps cars {@code 0..index}). */
+	public int carIndexAfterSeam(int index) {
+		return seamCarIndexes[index];
 	}
 
 	/** All car centres, in consist order (index 0 = A-end car). */

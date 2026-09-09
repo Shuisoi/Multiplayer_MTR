@@ -75,6 +75,14 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 * before the far end of the consist)
 	 */
 	public static @Nullable MmtrConsistWalker place(Data data, @Nullable BranchStore branches, Rail startRail, Position startEntryNode, double aEndOffsetM, double[] carLengthsM, @Nullable String targetRailHex) {
+		return place(data, branches, startRail, startEntryNode, aEndOffsetM, carLengthsM, targetRailHex, null, null);
+	}
+
+	/**
+	 * C5: the same placement, carrying the formation's coupler seams into the body so the consist can
+	 * be cut later (U6) and the body stays the single source of truth for the arc geometry.
+	 */
+	public static @Nullable MmtrConsistWalker place(Data data, @Nullable BranchStore branches, Rail startRail, Position startEntryNode, double aEndOffsetM, double[] carLengthsM, @Nullable String targetRailHex, @Nullable double[] seamArcMs, @Nullable int[] seamCarIndexes) {
 		if (data == null || startRail == null || startEntryNode == null || carLengthsM == null || carLengthsM.length == 0 || aEndOffsetM < 0) {
 			return null;
 		}
@@ -101,7 +109,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		}
 		final MmtrConsistBody body;
 		try {
-			body = new MmtrConsistBody(spine, aEndOffsetM, carLengthsM);
+			body = new MmtrConsistBody(spine, aEndOffsetM, carLengthsM, seamArcMs, seamCarIndexes);
 		} catch (final IllegalArgumentException | IllegalStateException e) {
 			return null;
 		}

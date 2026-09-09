@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.mmtr.consist.MmtrCabState;
+import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
@@ -93,11 +94,20 @@ public final class MmtrCoupleSurgery {
 			return Result.fail("调车授权未授或已过期");
 		}
 
-		// Which train physically leads (larger rail-local head offset along the shared direction).
-		final boolean initiatorLeads = initiator.getMmtrMotionWalker().offsetM() > target.getMmtrMotionWalker().offsetM();
+		// Which train physically leads: compare the leading faces along the direction of travel (C5 -
+		// a consist body's offsetM() is its leading face, and its body extends BEHIND that face, which
+		// is the opposite side from a legacy walker's offset arithmetic).
+		final double[] initiatorFrame = initiator.mmtrTravelFrame();
+		final double[] targetFrame = target.mmtrTravelFrame();
+		if (initiatorFrame == null || targetFrame == null) {
+			return Result.fail("无法确定两车的走行坐标");
+		}
+		final boolean initiatorLeads = initiatorFrame[0] > targetFrame[0];
 		final Vehicle leading = initiatorLeads ? initiator : target;
 		final Vehicle trailing = initiatorLeads ? target : initiator;
-		final double gap = leading.getMmtrMotionWalker().offsetM() - leading.vehicleExtraData.getTotalVehicleLength() - trailing.getMmtrMotionWalker().offsetM();
+		final double[] leadingFrame = initiatorLeads ? initiatorFrame : targetFrame;
+		final double[] trailingFrame = initiatorLeads ? targetFrame : initiatorFrame;
+		final double gap = leadingFrame[0] - leadingFrame[1] - trailingFrame[0];
 		if (gap > COUPLER_CONTACT_M) {
 			return Result.fail("两车车钩还差 " + Math.round(gap * 100.0) / 100.0 + " m，未接触");
 		}
@@ -135,6 +145,17 @@ public final class MmtrCoupleSurgery {
 
 		final MmtrMotionPosition walker = leading.getMmtrMotionWalker();
 		final TransportMode transportMode = leading.getTransportMode();
+		// C5: a consist body must be rebuilt too - its car lengths and coupler seams are part of the
+		// body, and the spine has to cover the trailing train's rails. Do this BEFORE any mutation so
+		// a formation that cannot be placed leaves the world untouched.
+		MmtrConsistWalker mergedConsistWalker = null;
+		if (walker instanceof final MmtrConsistWalker consistWalker) {
+			mergedConsistWalker = placeMergedConsistWalker(simulator, consistWalker, mergedCars);
+			if (mergedConsistWalker == null) {
+				return Result.fail("合并后的编组体无法放在当前轨道上（岔道未定或长度不足）");
+			}
+		}
+
 		leadingSiding.unregisterVehicle(leading);
 		if (trailingSiding != leadingSiding) {
 			trailingSiding.unregisterVehicle(trailing);
@@ -143,11 +164,11 @@ public final class MmtrCoupleSurgery {
 		}
 
 		final Vehicle merged = new Vehicle(mergedData, leadingSiding, new JsonReader(Utilities.getJsonObjectFromData(leading)), simulator);
-		if (walker instanceof final MmtrConsistWalker consistWalker) {
-			// The walker keeps its own cab state (which end leads); the crew's key from the trailing
-			// train does not transfer - after coupling the crew takes the leading cab.
-			merged.engageMmtrConsistMotion(consistWalker, MmtrCabState.Cab.NONE);
-			consistWalker.removeKey();
+		if (mergedConsistWalker != null) {
+			// The rebuilt body is unmanned: the trailing train's cab is now inside the formation, which
+			// the two-cab model cannot express - the crew takes the leading cab.
+			merged.engageMmtrConsistMotion(mergedConsistWalker, MmtrCabState.Cab.NONE);
+			mergedConsistWalker.removeKey();
 		} else if (walker instanceof final MmtrMotionWalker legacyWalker) {
 			merged.engageMmtrMotion(legacyWalker);
 		} else {
@@ -166,8 +187,7 @@ public final class MmtrCoupleSurgery {
 	}
 
 	/** The crew of both trains rides the merged consist; the trailing train's car indices are rebased. */
-	private static JsonArray mergedRidingEntitiesJson(Vehicle leading, Vehicle trailing, int leadingCarCount) {
-		final JsonArray entities = new JsonArray();
+	private static JsonArray mergedRidingEntitiesJson(Vehicle leading, Vehicle trailing, int leadingCarCount) {		final JsonArray entities = new JsonArray();
 		leading.vehicleExtraData.iterateRidingEntities(entity -> entities.add(Utilities.getJsonObjectFromData(entity)));
 		trailing.vehicleExtraData.iterateRidingEntities(entity -> {
 			final JsonObject json = Utilities.getJsonObjectFromData(entity);
@@ -177,8 +197,41 @@ public final class MmtrCoupleSurgery {
 		return entities;
 	}
 
-	private static @Nullable Siding sidingOf(Simulator simulator, Vehicle vehicle) {
-		final Siding[] found = {null};
+	/**
+	 * C5: build the consist body of the merged train. The A end stays exactly where it was (the body
+	 * only grows toward the B end), and the spine is re-placed from that A end so it covers the
+	 * trailing train's rails as well.
+	 */
+	private static @Nullable MmtrConsistWalker placeMergedConsistWalker(Simulator simulator, MmtrConsistWalker leadingWalker, ObjectArrayList<VehicleCar> mergedCars) {
+		final MmtrConsistBody body = leadingWalker.body();
+		final MmtrConsistBody.SpineLeg aEndLeg = body.legAtArcM(body.aEndArcM());
+		if (aEndLeg == null) {
+			return null;
+		}
+		final Rail rail = simulator.railIdMap.get(aEndLeg.railHex());
+		if (rail == null) {
+			return null;
+		}
+		final double[] carLengthsM = new double[mergedCars.size()];
+		final boolean[] couplerAfter = new boolean[mergedCars.size()];
+		for (int i = 0; i < carLengthsM.length; i++) {
+			carLengthsM[i] = mergedCars.get(i).getTotalLength(i == 0, i == carLengthsM.length - 1);
+			couplerAfter[i] = mergedCars.get(i).getMmtrCouplerAfter();
+		}
+		return MmtrConsistWalker.place(
+				simulator,
+				simulator.mmtrPointBranches,
+				rail,
+				aEndLeg.entryNode(),
+				body.legOffsetM(body.aEndArcM()),
+				carLengthsM,
+				null,
+				MmtrConsistBody.seamArcMsFrom(body.aEndArcM(), carLengthsM, couplerAfter),
+				MmtrConsistBody.seamCarIndexesFrom(carLengthsM, couplerAfter)
+		);
+	}
+
+	private static @Nullable Siding sidingOf(Simulator simulator, Vehicle vehicle) {		final Siding[] found = {null};
 		simulator.sidings.forEach(siding -> {
 			if (siding.getVehicleById(vehicle.getId()) != null) {
 				found[0] = siding;
