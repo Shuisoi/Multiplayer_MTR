@@ -168,4 +168,24 @@ public final class MmtrSignalChainTests {
 		assertEquals(1, MmtrSignalChain.depth(N, List.of(S), g, hex -> sections.getOrDefault(hex, List.of()), sectionBlocked, railBlocked, hex -> List.of(), 3),
 			"an unknown blocked colour conservatively closes the whole rail");
 	}
+
+	/**
+	 * ④ 显示层: a junction the engine mirrored as "not cleared" (undecided points or a fouled clearance
+	 * zone) makes a step through that node read as occupied, so the client shows the danger the motion
+	 * rules (①/②/③) enforce - instead of a green light in front of a train that is being held.
+	 */
+	@Test
+	public void aRestrictedJunctionCountsAsOccupied() {
+		final Graph g = graph();
+		final java.util.function.Predicate<String> noneRestricted = key -> false;
+		final java.util.function.Predicate<String> nodeNRestricted = key -> key.equals("0,0,0");
+
+		// Walking from A into E the signal's protected rail's far node is N: not cleared -> danger.
+		assertEquals(1, MmtrSignalChain.depth(A, List.of(E), g, hex -> List.of(), (hex, color) -> false, hex -> false, nodeNRestricted, hex -> List.of(), 3),
+			"the junction at N is not cleared: the signal protecting E shows danger");
+
+		// Once the junction is decided the same walk is green.
+		assertEquals(0, MmtrSignalChain.depth(A, List.of(E), g, hex -> List.of(), (hex, color) -> false, hex -> false, noneRestricted, hex -> List.of(), 3),
+			"a cleared junction leaves the signal green");
+	}
 }

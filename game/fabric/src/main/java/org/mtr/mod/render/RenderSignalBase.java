@@ -219,6 +219,7 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 			MmtrClientRoutes::sections,
 			(hex, color) -> data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).contains((long) color),
 			hex -> data.blockedRailIds.contains(hex) || !data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).isEmpty(),
+			MmtrClientRoutes::isNodeRestricted,
 			MmtrClientRoutes::nextRails, 3);
 	}
 

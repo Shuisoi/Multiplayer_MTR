@@ -36,17 +36,18 @@ public final class MmtrClientRoutes {
 	private static volatile Map<String, List<String>> nextRails = Collections.emptyMap();
 	private static volatile Set<String> pendingEntries = Collections.emptySet();
 	private static volatile Map<String, List<MmtrSignalChain.Section>> sections = Collections.emptyMap();
+	private static volatile Set<String> restrictedNodes = Collections.emptySet();
 
 	private MmtrClientRoutes() {
 	}
 
 	/** Replace the mirror (called from the packet handler on the client thread). */
 	public static void update(Map<String, List<String>> next, Set<String> pending) {
-		update(next, pending, Collections.emptyMap());
+		update(next, pending, Collections.emptyMap(), Collections.emptySet());
 	}
 
-	/** Replace the mirror including the B3b section map. */
-	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap) {
+	/** Replace the mirror including the B3b section map and the ④ restricted-junction node keys. */
+	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted) {
 		final Map<String, List<String>> copy = new HashMap<>();
 		next.forEach((railHex, nexts) -> copy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(nexts))));
 		nextRails = Collections.unmodifiableMap(copy);
@@ -54,12 +55,14 @@ public final class MmtrClientRoutes {
 		final Map<String, List<MmtrSignalChain.Section>> sectionCopy = new HashMap<>();
 		sectionMap.forEach((railHex, railSections) -> sectionCopy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(railSections))));
 		sections = Collections.unmodifiableMap(sectionCopy);
+		restrictedNodes = Collections.unmodifiableSet(new HashSet<>(restricted));
 	}
 
 	public static void clear() {
 		nextRails = Collections.emptyMap();
 		pendingEntries = Collections.emptySet();
 		sections = Collections.emptyMap();
+		restrictedNodes = Collections.emptySet();
 	}
 
 	/** The rails a SET main route runs onto after {@code railHex}; empty when no route covers it. */
@@ -90,6 +93,19 @@ public final class MmtrClientRoutes {
 
 	public static int sectionRailCount() {
 		return sections.size();
+	}
+
+	/**
+	 * ④: whether the junction node {@code x,y,z} is mirrored as "not cleared" (undecided points or a
+	 * fouled clearance zone). A step through such a node reads as occupied, so the client shows the same
+	 * danger the engine's motion rules enforce.
+	 */
+	public static boolean isNodeRestricted(@Nullable String nodeKey) {
+		return nodeKey != null && restrictedNodes.contains(nodeKey);
+	}
+
+	public static int restrictedNodeCount() {
+		return restrictedNodes.size();
 	}
 
 	public static int nextRailCount() {

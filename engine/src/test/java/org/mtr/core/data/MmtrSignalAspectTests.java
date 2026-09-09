@@ -1,6 +1,7 @@
 package org.mtr.core.data;
 
 import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.point.MmtrPointAuthority;
@@ -56,6 +57,10 @@ public final class MmtrSignalAspectTests {
 			sim.rails.add(beyond);
 			sim.sync();
 			sim.mmtrEnsureSignalColors();
+			// ④: a fork nobody has decided shows danger (no route through the junction can be set). The
+			// real server presets every fork to operator branch 0 (Simulator.mmtrDefaultPointsZero), so
+			// preset it here too - otherwise these "free driving" nets would all read red.
+			sim.mmtrPointBranches.set(fork.getX(), fork.getY(), fork.getZ(), entry.getHexId(), 0);
 		}
 
 		/** Mark a rail occupied the way a standing train does (manual block -> CURRENTLY_RESERVE). */
@@ -180,6 +185,9 @@ public final class MmtrSignalAspectTests {
 		sim.rails.add(d);
 		sim.sync();
 		sim.mmtrEnsureSignalColors();
+		// ④: decide the fork at M (via S) the way the real server's default preset does, so the free
+		// driving signal is not held at danger for an undecided turnout.
+		sim.mmtrPointBranches.set(m.getX(), m.getY(), m.getZ(), s.getHexId(), 0);
 
 		occupy(sim, d);
 		occupy(sim, entry);
@@ -210,6 +218,61 @@ public final class MmtrSignalAspectTests {
 		rail.mmtrReserveSignalColor(999_999_004L, section.signalColor);
 		rail.tick1(sim);
 		rail.tick2(0);
+	}
+
+	/**
+	 * ④ 显示层: the signal now agrees with the motion rules (①/②/③). A block whose far end is a junction
+	 * that cannot be cleared - nobody has decided the points, or another consist still fouls the junction's
+	 * clearance zone - shows DANGER instead of green, and clears as soon as the junction is decided /
+	 * clear again. A vehicle standing far away on the same rail does NOT restrict the junction (the
+	 * clearance zone is only the first 10 m of each leg).
+	 */
+	@Test
+	public void anUndecidedForkAndAFouledJunctionRestrictTheSignal() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-aspect-junction"), false);
+		final Position a = new Position(-20, 0, 0);
+		final Position n = new Position(0, 0, 0);
+		final Rail entry = through(a, n);
+		final Rail straight = through(n, new Position(20, 0, 0));
+		final Rail diverge = Rail.newRail(n, Angle.fromAngle(45), new Position(20, 0, 12), Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		sim.rails.add(entry);
+		sim.rails.add(straight);
+		sim.rails.add(diverge);
+		sim.sync();
+		sim.mmtrEnsureSignalColors();
+
+		// (1) Nobody has decided the points at N: no route through the junction can be set -> danger.
+		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
+			"an undecided fork holds the signal protecting the approach rail at danger");
+
+		// The operator presets a branch (what the real server's default does): the junction is decided.
+		sim.mmtrPointBranches.set(n.getX(), n.getY(), n.getZ(), entry.getHexId(), 0);
+		assertEquals(MmtrSignalAspect.Aspect.GREEN, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
+			"a decided junction clears the signal when the line is otherwise clear");
+
+		// (2) A consist still fouling the junction's clearance zone: the zone is the first 10 m of every
+		// leg, so an occupancy at arc 3..5 of the straight leg blocks the junction.
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = new ObjectArrayList<>();
+		trees.add(new Object2ObjectAVLTreeMap<>());
+		trees.add(new Object2ObjectAVLTreeMap<>());
+		Data.put(trees.get(1), straight.mmtrOrderedPositions()[0], straight.mmtrOrderedPositions()[1],
+			vehiclePosition -> {
+				final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+				newVehiclePosition.addSegment(3, 5, 999_999_005L);
+				return newVehiclePosition;
+			}, Object2ObjectAVLTreeMap::new);
+		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(sim, sim.mmtrRoutes, trees).aspectOf(entry.getHexId()),
+			"a consist inside the clearance zone holds the signal protecting the approach rail at danger");
+
+		// (3) With the junction decided and NO occupancy in its clearance zone, the same signal falls back
+		// to the ordinary chain: an occupied block one section ahead is a caution, not a junction danger.
+		trees.get(1).clear();
+		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> straightSections = sim.mmtrBlocks.blocksOf(straight.getHexId());
+		assertEquals(1, straightSections.size(), "the straight rail has no mid-rail signal");
+		occupySection(sim, straight, straightSections.get(0));
+		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, new MmtrSignalAspect(sim, sim.mmtrRoutes, trees).aspectOf(entry.getHexId()),
+			"a decided junction with the next block occupied is the ordinary single yellow");
 	}
 
 	/**

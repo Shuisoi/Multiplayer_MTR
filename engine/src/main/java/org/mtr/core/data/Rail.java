@@ -485,6 +485,15 @@ public final class Rail extends RailSchema {
 		}
 	}
 
+	/**
+	 * MMTR 岔区清限 (B/④): the rail's two declared endpoints in the order the shared occupancy trees key
+	 * them (ordered position 1 first). Public because the junction-clearance test lives outside the data
+	 * package, while {@link #getPosition1()}/{@link #getPosition2()} stay protected.
+	 */
+	public Position[] mmtrOrderedPositions() {
+		return position1.compareTo(position2) <= 0 ? new Position[]{position1, position2} : new Position[]{position2, position1};
+	}
+
 	public void copySignalColors(Rail rail) {
 		signalColors.clear();
 		signalColors.addAll(rail.signalColors);

@@ -1,11 +1,13 @@
 package org.mtr.core.mmtr.signal;
 
+import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
+import org.mtr.core.data.VehiclePosition;
 import org.mtr.core.mmtr.route.MmtrRoute;
 import org.mtr.core.mmtr.route.MmtrRouteRegistry;
 import org.mtr.core.simulation.Simulator;
@@ -62,10 +64,20 @@ public final class MmtrSignalAspect {
 	private final MmtrRouteRegistry routes;
 	private final Object2ObjectOpenHashMap<String, Rail> byHex = new Object2ObjectOpenHashMap<>();
 	private final Object2ObjectOpenHashMap<String, Position[]> railEnds = new Object2ObjectOpenHashMap<>();
+	/**
+	 * ④: explicit occupancy trees to test junction clearance against ({@code null} = read the
+	 * simulator's live train trees on every query, which is what the feed and the AWS trigger want).
+	 */
+	private final @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees;
 
 	public MmtrSignalAspect(Simulator simulator, MmtrRouteRegistry routes) {
+		this(simulator, routes, null);
+	}
+
+	public MmtrSignalAspect(Simulator simulator, MmtrRouteRegistry routes, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees) {
 		this.simulator = simulator;
 		this.routes = routes;
+		this.occupancyTrees = occupancyTrees;
 		simulator.positionsToRail.forEach((node, neighbourMap) -> neighbourMap.forEach((pos, rail) -> {
 			byHex.putIfAbsent(rail.getHexId(), rail);
 			final Position[] ends = railEnds.computeIfAbsent(rail.getHexId(), k -> new Position[2]);
@@ -154,7 +166,14 @@ public final class MmtrSignalAspect {
 		level.add(new Object[]{entryPos, hex, entryArcOf(hex, entryPos)});
 		for (int depth = 1; depth <= MAX_DEPTH; depth++) {
 			for (final Object[] entry : level) {
-				if (sectionBlocked((String) entry[1], (Double) entry[2])) {
+				// ④: a step is restricted when its section is occupied, OR the junction it enters through
+				// (the signal's own node) cannot be cleared, OR the junction it leaves through cannot be
+				// cleared - the two holds the motion rules (①/②/③) enforce are now visible in the display.
+				final String stepHex = (String) entry[1];
+				final Position stepNode = (Position) entry[0];
+				if (sectionBlocked(stepHex, (Double) entry[2])
+					|| junctionRestricted(stepNode)
+					|| junctionRestricted(farEndOf(stepHex, stepNode))) {
 					return depth;
 				}
 			}
@@ -183,6 +202,14 @@ public final class MmtrSignalAspect {
 			level.addAll(nextLevel);
 		}
 		return 0;
+	}
+
+	/** ④: whether {@code node} is a junction that cannot be cleared (fouled zone / undecided points). */
+	private boolean junctionRestricted(@Nullable Position node) {
+		if (node == null) {
+			return false;
+		}
+		return MmtrJunctionState.isUncleared(simulator, node, occupancyTrees == null ? simulator.mmtrOccupancyTrees() : occupancyTrees);
 	}
 
 	/** The arc of {@code hex}'s entry node in ordered-position-1 space (0 when it is not an endpoint). */

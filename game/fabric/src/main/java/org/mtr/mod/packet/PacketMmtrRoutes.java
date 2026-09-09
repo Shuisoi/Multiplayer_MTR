@@ -35,15 +35,19 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 
 	/** Build the wire form from the engine's derived views (flattened pairs; a rail may repeat). */
 	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries) {
-		return contentOf(nextRails, pendingEntries, new Object2ObjectOpenHashMap<>());
+		return contentOf(nextRails, pendingEntries, new Object2ObjectOpenHashMap<>(), new ObjectOpenHashSet<>());
 	}
 
 	/**
 	 * B3b: the same payload plus the block sections of every SPLIT rail, flattened as
 	 * {@code [railHex, fromM, toM, color] * n}. Unsplit rails are omitted, so a world without a
 	 * mid-rail light sends nothing extra.
+	 *
+	 * <p>④: {@code restrictedNodes} carries the {@code x,y,z} keys of junctions the engine cannot clear
+	 * (undecided points or a fouled clearance zone); the client chain treats a step through them as
+	 * occupied, so the lights agree with the motion rules.</p>
 	 */
-	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails) {
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
 		nextRails.forEach((from, tos) -> tos.forEach(to -> {
@@ -62,6 +66,9 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 			sections.add(String.valueOf(block.signalColor));
 		}));
 		json.add("sections", sections);
+		final JsonArray restricted = new JsonArray();
+		restrictedNodes.forEach(restricted::add);
+		json.add("restrictedNodes", restricted);
 		return json.toString();
 	}
 
@@ -87,8 +94,11 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 					Long.parseLong(sectionHexes.get(i + 3))
 				));
 		}
-		MmtrClientRoutes.update(next, pending, sections);
-		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s)");
+		// ④: the junctions the engine cannot clear, as x,y,z keys.
+		final ObjectOpenHashSet<String> restrictedNodes = new ObjectOpenHashSet<>();
+		jsonReader.iterateStringArray("restrictedNodes", restrictedNodes::clear, restrictedNodes::add);
+		MmtrClientRoutes.update(next, pending, sections, restrictedNodes);
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s), " + restrictedNodes.size() + " restricted junction(s)");
 	}
 
 	@Override

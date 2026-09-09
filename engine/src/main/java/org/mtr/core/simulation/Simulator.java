@@ -612,6 +612,16 @@ public class Simulator extends Data implements Utilities {
 		});
 	}
 
+	/**
+	 * ④ 显示层: the live occupancy trees of the train transport mode (the pair S1 reads: current tick
+	 * and the previous one), or null before {@link #sync()}. The aspect view uses them to tell whether a
+	 * junction's clearance zone is fouled; nothing else should mutate them.
+	 */
+	public @org.jspecify.annotations.Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> mmtrOccupancyTrees() {
+		final int ordinal = org.mtr.core.data.TransportMode.TRAIN.ordinal();
+		return vehiclePositions.isEmpty() || ordinal >= vehiclePositions.size() ? null : vehiclePositions.get(ordinal);
+	}
+
 	private org.mtr.core.mmtr.signal.@org.jspecify.annotations.Nullable MmtrSignalAspect mmtrSignalAspectView;
 	private String mmtrSignalAspectSignature = "";
 

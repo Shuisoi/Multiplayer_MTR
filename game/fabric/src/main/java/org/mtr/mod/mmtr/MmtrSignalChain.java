@@ -93,7 +93,7 @@ public final class MmtrSignalChain {
 	 * @param maxDepth        chain depth to model (3 = red / single / double yellow / green)
 	 */
 	public static int depth(Position startNode, List<String> protectedHexes, RailGraph graph, Predicate<String> blocked, Function<String, List<String>> lockedNextRails, int maxDepth) {
-		return depth(startNode, protectedHexes, graph, hex -> Collections.emptyList(), (hex, color) -> false, blocked, lockedNextRails, maxDepth);
+		return depth(startNode, protectedHexes, graph, hex -> Collections.emptyList(), (hex, color) -> false, blocked, hex -> false, lockedNextRails, maxDepth);
 	}
 
 	/**
@@ -105,13 +105,28 @@ public final class MmtrSignalChain {
 	 *                       conservative fallback for a blocked colour that belongs to no section)
 	 */
 	public static int depth(Position startNode, List<String> protectedHexes, RailGraph graph, Function<String, List<Section>> sections, BiPredicate<String, Long> sectionBlocked, Predicate<String> railBlocked, Function<String, List<String>> lockedNextRails, int maxDepth) {
+		return depth(startNode, protectedHexes, graph, sections, sectionBlocked, railBlocked, hex -> false, lockedNextRails, maxDepth);
+	}
+
+	/**
+	 * ④ 显示层: the full walk, including the mirrored "junction not cleared" node keys.
+	 *
+	 * @param restrictedNodes {@code x,y,z} keys of junctions the engine cannot clear (undecided points or
+	 *                        a fouled clearance zone); a step through such a node is as good as occupied,
+	 *                        so the signal shows the danger the motion rules (①/②/③) already enforce
+	 */
+	public static int depth(Position startNode, List<String> protectedHexes, RailGraph graph, Function<String, List<Section>> sections, BiPredicate<String, Long> sectionBlocked, Predicate<String> railBlocked, Predicate<String> restrictedNodes, Function<String, List<String>> lockedNextRails, int maxDepth) {
 		List<Object[]> level = new ArrayList<>();
 		for (final String hex : protectedHexes) {
 			level.add(new Object[]{hex, startNode, graph.entryArc(startNode, hex)});
 		}
 		for (int depth = 1; depth <= maxDepth; depth++) {
 			for (final Object[] entry : level) {
-				if (sectionBlocked((String) entry[0], (Double) entry[2], sections, sectionBlocked, railBlocked)) {
+				final String stepHex = (String) entry[0];
+				final Position stepNode = (Position) entry[1];
+				if (sectionBlocked(stepHex, (Double) entry[2], sections, sectionBlocked, railBlocked)
+					|| restrictedNodes.test(nodeKey(stepNode))
+					|| restrictedNodes.test(nodeKey(graph.farEnd(stepNode, stepHex)))) {
 					return depth;
 				}
 			}
@@ -170,6 +185,11 @@ public final class MmtrSignalChain {
 			level = nextLevel;
 		}
 		return 0;
+	}
+
+	/** The {@code x,y,z} key the mirror uses for a node (④ restricted-junction set). */
+	private static String nodeKey(@Nullable Position node) {
+		return node == null ? "" : node.getX() + "," + node.getY() + "," + node.getZ();
 	}
 
 	/**
