@@ -4,6 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.mmtr.MmtrMission;
+import org.mtr.core.mmtr.MmtrRunPlanner;
 import org.mtr.core.mmtr.consist.MmtrCabState;
 import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
@@ -220,6 +222,28 @@ public final class MmtrCoupleSurgery {
 		}
 		leadingSiding.adoptVehicle(merged);
 		merged.mmtrSeedAirStateAfterCoupling(leadingCars.size());
+		// C9: the formation is a NEW Vehicle object, so anything attached to the runtime object (the
+		// mission a consist job is executing, its task and executor) would be dropped by the surgery.
+		// The merged train stands in the same place doing the same job, so it inherits it - and if the
+		// merged body already stands on the mission's target rail (the normal case: a task-driven run
+		// that stopped at the coupler), the movement is complete and the mission is closed here. Doing it
+		// here rather than letting the vehicle re-plan avoids a spurious "walker has no current rail"
+		// failure while the freshly placed body resolves its rails.
+		final MmtrMission inheritedMission = initiator.getMmtrMission() != null ? initiator.getMmtrMission() : target.getMmtrMission();
+		if (inheritedMission != null) {
+			if (mergedConsistWalker != null && mergedBodyCoversRail(mergedConsistWalker, simulator, inheritedMission.getTargetSidingId())) {
+				if (inheritedMission.getState() == MmtrMission.State.ASSIGNED) {
+					inheritedMission.dispatch();
+				}
+				if (inheritedMission.getState() == MmtrMission.State.DISPATCHED) {
+					inheritedMission.atTarget();
+				}
+				if (inheritedMission.getState() == MmtrMission.State.AT_TARGET) {
+					inheritedMission.complete();
+				}
+			}
+			merged.setMmtrMission(inheritedMission);
+		}
 		simulator.mmtrShuntAuthorities.revoke(initiatorVehicleId);
 		simulator.mmtrShuntAuthorities.revoke(targetVehicleId);
 
@@ -227,6 +251,20 @@ public final class MmtrCoupleSurgery {
 				+ "（" + mergedCars.size() + " 节，" + Math.round(Siding.getTotalVehicleLength(mergedCars) * 10.0) / 10.0 + " m，车钩间隙 "
 				+ Math.round(gap * 100.0) / 100.0 + " m）");
 		return Result.success(merged);
+	}
+
+	/** Whether the merged body occupies the rail a mission was driving to (target siding → its rail). */
+	private static boolean mergedBodyCoversRail(MmtrConsistWalker walker, Simulator simulator, long targetSidingId) {
+		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
+		if (targetRail == null) {
+			return false;
+		}
+		for (final MmtrConsistBody.OccupiedSegment segment : walker.body().occupancy()) {
+			if (targetRail.getHexId().equals(segment.railHex())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** The crew of both trains rides the merged consist; the trailing train's car indices are rebased. */

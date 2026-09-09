@@ -27,5 +27,14 @@ public enum MmtrTaskKind {
 	 * is the future COUPLE action. */
 	DRIVE_TO_CONSIST,
 	/** 货运装卸停留 (占位): stop at a freight point / stabling siding and work for a duration. */
-	FREIGHT_WORK
+	FREIGHT_WORK,
+	/**
+	 * C9 连挂 (action): attach the consist standing on this siding. Runs after the approach - either a
+	 * cross-track MOVE_TO under a 调车授权, or the make-up path where both consist are already parked -
+	 * and performs the real surgery; with automatic couplers (C8) the couplers may already have latched
+	 * on arrival, in which case the step completes as a no-op.
+	 */
+	COUPLE,
+	/** C9 解挂 (action): cut this formation after a car wherever it now stands. */
+	UNCOUPLE
 }

@@ -99,6 +99,16 @@ public final class VehicleCar extends VehicleCarSchema {
 		return getCouplingPadding1(firstCar) + length + getCouplingPadding2(lastCar);
 	}
 
+	/** Raw coupling padding at the A end (no first/last-car adjustment). */
+	public double getCouplingPadding1() {
+		return couplingPadding1;
+	}
+
+	/** Raw coupling padding at the B end (no first/last-car adjustment). */
+	public double getCouplingPadding2() {
+		return couplingPadding2;
+	}
+
 	double getCouplingPadding1(boolean firstCar) {
 		return firstCar ? 0 : couplingPadding1;
 	}

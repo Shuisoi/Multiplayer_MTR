@@ -463,7 +463,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		if (targetRail.getHexId().equals(mmtrMotionWalker.railHex())) {
-			mission.fail("target is the rail the vehicle is already on");
+			// Already standing on the target rail: the movement is complete. This is the normal end of a
+			// consist job's cross-track run - the approach stopped at the coupler gap and the surgery (or
+			// the automatic couplers) absorbed the rake that stood there, so the target rail is now ours.
+			if (mission.getState() == MmtrMission.State.ASSIGNED) {
+				mission.dispatch();
+			}
+			if (mission.getState() == MmtrMission.State.DISPATCHED) {
+				mission.atTarget();
+			}
+			if (mission.getState() == MmtrMission.State.AT_TARGET) {
+				mission.complete();
+			}
 			return;
 		}
 		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), 1.0);

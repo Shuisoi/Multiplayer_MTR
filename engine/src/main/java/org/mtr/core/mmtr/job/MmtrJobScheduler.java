@@ -3,9 +3,15 @@ package org.mtr.core.mmtr.job;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.MmtrCoupleSurgery;
+import org.mtr.core.data.Rail;
 import org.mtr.core.data.Siding;
 import org.mtr.core.data.Vehicle;
+import org.mtr.core.data.VehicleCar;
 import org.mtr.core.mmtr.MmtrMission;
+import org.mtr.core.mmtr.MmtrRunPlanner;
+import org.mtr.core.mmtr.segment.MmtrMotionPosition;
+import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Utilities;
 
@@ -28,13 +34,19 @@ import org.mtr.core.tool.Utilities;
  *       path (doors open/close by dwell). The scheduler walks the job's platform steps
  *       (MOVE_TO completes on arrival, SERVE completes on departure from the platform).</li>
  * </ul>
- * COUPLE/UNCOUPLE step semantics arrive with the coupling executor rounds.
+ * COUPLE/UNCOUPLE are ACTION steps (C9): the approach is its own MOVE_TO step - a cross-track run
+ * under a 调车授权 when the target siding is another one - and the action runs as soon as the consist
+ * stands. With automatic couplers (C8) the couplers may latch on arrival, so an absorbed target
+ * completes the step too.
  */
 public final class MmtrJobScheduler {
 
 	public enum JobState { PENDING, RUNNING, DONE, FAILED }
 
 	private enum Mode { MANUAL, AUTO }
+
+	/** How long a task-driven 调车授权 stays live; refreshed every time the step is (re)armed. */
+	private static final long SHUNT_AUTHORITY_MILLIS = 15 * 60 * 1000L;
 
 	private final ObjectArrayList<MmtrConsistJob> jobs = new ObjectArrayList<>();
 	private final Object2ObjectOpenHashMap<String, JobInstance> instances = new Object2ObjectOpenHashMap<>();
@@ -589,20 +601,19 @@ public final class MmtrJobScheduler {
 				return;
 			}
 			final boolean parkedOnYard = vehicleParkedOnYard(instance, vehicle, simulator);
-			if (step.type == MmtrJobStep.StepType.UNCOUPLE) {
-				if (!parkedOnYard) {
-					fail(instance, "UNCOUPLE must run while parked on the yard siding (step " + step.stepId + ")");
-					return;
-				}
+			if (step.type == MmtrJobStep.StepType.UNCOUPLE && parkedOnYard) {
+				// Yard cut: the classic "pull away and leave the tail behind on this siding" sequence.
 				if (!executeUncouple(instance, simulator)) {
 					return;
 				}
 				instance.awaitingStart = true;
 				continue;
 			}
-			if (step.type == MmtrJobStep.StepType.COUPLE) {
-				fail(instance, "COUPLE runs only as the first step of a make-up job (step " + step.stepId + ")");
-				return;
+			if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
+				// C9: an ACTION step, not a movement. The first COUPLE of a make-up job was already
+				// consumed by tryCoupleStart before this loop; a COUPLE after a cross-track MOVE_TO and
+				// a cut wherever the consist now stands are performed by advanceManual once it stands.
+				break;
 			}
 			if (!parkedOnYard) {
 				break; // en route: platform movement is advanced below
@@ -614,14 +625,10 @@ public final class MmtrJobScheduler {
 				instance.awaitingStart = true;
 				continue;
 			}
-			// Cross-side auto-move (relocation / arrival make-up to ANOTHER siding) is OFFLINE as of the
-			// Motion-Core cleanup: it was a "re-birth at destination", not a real drive. Cross-track moves
-			// will be re-implemented by Motion Core live driving (segment+offset + turnout authority).
-			if (step.type == MmtrJobStep.StepType.MOVE_TO && step.targetId != curSiding(instance)
-				&& findSiding(simulator, step.targetId) != null) {
-				fail(instance, "cross-track auto-move is offline (step " + step.stepId + " targets another siding " + step.targetId + ")");
-				return;
-			}
+			// C9: a MOVE_TO to ANOTHER siding is a real cross-track run now: the consist leaves its yard
+			// under a 调车授权 and drives itself there with Motion Core live driving (MmtrRunPlanner +
+			// mission self-arming). The old "cross-track auto-move is offline" gate predates that
+			// machinery and is gone; a target that cannot be reached fails through the mission instead.
 			// Parked with a movement step next: first departure or re-departure after a return.
 			if (step.type == MmtrJobStep.StepType.MOVE_TO || step.type == MmtrJobStep.StepType.SERVE) {
 				if (instance.awaitingStart || !instance.started) {
@@ -705,7 +712,8 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
-			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding (step " + step.stepId + ")");
+			// C9: an action step with no mission of its own - advanceManual performs the surgery as soon
+			// as the consist stands (the approach was the preceding MOVE_TO).
 			return;
 		}
 		if (step.type == MmtrJobStep.StepType.SERVE) {
@@ -723,6 +731,9 @@ public final class MmtrJobScheduler {
 		// turnout grants, stop target), so no legacy autopilot seam is engaged for them.
 		final boolean targetIsPlatform = isPlatform(simulator, targetId);
 		final MmtrMission.Kind kind = targetIsPlatform ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER;
+		if (!targetIsPlatform) {
+			grantShuntForStep(instance, vehicle, simulator, targetId);
+		}
 		// Task mapping (作业单步骤 → 任务实例): the mission carries the task definition so the
 		// timetable layer and the future interlocking read where/when/what of the running step.
 		final org.mtr.core.mmtr.task.MmtrTask task = org.mtr.core.mmtr.task.MmtrTaskFactory.fromStep(step, targetIsPlatform);
@@ -744,6 +755,192 @@ public final class MmtrJobScheduler {
 		System.out.println("[MMTR-JOB] manual step " + step.stepId + " -> " + kind + " target " + targetId + " vehicle=" + vehicle.getId());
 		if (!vehicle.isMmtrMotion()) {
 			vehicle.engageMissionAutopilot();
+		}
+	}
+
+	/**
+	 * C9: a task-driven move into another siding is a 调车 movement. When that siding already holds
+	 * stock - or a COUPLE step follows - grant the consist a temporary SUBSIDIARY_SHUNT authority: S1
+	 * then lets it enter the occupied section and draw up to the coupler gap, and the coupling gate
+	 * ({@link MmtrCoupleSurgery}) requires a live authority for the movement. An empty target gets no
+	 * authority, so ordinary relocations keep their normal protection.
+	 */
+	private void grantShuntForStep(JobInstance instance, Vehicle vehicle, Simulator simulator, long targetSidingId) {
+		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
+		if (walker == null || targetRail == null || targetRail.getHexId().equals(walker.railHex())) {
+			return;
+		}
+		if (findParkedOnSiding(simulator, targetSidingId) == null && !nextStepIsCouple(instance)) {
+			return;
+		}
+		simulator.mmtrShuntAuthorities.grant(vehicle.getId(), walker.railHex(), targetRail.getHexId(),
+			MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT, MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT.getDefaultSpeedLimitKmh(), SHUNT_AUTHORITY_MILLIS);
+		System.out.println("[MMTR-JOB] 调车授权 " + instance.job.jobId + " vehicle=" + vehicle.getId() + " -> rail " + targetRail.getHexId() + "（任务驱动的调车进路）");
+	}
+
+	private boolean nextStepIsCouple(JobInstance instance) {
+		final int next = (int) instance.stepIndex + 1;
+		return next < instance.job.steps.size() && instance.job.steps.get(next).type == MmtrJobStep.StepType.COUPLE;
+	}
+
+	/**
+	 * C9: perform the COUPLE action wherever the consist now stands. The target is the stock of the job
+	 * named by the step (the normal authoring), else whatever else stands on our rail. An already
+	 * absorbed target means the automatic couplers latched on arrival - the step is done either way.
+	 *
+	 * @return whether the step completed (false = still rolling, or the job was failed)
+	 */
+	private boolean executeCoupleAtStand(JobInstance instance, Simulator simulator) {
+		final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
+		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+		if (vehicle == null) {
+			fail(instance, "COUPLE: consist vanished (step " + step.stepId + ")");
+			return false;
+		}
+		if (vehicle.getSpeed() > 1e-9) {
+			return false; // still rolling up - the approach has not finished
+		}
+		final String targetJobId = step.targetJobId == null ? "" : step.targetJobId.trim();
+		final JobInstance targetInstance = targetJobId.isEmpty() ? null : instances.get(targetJobId);
+		if (targetInstance != null && targetInstance.vehicleId != 0 && findVehicle(simulator, targetInstance.vehicleId) == null) {
+			// C8: the automatic coupler latched the two trains together the moment the approach stopped,
+			// so the target's vehicle id is gone (absorbed into ours). Nothing left to do.
+			instance.stepIndex++;
+			System.out.println("[MMTR-JOB] COUPLE done by the automatic coupler (target job " + targetJobId + " absorbed)");
+			return true;
+		}
+		final Vehicle target = coupleTargetVehicle(instance, vehicle, simulator, targetInstance);
+		if (target == null) {
+			fail(instance, "COUPLE: no other consist stands in coupler reach (step " + step.stepId + ")");
+			return false;
+		}
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(simulator, vehicle.getId(), target.getId());
+		if (!result.ok()) {
+			if (simulator.mmtrFindVehicle(target.getId()) == null) {
+				// The surgery's own auto-coupler pass may have completed the merge this tick.
+				instance.stepIndex++;
+				System.out.println("[MMTR-JOB] COUPLE done by the automatic coupler (target " + target.getId() + " absorbed)");
+				return true;
+			}
+			fail(instance, "COUPLE refused: " + result.reason());
+			return false;
+		}
+		final Vehicle merged = result.vehicle();
+		instance.vehicleId = merged.getId();
+		refreshFleetCars(instance, merged);
+		if (targetInstance != null) {
+			targetInstance.vehicleId = merged.getId();
+			targetInstance.consumed = true;
+			targetInstance.state = JobState.DONE;
+		}
+		instance.stepIndex++;
+		System.out.println("[MMTR-JOB] COUPLE done: " + merged.getId() + " now " + merged.vehicleExtraData.immutableVehicleCars.size() + " 节");
+		return true;
+	}
+
+	/** C9: whether the consist has drawn up to the train standing on its target siding (coupler reach). */
+	private boolean arrivedAtTargetConsist(Vehicle vehicle, Simulator simulator) {
+		if (vehicle.getSpeed() > 1e-9) {
+			return false;
+		}
+		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		if (walker == null) {
+			return false;
+		}
+		final Vehicle[] target = {null};
+		simulator.sidings.forEach(siding -> siding.iterateVehicles(other -> {
+			if (target[0] == null && other.getId() != vehicle.getId() && other.getSpeed() <= 1e-9 && other.getMmtrMotionWalker() != null
+				&& walker.railHex().equals(other.getMmtrMotionWalker().railHex())) {
+				target[0] = other;
+			}
+		}));
+		if (target[0] == null) {
+			return false;
+		}
+		final double gap = MmtrCoupleSurgery.couplerGapM(vehicle, target[0]);
+		return Double.isFinite(gap) && gap <= MmtrCoupleSurgery.COUPLER_CONTACT_M;
+	}
+
+	/**
+	 * C8/C9: with automatic couplers the target stock latches on the moment the approach stops, so
+	 * nothing is left standing on the target siding. That also completes the movement - the train is
+	 * where it was going, and the cars are now part of its own formation.
+	 */
+	private boolean targetConsistAbsorbed(Vehicle vehicle, Simulator simulator, long targetSidingId) {
+		if (vehicle.getSpeed() > 1e-9) {
+			return false;
+		}
+		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
+		if (walker == null || targetRail == null || !targetRail.getHexId().equals(walker.railHex())) {
+			return false;
+		}
+		final boolean[] other = {false};
+		simulator.sidings.forEach(siding -> siding.iterateVehicles(otherVehicle -> {
+			if (otherVehicle.getId() != vehicle.getId() && otherVehicle.getMmtrMotionWalker() != null
+				&& walker.railHex().equals(otherVehicle.getMmtrMotionWalker().railHex())) {
+				other[0] = true;
+			}
+		}));
+		return !other[0];
+	}
+
+	/** The consist a COUPLE step couples onto: the named job's stock, else whatever else stands here. */
+	@Nullable
+	private Vehicle coupleTargetVehicle(JobInstance instance, Vehicle vehicle, Simulator simulator, @Nullable JobInstance targetInstance) {
+		if (targetInstance != null && targetInstance.vehicleId != 0) {
+			final Vehicle named = findVehicle(simulator, targetInstance.vehicleId);
+			if (named != null && named.getId() != vehicle.getId()) {
+				return named;
+			}
+		}
+		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		if (walker == null) {
+			return null;
+		}
+		final Vehicle[] found = {null};
+		simulator.sidings.forEach(siding -> siding.iterateVehicles(other -> {
+			if (found[0] == null && other.getId() != vehicle.getId() && other.getMmtrMotionWalker() != null
+				&& walker.railHex().equals(other.getMmtrMotionWalker().railHex())) {
+				found[0] = other;
+			}
+		}));
+		return found[0];
+	}
+
+	/**
+	 * C9: cut the formation after the step's car index wherever it stands (the yard path rebuilds the
+	 * head through the siding template; after a cross-track move the consist is not on its yard siding,
+	 * so this runs the real surgery and keeps the head half on the job).
+	 */
+	private boolean executeUncoupleAtStand(JobInstance instance, Simulator simulator) {
+		final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
+		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+		if (vehicle == null) {
+			fail(instance, "UNCOUPLE: consist vanished (step " + step.stepId + ")");
+			return false;
+		}
+		if (vehicle.getSpeed() > 1e-9) {
+			return false;
+		}
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.uncouple(simulator, vehicle.getId(), step.targetIndex);
+		if (!result.ok()) {
+			fail(instance, "UNCOUPLE refused: " + result.reason());
+			return false;
+		}
+		instance.vehicleId = result.vehicle().getId();
+		refreshFleetCars(instance, result.vehicle());
+		instance.stepIndex++;
+		System.out.println("[MMTR-JOB] UNCOUPLE done: head " + result.vehicle().getId() + " 留作业单，尾段 " + (result.other() == null ? "?" : result.other().getId()));
+		return true;
+	}
+
+	/** Refresh the job's authored fleet from the formation that actually exists after a surgery. */
+	private static void refreshFleetCars(JobInstance instance, Vehicle vehicle) {
+		instance.fleetCars.clear();
+		for (final VehicleCar car : vehicle.vehicleExtraData.immutableVehicleCars) {
+			instance.fleetCars.add(MmtrCarSpec.fromVehicleCar(car));
 		}
 	}
 
@@ -783,13 +980,50 @@ public final class MmtrJobScheduler {
 			}
 			return;
 		}
+		if (step != null && (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE)) {
+			// C9 action step: the approach (if any) already finished, so run the surgery as soon as the
+			// consist stands. executeCoupleAtStand/executeUncoupleAtStand report "not yet" by returning
+			// false, so this is re-tried every tick until the formation is at a stand.
+			final boolean done = step.type == MmtrJobStep.StepType.COUPLE
+				? executeCoupleAtStand(instance, simulator)
+				: executeUncoupleAtStand(instance, simulator);
+			if (done) {
+				if (instance.stepIndex >= instance.job.steps.size()) {
+					instance.state = JobState.DONE;
+				} else {
+					runManualStep(instance, simulator);
+				}
+			}
+			return;
+		}
 		final MmtrMission mission = vehicle.getMmtrMission();
+		if (mission != null && step != null && step.type == MmtrJobStep.StepType.MOVE_TO
+			&& (arrivedAtTargetConsist(vehicle, simulator) || targetConsistAbsorbed(vehicle, simulator, step.targetId))) {
+			// C9: the planned stop of a cross-track run is the FAR end of the target siding, but the run
+			// really ends where the standing rake is - the occupancy face under the 调车授权 stops the
+			// consist at the coupler gap. Closed up to the coupler = the movement is complete, so end the
+			// mission here instead of waiting for a stop target the rake physically blocks.
+			vehicle.setMmtrMotionAuto(false);
+			vehicle.setMmtrMotionStopTarget(-1, false);
+			if (mission.getState() == MmtrMission.State.DISPATCHED) {
+				mission.atTarget();
+			}
+			if (mission.getState() == MmtrMission.State.AT_TARGET) {
+				mission.complete();
+			}
+			System.out.println("[MMTR-JOB] MOVE_TO reached the consist on siding " + step.targetId + " (closed up to the coupler)");
+		}
 		if (mission == null || !mission.isTerminal()) {
 			return;
 		}
 		if (mission.getState() != MmtrMission.State.COMPLETE) {
 			fail(instance, "mission for step ended " + mission.getState());
 			return;
+		}
+		if (step != null && step.type == MmtrJobStep.StepType.MOVE_TO && findSiding(simulator, step.targetId) != null) {
+			// C9: the consist has relocated to that siding (a real cross-track run), so later steps -
+			// including a return to the original yard siding - work from where it now stands.
+			instance.curSidingId = step.targetId;
 		}
 		instance.stepIndex++;
 		if (instance.stepIndex >= instance.job.steps.size()) {

@@ -211,18 +211,21 @@ public final class MmtrMotionMissionTests {
 	}
 
 	@Test
-	public void selfArmFailsMissionWhenTargetIsTheCurrentRail() {
+	public void selfArmCompletesMissionWhenTargetIsTheCurrentRail() {
 		final Net n = new Net();
 		final Vehicle v = n.spawn();
-		// Target = this vehicle's own yard siding rail: the self-arm must fail the mission with a
-		// reason instead of arming a nonsense run.
+		// Target = this vehicle's own yard siding rail. C9: a task-driven cross-track run ends exactly
+		// this way - the approach stopped at the coupler gap, the surgery (or the automatic couplers)
+		// absorbed the rake standing there, and the target rail is the one the merged train now stands
+		// on. "Already there" is arrival, not a failure; arming a run to where we stand would be the
+		// nonsense the old behaviour avoided by failing.
 		final MmtrMission mission = new MmtrMission(v.getId(), MmtrMission.Kind.MANEUVER, n.siding.getId(), n.siding.getId(), 0L);
 		mission.setExecutor(MmtrMission.Executor.AUTOPILOT, null);
 		assertTrue(v.setMmtrMission(mission), "mission attached directly");
 		n.siding.simulateVehicles(1000, null);
 		n.siding.simulateVehicles(1000, null);
 		assertNotNull(v.getMmtrMission(), "mission present");
-		assertEquals(MmtrMission.State.FAILED, v.getMmtrMission().getState(), "self-arm must fail the mission for the current-rail target");
-		assertFalse(v.isMmtrMotionAuto(), "auto never armed");
+		assertEquals(MmtrMission.State.COMPLETE, v.getMmtrMission().getState(), "a mission whose target is the current rail is already there");
+		assertFalse(v.isMmtrMotionAuto(), "no run is armed for a movement that is over");
 	}
 }

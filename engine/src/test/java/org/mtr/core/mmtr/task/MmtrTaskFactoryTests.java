@@ -68,9 +68,21 @@ public final class MmtrTaskFactoryTests {
 	}
 
 	@Test
-	public void coupleAndUncoupleStayNullUntilDerivedVehicleSlice() {
-		assertNull(MmtrTaskFactory.fromStep(step(MmtrJobStep.StepType.COUPLE, 0), false));
-		assertNull(MmtrTaskFactory.fromStep(step(MmtrJobStep.StepType.UNCOUPLE, 0), false));
+	public void coupleAndUncoupleMapToTheirActionTasks() {
+		final MmtrTask couple = MmtrTaskFactory.fromStep(step(MmtrJobStep.StepType.COUPLE, 0), false);
+		assertNotNull(couple, "C9: COUPLE is an action task now");
+		final CoupleTask coupleMapped = assertInstanceOf(CoupleTask.class, couple);
+		assertEquals(0, coupleMapped.targetRef, "连挂 targets a consist, not a platform/siding id");
+		assertEquals(DUE, coupleMapped.dueMs);
+		assertEquals("", coupleMapped.validate());
+
+		final MmtrJobStep uncoupleStep = step(MmtrJobStep.StepType.UNCOUPLE, 0);
+		uncoupleStep.targetIndex = 1;
+		final MmtrTask uncouple = MmtrTaskFactory.fromStep(uncoupleStep, false);
+		assertNotNull(uncouple, "C9: UNCOUPLE is an action task now");
+		final UncoupleTask uncoupleMapped = assertInstanceOf(UncoupleTask.class, uncouple);
+		assertEquals(1, uncoupleMapped.cutAfterCarIndex);
+		assertEquals("", uncoupleMapped.validate());
 	}
 
 	@Test

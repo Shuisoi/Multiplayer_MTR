@@ -13,8 +13,8 @@ import org.mtr.core.mmtr.job.MmtrJobStep;
  *   <li>MOVE_TO platform → {@link DriveToPlatformTask} (arrival, no door work);</li>
  *   <li>MOVE_TO siding   → {@link DriveToSidingTask} (shunting / 退库 return);</li>
  *   <li>SERVE            → {@link StationServiceTask} (door cycle at the platform);</li>
- *   <li>COUPLE/UNCOUPLE  → {@code null} until the derived-vehicle (powered / unpowered) slice
- *       lands; the yard surgery keeps its own semantics meanwhile.</li>
+ *   <li>COUPLE           → {@link CoupleTask} (C9: the approach is its own MOVE_TO step);</li>
+ *   <li>UNCOUPLE         → {@link UncoupleTask} (C9: cut wherever the formation stands).</li>
  * </ul>
  */
 public final class MmtrTaskFactory {
@@ -41,8 +41,14 @@ public final class MmtrTaskFactory {
 			case CHANGE_ENDS:
 				task = new ChangeEndsTask(step.stepId, step.dueTimeOfDayMs);
 				break;
+			case COUPLE:
+				task = new CoupleTask(step.stepId, step.dueTimeOfDayMs, step.targetJobId);
+				break;
+			case UNCOUPLE:
+				task = new UncoupleTask(step.stepId, step.dueTimeOfDayMs, step.targetIndex);
+				break;
 			default:
-				return null; // COUPLE / UNCOUPLE: derived-vehicle slice later
+				return null;
 		}
 		task.note = step.note == null ? "" : step.note;
 		return task;

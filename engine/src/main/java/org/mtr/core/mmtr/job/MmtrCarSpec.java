@@ -103,4 +103,26 @@ public final class MmtrCarSpec implements SerializedDataBase {
 	public MmtrUnitCar toUnitCar() {
 		return new MmtrUnitCar(vehicleId, length, couplingPadding1, couplingPadding2, powered, consistTypeId == null || consistTypeId.isEmpty() ? null : consistTypeId);
 	}
+
+	/**
+	 * C9: rebuild a spec from a runtime car. After a coupling/uncoupling surgery the job's fleet no
+	 * longer matches its authored list, so the scheduler refreshes it from the merged formation's own
+	 * cars - that keeps a following UNCOUPLE step's coupler gate honest.
+	 */
+	public static MmtrCarSpec fromVehicleCar(VehicleCar car) {
+		final MmtrCarSpec spec = new MmtrCarSpec();
+		spec.vehicleId = car.getVehicleId();
+		spec.length = car.getLength();
+		spec.width = car.getWidth();
+		spec.capacity = car.getCapacity();
+		spec.bogie1Position = car.getBogie1Position();
+		spec.bogie2Position = car.getBogie2Position();
+		spec.couplingPadding1 = car.getCouplingPadding1();
+		spec.couplingPadding2 = car.getCouplingPadding2();
+		spec.powered = car.getMmtrPowered();
+		spec.consistTypeId = car.getMmtrConsistTypeId();
+		spec.mmtrCouplerAfter = car.getMmtrCouplerAfter();
+		spec.mmtrAutoCoupler = car.getMmtrAutoCoupler();
+		return spec;
+	}
 }
