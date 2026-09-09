@@ -91,12 +91,8 @@ public final class MmtrSignalAspect {
 		if (railHex == null || railHex.isEmpty() || !byHex.containsKey(railHex)) {
 			return Aspect.GREEN;
 		}
-		// A not-yet-set route holds the signal at ITS ENTRY rail at danger: the train is waiting
-		// outside that signal until the interlocking sets the movement.
-		for (final MmtrRoute route : routes.snapshot()) {
-			if (!route.isEstablished() && railHex.equals(route.getEntryRailHex())) {
-				return Aspect.RED;
-			}
+		if (isPendingEntry(railHex)) {
+			return Aspect.RED;
 		}
 		final Position[] ends = railEnds.get(railHex);
 		if (ends == null || ends[1] == null) {
@@ -109,7 +105,36 @@ public final class MmtrSignalAspect {
 				best = depth;
 			}
 		}
-		return switch (best) {
+		return fromDepth(best);
+	}
+
+	/**
+	 * Aspect of one rail approached from {@code entryNode} — the direction-specific question the AWS
+	 * trigger (A3) asks: "what does the signal I am about to pass show for MY direction?". A null
+	 * entry node falls back to the most restrictive of both directions.
+	 */
+	public Aspect aspectFrom(@Nullable String railHex, @Nullable Position entryNode) {
+		if (railHex == null || railHex.isEmpty() || !byHex.containsKey(railHex)) {
+			return Aspect.GREEN;
+		}
+		if (isPendingEntry(railHex)) {
+			return Aspect.RED;
+		}
+		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode));
+	}
+
+	/** Whether {@code railHex} is the entry of a route that is still waiting to be set. */
+	private boolean isPendingEntry(String railHex) {
+		for (final MmtrRoute route : routes.snapshot()) {
+			if (!route.isEstablished() && railHex.equals(route.getEntryRailHex())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static Aspect fromDepth(int depth) {
+		return switch (depth) {
 			case 1 -> Aspect.RED;
 			case 2 -> Aspect.SINGLE_YELLOW;
 			case 3 -> Aspect.DOUBLE_YELLOW;

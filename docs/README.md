@@ -84,6 +84,7 @@
   - **78 = 信号×道岔×任务集成立项 + S5 进路对象**（`MmtrRoute`/`MmtrRouteRegistry`：进路成为一等对象，SET/PENDING 由道岔权威派生、每 tick 刷新、终态/删车释放；每列车 feed 带 `route`、顶层 `routes[]`；A2 信号与联锁的读源；454/0/2）。
   - **79 = A2 信号 = 进路 × 闭塞（单一真源）**（`MmtrSignalAspect`：闭塞链为底、SET MAIN 进路收窄分岔、PENDING 进路压红起点、调车不清主灯、无进路退回原链；`SystemMapServlet` 删掉重复的链走行，460/0/2）。
   - **80 = A2 游戏内信号灯读进路（镜像通道）**（引擎派生视图 `nextRails`/`pendingEntries` → `PacketMmtrRoutes` + `MmtrClientRoutes` + `MmtrRouteMirror`（变化才推）→ `RenderSignalBase` 收窄/压红；引擎 461/0/2、fabric 编译通过；实机目视待做）。
+  - **81 = A3 AWS 绑定信号显示**（`MmtrSignalAspect.aspectFrom` 方向敏感查询 + `Simulator` 缓存视图；AWS 触发 = 即将通过的那架信号机非绿且进入触发带，绿灯复位；黄灯（单/双）也会响；确认窗口 3 s → 2.5 s；464/0/2）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）

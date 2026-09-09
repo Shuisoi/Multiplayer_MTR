@@ -598,6 +598,43 @@ public class Simulator extends Data implements Utilities {
 		rails.forEach(org.mtr.core.data.Rail::mmtrEnsureSignalColor);
 	}
 
+	private org.mtr.core.mmtr.signal.@org.jspecify.annotations.Nullable MmtrSignalAspect mmtrSignalAspectView;
+	private String mmtrSignalAspectSignature = "";
+
+	/**
+	 * A2/A3: the cached signal-aspect view (进路 × 闭塞). Rebuilt when the rail set changes - the
+	 * same rails-signature gate the signal colours use - while the route state is read live from
+	 * {@link #mmtrRoutes} on every call. Vehicles ask it what the signal they are about to pass
+	 * shows; the web feed builds its own (one per request).
+	 */
+	public org.mtr.core.mmtr.signal.MmtrSignalAspect mmtrSignalAspectView() {
+		if (mmtrSignalAspectView == null) {
+			mmtrSignalAspectSignature = mmtrRailSetSignature();
+			mmtrSignalAspectView = new org.mtr.core.mmtr.signal.MmtrSignalAspect(this, mmtrRoutes);
+		}
+		return mmtrSignalAspectView;
+	}
+
+	/** Rebuild the cached aspect view when the rail set changed (once per tick, after the rail ticks). */
+	public void mmtrRefreshSignalAspectView() {
+		final String signature = mmtrRailSetSignature();
+		if (!signature.equals(mmtrSignalAspectSignature)) {
+			mmtrSignalAspectSignature = signature;
+			mmtrSignalAspectView = new org.mtr.core.mmtr.signal.MmtrSignalAspect(this, mmtrRoutes);
+		}
+	}
+
+	private String mmtrRailSetSignature() {
+		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|');
+		final ObjectArrayList<String> hexes = new ObjectArrayList<>();
+		for (final org.mtr.core.data.Rail rail : rails) {
+			hexes.add(rail.getHexId());
+		}
+		hexes.sort(null);
+		hexes.forEach(hex -> sig.append(hex).append(','));
+		return sig.toString();
+	}
+
 	/** Discover all turnouts (道岔) on the rail graph with the operator branch states applied. */
 	public ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> mmtrDiscoverPoints() {
 		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrSwitch> points = org.mtr.core.mmtr.point.MmtrPointRegistry.discover(this);
@@ -1109,6 +1146,7 @@ public class Simulator extends Data implements Utilities {
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			mmtrEnsurePointDefaults();
 			mmtrEnsureSignalColors();
+			mmtrRefreshSignalAspectView();
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
 			}

@@ -106,8 +106,11 @@ public final class MmtrRunPlanner {
 	 * false}) has {@code offsetM()} metres LEFT, not travelled - using {@code length - offset} put the
 	 * planned stop (and the 牵出—推进 reversal point) 2×offset too far down the line, which is why the
 	 * real locomotive drove straight past its reversal point (实机 2026-09-09, aassdd).
+	 *
+	 * <p>Public since A3: the AWS trigger measures the distance to the signal it is about to pass in
+	 * the same direction-aware space.</p>
 	 */
-	private static double remainingToAheadNodeM(MmtrMotionPosition walker) {
+	public static double remainingToAheadNodeM(MmtrMotionPosition walker) {
 		if (walker instanceof final MmtrConsistWalker consistWalker && !consistWalker.travelsTowardB()) {
 			return Math.max(0, consistWalker.offsetM());
 		}

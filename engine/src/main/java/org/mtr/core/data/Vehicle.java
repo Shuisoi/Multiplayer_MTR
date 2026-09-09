@@ -242,17 +242,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private static final double MMTR_BLOCK_NODE_EPS_M = 0.001;
 	/**
-	 * Signal S3 (AWS): the warning triggers while the train runs inside this lead distance of a
-	 * restricted boundary (occupied rail ahead / a slower rail to be braced for). Real AWS magnets
-	 * sit ~200 yd (183 m) before the signal; the engine keeps the lead small so short test rails
-	 * still exercise the state machine (constant, tunable).
+	 * Signal S3/A3 (AWS): the warning triggers while the train runs inside this lead distance of the
+	 * signal it is about to pass (a non-green aspect) or of a restricted boundary (an occupancy stop
+	 * / a slower rail to be braced for). Real AWS magnets sit ~200 yd (183 m) before the signal; the
+	 * engine keeps the lead small so short test rails still exercise the state machine (constant,
+	 * tunable).
 	 */
 	private static final double MMTR_AWS_TRIGGER_LEAD_M = 75.0;
 	/**
-	 * Signal S3 (AWS): driver acknowledgement window before an unacknowledged warning becomes a
-	 * SPAD emergency stop (UK AWS: 2.5-3 s; counted in vehicle tick time so tests stay clock-free).
+	 * Signal S3/A3 (AWS): driver acknowledgement window before an unacknowledged warning becomes a
+	 * SPAD emergency stop. A3 aligned this with the real semantics (2.5 s; UK AWS warning cancels in
+	 * ~2.5-3 s), counted in vehicle tick time so tests stay clock-free.
 	 */
-	private static final long MMTR_AWS_ACK_WINDOW_MILLIS = 3000;
+	private static final long MMTR_AWS_ACK_WINDOW_MILLIS = 2500;
 	/** Signal S3 (AWS) warning state machine: no warning active. */
 	private static final int MMTR_AWS_NONE = 0;
 	/** Signal S3 (AWS) warning state machine: warning sounding, awaiting driver acknowledgement. */
@@ -2927,17 +2929,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			return;
 		}
+		// A3: the trigger is the SIGNAL the train is about to pass, not a raw distance. The aspect of
+		// the rail it is entering (route-aware since A2) decides: red / single / double yellow -> warn,
+		// green -> clear. That is what makes a caution two blocks ahead (single/double yellow) warn at
+		// all - the old rule only saw the occupancy stop inside the lead. A speed-limit start ahead (a
+		// slower next rail) stays a trigger, like a real AWS speed board, and the S1 occupancy stop
+		// stays one too so a train parked at a block boundary keeps its acknowledged indication.
+		final Simulator awsSimulator = data instanceof final Simulator simulator ? simulator : null;
+		final Rail nextRailAws = mmtrMotionWalker.peekNextRail();
+		final String signalRailHex = nextRailAws == null ? mmtrMotionWalker.railHex() : nextRailAws.getHexId();
+		final Position signalEntryNode = nextRailAws == null ? mmtrMotionWalker.enteredFromPosition() : mmtrMotionWalker.aheadNode();
+		final org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect signalAspect = awsSimulator == null || signalRailHex == null
+			? org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect.GREEN
+			: awsSimulator.mmtrSignalAspectView().aspectFrom(signalRailHex, signalEntryNode);
+		final double remainingToSignalM = MmtrRunPlanner.remainingToAheadNodeM(mmtrMotionWalker);
+		final boolean signalInLead = signalAspect != org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect.GREEN && remainingToSignalM <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
 		// Restricted boundary ahead: nearest of the occupancy block stop and a slower next rail.
 		double boundaryM = mmtrBlockStopM < Double.MAX_VALUE / 2 ? mmtrBlockStopM : Double.MAX_VALUE;
-		final Rail nextRailAws = mmtrMotionWalker.peekNextRail();
 		if (nextRailAws != null) {
 			final double nextLimitMms = nextRailAws.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
 			final double currentLimitMms = mmtrCurrentRailLimitPerMs();
 			if (nextLimitMms > 0 && nextLimitMms < currentLimitMms - 1e-12) {
-				boundaryM = Math.min(boundaryM, mmtrMotionWalker.distanceM() + mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM());
+				boundaryM = Math.min(boundaryM, mmtrMotionWalker.distanceM() + remainingToSignalM);
 			}
 		}
-		final boolean restricted = boundaryM < Double.MAX_VALUE / 2 && boundaryM - mmtrMotionWalker.distanceM() <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
+		final boolean restricted = signalInLead
+			|| boundaryM < Double.MAX_VALUE / 2 && boundaryM - mmtrMotionWalker.distanceM() <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
 		if (!restricted) {
 			if (mmtrAwsState != MMTR_AWS_NONE) {
 				mmtrAwsState = MMTR_AWS_NONE;
@@ -2950,7 +2967,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrAwsState == MMTR_AWS_NONE) {
 			mmtrAwsState = MMTR_AWS_WARN;
 			mmtrAwsWarnElapsedMillis = 0;
-			System.out.println("[MMTR-AWS] warning on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.distanceM() * 10.0) / 10.0 + "m - restricted boundary at " + Math.round(boundaryM * 10.0) / 10.0 + "m");
+			System.out.println("[MMTR-AWS] warning on " + mmtrMotionWalker.railHex() + " at " + Math.round(mmtrMotionWalker.distanceM() * 10.0) / 10.0 + "m - signal " + signalAspect + " on " + signalRailHex + " in " + Math.round(remainingToSignalM * 10.0) / 10.0 + "m, boundary at " + Math.round(boundaryM * 10.0) / 10.0 + "m");
 			return; // the acknowledgement window starts counting on the NEXT tick
 		}
 		if (mmtrAwsAckQueued) {
