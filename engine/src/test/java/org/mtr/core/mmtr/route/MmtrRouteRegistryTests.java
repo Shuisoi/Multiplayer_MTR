@@ -214,12 +214,27 @@ public final class MmtrRouteRegistryTests {
 		registry.refresh(1, authority);
 		registry.refresh(2, authority);
 
-		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> nextRails = registry.setMainRouteNextRails();
-		assertEquals(RAIL_MID, nextRails.get(RAIL_ENTRY), "the SET route's locked path is mirrored");
-		assertEquals(RAIL_TARGET, nextRails.get(RAIL_MID));
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails = registry.setMainRouteNextRails();
+		assertEquals(RAIL_MID, nextRails.get(RAIL_ENTRY).get(0), "the SET route's locked path is mirrored");
+		assertEquals(RAIL_TARGET, nextRails.get(RAIL_MID).get(0));
 		assertFalse(nextRails.containsKey(RAIL_TARGET), "the last rail has no next rail");
 		assertEquals(1, registry.pendingEntryRails().size(), "only the PENDING route's entry is listed");
 		assertTrue(registry.pendingEntryRails().contains(RAIL_ENTRY), "the waiting movement's entry rail shows danger");
+
+		// A route that runs over the same rail twice (折返 / 牵出—推进) must mirror BOTH nexts: a plain
+		// rail -> rail map kept only the outbound leg and the renderer lost the narrowing on the way back.
+		registry.release(1);
+		final ObjectArrayList<String> doubledRails = new ObjectArrayList<>();
+		doubledRails.add(RAIL_ENTRY);
+		doubledRails.add(RAIL_MID);
+		doubledRails.add(RAIL_TARGET);
+		doubledRails.add(RAIL_MID);
+		doubledRails.add(RAIL_ENTRY);
+		registry.request(new MmtrRoute(1, "v1", MmtrRoute.Kind.MAIN, doubledRails, new ObjectArrayList<>(), RAIL_ENTRY, 2000));
+		registry.refresh(1, authority);
+		assertEquals(2, registry.setMainRouteNextRails().get(RAIL_MID).size(), "both occurrences of the doubled rail are mirrored");
+		assertEquals(RAIL_TARGET, registry.setMainRouteNextRails().get(RAIL_MID).get(0), "outbound leg first");
+		assertEquals(RAIL_ENTRY, registry.setMainRouteNextRails().get(RAIL_MID).get(1), "return leg second");
 
 		// A shunt route never narrows the main display, even when set.
 		registry.release(1);

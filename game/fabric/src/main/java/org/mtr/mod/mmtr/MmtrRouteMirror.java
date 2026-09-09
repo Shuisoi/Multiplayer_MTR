@@ -6,6 +6,7 @@ import net.minecraft.server.world.ServerWorld;
 import org.mtr.core.Main;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.mtr.mapping.holder.World;
 import org.mtr.mapping.mapper.MinecraftServerHelper;
@@ -44,7 +45,7 @@ public final class MmtrRouteMirror {
 			if (simulator == null) {
 				continue;
 			}
-			final Object2ObjectOpenHashMap<String, String> nextRails = simulator.mmtrRoutes.setMainRouteNextRails();
+			final Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails = simulator.mmtrRoutes.setMainRouteNextRails();
 			final ObjectOpenHashSet<String> pendingEntries = simulator.mmtrRoutes.pendingEntryRails();
 			final String signature = nextRails.toString() + "|" + pendingEntries.toString();
 			if (signature.equals(LAST_SIGNATURE.get(worldId))) {

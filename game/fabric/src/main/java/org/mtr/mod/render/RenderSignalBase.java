@@ -235,10 +235,18 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 				if (neighbours == null) {
 					continue;
 				}
-				// A2: a SET main route locks one path through this rail - follow only that rail.
-				final String lockedNext = MmtrClientRoutes.nextRail(entry.left());
-				if (lockedNext != null && neighbours.values().stream().anyMatch(rail -> rail.getHexId().equals(lockedNext))) {
-					nextLevel.add(new ObjectObjectImmutablePair<>(lockedNext, far));
+				// A2: a SET main route locks one path through this rail - follow only that rail. A route
+				// may traverse the rail twice (折返), so the mirror lists every candidate and we take the
+				// one that actually continues from the node this walk is leaving - the engine's rule.
+				boolean followedLockedPath = false;
+				for (final String lockedNext : MmtrClientRoutes.nextRails(entry.left())) {
+					if (neighbours.values().stream().anyMatch(rail -> rail.getHexId().equals(lockedNext))) {
+						nextLevel.add(new ObjectObjectImmutablePair<>(lockedNext, far));
+						followedLockedPath = true;
+						break;
+					}
+				}
+				if (followedLockedPath) {
 					continue;
 				}
 				neighbours.forEach((otherEnd, rail) -> {

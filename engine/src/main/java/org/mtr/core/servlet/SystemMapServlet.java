@@ -467,7 +467,11 @@ public final class SystemMapServlet extends ServletBase {
 	static com.google.gson.JsonObject mmtrRouteMirrorJson(Simulator simulator) {
 		final com.google.gson.JsonObject json = new com.google.gson.JsonObject();
 		final com.google.gson.JsonObject nextRails = new com.google.gson.JsonObject();
-		simulator.mmtrRoutes.setMainRouteNextRails().forEach(nextRails::addProperty);
+		simulator.mmtrRoutes.setMainRouteNextRails().forEach((from, nexts) -> {
+			final com.google.gson.JsonArray list = new com.google.gson.JsonArray();
+			nexts.forEach(list::add);
+			nextRails.add(from, list);
+		});
 		final com.google.gson.JsonArray pendingEntries = new com.google.gson.JsonArray();
 		simulator.mmtrRoutes.pendingEntryRails().forEach(pendingEntries::add);
 		json.add("nextRails", nextRails);

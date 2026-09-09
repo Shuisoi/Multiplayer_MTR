@@ -57,8 +57,8 @@ public final class SystemMapRouteMirrorTests {
 
 		final JsonObject mirror = SystemMapServlet.mmtrRouteMirrorJson(sim);
 		final JsonObject nextRails = mirror.getAsJsonObject("nextRails");
-		assertEquals(b.getHexId(), nextRails.get(a.getHexId()).getAsString(), "the SET route's locked path is mirrored");
-		assertEquals(c.getHexId(), nextRails.get(b.getHexId()).getAsString());
+		assertEquals(b.getHexId(), nextRails.getAsJsonArray(a.getHexId()).get(0).getAsString(), "the SET route's locked path is mirrored");
+		assertEquals(c.getHexId(), nextRails.getAsJsonArray(b.getHexId()).get(0).getAsString());
 		assertTrue(mirror.getAsJsonArray("pendingEntries").toString().contains(b.getHexId()),
 			"the PENDING route's entry rail is mirrored as a danger head: " + mirror.getAsJsonArray("pendingEntries"));
 	}

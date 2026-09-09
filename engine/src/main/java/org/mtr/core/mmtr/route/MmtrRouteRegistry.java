@@ -113,19 +113,27 @@ public final class MmtrRouteRegistry {
 	}
 
 	/**
-	 * A2 client mirror: rail hex -&gt; the next rail of the SET MAIN route running over it. This map IS
-	 * the fork-narrowing rule in one object, so the in-game renderer can follow the locked path
-	 * instead of walking every branch (and instead of re-implementing the route logic).
+	 * A2 client mirror: rail hex -&gt; the next rail(s) of every SET MAIN route running over it, in route
+	 * order. A route may traverse the SAME rail twice (牵出—推进 / 尽头换向: the real aassdd shunt's
+	 * plan had one rail twice), so the value is a list and the consumer picks the entry that shares the
+	 * node it is walking toward — the same rule the engine's {@code MmtrSignalAspect} applies. A plain
+	 * rail -&gt; rail map would silently keep only the outbound leg and lose the narrowing on the way
+	 * back.
 	 */
-	public Object2ObjectOpenHashMap<String, String> setMainRouteNextRails() {
-		final Object2ObjectOpenHashMap<String, String> out = new Object2ObjectOpenHashMap<>();
+	public Object2ObjectOpenHashMap<String, ObjectArrayList<String>> setMainRouteNextRails() {
+		final Object2ObjectOpenHashMap<String, ObjectArrayList<String>> out = new Object2ObjectOpenHashMap<>();
 		for (final MmtrRoute route : sorted()) {
 			if (!route.isEstablished() || route.getKind() != MmtrRoute.Kind.MAIN) {
 				continue;
 			}
 			final ObjectArrayList<String> rails = route.getRailHexes();
 			for (int i = 0; i + 1 < rails.size(); i++) {
-				out.putIfAbsent(rails.get(i), rails.get(i + 1));
+				final String from = rails.get(i);
+				final String to = rails.get(i + 1);
+				final ObjectArrayList<String> nexts = out.computeIfAbsent(from, key -> new ObjectArrayList<>());
+				if (!nexts.contains(to)) {
+					nexts.add(to);
+				}
 			}
 		}
 		return out;

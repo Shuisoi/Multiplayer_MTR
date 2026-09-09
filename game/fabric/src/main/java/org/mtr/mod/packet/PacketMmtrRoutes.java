@@ -33,14 +33,14 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		super(content);
 	}
 
-	/** Build the wire form from the engine's derived views. */
-	public static String contentOf(Object2ObjectOpenHashMap<String, String> nextRails, ObjectOpenHashSet<String> pendingEntries) {
+	/** Build the wire form from the engine's derived views (flattened pairs; a rail may repeat). */
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
-		nextRails.forEach((from, to) -> {
+		nextRails.forEach((from, tos) -> tos.forEach(to -> {
 			next.add(from);
 			next.add(to);
-		});
+		}));
 		final JsonArray pending = new JsonArray();
 		pendingEntries.forEach(pending::add);
 		json.add("nextRails", next);
@@ -54,9 +54,9 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		final ObjectOpenHashSet<String> pending = new ObjectOpenHashSet<>();
 		jsonReader.iterateStringArray("nextRails", flat::clear, flat::add);
 		jsonReader.iterateStringArray("pendingEntries", pending::clear, pending::add);
-		final Map<String, String> next = new HashMap<>();
+		final Map<String, java.util.List<String>> next = new HashMap<>();
 		for (int i = 0; i + 1 < flat.size(); i += 2) {
-			next.put(flat.get(i), flat.get(i + 1));
+			next.computeIfAbsent(flat.get(i), key -> new java.util.ArrayList<>()).add(flat.get(i + 1));
 		}
 		MmtrClientRoutes.update(next, pending);
 		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s)");
