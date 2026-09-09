@@ -1,11 +1,9 @@
 # Sync engine shadow jar into game/libs (upstream-style integration; Gradle versions differ so no composite build)
 $ErrorActionPreference = 'Stop'
 $mmtr = Split-Path -Parent $PSScriptRoot
-$tools = Join-Path (Split-Path $mmtr -Parent) 'tools'
-$jh = Get-ChildItem $tools -Directory | Where-Object { $_.Name -like 'jdk-21*' } | Select-Object -First 1
-if (-not $jh) { throw 'JDK 21 not found under tools/' }
-$env:JAVA_HOME = $jh.FullName
-$env:Path = (Join-Path $jh.FullName 'bin') + ';' + $env:Path
+# 工作区路径单一真源（env/workspace.env.ps1 导出 $JDK21 并设置 JAVA_HOME）
+. (Join-Path (Split-Path $mmtr -Parent) 'env\workspace.env.ps1')
+if (-not (Test-Path (Join-Path $JDK21 'bin\java.exe'))) { throw "JDK 21 not found at $JDK21" }
 $log = Join-Path $env:TEMP 'engine-shadow.log'
 & (Join-Path $mmtr 'engine\gradlew.bat') -p (Join-Path $mmtr 'engine') shadowJar --console=plain --no-daemon *> $log
 if ($LASTEXITCODE -ne 0) { Get-Content $log | Select-Object -Last 40; throw 'engine shadowJar failed' }

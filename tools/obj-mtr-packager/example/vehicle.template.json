@@ -1,0 +1,52 @@
+{
+  "_A_身份": {
+    "id": "",
+    "name": "",
+    "color": "7FA8CC",
+    "transportMode": "TRAIN"
+  },
+  "_B_物理参数": {
+    "carLengthBlocks": 0,
+    "carWidthBlocks": 0,
+    "bogieCount": 2,
+    "bogieOffsetBlocks": 0,
+    "bogie2OffsetBlocks": 0,
+    "couplingPadding1": 0,
+    "couplingPadding2": 0
+  },
+  "_C_模型与几何": {
+    "sourceObj": "",
+    "textureDir": "",
+    "rotationDegY": -90,
+    "recenter": true,
+    "flipTextureV": true
+  },
+  "_D_分组映射": {
+    "body": [
+      ""
+    ],
+    "interior": [
+      ""
+    ],
+    "door_l": [
+      ""
+    ],
+    "door_r": [
+      ""
+    ]
+  },
+  "_E_门与透明": {
+    "doorAnimationType": "STANDARD",
+    "doorSlidePx": 14,
+    "doorSign_l": 1,
+    "doorSign_r": -1,
+    "doorway": "auto",
+    "translucentParts": [],
+    "specialParts": {}
+  },
+  "_F_输出": {
+    "outputPackName": "",
+    "outputDir": "",
+    "packFormat": 18
+  }
+}

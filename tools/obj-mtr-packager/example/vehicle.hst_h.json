@@ -1,0 +1,45 @@
+{
+  "id": "hst_h",
+  "name": "HST-H 头部车",
+  "color": "7FA8CC",
+  "transportMode": "TRAIN",
+  "carLengthBlocks": 15,
+  "carWidthBlocks": 5,
+  "carIndex": 0,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -5,
+  "bogie2OffsetBlocks": 5,
+  "couplingPadding1": 0,
+  "couplingPadding2": 0,
+  "sourceObj": "${MC_ROOT}/assets/models/blender/HST_H/hst_h.obj",
+  "textureDir": "${MC_ROOT}/assets/models/blender/HST_H",
+  "rotationDegY": -90,
+  "recenter": true,
+  "flipTextureV": true,
+  "groupMap": {
+    "body": [
+      "body"
+    ],
+    "interior": [
+      "BlockEntities",
+      "selection/chunks_merged"
+    ],
+    "door_l": [
+      "door_l"
+    ],
+    "door_r": [
+      "door_r"
+    ],
+    "anchor": [
+      "mmtr_"
+    ]
+  },
+  "doorAnimationType": "STANDARD",
+  "doorSlidePx": 14,
+  "outputPackName": "HST_H_v12",
+  "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
+  "packFormat": 18,
+  "flipAnchorNormalByGroup": [
+    "mmtr_hud"
+  ]
+}

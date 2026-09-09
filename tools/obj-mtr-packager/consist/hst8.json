@@ -1,0 +1,105 @@
+{
+  "packName": "HST8_v1",
+  "description": "HST 8-car set - 2 cab cars + 6 coaches",
+  "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
+  "packFormat": 18,
+  "cars": [
+    {
+      "id": "hst_h",
+      "name": "HST-H 头部车",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 15,
+      "carWidthBlocks": 5,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5,
+      "bogie2OffsetBlocks": 5,
+      "couplingPadding1": 0,
+      "couplingPadding2": 0,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/HST_H/hst_h.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/HST_H",
+      "rotationDegY": -90,
+      "recenter": true,
+      "flipTextureV": true,
+      "groupMap": {
+        "body": ["body"],
+        "interior": ["BlockEntities"],
+        "door_l": ["door_l"],
+        "door_r": ["door_r"],
+        "anchor": ["mmtr_"]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "flipAnchorNormalByGroup": ["mmtr_hud"]
+    },
+    {
+      "id": "hst_b",
+      "name": "HST-B 中间客车",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 17,
+      "carWidthBlocks": 5,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5,
+      "bogie2OffsetBlocks": 5,
+      "couplingPadding1": 0,
+      "couplingPadding2": 0,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/HST_B/HST_B.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/HST_B/tex",
+      "rotationDegY": -90,
+      "recenter": true,
+      "flipTextureV": true,
+      "groupRename": {
+        "mmtr_door_l_1": "door_l_1",
+        "mmtr_door_l_2": "door_l_2",
+        "mmtr_door_r_1": "door_r_1",
+        "mmtr_door_r_2": "door_r_2"
+      },
+      "groupMap": {
+        "body": ["selection/chunks_merged"],
+        "interior": ["BlockEntities"],
+        "door_l": ["door_l"],
+        "door_r": ["door_r"]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14
+    },
+    {
+      "id": "hst_h_rev",
+      "name": "HST-H 头部车（反向）",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 15,
+      "carWidthBlocks": 5,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5,
+      "bogie2OffsetBlocks": 5,
+      "couplingPadding1": 0,
+      "couplingPadding2": 0,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/HST_H/hst_h.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/HST_H",
+      "rotationDegY": 90,
+      "recenter": true,
+      "flipTextureV": true,
+      "groupRename": {
+        "mmtr_hud": "mmtr_hud_2",
+        "mmtr_seat_1": "mmtr_seat_2",
+        "mmtr_cabdoor_1_1": "mmtr_cabdoor_2_1"
+      },
+      "groupMap": {
+        "body": ["body"],
+        "interior": ["BlockEntities"],
+        "door_l": ["door_l"],
+        "door_r": ["door_r"],
+        "anchor": ["mmtr_"]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "doorSlideByGroup": {
+        "door_l_1": -14,
+        "door_r_2": 14
+      },
+      "flipAnchorNormalByGroup": ["mmtr_hud_2"]
+    }
+  ]
+}

@@ -6,6 +6,9 @@ out/
 # IDE
 .idea/
 *.iml
+# upstream IntelliJ project leftovers (not needed, IDEA regenerates .idea/ from Gradle)
+*.ipr
+*.iws
 .vscode/
 # OS
 Thumbs.db
@@ -14,6 +17,10 @@ Thumbs.db
 run/
 # temp
 *.log
+# logs belong to the workspace logs/ dir, never inside the repo
+logs/
+# packager staging (created next to the source OBJ)
+**/.pack_stage_*/
 # scratch runner build output
 mmtr-engine-run/classes/
 # synced modern engine jar (source lives in engine/; recreate via scripts/sync-engine.ps1)
@@ -23,3 +30,7 @@ game/libs/Transport-Simulation-Core-0.0.1.jar
 engine/website/.angular/
 engine/website/dist/
 engine/website/node_modules/
+
+# 说明：apps/creator-studio 是独立 Gradle build，它的 .gradle/ build/ run/ 已被上面的全局规则忽略。
+# 工作区级的 env/ vendor/ assets/ artifacts/ logs/ instances/ sandbox/ 都在仓库之外，本文件不涉及。
+# 路径硬编码由 scripts/check-paths.ps1 检查（提交前跑一次）。

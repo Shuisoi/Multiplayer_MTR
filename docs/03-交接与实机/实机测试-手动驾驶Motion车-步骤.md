@@ -17,7 +17,7 @@
 ## 1. 前置环境
 
 - 真实 dev 存档：mmtr/game/fabric/run/saves/新的世界/mtr（含 overworld 的 mmtr-consist-types.json 等）。
-- JDK：C:\Users\30354\.jdks\jdk-21.0.12.1+1（PATH 前置）。
+- JDK：env\jdk-21（PATH 前置）。
 - 启动引擎/存档服务：以仓库现有运行方式为准
   （【运行时待确认】engine Main / game 侧启动脚本；SystemMapServlet 与 OperationProcessor 的
   HTTP/WS 入口地址与端口按实际部署填）。

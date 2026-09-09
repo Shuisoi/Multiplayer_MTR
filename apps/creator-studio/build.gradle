@@ -1,0 +1,41 @@
+plugins {
+	id "fabric-loom" version "1.10-SNAPSHOT"
+}
+
+version = "1.0.0"
+group = "dev.mtrcreator"
+
+base {
+	archivesName = "mtr-creator-studio"
+}
+
+repositories {
+	maven { url = "https://maven.fabricmc.net/" }
+	mavenCentral()
+}
+
+// 工作区根：mmtr/apps/creator-studio -> ../../../ = MC（可用 -PmcRoot=... 覆盖）
+def mcRoot = findProperty("mcRoot") ?: rootDir.toPath().resolve("../../..").normalize().toFile().absolutePath
+
+dependencies {
+	minecraft "com.mojang:minecraft:1.20.4"
+	mappings "net.fabricmc:yarn:1.20.4+build.3:v2"
+	modImplementation "net.fabricmc:fabric-loader:0.19.5"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:0.97.3+1.20.4"
+	// 原版官方 MTR 4.0.5(自带 Creator UI/引擎,单 jar),仅用于建模与导出,与 mmtr fork 无关
+	modImplementation files("${mcRoot}/vendor/mods/MTR-fabric-4.0.5+1.20.4.jar")
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_17
+	targetCompatibility = JavaVersion.VERSION_17
+}
+
+loom {
+	runs {
+		client {
+			ideConfigGenerated = true
+			programArgs "--width", "1280", "--height", "720"
+		}
+	}
+}

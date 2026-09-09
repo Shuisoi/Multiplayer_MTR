@@ -51,7 +51,7 @@ Motion Core 驱动：车的运行状态 = (当前轨道段 + 段内偏移)，到
 - engine/src/test/.../mmtr/segment/MmtrLiveRouterTests.java（含 walk / driver / manual / existing-control 用例）
 - engine/src/test/.../mmtr/point/DevWorldTurnoutFlipTests.java（真实 -96 岔口 搬0走直/搬1走岔，决策层）
 - engine/src/test/.../mmtr/point/DevWorldMotionWalkTests.java（真实 -96：Motion Core 驱动车沿 via 轨开进岔口、branch0/1 跨上不同真实轨、ofWalker / buildLegs）
-运行：cd mmtr/engine，JAVA_HOME 用 C:\Users\30354\.jdks\jdk-21.0.12.1+1（见 §6），./gradlew.bat test --tests 类名。
+运行：cd mmtr/engine，JAVA_HOME 用 env\jdk-21（见 §6），./gradlew.bat test --tests 类名。
 
 ---
 
@@ -103,11 +103,11 @@ Motion Core 驱动：车的运行状态 = (当前轨道段 + 段内偏移)，到
   Core (segment+offset) 逐 tick 驱动"（MmtrMotionSnapshot.ofWalker 已给可渲染表示）。
 
 ## 6. 构建 / 验证纪律（新会话务必照做）
-- JDK：JAVA_HOME=C:\Users\30354\.jdks\jdk-21.0.12.1+1，PATH 前置其 bin。引擎工作目录 mmtr/engine。
+- JDK：JAVA_HOME=env\jdk-21，PATH 前置其 bin。引擎工作目录 mmtr/engine。
 - 编译：./gradlew.bat compileJava compileTestJava
 - 跑指定测试：./gradlew.bat test --tests 类名（见 §2.3）。
 - 回归底线：改 Vehicle 前先跑全量 ./gradlew.bat test，记下失败集（现状：约 13 个失败全是既有的 mmtr-job 子系统 / DevWorldJobSmokeTests，与 Motion Core 无关，最初基线就红）。你的改动不得新增失败（Motion Core + 确定性测试必须保持绿）。
-- 真实 dev 存档可加载：Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, C:/Users/30354/Desktop/Shuisoi DEV/MC/mmtr/game/fabric/run/saves/新的世界/mtr, false)。
+- 真实 dev 存档可加载：Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, ${MC_ROOT}/mmtr/game/fabric/run/saves/新的世界/mtr, false)。
 
 ## 7. 文档地图（按需加载）
 - 本文档（新会话先读）：目标 / 已完成 / 剩余 / 锚点 / 验证。

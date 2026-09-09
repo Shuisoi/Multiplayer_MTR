@@ -1,0 +1,107 @@
+{
+  "packName": "MMTR_NewStock_v1",
+  "description": "P1 coach + SAF101 loco + cargotest wagon (MMTR)",
+  "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
+  "packFormat": 18,
+  "cars": [
+    {
+      "id": "p1",
+      "name": "P1 客车车厢",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 16,
+      "carWidthBlocks": 5,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5,
+      "bogie2OffsetBlocks": 5,
+      "couplingPadding1": 0,
+      "couplingPadding2": 0,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/p1/pack/p1.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/p1/pack",
+      "rotationDegY": -90,
+      "recenter": true,
+      "flipTextureV": true,
+      "groupMap": {
+        "body": ["selection/chunks_merged"],
+        "interior": ["BlockEntities"],
+        "door_l": ["door_l"],
+        "door_r": ["door_r"],
+        "door_f": ["door_f"]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14
+    },
+    {
+      "id": "saf101",
+      "name": "SAF101 双端机车",
+      "color": "2E7D5B",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 16,
+      "carWidthBlocks": 5,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5,
+      "bogie2OffsetBlocks": 5,
+      "couplingPadding1": 0,
+      "couplingPadding2": 0,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf101/pack/saf101.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf101/pack",
+      "rotationDegY": -90,
+      "recenter": true,
+      "flipTextureV": true,
+      "groupMap": {
+        "body": ["body"],
+        "interior": ["BlockEntities"],
+        "anchor": ["mmtr_"]
+      },
+      "floor": true,
+      "floorHeightBlocks": 1.0,
+      "extraDoorways": ["cabdoor_1_1", "cabdoor_1_2", "cabdoor_2_1", "cabdoor_2_2"],
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "doorSlideByGroup": {
+        "cabdoor_1_1": 14,
+        "cabdoor_1_2": -14,
+        "cabdoor_2_1": -14,
+        "cabdoor_2_2": 14
+      },
+      "hud": {
+        "background": "#FF05080C",
+        "widgets": [
+          { "kind": "roundRect", "x": 0.005, "y": 0.05, "w": 0.99, "h": 0.90, "radius": 0.09, "color": "#FF0B1119" },
+          { "kind": "speed", "x": 0.15, "y": 0.56, "size": 0.46, "color": "#FFFFFFFF", "align": "center" },
+          { "kind": "text", "text": "km/h", "x": 0.15, "y": 0.15, "size": 0.14, "color": "#FF8FA6B8", "align": "center" },
+          { "kind": "line", "x1": 0.28, "y1": 0.14, "x2": 0.28, "y2": 0.86, "lineWidth": 0.03, "color": "#FF1E2A36" },
+          { "kind": "text", "text": "限速", "x": 0.34, "y": 0.66, "size": 0.17, "color": "#FF8FA6B8", "align": "left" },
+          { "kind": "limit", "x": 0.34, "y": 0.36, "size": 0.30, "color": "#FFFFB03A", "align": "left" },
+          { "kind": "text", "text": "SAF101", "x": 0.96, "y": 0.72, "size": 0.15, "color": "#FF3FE0FF", "align": "right" },
+          { "kind": "text", "text": "双端机车", "x": 0.96, "y": 0.32, "size": 0.12, "color": "#FF5A6B78", "align": "right" },
+          { "kind": "rect", "x": 0.02, "y": 0.015, "w": 0.96, "h": 0.03, "color": "#FF3FE0FF" }
+        ]
+      }
+    },
+    {
+      "id": "cargotest",
+      "name": "货运敞车（测试）",
+      "color": "8B6F47",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 16,
+      "carWidthBlocks": 5,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5,
+      "bogie2OffsetBlocks": 5,
+      "couplingPadding1": 0,
+      "couplingPadding2": 0,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/cargotest/pack/cargotest.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/cargotest/pack",
+      "rotationDegY": -90,
+      "recenter": true,
+      "flipTextureV": true,
+      "groupMap": {
+        "body": ["selection/chunks_merged"],
+        "cargo": ["cargo"]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14
+    }
+  ]
+}

@@ -23,7 +23,7 @@
   overwrite each other and the game always keeps the newest one enabled.
 
 .EXAMPLE
-  powershell -File mmtr\scripts\pack-vehicle.ps1 tools\obj-mtr-packager\example\vehicle.hst_h.json -Version 13
+  powershell -File mmtr\scripts\pack-vehicle.ps1 mmtr\tools\obj-mtr-packager\example\vehicle.hst_h.json -Version 13
 #>
 param(
 	[Parameter(Mandatory = $true)][string]$Config,
@@ -34,7 +34,10 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $repo = Split-Path -Parent $PSScriptRoot
-$packager = Join-Path (Split-Path $repo -Parent) 'tools\obj-mtr-packager\pack_vehicle.js'
+$packager = Join-Path $repo 'tools\obj-mtr-packager\pack_vehicle.js'
+# 配置里的路径可用 ${MC_ROOT} 占位符（见 tools/obj-mtr-packager/paths.js），避免机器相关绝对路径入库。
+$mcRoot = Split-Path -Parent $repo
+function Resolve-McRoot([string]$value) { if ($value) { return $value.Replace('${MC_ROOT}', $mcRoot) } else { return $value } }
 
 function Fail($message) {
 	Write-Host ''
@@ -58,6 +61,7 @@ try {
 
 $id = $params.id
 if (-not $id) { Fail 'config has no "id"' }
+foreach ($key in @('sourceObj', 'textureDir', 'outputDir')) { $params.$key = Resolve-McRoot $params.$key }
 if (-not (Test-Path $params.sourceObj)) { Fail "sourceObj not found: $($params.sourceObj)" }
 if (-not (Test-Path $params.textureDir)) { Fail "textureDir not found: $($params.textureDir)" }
 

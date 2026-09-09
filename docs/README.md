@@ -33,6 +33,9 @@
 |---|---|---|
 | 现代引擎运行与验证.md | 让游戏跑在现代引擎：链接/车底配置/runClient-runServer 使用与验证 | 有效（部分条目待实机复验） |
 | 作业编排-运行手册.md | 任务(consist-jobs)体系：概念/数据位置/编排约束/编辑器 | 有效（任务系统重建中） |
+| 06-IntelliJ-IDEA配置指南.md | 两个 Gradle 工程的 IDEA 配置：SDK/Gradle JVM/注解处理/UTF-8/常见报错 | 有效（路径已按 2026-09-09 整理更新） |
+| MMTR-OBJ车辆资源包-标准化工作流.md | Blender→OBJ→资源包 的完整流程与打包器行为说明 | 有效（打包器在 `mmtr/tools/obj-mtr-packager/`） |
+| MMTR-OBJ车辆-用户输入清单.md | 打包前必须确认的车辆参数清单 | 有效 |
 
 ### 03-交接与实机（当前活口 + 验证）
 | 文件 | 内容 | 状态 |
@@ -80,7 +83,9 @@
   - **77 = 日志开关：每 tick 走行/同步日志按需开启**（`MmtrTrace` 默认关；`-Dmmtr.trace=true` 或 OP 指令 `trace on|off`；实机日志从"1600/2000 行噪声"回到可读；附"服务器运行时别覆盖 libs jar"红线）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
-## 仓库范围外（历史早期资料，未入库）
-- 项目早期文档在仓库上级目录 MC/docs/（00-环境搭建、01-MTR 源码分析、02-可行性、03-架构决策与里程碑、06-IDEA 指南、OBJ 车辆清单/工作流 等）：属 M0 前阶段历史，未随 mmtr 入库；其中 03 里程碑仍被多处文字引用。
-- 引擎(engine/)与模组(game/)各自的 README/docs 属上游工程文档，保持原位（engine/docs/*.md 为 TSC 上游文档）。
+## 历史与参考（已入库）
+- `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
+- `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
+- `engine/docs/*.md`：TSC 上游工程文档，保持原位。
+- 工作区级路径约定与目录说明见仓库上级目录的 `README.md`（MC 工作区地图）与 `整理方案.md`。
 
