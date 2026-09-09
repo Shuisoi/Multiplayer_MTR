@@ -16,6 +16,7 @@ import org.mtr.mod.Init;
 import org.mtr.mod.block.BlockNode;
 import org.mtr.mod.block.BlockSignalBase;
 import org.mtr.mod.block.IBlock;
+import org.mtr.mod.mmtr.MmtrSignalChain;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.client.MmtrClientRoutes;
@@ -203,9 +204,8 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 	 * MMTR: how far along the travel direction the nearest occupied rail sits, counted from the
 	 * protected rail(s) found at {@code nodePos}: 1 = protected occupied, 2 = one rail beyond,
 	 * 3 = two rails beyond, 0 = clear. Blocked = locally simulated occupancy OR the authoritative
-	 * server per-rail signal-color holds. Continuations keep the travel direction (dot &gt; 0, no
-	 * turn-backs); at a fork every branch is considered unless a SET main route locks one path
-	 * (A2: the engine's route mirror narrows the walk to the route's own next rail), and a rail that
+	 * server per-rail signal-color holds. The walk itself lives in {@link MmtrSignalChain} (pure, so
+	 * the client rule is unit-tested); this adapter only supplies the client rail graph. A rail that
 	 * is the entry of a still-PENDING route shows danger (the movement waits outside its signal).
 	 */
 	private static int mmtrChainDepth(MinecraftClientData data, Position nodePos, ObjectArrayList<String> protectedHexes) {
@@ -214,58 +214,38 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 				return 1;
 			}
 		}
-		final java.util.function.Predicate<String> blocked = hex -> data.blockedRailIds.contains(hex)
-			|| !data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).isEmpty();
-		final ObjectArrayList<ObjectObjectImmutablePair<String, Position>> level = new ObjectArrayList<>();
-		protectedHexes.forEach(hex -> level.add(new ObjectObjectImmutablePair<>(hex, nodePos)));
-		for (int depth = 1; depth <= 3; depth++) {
-			if (level.stream().anyMatch(entry -> blocked.test(entry.left()))) {
-				return depth;
-			}
-			if (depth == 3) {
-				break;
-			}
-			final ObjectArrayList<ObjectObjectImmutablePair<String, Position>> nextLevel = new ObjectArrayList<>();
-			for (final ObjectObjectImmutablePair<String, Position> entry : level) {
-				final Position far = mmtrFarEnd(data, entry.right(), entry.left());
-				if (far == null) {
-					continue;
-				}
-				final Object2ObjectOpenHashMap<Position, org.mtr.core.data.Rail> neighbours = data.positionsToRail.get(far);
-				if (neighbours == null) {
-					continue;
-				}
-				// A2: a SET main route locks one path through this rail - follow only that rail. A route
-				// may traverse the rail twice (折返), so the mirror lists every candidate and we take the
-				// one that actually continues from the node this walk is leaving - the engine's rule.
-				boolean followedLockedPath = false;
-				for (final String lockedNext : MmtrClientRoutes.nextRails(entry.left())) {
-					if (neighbours.values().stream().anyMatch(rail -> rail.getHexId().equals(lockedNext))) {
-						nextLevel.add(new ObjectObjectImmutablePair<>(lockedNext, far));
-						followedLockedPath = true;
-						break;
-					}
-				}
-				if (followedLockedPath) {
-					continue;
-				}
+		return MmtrSignalChain.depth(nodePos, protectedHexes, new ClientRailGraph(data),
+			hex -> data.blockedRailIds.contains(hex) || !data.railIdToCurrentlyBlockedSignalColors.getOrDefault(hex, new LongArrayList()).isEmpty(),
+			MmtrClientRoutes::nextRails, 3);
+	}
+
+	/** The client rail graph ({@code MinecraftClientData.positionsToRail}) behind {@link MmtrSignalChain}. */
+	private static final class ClientRailGraph implements MmtrSignalChain.RailGraph {
+
+		private final MinecraftClientData data;
+
+		private ClientRailGraph(MinecraftClientData data) {
+			this.data = data;
+		}
+
+		@Override
+		public @Nullable Position farEnd(Position node, String railHex) {
+			return mmtrFarEnd(data, node, railHex);
+		}
+
+		@Override
+		public java.util.List<MmtrSignalChain.RailEnd> otherRailsAt(Position node, String railHex) {
+			final java.util.List<MmtrSignalChain.RailEnd> out = new java.util.ArrayList<>();
+			final Object2ObjectOpenHashMap<Position, org.mtr.core.data.Rail> neighbours = data.positionsToRail.get(node);
+			if (neighbours != null) {
 				neighbours.forEach((otherEnd, rail) -> {
-					if (!rail.getHexId().equals(entry.left())) {
-						// Continue only in the travel direction (dot product with the incoming heading).
-						final double dot = (otherEnd.getX() - far.getX()) * (far.getX() - entry.right().getX()) + (otherEnd.getZ() - far.getZ()) * (far.getZ() - entry.right().getZ());
-						if (dot > 0) {
-							nextLevel.add(new ObjectObjectImmutablePair<>(rail.getHexId(), far));
-						}
+					if (!rail.getHexId().equals(railHex)) {
+						out.add(new MmtrSignalChain.RailEnd(rail.getHexId(), otherEnd));
 					}
 				});
 			}
-			if (nextLevel.isEmpty()) {
-				break;
-			}
-			level.clear();
-			level.addAll(nextLevel);
+			return out;
 		}
-		return 0;
 	}
 
 	/** The far endpoint of the rail {@code hex} that the train enters from {@code nodePos}. */

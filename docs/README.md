@@ -95,6 +95,7 @@
   - **88 = 自查：等待理由点名与 feed 分配**（PENDING 理由不再点名已越过的道岔（分段释放后的残留）；`aspectsForAllRails` 每请求只取一次 PENDING 入口集合；471/0/2）。
   - **89 = 联锁诊断指令 `interlock`**（`MmtrInterlockReport` + OP 指令 `interlock <id>|all`：进路状态/道岔持有/每条轨显示/客户端收窄，写进指令日志；实机输出同时印证 S5 原子锁、A2 闭塞链显示与折返镜像两条候选；472/0/2）。
   - **90 = A4 运营台视图：网页显示进路**（`mmtr-trains` 的每车 `route` + 顶层 `routeMirror` 接进运营台：面板摘要行 + 每车进路徽章 + 目标/等待理由；构建链要先删 `WebserverResources.java` 否则 Gradle 判 UP-TO-DATE 不重新嵌入；服务端 bundle 已实证含新文案）。
+  - **91 = 客户端信号链抽成纯函数并补测试**（`MmtrSignalChain.depth` 承接 `RenderSignalBase` 的链走行，渲染器只留 `ClientRailGraph` 适配器；`MmtrSignalChainTests` 5 例覆盖红/单黄/双黄/保守分岔/镜像收窄/折返双候选；fabric 测试 8/0，引擎 472/0/2 不变）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）
