@@ -86,6 +86,7 @@
   - **80 = A2 游戏内信号灯读进路（镜像通道）**（引擎派生视图 `nextRails`/`pendingEntries` → `PacketMmtrRoutes` + `MmtrClientRoutes` + `MmtrRouteMirror`（变化才推）→ `RenderSignalBase` 收窄/压红；引擎 461/0/2、fabric 编译通过；实机目视待做）。
   - **81 = A3 AWS 绑定信号显示**（`MmtrSignalAspect.aspectFrom` 方向敏感查询 + `Simulator` 缓存视图；AWS 触发 = 即将通过的那架信号机非绿且进入触发带，绿灯复位；黄灯（单/双）也会响；确认窗口 3 s → 2.5 s；464/0/2）。
   - **82 = S5 冲突进路互斥排队 + 分段释放**（进路 SET 判定改为"只要求尚未越过的道岔被持有"——列车越岔后进路在它前方保持 SET；双车咽喉用例：冲突进路 PENDING 等待、点名持有人、越岔后自动 SET 通过；同腿跟随不算敌对、由 S1 停在闭塞边界；467/0/2）。
+  - **83 = 实机验收（服务端侧）：连挂后进路孤儿修复**（新 jar 重启 dev 服务端，feed 里发现 SET 进路 + COMPLETE 任务的孤儿；根因 = 连挂手术新建 Vehicle 对象、进路挂在对象字段上；改为**按 id 从登记表读/释放** + 手术释放被吸收车与已终结合并车的进路；真实存档复验 `routes[]=0`、`signals` 134 轨中 7 红（=7 台停放车）符合占用链）。
 - 设计文档追不上进度时以 notes 最新轮次 + git log 为准。
 
 ## 历史与参考（已入库）

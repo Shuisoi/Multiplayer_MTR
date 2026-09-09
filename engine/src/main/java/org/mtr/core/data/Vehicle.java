@@ -463,7 +463,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// while the run is armed - a fork whose grant expires, or that an operator parks while the train
 		// is still waiting to arm, must drop the route to PENDING so the signal protecting it returns
 		// to danger instead of showing proceed for a movement the interlocking no longer has set.
-		if (mmtrRoute != null && data instanceof final Simulator routeSimulator) {
+		// By vehicle id (refresh is a no-op when the train has no route), so a surgery-rebuilt object
+		// still maintains the route its predecessor published.
+		if (data instanceof final Simulator routeSimulator) {
 			routeSimulator.mmtrRoutes.refresh(getId(), routeSimulator.mmtrPointAuthority);
 		}
 	}
@@ -669,13 +671,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		mmtrPendingPointOps.clear();
 		mmtrMotionPlan = null;
-		// S5: a released movement drops its route - the signal layer must stop reading it as set.
-		if (mmtrRoute != null) {
-			if (data instanceof final Simulator routeSimulator) {
-				routeSimulator.mmtrRoutes.release(getId());
-			}
-			mmtrRoute = null;
+		// S5: a released movement drops its route - the signal layer must stop reading it as set. The
+		// release is by vehicle id, never gated on this object's field: after a coupling surgery the
+		// live Vehicle is a NEW object and the route belongs to the train, not to the Java object.
+		if (data instanceof final Simulator routeSimulator) {
+			routeSimulator.mmtrRoutes.release(getId());
 		}
+		mmtrRoute = null;
 	}
 
 	/**
@@ -1654,9 +1656,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return consistWalker == null ? MmtrCabState.Cab.NONE : consistWalker.cabs().activeCab();
 	}
 
-	/** S5: the live 进路 of this train (null when it has no armed motion mission). */
+	/**
+	 * S5: the live 进路 of this train. The registry is the source of truth, not the field: a coupling
+	 * surgery rebuilds the Vehicle object (MmtrCoupleSurgery creates a merged Vehicle from JSON), so a
+	 * route published by the pre-surgery object would otherwise be invisible to the new one - and leak
+	 * (实机 2026-09-09: a SET shunt route with a COMPLETE mission).
+	 */
 	public org.mtr.core.mmtr.route.@Nullable MmtrRoute getMmtrRoute() {
-		return mmtrRoute;
+		return data instanceof final Simulator simulator ? simulator.mmtrRoutes.route(getId()) : mmtrRoute;
 	}
 
 	/** @return who holds the key ("NONE" / "SYSTEM" / "CREW") of a consist-body vehicle. */

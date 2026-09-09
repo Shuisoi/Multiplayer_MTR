@@ -246,6 +246,23 @@ public final class MmtrCoupleSurgery {
 		}
 		simulator.mmtrShuntAuthorities.revoke(initiatorVehicleId);
 		simulator.mmtrShuntAuthorities.revoke(targetVehicleId);
+		// S5: the merged train is a NEW Vehicle object, so a route published by the pre-surgery object
+		// belongs to no live object any more. The absorbed train's route and turnout holds are always
+		// dropped; the merged train's route is dropped when the merge already completes its movement
+		// (the normal task-driven shunt) - if the movement continues, the route stays and the new
+		// object maintains it by vehicle id (实机 2026-09-09: a SET route with a COMPLETE mission).
+		if (leading.getId() != merged.getId()) {
+			simulator.mmtrRoutes.release(leading.getId());
+			simulator.mmtrPointAuthority.releaseAll("v" + leading.getId());
+		}
+		if (trailing.getId() != merged.getId()) {
+			simulator.mmtrRoutes.release(trailing.getId());
+			simulator.mmtrPointAuthority.releaseAll("v" + trailing.getId());
+		}
+		if (inheritedMission != null && inheritedMission.isTerminal()) {
+			simulator.mmtrRoutes.release(merged.getId());
+			simulator.mmtrPointAuthority.releaseAll("v" + merged.getId());
+		}
 
 		System.out.println("[MMTR-COUP] 连挂完成: " + leading.getId() + " + " + trailing.getId() + " -> " + merged.getId()
 				+ "（" + mergedCars.size() + " 节，" + Math.round(Siding.getTotalVehicleLength(mergedCars) * 10.0) / 10.0 + " m，车钩间隙 "

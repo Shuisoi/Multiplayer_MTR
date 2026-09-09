@@ -231,6 +231,15 @@ public final class MmtrTaskDrivenCouplingTests {
 			+ n.sim.mmtrJobScheduler.failureOf("loco") + " / mission "
 			+ (merged == null || merged.getMmtrMission() == null ? "-" : merged.getMmtrMission().getState() + " " + merged.getMmtrMission().getFailureReason()));
 		assertEquals(2, n.sim.mmtrJobScheduler.stepIndexOf("loco"), "both the drive and the couple step ran");
+
+		// S5 regression (实机 2026-09-09): the surgery builds a NEW Vehicle object, so the route the
+		// pre-surgery object published must not survive as an orphan - the live feed showed a SET shunt
+		// route on a train whose mission was already COMPLETE. The movement is over: no route, no hold.
+		for (int i = 0; i < 5; i++) {
+			n.tick();
+		}
+		assertTrue(n.sim.mmtrRoutes.snapshot().isEmpty(), "no orphan route survives the coupling surgery");
+		assertEquals(0, n.sim.mmtrShuntAuthorities.size(), "the shunt authority of both trains is withdrawn");
 	}
 
 	private static boolean coupled(Net n, Vehicle rake, Vehicle loco) {
