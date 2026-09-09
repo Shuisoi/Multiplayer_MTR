@@ -37,7 +37,7 @@ public class PlayerPresentResponse extends PlayerPresentResponseSchema {
 	public void verify(Simulator simulator, UUID uuid) {
 		if (!playerDimension.equals(simulator.dimension)) {
 			simulator.run(() -> {
-				if (simulator.clients.removeIf(client -> client.uuid.equals(uuid))) {
+				if (simulator.removeClient(uuid)) {
 					log.info("Removing player {}", uuid);
 				}
 			});

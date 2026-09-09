@@ -47,6 +47,19 @@ public final class PersistentVehicleData {
 	}
 
 	/**
+	 * Whether this cached data still describes the formation behind a vehicle id. The client keeps one
+	 * instance per vehicle id, but an id's car count is NOT constant: MMTR coupling/uncoupling surgery
+	 * adds and removes cars on the same id, while {@link #rayTracing} and {@link #longestDimensions} are
+	 * sized once at construction. Reusing a stale instance made the renderer index past the end of the
+	 * array (visible in game as every train and rail vanishing behind a render-thread crash loop).
+	 *
+	 * @param carCount the car count of the formation the id now stands for
+	 */
+	public boolean matchesCarCount(int carCount) {
+		return rayTracing.length == carCount;
+	}
+
+	/**
 	 * Captures the rail progress difference of an incoming vehicle update. This will be used for smoothing out animations.
 	 *
 	 * @param newRailProgress    the rail progress coming from the server

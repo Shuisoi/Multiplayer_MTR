@@ -48,7 +48,12 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		serverSpeedKilometersPerHour = getSpeed() * 3600;
 		org.mtr.mod.Init.LOGGER.info("[MMTR-CL] mirror created id=" + getId() + " cars=" + vehicleExtraData.immutableVehicleCars.size() + " path=" + vehicleExtraData.immutablePath.size() + " progress=" + railProgress + " doors=" + vehicleExtraData.getDoorMultiplier());
 		final PersistentVehicleData tempPersistentVehicleData = MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.get(getId());
-		if (tempPersistentVehicleData == null) {
+		if (tempPersistentVehicleData == null || !tempPersistentVehicleData.matchesCarCount(vehicleExtraData.immutableVehicleCars.size())) {
+			// MMTR: coupling/uncoupling changes a vehicle id's car count, so the per-car cache must be
+			// rebuilt instead of reused - otherwise the renderer indexes past the end of rayTracing.
+			if (tempPersistentVehicleData != null) {
+				tempPersistentVehicleData.dispose();
+			}
 			persistentVehicleData = new PersistentVehicleData(vehicleExtraData.immutableVehicleCars, getTransportMode());
 			MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.put(getId(), persistentVehicleData);
 		} else {

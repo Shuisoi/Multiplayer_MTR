@@ -971,6 +971,19 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * Drop the {@link Client} record for {@code uuid} - the player has left this dimension or the
+	 * server. The record's "already sent" bookkeeping describes the departed session, and a rejoining
+	 * player starts from an empty client dataset, so keeping the record left every stationary
+	 * vehicle/rail/passenger unsent (trains and rails stayed invisible until something moved).
+	 *
+	 * @param uuid the player to forget
+	 * @return whether a record was actually removed
+	 */
+	public boolean removeClient(UUID uuid) {
+		return clients.removeIf(client -> client.uuid.equals(uuid));
+	}
+
+	/**
 	 * @return whether the entity {@code uuid} is currently riding {@code vehicleId}
 	 */
 	public boolean isRiding(UUID uuid, long vehicleId) {

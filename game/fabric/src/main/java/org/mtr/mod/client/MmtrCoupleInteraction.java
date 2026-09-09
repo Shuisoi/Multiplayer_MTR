@@ -36,7 +36,11 @@ public final class MmtrCoupleInteraction {
 	/** How close (blocks) the aimed train must be to be worked. */
 	private static final double REACH_M = 10.0;
 	/** How far off the crosshair (degrees) a train may be and still be "aimed at". */
-	private static final double MAX_AIM_ANGLE_DEGREES = 25;
+	private static final double MAX_AIM_ANGLE_DEGREES = 35;
+	/** How far (blocks) a train may be before the "aim at it" hint is shown. */
+	private static final double HINT_RANGE_M = 25.0;
+	/** Aim points are also tested at car-body height so the crosshair catches the train at eye level. */
+	private static final double AIM_HEIGHT_OFFSET_M = 1.5;
 	/** How often the action bar prompt is refreshed, in ticks. */
 	private static final int PROMPT_INTERVAL_TICKS = 10;
 	/** How long the client waits for the consist to actually change before reporting "no effect". */
@@ -72,6 +76,9 @@ public final class MmtrCoupleInteraction {
 			promptCooldown--;
 		} else if (target != null && pendingVehicleId == 0) {
 			player.sendMessage(new Text(TextHelper.literal(prompt(target)).data), true);
+			promptCooldown = PROMPT_INTERVAL_TICKS;
+		} else if (target == null && pendingVehicleId == 0 && anyTrainNearby(player)) {
+			player.sendMessage(new Text(TextHelper.literal("把准星对准车厢再按 K / aim the crosshair at a car, then press K").data), true);
 			promptCooldown = PROMPT_INTERVAL_TICKS;
 		}
 	}
@@ -215,7 +222,8 @@ public final class MmtrCoupleInteraction {
 
 	/**
 	 * Each car's aim points in world space: its centre plus (when it has two bogies) the midpoint of
-	 * the two bogies, so a long car is aimed at from either half.
+	 * the two bogies, each tested at bogie height and at car-body height so a crew aiming from the cab
+	 * or from the ground both catch the train.
 	 */
 	private static ObjectArrayList<ObjectArrayList<Vector>> carCentres(Vehicle vehicle) {
 		final ObjectArrayList<ObjectArrayList<Vector>> result = new ObjectArrayList<>();
@@ -227,13 +235,38 @@ public final class MmtrCoupleInteraction {
 				continue;
 			}
 			final Vector first = bogies.get(0).positionAndTiltAngle1().position();
-			centres.add(first);
+			final ObjectArrayList<Vector> anchors = new ObjectArrayList<>();
+			anchors.add(first);
 			if (bogies.size() > 1) {
 				final Vector second = bogies.get(1).positionAndTiltAngle1().position();
-				centres.add(new Vector((first.x() + second.x()) / 2, (first.y() + second.y()) / 2, (first.z() + second.z()) / 2));
+				anchors.add(new Vector((first.x() + second.x()) / 2, (first.y() + second.y()) / 2, (first.z() + second.z()) / 2));
+			}
+			for (final Vector anchor : anchors) {
+				centres.add(anchor);
+				centres.add(new Vector(anchor.x(), anchor.y() + AIM_HEIGHT_OFFSET_M, anchor.z()));
 			}
 			result.add(centres);
 		}
 		return result;
+	}
+
+	/** True when some train is within the hint range of the player's eye, aimed at or not. */
+	private static boolean anyTrainNearby(ClientPlayerEntity player) {
+		final double eyeX = player.getX();
+		final double eyeY = player.getY() + 1.6;
+		final double eyeZ = player.getZ();
+		for (final VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
+			for (final ObjectArrayList<Vector> centres : carCentres(vehicle)) {
+				for (final Vector centre : centres) {
+					final double dx = centre.x() - eyeX;
+					final double dy = centre.y() - eyeY;
+					final double dz = centre.z() - eyeZ;
+					if (dx * dx + dy * dy + dz * dz <= HINT_RANGE_M * HINT_RANGE_M) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 }
