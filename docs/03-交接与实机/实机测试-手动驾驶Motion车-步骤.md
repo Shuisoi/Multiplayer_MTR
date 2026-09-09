@@ -98,3 +98,27 @@
 - 车不在 -96 停住而是自动绕路/自动进站 -> 还有 auto 残留（应已删净，属回归）。
 - 设岔后车不续走 -> 检查 branch 值/ via hex 是否与 mmtr-points 一致；或看 [MMTR-DRV] 是否还在打印。
 - mmtr-motion 无该车 -> 车未生成（manifest reset 未命中 siding）或 vehicleId 看错。
+
+---
+
+## 9. 信号 × 道岔 × 任务集成（A2/A3/S5）实机验收清单
+
+> 代码面已交付并有引擎用例：notes/78（进路对象）、79（信号=进路×闭塞）、80（游戏内镜像）、
+> 81（AWS 绑信号）、82（冲突进路互斥 + 分段释放）。本节是**实机目视**部分（尚未跑过）。
+
+前置：停服后同步引擎 jar（`mmtr\scripts\sync-engine.bat`；**服务器运行时不要覆盖 `game/libs` 的 jar**，
+notes/77 红线的崩溃就是这么来的），再启动 dev 服务端。
+
+| # | 场景 | 期望证据 |
+|---|------|---------|
+| 1 | 给一列车派任务（`mmtr-vehicle-task` / 作业单），观察 WEB `mmtr-trains` | 该车出现 `route{state:"SET",kind:"MAIN",entryRail,targetRail,rails[]}`；`routes[]` 顶层也有它 |
+| 2 | 该车经过分岔 | 分岔处信号灯按**进路放行**（不再因另一支被占而保守显黄/红）；`[MMTR-DRV] motion seg=` 沿进路推进 |
+| 3 | 人为 `mmtr-point-lock` 该进路的一个道岔（或让另一列车先持有） | 该车进路变 `state:"PENDING"`，`stateReason` 点名道岔与 `lock=true`/`holder=v…`；**车不越过该道岔**，信号显红 |
+| 4 | 解锁 / 对方释放 | 进路自动回到 `SET`，车继续（分段释放：越过第一个道岔后进路仍为 `SET`） |
+| 5 | 黄灯区段手动开车 | 接近**非绿**信号时 `[MMTR-AWS] warning on … signal SINGLE_YELLOW/DOUBLE_YELLOW/RED …`；确认（按确认键）后指示保持；信号转绿时 `[MMTR-AWS] warning cleared` |
+| 6 | 未确认并继续行驶 | 约 2.5 s 后 `[MMTR-AWS] unacknowledged warning - SPAD emergency engaged`，车紧急制动停稳 |
+| 7 | 双车咽喉（两条股道同抢一个岔，不同腿） | WEB `routes[]`：先 SET 者持有；后者 `PENDING` 且车留在自己股道；前者越岔后后者自动 SET 并通过 |
+| 8 | 双车同腿跟随 | 后车进路点被独占而等待；点释放后跟进，最终被 **S1 占用**停在闭塞边界（不撞前车） |
+
+> 客户端要看到信号灯变化，客户端 JVM 需与服务器同一 jar 版本；进路镜像包只在**变化时**推送
+> （`[MMTR-CL] routes mirror: N locked rail(s)`，需 `-Dmmtr.trace=true` 才打印）。

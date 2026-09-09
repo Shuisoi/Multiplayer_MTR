@@ -19,6 +19,7 @@
 > 3. **T4 收尾评估**：notes/21——旧烘焙自动生成面已全部删除（legacy create() 全仓 0 调用）；残余=存档兼容(writePathCache)/停场模板(defaultPathData)/归档接缝(spawnMmtrManualWithLegs，仅测试)，均有主、无需再删。
 > 4. **验收证据映射**：notes/24——目标条款→提交/测试/文档逐条对应，全量 227→**247/0/2** 零新增失败。
 > 5. **剩余（另立项，不阻塞 L3/T4 验收）**：作业宏（consist-jobs 多步+COUPLE/UNCOUPLE）的 motion 版编排与作业车 motion 出生；行经段信号/限速（M2）；平台停点对齐；客户端渲染/镜像；实机人工确认清单（03 实机测试文档 §7）。验证纪律：每片全量零新增失败（现 247/0/2）。
+> 6. **信号 × 道岔 × 任务集成（2026-09-09，notes/78–82）**：进路对象 `MmtrRoute`/`MmtrRouteRegistry`（SET/PENDING 由道岔权威每 tick 派生、分段释放、feed 每列车 `route` + 顶层 `routes[]`）；A2 信号=进路×闭塞（`MmtrSignalAspect` 单一真源，引擎与游戏内同规则，客户端镜像 `PacketMmtrRoutes`）；A3 AWS 绑定信号显示（黄灯也响、绿灯复位、确认窗口 2.5 s）；S5 冲突进路互斥排队 + 咽喉双车用例。全量 **467/0/2**。**剩余：实机验收（03 文档 §9 清单）+ S6/P5 文档收口。**
 > 语言：文档中文；代码/提交信息英文。
 
 ---
