@@ -487,11 +487,9 @@ public final class SystemMapServlet extends ServletBase {
 
 	/**
 	 * MMTR rail signal aspects for the web console: one entry per rail with its display aspect.
-	 * RED = a train currently occupies the rail; SINGLE_YELLOW = the rail beyond (in the travel
-	 * direction) is occupied; DOUBLE_YELLOW = two rails beyond; GREEN = clear ahead. The chain
-	 * mirrors the fabric signal-light renderer: continuations keep the travel direction (no
-	 * turn-backs); at a fork every branch counts (conservative worst case - the S5 route-locked
-	 * aspect would narrow it to the set route). "Pre-approach" reservations are not occupancy.
+	 * A2: the rule (闭塞链 × 进路) lives in {@link org.mtr.core.mmtr.signal.MmtrSignalAspect} and is
+	 * shared with the in-game renderer; this method only shapes it for the feed. "Pre-approach"
+	 * reservations are not occupancy.
 	 */
 	private static com.google.gson.JsonArray getMmtrRailAspects(Simulator simulator) {
 		final com.google.gson.JsonArray signals = new com.google.gson.JsonArray();
@@ -506,111 +504,10 @@ public final class SystemMapServlet extends ServletBase {
 
 	/** hex -> display aspect for every rail (shared by the rail feed and the signal registry feed). */
 	private static java.util.HashMap<String, String> computeRailAspectMap(Simulator simulator) {
-		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Rail> byHex = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
-		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Position[]> railEnds = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
-		simulator.positionsToRail.forEach((node, neighbourMap) -> neighbourMap.forEach((pos, rail) -> {
-			byHex.putIfAbsent(rail.getHexId(), rail);
-			final org.mtr.core.data.Position[] ends = railEnds.computeIfAbsent(rail.getHexId(), k -> new org.mtr.core.data.Position[2]);
-			if (ends[0] == null) {
-				ends[0] = node;
-			} else if (ends[1] == null && !ends[0].equals(node)) {
-				ends[1] = node;
-			}
-		}));
 		final java.util.HashMap<String, String> aspects = new java.util.HashMap<>();
-		byHex.forEach((hex, rail) -> {
-			final org.mtr.core.data.Position[] ends = railEnds.get(hex);
-			if (ends == null || ends[1] == null) {
-				return;
-			}
-			final int depth = signalDepth(simulator, byHex, railEnds, hex, ends[0], ends[1]);
-			aspects.put(hex, switch (depth) {
-				case 1 -> "RED";
-				case 2 -> "SINGLE_YELLOW";
-				case 3 -> "DOUBLE_YELLOW";
-				default -> "GREEN";
-			});
-		});
+		new org.mtr.core.mmtr.signal.MmtrSignalAspect(simulator, simulator.mmtrRoutes).aspectsForAllRails()
+			.forEach((hex, aspect) -> aspects.put(hex, aspect.name()));
 		return aspects;
-	}
-
-	/**
-	 * Display aspect of one rail, walked from both travel directions (a signal approaching from
-	 * either end would protect it). Depth semantics match the fabric renderer: 1 = the rail
-	 * itself is occupied (RED); 2 = one rail beyond in the travel direction is occupied (single
-	 * yellow); 3 = two rails beyond (double yellow); 0 = clear. The most restrictive direction
-	 * wins.
-	 */
-	private static int signalDepth(Simulator simulator, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Rail> byHex, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Position[]> railEnds, String hex, org.mtr.core.data.Position end1, org.mtr.core.data.Position end2) {
-		int best = 0;
-		for (final org.mtr.core.data.Position entry : new org.mtr.core.data.Position[]{end1, end2}) {
-			final int depth = chainDepthFrom(simulator, byHex, railEnds, hex, entry);
-			if (depth > 0 && (best == 0 || depth < best)) {
-				best = depth;
-			}
-		}
-		return best;
-	}
-
-	/**
-	 * How far ahead (in rails, the protected one included) the nearest occupied rail sits when
-	 * the signal protecting {@code hex} is approached from {@code entryPos}: 1 = protected rail
-	 * occupied, 2 = one rail beyond, 3 = two rails beyond, 0 = clear. Same walk as the fabric
-	 * renderer ({@code mmtrChainDepth}): from the far end of every rail only continuations that
-	 * keep the travel direction (dot product with the incoming heading) are followed; at a fork
-	 * every branch counts (conservative worst case until route-locked aspects exist).
-	 */
-	private static int chainDepthFrom(Simulator simulator, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Rail> byHex, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Position[]> railEnds, String hex, org.mtr.core.data.Position entryPos) {
-		final java.util.ArrayList<Object[]> level = new java.util.ArrayList<>(); // {node, hex}
-		level.add(new Object[]{entryPos, hex});
-		for (int depth = 1; depth <= 3; depth++) {
-			for (final Object[] entry : level) {
-				final org.mtr.core.data.Rail rail = byHex.get((String) entry[1]);
-				if (rail != null && rail.mmtrIsCurrentlyBlocked()) {
-					return depth;
-				}
-			}
-			if (depth == 3) {
-				break;
-			}
-			final java.util.ArrayList<Object[]> nextLevel = new java.util.ArrayList<>();
-			for (final Object[] entry : level) {
-				final org.mtr.core.data.Position node = (org.mtr.core.data.Position) entry[0];
-				final String curHex = (String) entry[1];
-				final org.mtr.core.data.Position far = farEndOf(railEnds, curHex, node);
-				if (far == null) {
-					continue;
-				}
-				final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<org.mtr.core.data.Position, org.mtr.core.data.Rail> neighbours = simulator.positionsToRail.get(far);
-				if (neighbours == null) {
-					continue;
-				}
-				neighbours.forEach((otherEnd, rail) -> {
-					if (!rail.getHexId().equals(curHex)) {
-						// Continue only in the travel direction (dot product with the incoming heading).
-						final double dot = (otherEnd.getX() - far.getX()) * (far.getX() - node.getX()) + (otherEnd.getZ() - far.getZ()) * (far.getZ() - node.getZ());
-						if (dot > 0) {
-							nextLevel.add(new Object[]{far, rail.getHexId()});
-						}
-					}
-				});
-			}
-			if (nextLevel.isEmpty()) {
-				break;
-			}
-			level.clear();
-			level.addAll(nextLevel);
-		}
-		return 0;
-	}
-
-	/** The far endpoint of {@code hex} when its rail is entered from {@code node}. */
-	private static org.mtr.core.data.Position farEndOf(it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.data.Position[]> railEnds, String hex, org.mtr.core.data.Position node) {
-		final org.mtr.core.data.Position[] ends = railEnds.get(hex);
-		if (ends == null || ends[1] == null) {
-			return null;
-		}
-		return ends[0].equals(node) ? ends[1] : ends[1].equals(node) ? ends[0] : null;
 	}
 
 	/**
