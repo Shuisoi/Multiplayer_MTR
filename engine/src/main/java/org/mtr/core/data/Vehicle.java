@@ -1728,6 +1728,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrMotionLegs.clear();
 		if (mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) {
 			// B7.2b: tail -> head, anchored so the leading face sits exactly at railProgress (distanceM).
+			// The car-list direction has to be re-derived HERE as well: these legs are rebuilt on every
+			// moving tick, and a cab change or a reverser flip changes the direction of travel without
+			// going through syncMmtrConsistMirror - with a stale flag the client laid the car list on
+			// the wrong end, so the whole consist looked like it had turned around (the wagon "ran to
+			// the front").
+			reversed = consistWalker.mirrorReversed();
 			mmtrMotionLegs.addAll(consistWalker.buildMirrorLegs());
 		} else if (mmtrMotionWalker != null) {
 			mmtrMotionLegs.addAll(mmtrMotionWalker.buildLegs());

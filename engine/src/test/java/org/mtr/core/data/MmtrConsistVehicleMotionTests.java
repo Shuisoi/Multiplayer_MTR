@@ -7,6 +7,7 @@ import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.MmtrMotionSnapshot;
 import org.mtr.core.mmtr.consist.MmtrCabState;
+import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 import org.mtr.core.simulation.Simulator;
@@ -97,6 +98,129 @@ public final class MmtrConsistVehicleMotionTests {
 		assertNotNull(walker, "the consist must fit on the placement rail");
 		v.engageMmtrConsistMotion(walker, MmtrCabState.Cab.CAB_B);
 		return v;
+	}
+
+	/** 机辆 two-car probe: a powered locomotive (coupler after it) plus a hauled wagon. */
+	private static ObjectArrayList<VehicleCar> probeCars2() {
+		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+		final VehicleCar loco = new VehicleCar("loco", 2, 1, 10, 0, 1, 0.1, 0.1, true, "");
+		loco.setMmtrCouplerAfter(true);
+		cars.add(loco);
+		cars.add(new VehicleCar("wagon", 2, 1, 10, 0, 1, 0.1, 0.1, false, ""));
+		return cars;
+	}
+
+	/** The same placement, with a two-car 机辆 consist and the requested cab manned. */
+	private static Vehicle consistVehicle2(Simulator sim, Rail startRail, Position startEntry, double aEndOffsetM, MmtrCabState.Cab cab, BranchStore store) {
+		final ObjectArrayList<VehicleCar> cars = probeCars2();
+		final double[] carLengthsM = {cars.get(0).getTotalLength(true, false), cars.get(1).getTotalLength(false, true)};
+		final boolean[] couplerAfter = {cars.get(0).getMmtrCouplerAfter(), cars.get(1).getMmtrCouplerAfter()};
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, cars, new ObjectArrayList<>(), 0.0004, 0.0004, true, 120, 30000L);
+		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
+		final MmtrConsistWalker walker = MmtrConsistWalker.place(sim, store, startRail, startEntry, aEndOffsetM, carLengthsM, null,
+				MmtrConsistBody.seamArcMsFrom(aEndOffsetM, carLengthsM, couplerAfter),
+				MmtrConsistBody.seamCarIndexesFrom(carLengthsM, couplerAfter));
+		assertNotNull(walker, "the two-car consist must fit on the placement rail");
+		v.engageMmtrConsistMotion(walker, cab);
+		return v;
+	}
+
+	/**
+	 * REV 实机反馈（2026-09-09）：在 A 端开出去、停车、进另一端，再往前开时"整个编组像掉头一样反过来、
+	 * 后面挂的货车跑到前面"。物理上换驾驶室/换向只改变**哪一端在前**，车体一格都不能动 —— 这条用例
+	 * 把 2 节机辆编组（机车 + 货车）的两个边界都钉死。
+	 */
+	@Test
+	public void changingToTheOtherCabDoesNotMoveOrReorderTheCars() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle2(line.sim, line.r0, line.nA, 2, MmtrCabState.Cab.CAB_A, new BranchStore());
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 5, positions());
+		v.applyMmtrControl(new ControlState().setBrakeNotch(8).setReverser(1));
+		driveTicks(v, 200, positions());
+		assertEquals(0, v.getSpeed(), 1e-9, "at rest before the crew walks to the other cab");
+
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> before = v.getVehicleCarsAndPositions();
+		assertEquals(2, before.size(), "the probe is a two-car 机辆 consist");
+		assertTrue(v.enterMmtrCabAtCar(0, false, java.util.UUID.randomUUID()), "the crew takes the B-end cab of the same car");
+		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrActiveCab());
+		assertCarsDoNotMove("换到另一端", before, v.getVehicleCarsAndPositions());
+	}
+
+	/**
+	 * The reported symptom, verbatim: after the cab change the crew DRIVES, and the consist looked like
+	 * it had turned around (the wagon ran to the front). The cause was not the geometry but the mirror:
+	 * the synced legs are rebuilt on every moving tick in the new direction while {@code reversed} (the
+	 * car-list direction) was only refreshed on 换端/换向, so the client laid the car list on the wrong
+	 * end. Cars may only creep by the distance actually driven, never jump by a car length.
+	 */
+	@Test
+	public void drivingFromTheOtherCabKeepsTheCarOrder() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle2(line.sim, line.r0, line.nA, 2, MmtrCabState.Cab.CAB_A, new BranchStore());
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 5, positions());
+		v.applyMmtrControl(new ControlState().setBrakeNotch(8).setReverser(1));
+		driveTicks(v, 200, positions());
+		assertEquals(0, v.getSpeed(), 1e-9, "at rest before the crew walks to the other cab");
+
+		final java.util.UUID crew = java.util.UUID.randomUUID();
+		final ObjectArrayList<VehicleRidingEntity> riders = new ObjectArrayList<>();
+		riders.add(new VehicleRidingEntity(crew, 0, 0, 0, 0, false, true, true, false, false, false, false));
+		v.updateRidingEntities(riders);
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> before = v.getVehicleCarsAndPositions();
+		assertTrue(v.enterMmtrCabAtCar(0, false, crew), "the crew takes the B-end cab of the same car");
+
+		// Drive a couple of ticks from the other cab: the legs get rebuilt in the new direction here.
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1), crew);
+		driveTicks(v, 2, positions());
+
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> after = v.getVehicleCarsAndPositions();
+		assertEquals(2, after.size());
+		for (int i = 0; i < before.size(); i++) {
+			assertEquals(before.get(i).left().getVehicleId(), after.get(i).left().getVehicleId(), "the car order must not change");
+		}
+		// The train itself creeps forward, so compare the RELATIVE arrangement of the two cars: a car
+		// list laid out on the wrong end flips this vector by a whole car length (~2.2 m).
+		final var beforeLoco = before.get(0).right().get(0).positionAndTiltAngle1().position();
+		final var beforeWagon = before.get(1).right().get(0).positionAndTiltAngle1().position();
+		final var afterLoco = after.get(0).right().get(0).positionAndTiltAngle1().position();
+		final var afterWagon = after.get(1).right().get(0).positionAndTiltAngle1().position();
+		assertEquals(beforeLoco.x() - beforeWagon.x(), afterLoco.x() - afterWagon.x(), 0.05, "the loco must stay on its own side of the wagon in x");
+		assertEquals(beforeLoco.z() - beforeWagon.z(), afterLoco.z() - afterWagon.z(), 0.05, "the loco must stay on its own side of the wagon in z");
+	}
+
+	/** The same invariant for the reverser: pulling it changes the leading end, not the car placement. */
+	@Test
+	public void pullingTheReverserDoesNotMoveOrReorderTheCars() {		final Line line = new Line();
+		final Vehicle v = consistVehicle2(line.sim, line.r0, line.nA, 2, MmtrCabState.Cab.CAB_A, new BranchStore());
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 5, positions());
+		v.applyMmtrControl(new ControlState().setBrakeNotch(8).setReverser(1));
+		driveTicks(v, 200, positions());
+		assertEquals(0, v.getSpeed(), 1e-9);
+
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> before = v.getVehicleCarsAndPositions();
+		v.applyMmtrControl(new ControlState().setReverser(-1));
+		assertTrue(v.getMmtrConsistWalker().travelReversed(), "the reverser is pulled");
+		assertCarsDoNotMove("换向器", before, v.getVehicleCarsAndPositions());
+	}
+
+	/** Every car's bogies must stay at the same world position (1 cm tolerance for curve rounding). */
+	private static void assertCarsDoNotMove(String what, ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> before, ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> after) {
+		assertEquals(before.size(), after.size());
+		for (int i = 0; i < before.size(); i++) {
+			assertEquals(before.get(i).left().getVehicleId(), after.get(i).left().getVehicleId(), what + ": the car order must not change");
+			final ObjectArrayList<Vehicle.BogiePosition> beforeBogies = before.get(i).right();
+			final ObjectArrayList<Vehicle.BogiePosition> afterBogies = after.get(i).right();
+			assertEquals(beforeBogies.size(), afterBogies.size());
+			for (int j = 0; j < beforeBogies.size(); j++) {
+				final var beforePosition = beforeBogies.get(j).positionAndTiltAngle1().position();
+				final var afterPosition = afterBogies.get(j).positionAndTiltAngle1().position();
+				assertEquals(beforePosition.x(), afterPosition.x(), 0.01, what + ": car " + i + " bogie " + j + " must not move in x");
+				assertEquals(beforePosition.z(), afterPosition.z(), 0.01, what + ": car " + i + " bogie " + j + " must not move in z");
+			}
+		}
 	}
 
 	private static double driveTicks(Vehicle v, int ticks, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
