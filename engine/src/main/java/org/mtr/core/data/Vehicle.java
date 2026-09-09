@@ -211,6 +211,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private static final double MMTR_BLOCK_TAIL_GAP_M = 2.0;
 	/**
+	 * C3b: how close an authorised coupling movement may draw up to the train it is coupling to.
+	 * The block rule's 2 m tail gap is a following distance for running moves; a coupling movement
+	 * has to close to coupler length, but never touch - this is the stop the driver's "prepared to
+	 * stop at sight" resolves to.
+	 */
+	private static final double MMTR_COUPLER_GAP_M = 0.3;
+	/**
 	 * Signal S1: when the next rail (block) is externally occupied the vehicle stops AT the current
 	 * rail's end node without crossing it; advance is capped epsilon short of the node so the walker
 	 * never boards the occupied rail while the block service still holds it.
@@ -2124,29 +2131,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionLegs.isEmpty()) {
 			return;
 		}
-		if (vehiclePositions != null && getIsOnRoute()) {
+		// C3b: parked (stabled) stock registers its footprint too. The old `getIsOnRoute()` guard hid
+		// yard stock from the occupancy tree, so a coupling movement drawing up to a rake - or any
+		// other train entering the siding - saw an empty section and could drive straight through it.
+		if (vehiclePositions != null) {
 			int index = indexInMmtrMotionLegs(railProgress);
 			while (index >= 0) {
 				final PathData pathData = mmtrMotionLegs.get(index);
 				if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
 					break;
 				}
-				// B7.2c: a consist body legitimately starts on the first mirrored leg (its tail sits
-				// there), so the legacy "skip the first leg" guard must not apply to it.
-				if (index > 0 || mmtrMotionWalker instanceof MmtrConsistWalker) {
-					final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
-					if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
-						final Position position1 = pathData.getOrderedPosition1();
-						final Position position2 = pathData.getOrderedPosition2();
-						Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
-							final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
-							newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
-							return newVehiclePosition;
-						}, Object2ObjectAVLTreeMap::new);
-					}
+				// C3b: every leg the body actually reaches is written. The legacy "skip the first leg"
+				// guard hid a stabled train's whole footprint (its body sits on leg 0 and nowhere
+				// else), which is exactly the state a coupling movement has to see.
+				final DoubleDoubleImmutablePair blockedBounds = getBlockedBounds(pathData, railProgress - vehicleExtraData.getTotalVehicleLength(), railProgress - 0.01);
+				if (blockedBounds.rightDouble() - blockedBounds.leftDouble() > 0.01) {
+					final Position position1 = pathData.getOrderedPosition1();
+					final Position position2 = pathData.getOrderedPosition2();
+					Data.put(vehiclePositions, position1, position2, vehiclePosition -> {
+						final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+						newVehiclePosition.addSegment(blockedBounds.leftDouble(), blockedBounds.rightDouble(), id);
+						return newVehiclePosition;
+					}, Object2ObjectAVLTreeMap::new);
 				}
 				index--;
 			}
+			writeMmtrStandingFootprint(vehiclePositions);
 		}
 
 		// MMTR (L3): push this motion vehicle to nearby clients on EVERY tick like the legacy path
@@ -2187,9 +2197,47 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * C3b: register the body interval of a train that stands on a rail but whose leg shadow does not
+	 * reach behind it. The leg shadow starts where the walker was placed, so a train parked at the
+	 * yard (walker distance 0) has its whole body <em>before</em> the shadow and the loop above writes
+	 * nothing - the stabled rake would be invisible and an authorised coupling movement would drive
+	 * through it. The interval is written on the rail the leading end stands on, in the same
+	 * ordered-position distance space every other writer and reader uses.
+	 */
+	private void writeMmtrStandingFootprint(Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
+		final double bodyLength = vehicleExtraData.getTotalVehicleLength();
+		// Only when the tail is outside the leg shadow; otherwise the loop above already covered it.
+		if (mmtrMotionWalker == null || railProgress - bodyLength >= 0) {
+			return;
+		}
+		final Rail rail = mmtrMotionWalker.currentRail();
+		final Position entry = mmtrMotionWalker.enteredFromPosition();
+		if (rail == null || entry == null) {
+			return;
+		}
+		final double railLength = rail.railMath.getLength();
+		final double headOffset = Math.min(railLength, Math.max(0, mmtrMotionWalker.offsetM()));
+		final double tailOffset = Math.max(0, headOffset - bodyLength);
+		final Position position1 = rail.getPosition1();
+		final Position position2 = rail.getPosition2();
+		final Position orderedPosition1 = position1.compareTo(position2) <= 0 ? position1 : position2;
+		final Position orderedPosition2 = orderedPosition1 == position1 ? position2 : position1;
+		final boolean fromOrderedPosition1 = orderedPosition1.equals(entry);
+		final double startDistance = fromOrderedPosition1 ? tailOffset : railLength - headOffset;
+		final double endDistance = fromOrderedPosition1 ? headOffset : railLength - tailOffset;
+		if (endDistance - startDistance <= 0.01) {
+			return;
+		}
+		Data.put(vehiclePositions, orderedPosition1, orderedPosition2, vehiclePosition -> {
+			final VehiclePosition newVehiclePosition = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+			newVehiclePosition.addSegment(startDistance, endDistance, id);
+			return newVehiclePosition;
+		}, Object2ObjectAVLTreeMap::new);
+	}
+
 	/** Index of the leg whose cumulative range contains {@code progress} (last leg when beyond). */
-	private int indexInMmtrMotionLegs(double progress) {
-		for (int i = 0; i < mmtrMotionLegs.size(); i++) {
+	private int indexInMmtrMotionLegs(double progress) {		for (int i = 0; i < mmtrMotionLegs.size(); i++) {
 			if (mmtrMotionLegs.get(i).getEndDistance() > progress) {
 				return i;
 			}
@@ -2570,7 +2618,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * ahead of this motion vehicle, or {@code Double.MAX_VALUE} when nothing blocks. Two rules:
 	 * (1) on the CURRENT rail the closest external occupancy face inside the window from the head to
 	 * the rail end stops the vehicle {@code MMTR_BLOCK_TAIL_GAP_M} short of that face (exact-interval
-	 * following - works for a same-direction tail ahead and for an oncoming head alike);
+	 * following - works for a same-direction tail ahead and for an oncoming head alike); on a rail
+	 * covered by a 调车授权 the same rule applies with {@code MMTR_COUPLER_GAP_M}, so an authorised
+	 * coupling movement draws up to the train it is coupling to instead of through it;
 	 * (2) if the NEXT rail (the one the walker would elect after this rail - pure look-ahead, no
 	 * crossing side effects) carries ANY external occupancy, the vehicle stops at this rail's end
 	 * node (one occupied rail = one closed block, AWS-style section interlocking; the epsilon keeps
@@ -2582,22 +2632,25 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return Double.MAX_VALUE;
 		}
 		// C3a 调车授权: under a subsidiary aspect the authorised movement may enter the occupied
-		// section (permissive working) - the rails it covers are exempt from both block rules. The
-		// movement is capped to the shunt speed limit instead, i.e. "prepared to stop at sight".
+		// section (permissive working) - the rails it covers are exempt from the whole-rail block
+		// rule. C3b: on an authorised rail the occupancy face AHEAD still stops the movement, but at
+		// coupler distance instead of the running tail gap - that is what "draw up to the train you
+		// are coupling to" means, and it is what keeps the loco from driving through the rake.
 		final org.mtr.core.mmtr.signal.MmtrShuntAuthority authority = getMmtrShuntAuthority();
 		double stop = Double.MAX_VALUE;
 		// (1) external occupancy face on the current rail, from the head up to the end of the rail
 		final int index = indexInMmtrMotionLegs(railProgress);
 		final PathData segment = mmtrMotionLegs.get(index);
 		final boolean currentRailAuthorized = authority != null && authority.covers(segment.getRail() == null ? null : segment.getRail().getHexId());
-		if (!currentRailAuthorized && railProgress < segment.getEndDistance() - 1e-9) {
+		if (railProgress < segment.getEndDistance() - 1e-9) {
+			final double gap = currentRailAuthorized ? MMTR_COUPLER_GAP_M : MMTR_BLOCK_TAIL_GAP_M;
 			final DoubleDoubleImmutablePair bounds = getBlockedBounds(segment, railProgress, segment.getEndDistance());
 			for (int i = 0; i < vehiclePositions.size(); i++) {
 				final VehiclePosition vehiclePosition = Data.tryGet(vehiclePositions.get(i), segment.getOrderedPosition1(), segment.getOrderedPosition2());
 				if (vehiclePosition != null) {
 					final double overlap = vehiclePosition.getClosestOverlap(bounds.leftDouble(), bounds.rightDouble(), segment.reversePositions, id);
 					if (overlap >= 0) {
-						stop = Math.min(stop, railProgress + Math.max(0, overlap - MMTR_BLOCK_TAIL_GAP_M));
+						stop = Math.min(stop, railProgress + Math.max(0, overlap - gap));
 					}
 				}
 			}
