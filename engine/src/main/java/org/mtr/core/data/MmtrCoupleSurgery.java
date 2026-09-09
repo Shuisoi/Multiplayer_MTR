@@ -130,10 +130,13 @@ public final class MmtrCoupleSurgery {
 		if (leadingSiding == null || trailingSiding == null) {
 			return Result.fail("找不到车辆所属股道");
 		}
-		if (Siding.getTotalVehicleLength(mergedCars) > leadingSiding.getRailLength() + 1e-6) {
-			return Result.fail("合并后长度 " + Math.round(Siding.getTotalVehicleLength(mergedCars) * 10.0) / 10.0 + " m 超过股道长度 "
-					+ Math.round(leadingSiding.getRailLength() * 10.0) / 10.0 + " m");
-		}
+		// 实机反馈 (2026-09-09): the old "merged length must fit the siding rail" gate refused a perfectly
+		// legal coupling - a locomotive at the siding mouth + the rake inside it are already longer than
+		// the siding (the locomotive stands across the mouth on the lead rail), so 16 m + 32 m > 43 m was
+		// rejected even though the merged formation stands exactly where the two trains already are.
+		// A consist body is not confined to one rail: the real check is whether the merged body can be
+		// placed on the rails (placeMergedConsistWalker below), which fails cleanly when there is not
+		// enough track behind the seam.
 
 		// Rebuild the leading vehicle's data with the merged formation and the transferred crew.
 		final JsonObject mergedJson = Utilities.getJsonObjectFromData(leading.vehicleExtraData);

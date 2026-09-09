@@ -73,6 +73,11 @@ public final class MmtrCoupleSurgeryTests {
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = newTrees();
 
 		Net(String savePath) {
+			this(savePath, 12);
+		}
+
+		/** @param siding1Length the siding's DECLARED length (the physical rail y1 stays 12 m) */
+		Net(String savePath, int siding1Length) {
 			sim = new Simulator("test", new String[]{"test"}, Paths.get(savePath), false);
 			y2 = Rail.newSidingRail(y2Back, Angle.fromAngle(0), y2Mouth, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
 			x2 = through(y2Mouth, y1Back);
@@ -80,7 +85,7 @@ public final class MmtrCoupleSurgeryTests {
 			ma = through(y1Mouth, new Position(16, 0, 0));
 			pl = through(new Position(16, 0, 0), new Position(60, 0, 0));
 			depot = new Depot(TransportMode.TRAIN, sim);
-			siding1 = new Siding(y1Back, y1Mouth, 12, TransportMode.TRAIN, sim);
+			siding1 = new Siding(y1Back, y1Mouth, siding1Length, TransportMode.TRAIN, sim);
 			siding2 = new Siding(y2Back, y2Mouth, 12, TransportMode.TRAIN, sim);
 			depot.setName("Couple Yard");
 			depot.setCorners(new Position(-35, -3, -3), new Position(65, 3, 3));
@@ -306,9 +311,40 @@ public final class MmtrCoupleSurgeryTests {
 		assertEquals(2, countVehicles(a.n.sim), "the world holds exactly the two halves");
 	}
 
+	/**
+	 * 实机反馈 (2026-09-09): a locomotive standing at the siding mouth is already longer than the
+	 * siding together with the rake inside it, yet the coupling is legal — a consist body is not
+	 * confined to one rail, and the locomotive straddles the mouth on the lead rail. The old
+	 * "merged length must fit the siding" gate refused exactly the dev world's 机辆 shunt
+	 * (16 m loco + 32 m rake on a 43 m siding). The siding here DECLARES 5 m while its rail is 12 m,
+	 * which is the same situation: the merged 6.6 m body stands on the rails, just not inside the
+	 * declared siding.
+	 */
 	@Test
-	public void cuttingAnywhereElseIsRefused() {
-		final Approached a = new Approached();
+	public void aMergedConsistMayBeLongerThanTheSidingItStandsOn() {
+		final Net n = new Net("build/mmtr-couple-long-merge", 5);
+		final Vehicle rake = n.spawn(n.siding1, cars("wagon", 2, false, "wagon"));
+		final Vehicle loco = n.spawn(n.siding2, cars("loco", 1, true, "loco"));
+		n.tick();
+		n.tick();
+		n.sim.mmtrShuntAuthorities.grant(loco.getId(), n.x2.getHexId(), n.y1.getHexId(), Kind.SUBSIDIARY_SHUNT, 0, 10 * 60 * 1000L);
+		boardDriver(n.sim, loco, 3);
+		n.tickUntil(() -> n.y1.getHexId().equals(loco.getMmtrMotionWalker().railHex()) && loco.getSpeed() == 0, 4000);
+
+		final double mergedLength = Siding.getTotalVehicleLength(new ObjectArrayList<>(rake.vehicleExtraData.immutableVehicleCars))
+				+ Siding.getTotalVehicleLength(new ObjectArrayList<>(loco.vehicleExtraData.immutableVehicleCars));
+		assertTrue(mergedLength > n.siding1.getRailLength() + 1e-6,
+				"the merged consist is longer than the declared siding (" + mergedLength + " > " + n.siding1.getRailLength() + ")");
+
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(n.sim, loco.getId(), rake.getId());
+		assertTrue(result.ok(), "a body that straddles the siding mouth must still couple: " + result.reason());
+		assertEquals(3, result.mergedCarCount(), "2 rake cars + the locomotive");
+		assertTrue(Siding.getTotalVehicleLength(new ObjectArrayList<>(result.vehicle().vehicleExtraData.immutableVehicleCars)) > n.siding1.getRailLength(),
+				"the merged formation really is longer than the declared siding");
+	}
+
+	@Test
+	public void cuttingAnywhereElseIsRefused() {		final Approached a = new Approached();
 		final Vehicle merged = coupled(a);
 		final MmtrCoupleSurgery.Result noSeam = MmtrCoupleSurgery.uncouple(a.n.sim, merged.getId(), 0);
 		assertFalse(noSeam.ok());
