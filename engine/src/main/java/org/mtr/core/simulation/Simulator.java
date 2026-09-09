@@ -1090,6 +1090,10 @@ public class Simulator extends Data implements Utilities {
 			// MTR depot path auto-generation removed (auto rebuilt on Motion/tasks): stock runs on
 			// Motion legs, not depot-generated route legs.
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
+			// C8 自动车钩: after the vehicle simulation (the surgery unregisters the trailing train, so
+			// it must not run while a siding iterates its vehicles), let trains with automatic couplers
+			// latch onto the rake they have drawn up to under a 调车授权.
+			org.mtr.core.mmtr.MmtrAutoCoupler.tick(this);
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			mmtrEnsurePointDefaults();
 			mmtrEnsureSignalColors();

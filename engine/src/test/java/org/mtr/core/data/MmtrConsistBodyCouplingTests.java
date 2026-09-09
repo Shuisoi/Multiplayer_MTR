@@ -5,6 +5,7 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.ControlState;
+import org.mtr.core.mmtr.MmtrAutoCoupler;
 import org.mtr.core.mmtr.consist.MmtrCabState.Cab;
 import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
@@ -21,6 +22,7 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -127,9 +129,16 @@ public final class MmtrConsistBodyCouplingTests {
 	}
 
 	private static ObjectArrayList<VehicleCar> cars(String vehicleId, int count, boolean powered, String consistTypeId) {
+		return cars(vehicleId, count, powered, consistTypeId, true);
+	}
+
+	/** C8: {@code autoCoupler} declares whether the car's couplers latch by themselves. */
+	private static ObjectArrayList<VehicleCar> cars(String vehicleId, int count, boolean powered, String consistTypeId, boolean autoCoupler) {
 		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
 		for (int i = 0; i < count; i++) {
-			cars.add(new VehicleCar(vehicleId, 2, 1, 10, 0, 1, 0.1, 0.1, powered, consistTypeId));
+			final VehicleCar car = new VehicleCar(vehicleId, 2, 1, 10, 0, 1, 0.1, 0.1, powered, consistTypeId);
+			car.setMmtrAutoCoupler(autoCoupler);
+			cars.add(car);
 		}
 		return cars;
 	}
@@ -146,13 +155,19 @@ public final class MmtrConsistBodyCouplingTests {
 
 	/** Rake (2 wagons, consist body) stabled on y1; loco (1 car, consist body) drawn up to it. */
 	private static final class Approached {
-		final Net n = new Net("build/mmtr-consist-body-couple");
+		final Net n;
 		final Vehicle rake;
 		final Vehicle loco;
 
 		Approached() {
-			rake = n.spawnConsist(n.siding1, cars("wagon", 2, false, "wagon"));
-			loco = n.spawnConsist(n.siding2, cars("loco", 1, true, "loco"));
+			this(true, true, "build/mmtr-consist-body-couple");
+		}
+
+		/** C8: the two trains' couplers are declared independently, so a mixed joint can be staged. */
+		Approached(boolean locoCouplerAutomatic, boolean rakeCouplerAutomatic, String savePath) {
+			n = new Net(savePath);
+			rake = n.spawnConsist(n.siding1, cars("wagon", 2, false, "wagon", rakeCouplerAutomatic));
+			loco = n.spawnConsist(n.siding2, cars("loco", 1, true, "loco", locoCouplerAutomatic));
 			n.tick();
 			n.tick();
 			n.sim.mmtrShuntAuthorities.grant(loco.getId(), n.x2.getHexId(), n.y1.getHexId(), Kind.SUBSIDIARY_SHUNT, 0, 10 * 60 * 1000L);
@@ -327,6 +342,65 @@ public final class MmtrConsistBodyCouplingTests {
 		assertNotNull(merged.getMmtrConsistWalker(), "the merged train is a consist body");
 		assertTrue(merged.getMmtrConsistWalker().cabs().isCrewKey(), "the driver keeps the key across a head-on coupling");
 		assertEquals(Cab.CAB_B, merged.getMmtrConsistWalker().cabs().activeCab(), "the driver still faces the B end");
+	}
+
+	/**
+	 * C8 自动车钩: a train whose facing couplers are automatic latches onto the rake it has drawn up to
+	 * as soon as it stands inside coupler reach - no key press, which is how a 动车组/调机 behaves.
+	 */
+	@Test
+	public void anAutomaticCouplerLatchesOnWhenTheTrainStopsAtTheGap() {
+		final Approached a = new Approached(true, true, "build/mmtr-auto-coupler");
+		assertTrue(MmtrCoupleSurgery.autoCouplersAtJoint(a.loco, a.rake), "both facing cars declare automatic couplers");
+
+		MmtrAutoCoupler.tick(a.n.sim);
+
+		// The surgery keeps the physically leading train (here the rake) and absorbs the locomotive.
+		final Vehicle merged = a.n.sim.mmtrFindVehicle(a.rake.getId());
+		assertNotNull(merged, "the rake survives as the merged train");
+		assertEquals(3, merged.vehicleExtraData.immutableVehicleCars.size(), "the locomotive latched on by itself");
+		assertNull(a.n.sim.mmtrFindVehicle(a.loco.getId()), "the locomotive is no longer a separate train");
+		assertTrue(merged.getMmtrConsistWalker().cabs().isCrewKey(), "the crew keeps its key across an automatic coupling");
+	}
+
+	/** A manual coupler (货车螺旋车钩) never latches by itself: the crew still has to work it. */
+	@Test
+	public void aManualCouplerWaitsForTheCrew() {
+		final Approached a = new Approached(true, false, "build/mmtr-auto-coupler-manual");
+		assertFalse(MmtrCoupleSurgery.autoCouplersAtJoint(a.loco, a.rake), "the rake's facing car is a manual coupler");
+
+		MmtrAutoCoupler.tick(a.n.sim);
+
+		assertNotNull(a.n.sim.mmtrFindVehicle(a.rake.getId()), "the rake stays separate");
+		assertEquals(1, a.n.sim.mmtrFindVehicle(a.loco.getId()).vehicleExtraData.immutableVehicleCars.size(), "nothing latched on");
+
+		// The crew can still couple by hand - that is the C7 path, and the flag must not block it.
+		final MmtrCoupleSurgery.Result result = MmtrCoupleSurgery.couple(a.n.sim, a.loco.getId(), a.rake.getId());
+		assertTrue(result.ok(), result.reason());
+	}
+
+	/** A mixed joint (automatic on one side, manual on the other) also waits for the crew. */
+	@Test
+	public void aMixedJointWaitsForTheCrew() {
+		final Approached a = new Approached(false, true, "build/mmtr-auto-coupler-mixed");
+		assertFalse(MmtrCoupleSurgery.autoCouplersAtJoint(a.loco, a.rake), "one side of the joint is manual");
+
+		MmtrAutoCoupler.tick(a.n.sim);
+
+		assertNotNull(a.n.sim.mmtrFindVehicle(a.rake.getId()), "a mixed joint must not latch by itself");
+		assertEquals(1, a.n.sim.mmtrFindVehicle(a.loco.getId()).vehicleExtraData.immutableVehicleCars.size(), "nothing latched on");
+	}
+
+	/** Without a live 调车授权 nothing latches: a chance encounter in the yard is not a coupling. */
+	@Test
+	public void anAutomaticCouplerWithoutAShuntAuthorityStaysOpen() {
+		final Approached a = new Approached(true, true, "build/mmtr-auto-coupler-noauth");
+		a.n.sim.mmtrShuntAuthorities.revoke(a.loco.getId());
+
+		MmtrAutoCoupler.tick(a.n.sim);
+
+		assertNotNull(a.n.sim.mmtrFindVehicle(a.rake.getId()), "without an authority the trains stay separate");
+		assertEquals(1, a.n.sim.mmtrFindVehicle(a.loco.getId()).vehicleExtraData.immutableVehicleCars.size(), "nothing latched on");
 	}
 
 	/** Place a consist body with its A end {@code aEndOffsetM} into {@code rail} from {@code entry}. */

@@ -44,6 +44,13 @@ public final class MmtrCarSpec implements SerializedDataBase {
 	 * "locomotive + wagons" and 重联 8+8 can be uncoupled at exactly those boundaries.
 	 */
 	public boolean mmtrCouplerAfter;
+	/**
+	 * C8: whether this car's couplers are AUTOMATIC (default {@code true} - 动车组/调机). With automatic
+	 * couplers on BOTH facing cars, a train that stops inside coupler reach of a standing rake under a
+	 * 调车授权 latches on by itself (no key press); {@code false} declares a manual coupler (货车螺旋
+	 * 车钩), which still needs the crew to confirm with the coupler key.
+	 */
+	public boolean mmtrAutoCoupler = true;
 
 	public MmtrCarSpec() {
 	}
@@ -65,6 +72,7 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		powered = readerBase.getBoolean("powered", true);
 		consistTypeId = readerBase.getString("consistTypeId", "");
 		mmtrCouplerAfter = readerBase.getBoolean("mmtrCouplerAfter", false);
+		mmtrAutoCoupler = readerBase.getBoolean("mmtrAutoCoupler", true);
 	}
 
 	@Override
@@ -80,12 +88,14 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		writerBase.writeBoolean("powered", powered);
 		writerBase.writeString("consistTypeId", consistTypeId);
 		writerBase.writeBoolean("mmtrCouplerAfter", mmtrCouplerAfter);
+		writerBase.writeBoolean("mmtrAutoCoupler", mmtrAutoCoupler);
 	}
 
 	/** Converts this authoring spec into MTR's runtime car, carrying the MMTR metadata with it. */
 	public VehicleCar toVehicleCar() {
 		final VehicleCar car = new VehicleCar(vehicleId, length, width, capacity, bogie1Position, bogie2Position, couplingPadding1, couplingPadding2, powered, consistTypeId);
 		car.setMmtrCouplerAfter(mmtrCouplerAfter);
+		car.setMmtrAutoCoupler(mmtrAutoCoupler);
 		return car;
 	}
 

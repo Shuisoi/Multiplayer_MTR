@@ -57,6 +57,20 @@ public final class VehicleCar extends VehicleCarSchema {
 		mmtrCouplerAfter = value;
 	}
 
+	/**
+	 * C8: whether this car's couplers are AUTOMATIC (动车组/调机的自动车钩). A train that has drawn up
+	 * to a standing rake under a 调车授权 and stopped inside coupler reach latches on by itself when
+	 * both facing cars are automatic; a manual coupler (货车螺旋车钩) still needs the crew to confirm.
+	 */
+	public boolean getMmtrAutoCoupler() {
+		return mmtrAutoCoupler;
+	}
+
+	/** Declares (or clears) this car's automatic couplers. */
+	public void setMmtrAutoCoupler(boolean value) {
+		mmtrAutoCoupler = value;
+	}
+
 	public String getVehicleId() {
 		return vehicleId;
 	}

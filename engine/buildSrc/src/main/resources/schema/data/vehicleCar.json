@@ -45,6 +45,10 @@
 		"mmtrCouplerAfter": {
 			"type": "boolean",
 			"default": false
+		},
+		"mmtrAutoCoupler": {
+			"type": "boolean",
+			"default": true
 		}
 	},
 	"required": [

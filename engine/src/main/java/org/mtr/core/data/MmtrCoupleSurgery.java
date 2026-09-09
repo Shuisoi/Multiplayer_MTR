@@ -15,6 +15,8 @@ import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Utilities;
 import org.mtr.core.tool.Vector;
 
+import java.util.List;
+
 /**
  * C4: the real coupling surgery (连挂真手术).
  *
@@ -275,8 +277,12 @@ public final class MmtrCoupleSurgery {
 	/**
 	 * The distance between the two trains' facing ends (the coupler gap), or {@code NaN} when neither a
 	 * geometric nor a travel-frame measurement is possible.
+	 *
+	 * <p>Public since C8: the automatic-coupler pass screens candidate targets with it before asking for
+	 * the surgery, so it can skip everything that is not closed up to coupler distance without logging a
+	 * refusal per candidate.</p>
 	 */
-	private static double couplerGapM(Vehicle initiator, Vehicle target) {
+	public static double couplerGapM(Vehicle initiator, Vehicle target) {
 		final Vector initiatorA = endWorldPosition(initiator, true);
 		final Vector initiatorB = endWorldPosition(initiator, false);
 		final Vector targetA = endWorldPosition(target, true);
@@ -323,6 +329,30 @@ public final class MmtrCoupleSurgery {
 		final double bToOther = Math.min(distanceSquared(candidateB, otherA), distanceSquared(candidateB, otherB));
 		final double aToOther = Math.min(distanceSquared(candidateA, otherA), distanceSquared(candidateA, otherB));
 		return bToOther < aToOther;
+	}
+
+	/**
+	 * C8: whether the joint between {@code initiator} and {@code target} is made of two AUTOMATIC
+	 * couplers - i.e. the two cars that meet at the joint both declare {@code mmtrAutoCoupler}. Only then
+	 * may the engine latch the trains together by itself; a manual coupler, or a legacy single-point
+	 * walker (no car orientation), still needs the crew to confirm with the coupler key.
+	 */
+	public static boolean autoCouplersAtJoint(Vehicle initiator, Vehicle target) {
+		if (initiator.getMmtrConsistWalker() == null || target.getMmtrConsistWalker() == null) {
+			return false;
+		}
+		final List<VehicleCar> initiatorCars = initiator.vehicleExtraData.immutableVehicleCars;
+		final List<VehicleCar> targetCars = target.vehicleExtraData.immutableVehicleCars;
+		if (initiatorCars.isEmpty() || targetCars.isEmpty()) {
+			return false;
+		}
+		// The joint connects one train's B end to the other's A end, and cars are ordered A -> B, so the
+		// car at the joint is the last car when that train's B end faces the joint and the first when it
+		// faces the other way.
+		final boolean initiatorBEndFacesJoint = bEndFacesJoint(initiator, target);
+		final VehicleCar initiatorCar = initiatorBEndFacesJoint ? initiatorCars.get(initiatorCars.size() - 1) : initiatorCars.get(0);
+		final VehicleCar targetCar = initiatorBEndFacesJoint ? targetCars.get(0) : targetCars.get(targetCars.size() - 1);
+		return initiatorCar.getMmtrAutoCoupler() && targetCar.getMmtrAutoCoupler();
 	}
 
 	/** World position of a consist body's A ({@code aEnd}) or B end, or {@code null} when unavailable. */
