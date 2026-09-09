@@ -278,6 +278,32 @@ public final class MmtrRouteRegistryTests {
 		assertTrue(registry.setMainRouteNextRails().containsKey(RAIL_ENTRY), "the locked path is still published");
 	}
 
+	/**
+	 * The PENDING reason must name an OUTSTANDING turnout. A crossed turnout's hold was released at
+	 * the crossing, so reporting it would send the operator to a point the train has already left.
+	 */
+	@Test
+	public void thePendingReasonNamesAnOutstandingTurnoutNotACrossedOne() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrRouteRegistry registry = new MmtrRouteRegistry();
+		final MmtrPointAuthority authority = new MmtrPointAuthority(clock::get);
+		final MmtrRoute route = registry.request(route(1));
+		grantAll(authority, 1, 5000);
+		registry.refresh(1, authority);
+		assertTrue(route.isEstablished());
+
+		// The train crosses the first turnout; the operator then parks the second one.
+		authority.passed(0, 0, 0, VIA_A, "v1");
+		route.markForkCrossed("0,0,0|" + VIA_A);
+		authority.lock(60, 0, 0, VIA_B);
+		authority.passed(60, 0, 0, VIA_B, "v1");
+		registry.refresh(1, authority);
+
+		assertFalse(route.isEstablished(), "the parked turnout keeps the route pending");
+		assertTrue(route.getStateReason().contains("60,0,0"), "the reason names the outstanding point: " + route.getStateReason());
+		assertFalse(route.getStateReason().contains("point 0,0,0"), "the reason must not name the crossed point: " + route.getStateReason());
+	}
+
 	@Test
 	public void routeExposesItsRailsForksAndTarget() {
 		final MmtrRoute route = route(3);

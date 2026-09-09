@@ -50,8 +50,10 @@ public final class MmtrRouteRegistry {
 
 	/**
 	 * Recompute a route's establishment state against the turnout authority. A route is SET when
-	 * every turnout it needs is currently granted to its owner; otherwise it is PENDING and the
-	 * reason names the first blocking point (operator park / another holder / queue).
+	 * every turnout it still needs is granted to its owner; otherwise it is PENDING and the reason
+	 * names the first OUTSTANDING blocking point (operator park / another holder / queue). A crossed
+	 * turnout is neither required nor reported - its hold was released at the crossing, so naming it
+	 * would send the operator looking at a point the train has already left.
 	 */
 	public void refresh(long vehicleId, MmtrPointAuthority authority) {
 		final MmtrRoute route = byVehicle.get(vehicleId);
@@ -68,11 +70,14 @@ public final class MmtrRouteRegistry {
 			route.applyState(true, "all turnouts crossed");
 			return;
 		}
-		boolean allGranted = true;
+		final ObjectArrayList<String[]> outstanding = new ObjectArrayList<>();
 		for (final String[] fork : route.getForks()) {
-			if (route.isForkCrossed(fork)) {
-				continue; // already used up; its hold was released at the crossing
+			if (!route.isForkCrossed(fork)) {
+				outstanding.add(fork);
 			}
+		}
+		boolean allGranted = true;
+		for (final String[] fork : outstanding) {
 			if (!authority.isGrantedTo(Long.parseLong(fork[0]), Long.parseLong(fork[1]), Long.parseLong(fork[2]), fork[3], route.getOwner())) {
 				allGranted = false;
 				break;
@@ -80,7 +85,7 @@ public final class MmtrRouteRegistry {
 		}
 		route.applyState(allGranted, allGranted
 			? "all turnouts held by " + route.getOwner()
-			: MmtrRunPlanner.describeForkWait(route.getForks(), authority, route.getOwner()));
+			: MmtrRunPlanner.describeForkWait(outstanding, authority, route.getOwner()));
 	}
 
 	/**

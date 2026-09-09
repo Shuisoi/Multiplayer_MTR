@@ -2,6 +2,7 @@ package org.mtr.core.mmtr.signal;
 
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
@@ -79,7 +80,8 @@ public final class MmtrSignalAspect {
 	/** Display aspect of every drawn rail, keyed by hex (ops feed / renderer input). */
 	public Map<String, Aspect> aspectsForAllRails() {
 		final Map<String, Aspect> aspects = new HashMap<>();
-		byHex.keySet().forEach(hex -> aspects.put(hex, aspectOf(hex)));
+		final ObjectOpenHashSet<String> pendingEntries = routes.pendingEntryRails();
+		byHex.keySet().forEach(hex -> aspects.put(hex, aspectOf(hex, pendingEntries)));
 		return aspects;
 	}
 
@@ -88,10 +90,14 @@ public final class MmtrSignalAspect {
 	 * approached from either end, and each end has its own head).
 	 */
 	public Aspect aspectOf(@Nullable String railHex) {
+		return aspectOf(railHex, routes.pendingEntryRails());
+	}
+
+	private Aspect aspectOf(@Nullable String railHex, ObjectOpenHashSet<String> pendingEntries) {
 		if (railHex == null || railHex.isEmpty() || !byHex.containsKey(railHex)) {
 			return Aspect.GREEN;
 		}
-		if (isPendingEntry(railHex)) {
+		if (pendingEntries.contains(railHex)) {
 			return Aspect.RED;
 		}
 		final Position[] ends = railEnds.get(railHex);
@@ -117,20 +123,10 @@ public final class MmtrSignalAspect {
 		if (railHex == null || railHex.isEmpty() || !byHex.containsKey(railHex)) {
 			return Aspect.GREEN;
 		}
-		if (isPendingEntry(railHex)) {
+		if (routes.pendingEntryRails().contains(railHex)) {
 			return Aspect.RED;
 		}
 		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode));
-	}
-
-	/** Whether {@code railHex} is the entry of a route that is still waiting to be set. */
-	private boolean isPendingEntry(String railHex) {
-		for (final MmtrRoute route : routes.snapshot()) {
-			if (!route.isEstablished() && railHex.equals(route.getEntryRailHex())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static Aspect fromDepth(int depth) {
