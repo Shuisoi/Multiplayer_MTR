@@ -1158,6 +1158,11 @@ public final class MmtrJobScheduler {
 	private static boolean placeCars(Simulator simulator, JobInstance instance) {
 		final Siding siding = findSiding(simulator, instance.job.sidingId);
 		if (siding == null) {
+			// An unknown siding id is an authoring error (a typo in the jobs file): list what exists, so
+			// the operator can fix the job instead of guessing.
+			final StringBuilder known = new StringBuilder();
+			simulator.sidings.forEach(s -> known.append(s.getId()).append(' '));
+			System.out.println("[MMTR-JOB] job " + instance.job.jobId + " targets unknown siding " + instance.job.sidingId + "; known sidings: " + known);
 			return false;
 		}
 		final ObjectArrayList<MmtrCarSpec> spawn = instance.spawnCars.isEmpty() ? instance.job.cars : instance.spawnCars;
