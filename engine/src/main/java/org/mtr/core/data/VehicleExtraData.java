@@ -24,6 +24,9 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 	private int stopIndex = -1;
 	private double oldStoppingPoint;
 	private boolean oldDoorTarget;
+	private boolean oldMmtrDoorLeft;
+	private boolean oldMmtrDoorRight;
+	private boolean oldMmtrDoorManual;
 	private long oldPowerLevel;
 	private double oldSpeedTarget;
 	private boolean oldIsCurrentlyManual;
@@ -310,15 +313,72 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 	}
 
 	protected void toggleDoors() {
-		doorTarget = !doorTarget;
+		// MTR's own manual driver key: both sides, automatic (platform) side selection stays in charge.
+		final boolean open = !doorTarget;
+		mmtrDoorLeft = open;
+		mmtrDoorRight = open;
+		mmtrDoorManual = false;
+		doorTarget = open;
 	}
 
 	protected void openDoors() {
 		doorTarget = true;
+		mmtrDoorLeft = true;
+		mmtrDoorRight = true;
+		mmtrDoorManual = false;
 	}
 
 	protected void closeDoors() {
 		doorTarget = false;
+		mmtrDoorLeft = false;
+		mmtrDoorRight = false;
+		mmtrDoorManual = false;
+	}
+
+	/** Which doors a crew door command addresses. */
+	public enum MmtrDoorSide {
+		LEFT,
+		RIGHT,
+		BOTH;
+
+		public static MmtrDoorSide parse(@Nullable String value) {
+			if (value == null) {
+				return BOTH;
+			}
+			return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+				case "left", "l" -> LEFT;
+				case "right", "r" -> RIGHT;
+				default -> BOTH;
+			};
+		}
+	}
+
+	/** The crew-commanded left door target (see {@link #mmtrSetDoors(String, String)}). */
+	public boolean getMmtrDoorLeft() {
+		return mmtrDoorLeft;
+	}
+
+	/** The crew-commanded right door target (see {@link #mmtrSetDoors(String, String)}). */
+	public boolean getMmtrDoorRight() {
+		return mmtrDoorRight;
+	}
+
+	/**
+	 * Whether a crew member is working the doors by hand. While true the client opens exactly the
+	 * commanded sides and ignores the platform-proximity rule MTR uses for automatic door opening -
+	 * that rule is why "the HUD says the doors are open but nothing moves" off a platform.
+	 */
+	public boolean isMmtrDoorManual() {
+		return mmtrDoorManual;
+	}
+
+	/** Whether the given side is currently commanded open. */
+	public boolean getMmtrDoorOpen(MmtrDoorSide side) {
+		return switch (side) {
+			case LEFT -> mmtrDoorLeft;
+			case RIGHT -> mmtrDoorRight;
+			case BOTH -> mmtrDoorLeft || mmtrDoorRight;
+		};
 	}
 
 	/**
@@ -329,13 +389,39 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 	 * @return the door target after the change, {@code true} when the doors are now open
 	 */
 	public boolean mmtrSetDoors(String action) {
-		if ("open".equals(action)) {
-			openDoors();
-		} else if ("close".equals(action)) {
-			closeDoors();
-		} else {
-			toggleDoors();
+		return mmtrSetDoors(action, "both");
+	}
+
+	/**
+	 * MMTR: crew door control per side ({@code "left"} / {@code "right"} / {@code "both"}).
+	 *
+	 * <p>Rail practice is per-side: the driver opens only the platform side. The engine keeps the two
+	 * sides independently and the aggregate {@code doorTarget} (what MTR's passenger logic and the HUD
+	 * read) is simply "either side open". A crew command also marks the doors <em>manual</em>, which
+	 * tells the client to honour these flags instead of its platform-proximity rule - so the doors
+	 * move even when the train stands in a siding.</p>
+	 *
+	 * @param action {@code "open"}, {@code "close"} or anything else for a toggle
+	 * @param side   {@code "left"}, {@code "right"} or {@code "both"}
+	 * @return the aggregate door target after the change
+	 */
+	public boolean mmtrSetDoors(String action, @Nullable String side) {
+		final MmtrDoorSide doorSide = MmtrDoorSide.parse(side);
+		final boolean open = switch (action == null ? "" : action.trim().toLowerCase(java.util.Locale.ROOT)) {
+			case "open" -> true;
+			case "close" -> false;
+			default -> !getMmtrDoorOpen(doorSide);
+		};
+		switch (doorSide) {
+			case LEFT -> mmtrDoorLeft = open;
+			case RIGHT -> mmtrDoorRight = open;
+			case BOTH -> {
+				mmtrDoorLeft = open;
+				mmtrDoorRight = open;
+			}
 		}
+		mmtrDoorManual = true;
+		doorTarget = mmtrDoorLeft || mmtrDoorRight;
 		return doorTarget;
 	}
 
@@ -344,12 +430,17 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 	}
 
 	protected boolean checkForUpdate() {
-		final boolean needsUpdate = Math.abs(stoppingPoint - oldStoppingPoint) > 0.01 || doorTarget != oldDoorTarget || powerLevel != oldPowerLevel || Math.abs(speedTarget - oldSpeedTarget) > 0.01 || isCurrentlyManual != oldIsCurrentlyManual || hasRidingEntityUpdate;
+		// The per-side door flags and the manual flag are mirrored too: closing one side while the
+		// other stays open leaves doorTarget unchanged, and the client still has to see it.
+		final boolean needsUpdate = Math.abs(stoppingPoint - oldStoppingPoint) > 0.01 || doorTarget != oldDoorTarget || powerLevel != oldPowerLevel || Math.abs(speedTarget - oldSpeedTarget) > 0.01 || isCurrentlyManual != oldIsCurrentlyManual || mmtrDoorLeft != oldMmtrDoorLeft || mmtrDoorRight != oldMmtrDoorRight || mmtrDoorManual != oldMmtrDoorManual || hasRidingEntityUpdate;
 		oldStoppingPoint = stoppingPoint;
 		oldDoorTarget = doorTarget;
 		oldPowerLevel = powerLevel;
 		oldSpeedTarget = speedTarget;
 		oldIsCurrentlyManual = isCurrentlyManual;
+		oldMmtrDoorLeft = mmtrDoorLeft;
+		oldMmtrDoorRight = mmtrDoorRight;
+		oldMmtrDoorManual = mmtrDoorManual;
 		hasRidingEntityUpdate = false;
 		return needsUpdate;
 	}

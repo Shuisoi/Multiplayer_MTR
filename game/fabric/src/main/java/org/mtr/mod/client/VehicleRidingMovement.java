@@ -15,6 +15,7 @@ import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.item.ItemDepotDriverKey;
 import org.mtr.mod.item.ItemDriverKey;
 import org.mtr.mod.packet.PacketDriveControl;
+import org.mtr.mod.packet.PacketMmtrCabOp;
 import org.mtr.mod.packet.PacketUpdateVehicleRidingEntities;
 import org.mtr.mod.render.PositionAndRotation;
 import org.mtr.mod.render.RenderVehicleHelper;
@@ -59,6 +60,8 @@ public class VehicleRidingMovement {
 	private static int mmtrBrakeNotch;
 	private static int mmtrReverser;
 	private static boolean prevThrottleUp, prevThrottleDown, prevBrakeApply, prevBrakeRelease, prevReverserUp, prevReverserDown;
+	/** Rising-edge state of the cab crew's per-side door keys (Y = left, U = right). */
+	private static boolean prevDoorLeftPressed, prevDoorRightPressed;
 	/** True once the engine has been told this client occupies a cab driver seat this ride. */
 	private static boolean mmtrDriverSynced;
 	/** True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk. */
@@ -147,6 +150,24 @@ public class VehicleRidingMovement {
 
 		if (doorOverrideTicks > 0) {
 			doorOverrideTicks--;
+		}
+
+		// B7.6h: the crew sitting in the cab works the doors per side — Y = left, U = right, as on a
+		// real desk. Only the cab crew (the key holder) may do this; passengers keep the plain door key.
+		if (mmtrCabDriver) {
+			final boolean doorLeftPressed = KeyBindings.MMTR_DOOR_LEFT.isPressed();
+			if (doorLeftPressed && !prevDoorLeftPressed) {
+				InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(ridingVehicleId, PacketMmtrCabOp.Op.DOORS, "left"));
+			}
+			prevDoorLeftPressed = doorLeftPressed;
+			final boolean doorRightPressed = KeyBindings.MMTR_DOOR_RIGHT.isPressed();
+			if (doorRightPressed && !prevDoorRightPressed) {
+				InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(ridingVehicleId, PacketMmtrCabOp.Op.DOORS, "right"));
+			}
+			prevDoorRightPressed = doorRightPressed;
+		} else {
+			prevDoorLeftPressed = false;
+			prevDoorRightPressed = false;
 		}
 
 		if (ridingVehicleId == 0) {

@@ -122,6 +122,18 @@
 		"doorTarget": {
 			"type": "boolean"
 		},
+		"mmtrDoorLeft": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrDoorRight": {
+			"type": "boolean",
+			"default": false
+		},
+		"mmtrDoorManual": {
+			"type": "boolean",
+			"default": false
+		},
 		"isCurrentlyManual": {
 			"type": "boolean"
 		},

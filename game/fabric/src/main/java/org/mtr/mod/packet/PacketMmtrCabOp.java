@@ -17,6 +17,9 @@ import org.mtr.mod.Init;
  * into an engine command, so the physical gates (consist model, train at a stand, one key per
  * consist) are enforced by the engine and the result lands in the command log.
  *
+ * <p>For {@link Op#DOORS} the {@code cab} field carries the side to work ({@code ""} = both sides,
+ * {@code "left"} / {@code "right"} = the cab crew's per-side door keys).</p>
+ *
  * <p>Permission and the driver's position are the game side's job: this packet is only sent from the
  * client interaction, which requires the player to stand within reach of the car.</p>
  */
@@ -63,7 +66,7 @@ public final class PacketMmtrCabOp extends PacketHandler {
 			if (simulator == null || simulator.mmtrFindVehicle(vehicleId) == null) {
 				continue;
 			}
-			simulator.mmtrPushCommand(op == Op.ENTER ? "cab " + vehicleId + " " + cab + " " + crew : op == Op.LEAVE ? "cab " + vehicleId + " out " + crew : "doors " + vehicleId + " toggle");
+			simulator.mmtrPushCommand(op == Op.ENTER ? "cab " + vehicleId + " " + cab + " " + crew : op == Op.LEAVE ? "cab " + vehicleId + " out " + crew : "doors " + vehicleId + " toggle" + (cab.isEmpty() ? "" : " " + cab));
 			return;
 		}
 	}

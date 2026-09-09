@@ -57,7 +57,7 @@ public final class MmtrCommandExecutor {
 			executeCabCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle])");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both])");
 	}
 
 	/**
@@ -81,10 +81,12 @@ public final class MmtrCommandExecutor {
 		}
 		if (parts[0].equals("doors")) {
 			// Crew door control: no cab/consist requirement, so anyone at the platform can open a
-			// standing train's doors through the interact key.
+			// standing train's doors through the interact key. The optional side argument ("left" /
+			// "right") is the per-side control the cab crew uses (Y / U).
 			final String action = parts.length >= 3 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "toggle";
-			final boolean open = vehicle.vehicleExtraData.mmtrSetDoors(action);
-			simulator.mmtrCommandResult("[doors] " + vehicleId + (open ? " 开门" : " 关门"));
+			final String side = parts.length >= 4 ? parts[3] : "both";
+			final boolean open = vehicle.vehicleExtraData.mmtrSetDoors(action, side);
+			simulator.mmtrCommandResult("[doors] " + vehicleId + (open ? " 开门" : " 关门") + " " + side + " (L=" + vehicle.vehicleExtraData.getMmtrDoorLeft() + " R=" + vehicle.vehicleExtraData.getMmtrDoorRight() + " 手动=" + vehicle.vehicleExtraData.isMmtrDoorManual() + ")");
 			return;
 		}
 		if (vehicle.getMmtrConsistWalker() == null) {

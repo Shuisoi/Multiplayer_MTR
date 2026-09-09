@@ -145,7 +145,31 @@ public class RenderVehicles implements IGui {
 						final VehicleResourceCache vehicleResourceCache = vehicleResource.getCachedVehicleResource(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), false);
 						// Find open doorways (close to platform blocks, unlocked platform screen doors, or unlocked automatic platform gates)
 						final ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways;
-						if (vehicleResourceCache != null && fromResourcePackCreator) {
+						if (vehicleResourceCache != null && vehicle.vehicleExtraData.isMmtrDoorManual()) {
+							// MMTR B7.6h: the cab crew works the doors by hand (Y = left, U = right).
+							// Honour exactly those sides and skip MTR's platform-proximity rule, so a
+							// train standing in a siding can still open its doors - and so only the
+							// commanded side opens at a platform.
+							openDoorways = new ObjectArrayList<>();
+							final boolean leftOpen = vehicle.vehicleExtraData.getMmtrDoorLeft();
+							final boolean rightOpen = vehicle.vehicleExtraData.getMmtrDoorRight();
+							if (leftOpen || rightOpen) {
+								vehicleResourceCache.doorways.forEach(doorway -> {
+									if (leftOpen) {
+										final Box clipped = MmtrDoorSides.clipToOpenSide(vehicle, doorway, true);
+										if (clipped != null) {
+											openDoorways.add(new ObjectDoubleImmutablePair<>(clipped, 0));
+										}
+									}
+									if (rightOpen) {
+										final Box clipped = MmtrDoorSides.clipToOpenSide(vehicle, doorway, false);
+										if (clipped != null) {
+											openDoorways.add(new ObjectDoubleImmutablePair<>(clipped, 0));
+										}
+									}
+								});
+							}
+						} else if (vehicleResourceCache != null && fromResourcePackCreator) {
 							openDoorways = vehicle.persistentVehicleData.checkCanOpenDoors() ? vehicleResourceCache.doorways.stream().map(doorway -> new ObjectDoubleImmutablePair<>(doorway, 0)).collect(Collectors.toCollection(ObjectArrayList::new)) : new ObjectArrayList<>();
 							vehicle.persistentVehicleData.overrideDoorMultiplier(ResourcePackCreatorOperationServlet.getDoorMultiplier());
 						} else if (vehicleResourceCache == null || !vehicle.getTransportMode().continuousMovement && vehicle.isMoving()) {

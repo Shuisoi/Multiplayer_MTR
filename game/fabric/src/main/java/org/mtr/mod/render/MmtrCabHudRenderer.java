@@ -289,7 +289,13 @@ public final class MmtrCabHudRenderer {
 	private static void drawLampsAndDoors(GraphicsHolder graphicsHolder, GuiDrawing gui, int x, int y, VehicleExtraData extraData) {
 		final int xEnd = drawLampChip(gui, graphicsHolder, x, y, "保护", vehicle.isMmtrProtectionFromSync() ? NEON_RED : 0xFF22303C, vehicle.isMmtrProtectionFromSync() ? "SPAD" : "");
 		final boolean doorsOpen = extraData.getDoorMultiplier() > 0;
-		drawChip(gui, graphicsHolder, xEnd + GAP, y, doorsOpen ? "DO" : "DC", doorsOpen ? NEON_GREEN : TEXT_DIM);
+		final int xDoors = drawChip(gui, graphicsHolder, xEnd + GAP, y, doorsOpen ? "DO" : "DC", doorsOpen ? NEON_GREEN : TEXT_DIM);
+		// B7.6h: which side is open (Y = left, U = right). Only shown once the crew works the doors
+		// by hand; automatic door opening still reports the plain DO/DC aggregate.
+		if (extraData.isMmtrDoorManual()) {
+			final int xLeft = drawChip(gui, graphicsHolder, xDoors + GAP, y, "L", extraData.getMmtrDoorLeft() ? NEON_GREEN : TEXT_DIM);
+			drawChip(gui, graphicsHolder, xLeft + GAP, y, "R", extraData.getMmtrDoorRight() ? NEON_GREEN : TEXT_DIM);
+		}
 	}
 
 	// ---------------------------------------------------------------------------

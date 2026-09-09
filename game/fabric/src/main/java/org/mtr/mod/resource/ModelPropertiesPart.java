@@ -18,6 +18,7 @@ import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.generated.resource.ModelPropertiesPartSchema;
 import org.mtr.mod.render.MainRenderer;
+import org.mtr.mod.render.MmtrDoorSides;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.StoredMatrixTransformations;
 
@@ -332,6 +333,14 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 						canOpen = true;
 						break;
 					}
+				}
+
+				// MMTR B7.6h: when the cab crew works the doors by hand, the side they commanded decides
+				// - MTR's own rule (a doorway only opens next to a platform block) would leave the doors
+				// shut on a train standing in a siding, which is exactly what "the HUD says open but
+				// nothing moves" was.
+				if (isDoor() && vehicle.vehicleExtraData.isMmtrDoorManual()) {
+					canOpen = MmtrDoorSides.isOpenSide(vehicle, partDetails.box);
 				}
 
 				final double doorValue = canOpen ? vehicle.persistentVehicleData.getDoorValue() : 0;
