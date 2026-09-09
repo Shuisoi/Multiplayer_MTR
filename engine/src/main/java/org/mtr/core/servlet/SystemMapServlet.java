@@ -454,8 +454,25 @@ public final class SystemMapServlet extends ServletBase {
 		// S5: every live route (SET and PENDING), so the console can show the interlocking state
 		// independently of the train markers (and name what a waiting movement is blocked on).
 		root.add("routes", getMmtrRoutes(simulator));
+		// A2/A4: the exact derived view the CLIENT mirror is built from (MmtrRouteRegistry →
+		// PacketMmtrRoutes → MmtrClientRoutes → RenderSignalBase). Exposed so an operator can compare
+		// what the game shows with what the engine told the clients - and so the narrowing is
+		// observable server-side.
+		root.add("routeMirror", mmtrRouteMirrorJson(simulator));
 		root.add("points", new com.google.gson.JsonArray());
 		return root;
+	}
+
+	/** The rail→next-rail narrowing map and the PENDING entry rails, exactly as mirrored to clients. */
+	static com.google.gson.JsonObject mmtrRouteMirrorJson(Simulator simulator) {
+		final com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+		final com.google.gson.JsonObject nextRails = new com.google.gson.JsonObject();
+		simulator.mmtrRoutes.setMainRouteNextRails().forEach(nextRails::addProperty);
+		final com.google.gson.JsonArray pendingEntries = new com.google.gson.JsonArray();
+		simulator.mmtrRoutes.pendingEntryRails().forEach(pendingEntries::add);
+		json.add("nextRails", nextRails);
+		json.add("pendingEntries", pendingEntries);
+		return json;
 	}
 
 	/** One route as the ops feed / a train card shows it. */

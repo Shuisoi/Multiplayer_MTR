@@ -153,6 +153,58 @@ public final class MmtrSignalAspectTests {
 			"a subsidiary aspect authorises the shunt with the main head still at danger - it narrows nothing");
 	}
 
+	/**
+	 * A2 on a 折返 (setback / flip) route: the movement runs over the SAME rail twice (out and back),
+	 * so the route's rail list contains it twice. The narrowing must pick the occurrence that matches
+	 * the direction being walked - picking the wrong one would make the signal follow the path the
+	 * train has already travelled.
+	 *
+	 * <p>Layout: E(-20..0) -&gt; N(0) -&gt; S(0..60) -&gt; M(60) -&gt; {S2(60..120) | D(60 -&gt; 120,+20)}.
+	 * Route E, S, S2, S, E (out over S to S2, back over S to E). With BOTH the diverging D and the
+	 * return target E occupied, the signal protecting S walked OUTBOUND from N must still be green:
+	 * the locked path there is S2.</p>
+	 */
+	@Test
+	public void aRouteThatRunsOverARailTwiceNarrowsPerDirection() {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-aspect-doubled"), false);
+		final Position a = new Position(-20, 0, 0);
+		final Position n = new Position(0, 0, 0);
+		final Position m = new Position(60, 0, 0);
+		final Rail entry = through(a, n);
+		final Rail s = through(n, m);
+		final Rail s2 = through(m, new Position(120, 0, 0));
+		final Rail d = through(m, new Position(120, 0, 20));
+		sim.rails.add(entry);
+		sim.rails.add(s);
+		sim.rails.add(s2);
+		sim.rails.add(d);
+		sim.sync();
+		sim.mmtrEnsureSignalColors();
+
+		occupy(sim, d);
+		occupy(sim, entry);
+		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectFrom(s.getHexId(), n),
+			"no route: the occupied diverging branch is seen from the signal protecting S");
+
+		final ObjectArrayList<String> rails = new ObjectArrayList<>();
+		rails.add(entry.getHexId());
+		rails.add(s.getHexId());
+		rails.add(s2.getHexId());
+		rails.add(s.getHexId());
+		rails.add(entry.getHexId());
+		final MmtrRoute route = sim.mmtrRoutes.request(new MmtrRoute(1, "v1", MmtrRoute.Kind.MAIN, rails, new ObjectArrayList<>(), entry.getHexId(), 1000));
+		sim.mmtrRoutes.refresh(1, sim.mmtrPointAuthority);
+		assertTrue(route.isEstablished(), "a route without turnouts is set");
+		assertEquals(MmtrSignalAspect.Aspect.GREEN, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectFrom(s.getHexId(), n),
+			"the locked path outbound is S2: neither the diverging branch nor the return target affects this signal");
+	}
+
+	private static void occupy(Simulator sim, Rail rail) {
+		rail.blockRail(new LongArrayList());
+		rail.tick1(sim);
+		rail.tick2(0);
+	}
+
 	@Test
 	public void unknownAndEmptyRailsAreSafe() {
 		final Net n = new Net("build/mmtr-aspect-unknown");
