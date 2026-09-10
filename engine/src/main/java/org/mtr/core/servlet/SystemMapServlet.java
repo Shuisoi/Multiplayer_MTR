@@ -594,9 +594,11 @@ public final class SystemMapServlet extends ServletBase {
 		for (int blockIndex = 0; blockIndex < gateBlocks.size(); blockIndex++) {
 			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.GateBlock block = gateBlocks.get(blockIndex);
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
-			// A block is identified by the lamp that opens it; a block nobody guards is keyed by its ordinal
-			// so the map still gives each one a stable colour of its own.
-			out.addProperty("id", block.entryLampKey.isEmpty() ? ("无灯#" + blockIndex) : block.entryLampKey);
+			// A block is named by its own unique id: the lamp that opens it, or 无灯#<rail>@<arc> when nobody
+			// guards it. Both the node assignment and the map's colours key on this name, so it must be unique
+			// - "no lamp" is a property of several blocks at once.
+			out.addProperty("index", blockIndex);
+			out.addProperty("id", block.id);
 			out.addProperty("lamp", block.entryLampKey);
 			out.addProperty("open", block.endsOpen);
 			out.addProperty("length", block.lengthM());
@@ -627,6 +629,34 @@ public final class SystemMapServlet extends ServletBase {
 			blocks.add(out);
 		}
 		result.add("blocks", blocks);
+		// 区间层的节点归属: every track-layer node with the ONE block it belongs to (the user's requirement).
+		// The block is named by its INDEX in blocks, not by its lamp key: an unguarded block has no lamp, and
+		// several of them exist at once, so a lamp key would merge them into a single answer.
+		final com.google.gson.JsonArray blockNodes = new com.google.gson.JsonArray();
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> owners = simulator.mmtrDirectionalBlocks.nodeOwners();
+		final java.util.HashMap<String, Integer> indexByBlockId = new java.util.HashMap<>();
+		for (int blockIndex = 0; blockIndex < gateBlocks.size(); blockIndex++) {
+			indexByBlockId.put(gateBlocks.get(blockIndex).id, blockIndex);
+		}
+		simulator.positionsToRail.forEach((node, neighbourMap) -> {
+			if (neighbourMap.isEmpty()) {
+				return;
+			}
+			final String nodeKey = node.getX() + "," + node.getY() + "," + node.getZ();
+			if (!owners.containsKey(nodeKey)) {
+				return;
+			}
+			final String owner = owners.get(nodeKey);
+			final Integer index = indexByBlockId.get(owner);
+			final com.google.gson.JsonObject n = new com.google.gson.JsonObject();
+			n.addProperty("x", node.getX());
+			n.addProperty("y", node.getY());
+			n.addProperty("z", node.getZ());
+			n.addProperty("block", owner);
+			n.addProperty("index", index == null ? -1 : index);
+			blockNodes.add(n);
+		});
+		result.add("nodes", blockNodes);
 		return result;
 	}
 
@@ -747,6 +777,10 @@ public final class SystemMapServlet extends ServletBase {
 	 */
 	private static JsonObject getMmtrTopology(org.mtr.core.simulation.Simulator simulator) {
 		final com.google.gson.JsonArray nodes = new com.google.gson.JsonArray();
+		// 区间层: the block each track-layer node belongs to. The user's requirement is that every node has
+		// EXACTLY ONE block ("每个轨道层每个节点都有且只有一个区间层所属"), so the engine assigns it here and the
+		// console only paints what it is given.
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> nodeOwners = simulator.mmtrDirectionalBlocks.nodeOwners();
 		simulator.positionsToRail.forEach((node, neighbourMap) -> {
 			if (neighbourMap.isEmpty()) {
 				return;
@@ -756,6 +790,7 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("y", node.getY());
 			out.addProperty("z", node.getZ());
 			out.addProperty("degree", neighbourMap.size());
+			out.addProperty("block", nodeOwners.getOrDefault(node.getX() + "," + node.getY() + "," + node.getZ(), ""));
 			final com.google.gson.JsonArray neighbours = new com.google.gson.JsonArray();
 			neighbourMap.forEach((pos, rail) -> {
 				final com.google.gson.JsonObject n = new com.google.gson.JsonObject();

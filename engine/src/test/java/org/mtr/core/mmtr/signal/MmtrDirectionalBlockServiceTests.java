@@ -1,6 +1,7 @@
 package org.mtr.core.mmtr.signal;
 
 import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.junit.jupiter.api.Test;
@@ -520,21 +521,30 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertTrue(orphan.entryLampKey.isEmpty(), "nobody opens it - there is no lamp on it");
 		assertTrue(orphan.endsOpen, "and nothing closes it");
 		assertEquals(100, orphan.lengthM(), 1.0, "the whole rail, not a stub");
+		// Unguarded blocks need names of their own: the node assignment and the map colours key on the id,
+		// so "no lamp" cannot be one shared name for every unguarded block in the world.
+		final ObjectOpenHashSet<String> ids = new ObjectOpenHashSet<>();
+		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
+			assertTrue(ids.add(block.id), "block id " + block.id + " is not unique");
+		}
+		assertFalse(orphan.id.isEmpty(), "an unguarded block still carries a stable id");
 	}
 
 	/**
-	 * The direction of the lamp decides whose block the rail falls in - a lamp only guards the side it
-	 * FACES (user: 反向没放灯啊). Two lamps on one 100 m rail therefore give two blocks, and a lamp facing
-	 * the way the movement travels leaves the stretch behind it to the previous block.
+	 * The direction of the lamp decides whose cell the track falls in - a lamp only guards the side it
+	 * FACES (user: 反向没放灯啊). Two lamps on one 200 m rail therefore give two cells, and the one the
+	 * movement has already passed belongs to the lamp BEHIND it.
 	 */
 	@Test
 	public void aLampGuardsTheSideItFaces() {
-		final Rail line = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		// 200 m, not 100: two lamps 50 m apart would land on the same block coordinate and one registry
+		// entry would overwrite the other, which is a test-geometry mistake, not a model one.
+		final Rail line = rail(new Position(0, 0, 0), new Position(200, 0, 0));
 		final Simulator simulator = sim("build/mmtr-gate-facing", line);
-		// Mid-rail, facing east: it protects the stretch ahead of it, the part it has passed belongs to
-		// whatever was before, and there is nothing to face back east.
+		// Mid-rail facing east: it protects the stretch ahead of it.
 		final String eastLamp = addBoundLamp(simulator, line, 50, EAST, line);
-		final String westLamp = addBoundLamp(simulator, line, 100, WEST, line);
+		// At the far end facing west: it protects the stretch it faces, up to the east-facing head.
+		final String westLamp = addBoundLamp(simulator, line, 150, WEST, line);
 		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
 
 		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
@@ -544,11 +554,11 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertNotNull(westBlock, "the west-facing lamp opens the one it faces");
 
 		assertEquals(50, eastBlock.spans.get(0).arcFromM, 0.5, "the east-facing lamp protects only what is ahead of it");
-		assertEquals(50, eastBlock.lengthM(), 1.0, "the stretch it has already passed is NOT its block");
-		assertEquals(0, westBlock.spans.get(0).arcFromM, 0.5, "the west-facing lamp protects the whole rail");
-		assertEquals(100, westBlock.lengthM(), 1.0);
-		// Same rail, two blocks: this is what "directed" means on the map, and it is why the layer is
-		// drawn per lamp rather than per rail.
+		assertEquals(150, eastBlock.lengthM(), 1.0, "which is everything east of it: no other head faces east");
+		assertEquals(0, westBlock.spans.get(0).arcFromM, 0.5, "the west-facing lamp protects the stretch behind it");
+		assertEquals(50, westBlock.lengthM(), 1.0, "which ends where the east-facing head takes over");
+		// Same rail, two cells: this is what "directed" means on the map, and it is why the layer is drawn
+		// per lamp rather than per rail.
 		assertEquals(2, blocks.size());
 	}
 
@@ -642,6 +652,39 @@ public final class MmtrDirectionalBlockServiceTests {
 			assertTrue(seen.add(span.railHex),
 				"rail " + span.railHex + " is listed twice: a shared stretch was added once per branch");
 		}
+	}
+
+	/**
+	 * Every TRACK-layer node belongs to exactly ONE block (user requirement 2026-09-10:
+	 * "要求每个轨道层每个节点都都有且只有一个区间层所属").
+	 *
+	 * <p>A node is a single physical point that several rails meet at, so it needs exactly one owner: the
+	 * layer must be a division, not a set of overlapping reaches. This also pins the other half of the same
+	 * property - the reaches of two lamps in a ladder used to contain each other (287 overlapping pairs on
+	 * the dev world), and each cell is now clipped where the nearer lamp takes over.</p>
+	 */
+	@Test
+	public void everyNodeBelongsToExactlyOneBlock() {
+		final Rail throat = rail(new Position(0, 0, 0), new Position(0, 0, 100));
+		final Rail straight = rail(new Position(0, 0, 100), new Position(0, 0, 250));
+		final Rail diverge = rail(new Position(0, 0, 100), new Position(40, 0, 250));
+		final Rail siding = rail(new Position(0, 0, 100), new Position(-60, 0, 250));
+		final Simulator simulator = sim("build/mmtr-gate-node-owner", throat, straight, diverge, siding);
+		final String lamp = addLamp(simulator, throat, 0, NORTH);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final Object2ObjectOpenHashMap<String, String> owners = service.nodeOwners();
+		// Every endpoint of every rail is a node in this layer's terms, the dead ends included: the throat's
+		// two ends, the fork, and the far end of each of the three legs.
+		assertEquals(5, owners.size(), "the fork's node plus one far node per leg, plus the throat's near node");
+		assertEquals(owners, service.nodeOwners(), "asking twice gives the same answer (no order dependence)");
+		for (final java.util.Map.Entry<String, String> entry : owners.entrySet()) {
+			assertNotNull(entry.getValue(), "node " + entry.getKey() + " must belong to a block");
+		}
+		// The throat lamp's cell starts at the throat's near node, so both the near node and the fork node
+		// are its: the cell runs across the rail boundary, which is the whole point of the model.
+		assertEquals(lamp, owners.get("0,0,0"), "the node under the lamp is the entry of its own cell");
+		assertEquals(lamp, owners.get("0,0,100"), "the fork node is inside the lamp's cell, not a boundary of it");
 	}
 
 	/**

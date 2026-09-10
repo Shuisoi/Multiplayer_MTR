@@ -58,6 +58,13 @@ public final class MmtrCommandExecutor {
 			executeInterlock(simulator, parts);
 			return;
 		}
+		// 闭塞区间 v2 (S6): the 水闸区间 layer itself - one cell per lamp, plus the node assignment check.
+		if (parts.length >= 1 && parts[0].equals("blocks")) {
+			simulator.mmtrCommandResult(parts.length >= 2
+				? org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describeNode(simulator, parts[1])
+				: org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describeBlocks(simulator));
+			return;
+		}
 		// 闭塞区间 v2 (S2): the directional lamp-to-lamp sections, next to the v1 report.
 		if (parts.length >= 1 && parts[0].equals("blocks-v2")) {
 			simulator.mmtrCommandResult(parts.length >= 2 && !parts[1].equals("all")

@@ -33,6 +33,8 @@ export interface MmtrSectionEntry {
  * mid-rail. A cell with no `lamp` is one nobody guards - the end of the line, a plain siding.</p>
  */
 export interface MmtrBlockEntry {
+	/** This block's position in the engine's own list - the console tints by it, so blocks never share. */
+	index: number;
 	/** The lamp that opens this block; for an unguarded block, a stable synthetic id. */
 	id: string;
 	/** The lamp that opens this block (empty = nobody guards it, so it has no light to read). */
@@ -46,13 +48,24 @@ export interface MmtrBlockEntry {
 	spans: MmtrSectionSpan[];
 }
 
+/** A TRACK-layer node with the block the engine assigned it to (exactly one, always). */
+export interface MmtrBlockNode {
+	x: number;
+	y: number;
+	z: number;
+	/** The owning block's id (empty only for a block no lamp guards). */
+	block: string;
+	/** The owning block's index in {@link MmtrBlockEntry}[] (-1 when the engine assigned none). */
+	index: number;
+}
+
 /**
  * 区间图层 feed (闭塞区间 v2): polls {@code mmtr-sections}.
  *
- * <p>The ENGINE decides everything here - which cells the line is divided into, what each spans, and
- * what its lamp reads. This service only stores and counts what it is sent: the console must not
- * re-derive division (the whole point is that the engine is the single source of truth, and the web page
- * cannot make judgements of its own).</p>
+ * <p>The ENGINE decides everything here - which cells the line is divided into, what each spans, which
+ * block owns which node, and what each lamp reads. This service only stores and counts what it is sent:
+ * the console must not re-derive division (the whole point is that the engine is the single source of
+ * truth, and the web page cannot make judgements of its own).</p>
  */
 @Injectable({providedIn: "root"})
 export class MmtrSectionsService {
@@ -60,6 +73,8 @@ export class MmtrSectionsService {
 	public readonly sections = signal<MmtrSectionEntry[]>([]);
 	/** The BLOCK layer: 水闸区间, the cells the engine actually holds trains with - this is what the map draws. */
 	public readonly blocks = signal<MmtrBlockEntry[]>([]);
+	/** Every track-layer node with its single owning block. */
+	public readonly nodes = signal<MmtrBlockNode[]>([]);
 	public readonly loading = signal(true);
 
 	private readonly httpClient = inject(HttpClient);
@@ -76,10 +91,11 @@ export class MmtrSectionsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{data: {sections: MmtrSectionEntry[], blocks: MmtrBlockEntry[], railCount: number}}>(this.mapUrl("mmtr-sections")).subscribe({
+		this.httpClient.get<{data: {sections: MmtrSectionEntry[], blocks: MmtrBlockEntry[], nodes: MmtrBlockNode[], railCount: number}}>(this.mapUrl("mmtr-sections")).subscribe({
 			next: response => {
 				this.sections.set(response.data.sections ?? []);
 				this.blocks.set(response.data.blocks ?? []);
+				this.nodes.set(response.data.nodes ?? []);
 				this.loading.set(false);
 				this.schedule();
 			},

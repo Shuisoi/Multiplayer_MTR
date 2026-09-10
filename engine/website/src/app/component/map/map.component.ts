@@ -115,6 +115,8 @@ export class MapComponent implements AfterViewInit {
 	private readonly lineGroups = new Map<string, THREE.Group>();
 	private readonly liveLineMaterials: LineMaterial[] = [];
 	private static readonly RAIL_Z_INDEX = 0;
+	/** Radius of the 区间图层 ring drawn at each track-layer node (world metres, so it scales with the map). */
+	private static readonly NODE_RING_RADIUS_M = 1.5;
 	/** Monochrome line styling: gray tiers + focus emphasis (black & white console). */
 	private static readonly LINE_GRAYS = [0xFFFFFF, 0xD4DAE0, 0xAEB6BE, 0x8B949C];
 	private static readonly LINE_NAMES = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"];
@@ -173,6 +175,7 @@ export class MapComponent implements AfterViewInit {
 		// occupied is the thing the operator is watching for).
 		effect(() => {
 			this.mmtrSectionsService.blocks();
+			this.mmtrSectionsService.nodes();
 			this.mmtrLayersService.sections();
 			this.applySectionLayer();
 		});
@@ -349,9 +352,9 @@ export class MapComponent implements AfterViewInit {
 			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionNoLamp, lineMaterialSectionOccupied]
 				.forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
 		}
-		// One tint per BLOCK, assigned in the engine's own order so a block keeps its colour as the map is
-		// rebuilt. A block with no lamp is line no lamp reaches: drawn faint, which is exactly the
-		// signal-lamp coverage gap the operator wants to see.
+		// One tint per BLOCK, assigned by the engine's own block index so a block keeps its colour as the map
+		// is rebuilt and two blocks never share one. A block with no lamp is line no lamp reaches: drawn
+		// faint, which is exactly the signal-lamp coverage gap the operator wants to see.
 		const tints = new Map<string, LineMaterial>();
 		const tiers = [lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC];
 		const group = new THREE.Group();
@@ -360,10 +363,10 @@ export class MapComponent implements AfterViewInit {
 			if (block.occupied) {
 				material = lineMaterialSectionOccupied;
 			} else if (block.lamp) {
-				let tint = tints.get(block.id);
+				let tint = tints.get(String(block.index));
 				if (!tint) {
 					tint = tiers[tints.size % tiers.length];
-					tints.set(block.id, tint);
+					tints.set(String(block.index), tint);
 				}
 				material = tint;
 			}
@@ -381,6 +384,24 @@ export class MapComponent implements AfterViewInit {
 				line.computeLineDistances();
 				group.add(line);
 			}
+		}
+		// Every TRACK-layer node is drawn as a small ring in the colour of the block it belongs to. The
+		// engine guarantees exactly one block per node, so a node is never uncoloured and never split: this
+		// ring is what makes the "每个节点都有且只有一个区间层所属" requirement visible on the map.
+		for (const node of this.mmtrSectionsService.nodes()) {
+			const tint = tints.get(String(node.index)) ?? lineMaterialSectionNoLamp;
+			const x = node.x + 0.5;
+			const z = -(node.z + 0.5);
+			const ring: number[] = [];
+			for (let i = 0; i <= 12; i++) {
+				const angle = (i / 12) * Math.PI * 2;
+				ring.push(x + Math.cos(angle) * MapComponent.NODE_RING_RADIUS_M, z + Math.sin(angle) * MapComponent.NODE_RING_RADIUS_M, MapComponent.RAIL_Z_INDEX + 0.5);
+			}
+			const geometry = new LineGeometry();
+			geometry.setPositions(ring);
+			const circle = new Line2(geometry, tint);
+			circle.computeLineDistances();
+			group.add(circle);
 		}
 		this.sectionLayer = group;
 		this.scene.add(this.sectionLayer);

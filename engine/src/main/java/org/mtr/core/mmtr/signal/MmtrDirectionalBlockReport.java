@@ -52,6 +52,61 @@ public final class MmtrDirectionalBlockReport {
 		return out.toString();
 	}
 
+	/**
+	 * 水闸区间的完整转储 + 节点归属自检 (diagnostics): every block with its spans, then every node with the
+	 * block it belongs to, then a count of anything without an owner.
+	 *
+	 * <p>This is the check the layer's whole promise rests on - "每个轨道层每个节点都有且只有一个区间层所属" -
+	 * so it reports the failures rather than only the successes: a node with no owner, or a node whose owner is
+	 * not one of the blocks, is printed with the rail and arc that produced it.</p>
+	 */
+	public static String describeBlocks(Simulator simulator) {
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
+		final StringBuilder out = new StringBuilder("[blocks] 水闸区间 ").append(blocks.size())
+			.append(" 个 / 轨 ").append(simulator.rails.size()).append(" 根 / 灯 ").append(simulator.mmtrSignals.signals.size()).append(" 架");
+		int spanCount = 0;
+		int unguarded = 0;
+		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
+			spanCount += block.spans.size();
+			if (block.entryLampKey.isEmpty()) {
+				unguarded++;
+			}
+		}
+		out.append("\n[blocks] 段 ").append(spanCount).append(" / 有灯区间 ").append(blocks.size() - unguarded)
+			.append(" / 无灯区间 ").append(unguarded);
+
+		out.append("\n[blocks] 节点归属:");
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> owners = service.nodeOwners();
+		int missing = 0;
+		for (final String owner : owners.values()) {
+			if (owner == null || owner.isEmpty()) {
+				missing++;
+			}
+		}
+		out.append(" 节点 ").append(owners.size()).append(" 个 / 无归属 ").append(missing);
+		return out.toString();
+	}
+
+	/** One node's ownership, with everything that went into it (diagnostics). */
+	public static String describeNode(Simulator simulator, String nodeKey) {
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> owners = service.nodeOwners();
+		final String owner = owners.get(nodeKey);
+		final StringBuilder out = new StringBuilder("[blocks] 节点 ").append(nodeKey).append(" 归属=")
+			.append(owner == null ? "（不在节点表里）" : (owner.isEmpty() ? "（无）" : owner));
+		final String[] parts = nodeKey.split(",");
+		if (parts.length == 3) {
+			try {
+				out.append(new MmtrDirectionalBlockService(simulator).describeNodeResolution(
+					new org.mtr.core.data.Position(Long.parseLong(parts[0].trim()), Long.parseLong(parts[1].trim()), Long.parseLong(parts[2].trim()))));
+			} catch (NumberFormatException ignored) {
+				out.append("\n  （节点坐标无法解析，用法: blocks <x>,<y>,<z>）");
+			}
+		}
+		return out.toString();
+	}
+
 	/** One rail's sections in both directions (diagnostics for a specific rail). */
 	public static String describe(Simulator simulator, @Nullable String railHex) {
 		if (railHex == null || railHex.isEmpty()) {
