@@ -25,32 +25,41 @@ export interface MmtrSectionEntry {
 	spans: MmtrSectionSpan[];
 }
 
-/** One piece of the server-side 区间 partition: a slice of one rail owned by exactly one block. */
-export interface MmtrSectionPiece {
-	hex: string;
-	from: number;
-	to: number;
-	/** The block (lamp key) this piece belongs to; empty on a piece that starts at a plain rail end. */
-	section: string;
-	/** The lamp standing at this piece's start - the boundary a driver sees. */
+/**
+ * 水闸区间: one cell of the BLOCK layer - a stretch of line bounded by the lamps that face into it.
+ *
+ * <p>The cell is the engine's own unit of "一区段一车", so it can span several rails (the node between
+ * two rails belongs to the TRACK layer, not this one) or be a piece of a single rail when a lamp stands
+ * mid-rail. A cell with no `lamp` is one nobody guards - the end of the line, a plain siding.</p>
+ */
+export interface MmtrBlockEntry {
+	/** The lamp that opens this block; for an unguarded block, a stable synthetic id. */
+	id: string;
+	/** The lamp that opens this block (empty = nobody guards it, so it has no light to read). */
 	lamp: string;
-	/** Sampled world points along the piece, flattened [x, z, x, z, ...] - drawn as-is. */
-	points: number[];
+	/** True when the walk ran out (dead end) instead of closing on the next lamp. */
+	open: boolean;
+	occupied: boolean;
+	/** What the block's own entry lamp shows right now (empty for an unguarded block). */
+	aspect: string;
+	length: number;
+	spans: MmtrSectionSpan[];
 }
 
 /**
  * 区间图层 feed (闭塞区间 v2): polls {@code mmtr-sections}.
  *
- * <p>The ENGINE decides everything here - which pieces the line is divided into, and which block each
- * piece belongs to. This service only stores and counts what it is sent: the console must not re-derive
- * division (the whole point of 信号 = 进路 × 闭塞 is that the engine is the single source of truth).</p>
+ * <p>The ENGINE decides everything here - which cells the line is divided into, what each spans, and
+ * what its lamp reads. This service only stores and counts what it is sent: the console must not
+ * re-derive division (the whole point is that the engine is the single source of truth, and the web page
+ * cannot make judgements of its own).</p>
  */
 @Injectable({providedIn: "root"})
 export class MmtrSectionsService {
-	/** Each lamp's own block (what one lamp protects, walked lamp to lamp) - overlaps by design. */
+	/** Each lamp's own section (what one lamp protects, walked lamp to lamp) - overlaps by design. */
 	public readonly sections = signal<MmtrSectionEntry[]>([]);
-	/** The line cut AT the lamps: one owner per piece, no overlaps - this is what the map draws. */
-	public readonly pieces = signal<MmtrSectionPiece[]>([]);
+	/** The BLOCK layer: 水闸区间, the cells the engine actually holds trains with - this is what the map draws. */
+	public readonly blocks = signal<MmtrBlockEntry[]>([]);
 	public readonly loading = signal(true);
 
 	private readonly httpClient = inject(HttpClient);
@@ -67,10 +76,10 @@ export class MmtrSectionsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{data: {sections: MmtrSectionEntry[], pieces: MmtrSectionPiece[], railCount: number}}>(this.mapUrl("mmtr-sections")).subscribe({
+		this.httpClient.get<{data: {sections: MmtrSectionEntry[], blocks: MmtrBlockEntry[], railCount: number}}>(this.mapUrl("mmtr-sections")).subscribe({
 			next: response => {
 				this.sections.set(response.data.sections ?? []);
-				this.pieces.set(response.data.pieces ?? []);
+				this.blocks.set(response.data.blocks ?? []);
 				this.loading.set(false);
 				this.schedule();
 			},
@@ -87,11 +96,11 @@ export class MmtrSectionsService {
 		this.timeoutId = setTimeout(() => this.poll(), LIVE_REFRESH_INTERVAL_MILLIS) as unknown as number;
 	}
 
-	/** How many rails carry more than one span of the same section (a lamp split a rail). */
+	/** How many rails carry more than one block piece (a lamp split a rail mid-way). */
 	public splitRailCount(): number {
 		const perRail = new Map<string, number>();
-		for (const section of this.sections()) {
-			for (const span of section.spans) {
+		for (const block of this.blocks()) {
+			for (const span of block.spans) {
 				perRail.set(span.hex, (perRail.get(span.hex) ?? 0) + 1);
 			}
 		}
@@ -104,8 +113,13 @@ export class MmtrSectionsService {
 		return count;
 	}
 
-	/** How many sections are occupied right now (their lamp reads danger for that reason). */
+	/** How many blocks are occupied right now - 一区段一车. */
 	public occupiedCount(): number {
-		return this.sections().filter(section => section.occupied).length;
+		return this.blocks().filter(block => block.occupied).length;
+	}
+
+	/** How many blocks the engine's division has (the number the layer switch shows). */
+	public blockCount(): number {
+		return this.blocks().length;
 	}
 }

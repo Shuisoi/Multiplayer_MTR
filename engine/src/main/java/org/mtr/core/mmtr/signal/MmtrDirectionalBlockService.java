@@ -55,12 +55,6 @@ public final class MmtrDirectionalBlockService {
 	/** Safety caps: a malformed graph must never spin forever. */
 	private static final int MAX_RAILS_PER_SECTION = 256;
 	private static final double MAX_SECTION_LENGTH_M = 4000;
-	/** Cut points of the 区间 partition closer than this are one boundary (see {@code dedupeCuts}). */
-	private static final double CUT_MERGE_M = 1.0;
-	/** Pieces shorter than this are dropped: a block is not centimetres long. */
-	private static final double MIN_PIECE_LENGTH_M = 0.5;
-	/** A lamp farther than this from a rail does not cut it (stabling roads are about this far apart). */
-	private static final double LAMP_CUT_TOLERANCE_M = 3.0;
 
 	/** One rail's slice of a section, in ordered-position-1 arc space, with its travel direction. */
 	public static final class RailSpan {
@@ -141,7 +135,6 @@ public final class MmtrDirectionalBlockService {
 				+ " spans=" + spans.size() + " len=" + round(lengthM());
 		}
 	}
-
 	/** One lamp resolved to the rail it protects and the direction it authorises. */
 	public static final class ProtectedRail {
 		public final Rail rail;
@@ -751,148 +744,136 @@ public final class MmtrDirectionalBlockService {
 		}
 	}
 
+	// ---------------------------------------------------------------- 水闸区间 (S6)
+
+	/** One 水闸区间: a stretch of line bounded by the lamps that face INTO it. */
+	public static final class GateBlock {
+		/**
+		 * The lamp that opens this block (the one facing into it); empty for a block that no lamp guards
+		 * (the end of the line, a plain siding).
+		 */
+		public final String entryLampKey;
+		/** True when the walk ran out (dead end) instead of closing on the next lamp. */
+		public final boolean endsOpen;
+		public final ObjectArrayList<RailSpan> spans = new ObjectArrayList<>();
+
+		GateBlock(String entryLampKey, boolean endsOpen) {
+			this.entryLampKey = entryLampKey;
+			this.endsOpen = endsOpen;
+		}
+
+		public double lengthM() {
+			double length = 0;
+			for (final RailSpan span : spans) {
+				length += span.lengthM();
+			}
+			return length;
+		}
+
+		@Override
+		public String toString() {
+			return (entryLampKey.isEmpty() ? "（无入口灯）" : entryLampKey) + (endsOpen ? " → 开放端" : " → 下一盏灯")
+				+ " 跨 " + spans.size() + " 段 长=" + Math.round(lengthM() * 10) / 10.0;
+		}
+	}
+
 	/**
-	 * 区间图层的<b>划分</b>视图: the line broken into pieces that each belong to exactly ONE block,
-	 * with the cut points being the lamps themselves.
+	 * 水闸区间 (user definition, 2026-09-10): blocks are the cells between SIGNALS, and a signal is a gate.
 	 *
-	 * <p>Why this exists next to {@link #sectionViews}: a section is defined as "from this lamp, walk the
-	 * way it faces until the next lamp" - and when there IS no next lamp in that direction it walks to the
-	 * end of the line. Measured on the dev world, that produced 32 sections whose spans overlapped heavily
-	 * (one rail covered by up to 13 of them, 103 of 134 rails covered by none), which as a MAP is not a
-	 * division at all: it is each lamp's reach. What a driver sees on the ground is the division: the line
-	 * cut AT the lamps.</p>
+	 * <p>The rule, in the user's words: a block is closed when <em>every one of its exits has a lamp facing
+	 * INTO the block</em>; a lamp facing out of it belongs to the NEXT block; a stretch with no lamp (the end
+	 * of the line, or an exit nobody guards) forms a block by itself. Nodes and turnouts do NOT cut blocks -
+	 * they belong to the TRACK layer, which the map's rail/turnout layers already show.</p>
 	 *
-	 * <p>So this method cuts each rail at every lamp projecting onto it (plus its two ends) and assigns
-	 * each piece to the section that covers it. Pieces never overlap, together they cover the whole line,
-	 * and a piece carries the lamp that bounds it - which is exactly "按信号灯分成几段".</p>
+	 * <p>This matches real practice: a block section is a track-circuit section and the signal stands at its
+	 * ENTRANCE, so block boundaries are signal positions (the insulation joints sit with the signals) and
+	 * "one section, one train" is what the section is FOR (see 参考-英铁AWS与TPWS机制 §4).</p>
+	 *
+	 * <p>Algorithm: walk out of each lamp the way it faces; the walk ends when it reaches a node carrying a
+	 * lamp (that lamp is the next block's entrance) or when it cannot continue. Rails the walk never reaches
+	 * carry no lamp at all, so each forms its own block - the "无信号灯的自己成一个区间" case.</p>
 	 */
-	public ObjectArrayList<PartitionPiece> partitionViews() {
+	public ObjectArrayList<GateBlock> gateBlocks() {
 		refresh();
-		final ObjectArrayList<PartitionPiece> out = new ObjectArrayList<>();
+		final ObjectArrayList<GateBlock> out = new ObjectArrayList<>();
+		final ObjectOpenHashSet<String> covered = new ObjectOpenHashSet<>();
+		for (final Map.Entry<String, Section> entry : sectionsBySignal.entrySet()) {
+			final Section walk = entry.getValue();
+			if (walk.spans.isEmpty()) {
+				continue;
+			}
+			final GateBlock block = new GateBlock(entry.getKey(), walk.exitSignalKey == null || walk.exitSignalKey.isEmpty());
+			for (final RailSpan span : walk.spans) {
+				block.spans.add(span);
+				covered.add(span.railHex);
+			}
+			out.add(block);
+		}
+		// 无灯轨各自成一个区间: nothing faces into them, so they are blocks nobody guards (the end of the
+		// line, a plain siding). They are NOT merged with each other - merging needs a node, and nodes do not
+		// belong to this layer.
 		for (final Rail rail : simulator.rails) {
 			final String hex = rail.getHexId();
 			final double length = rail.railMath.getLength();
-			if (length <= 1e-6) {
+			if (covered.contains(hex) || length <= 1e-6) {
 				continue;
 			}
-			// EVERY boundary on this rail, from every source, into ONE set: a lamp projecting onto it, and
-			// the ends of the blocks that cover it. Collecting one block's spans at a time (the first
-			// version) never produced a shared cut line, so the pieces still overlapped.
-			final java.util.TreeSet<Double> cuts = new java.util.TreeSet<>();
-			cuts.add(0.0);
-			cuts.add(length);
-			addLampCuts(rail, cuts, length);
-			for (final Section section : sectionsOfRail(hex)) {
-				for (final RailSpan span : section.spans) {
-					if (span.railHex.equals(hex)) {
-						cuts.add(clamp(span.arcFromM, 0, length));
-						cuts.add(clamp(span.arcToM, 0, length));
-					}
-				}
-			}
-			final ObjectArrayList<Double> ordered = dedupeCuts(cuts);
-			for (int i = 0; i + 1 < ordered.size(); i++) {
-				final double from = ordered.get(i);
-				final double to = ordered.get(i + 1);
-				if (to - from <= MIN_PIECE_LENGTH_M) {
-					continue;
-				}
-				// A piece belongs to the block that STARTS at its own boundary - that is what "按信号灯
-				// 分成几段" means, and it is why the piece carries the lamp at its start rather than a
-				// membership chosen among the sections that happen to sweep over it.
-				final String lamp = lampAtArc(rail, from, length);
-				out.add(new PartitionPiece(hex, from, to, lamp, lamp));
-			}
+			final GateBlock block = new GateBlock("", true);
+			final double[] heading = headingAt(rail, 0);
+			block.spans.add(new RailSpan(hex, 0, length, heading[0], heading[1]));
+			out.add(block);
 		}
 		return out;
 	}
 
 	/**
-	 * Cut points collapsed to one per lamp/end, in order.
-	 *
-	 * <p>A lamp's projected arc is sampled, so the same lamp can land a few centimetres apart depending on
-	 * which tolerance the caller used; left alone those near-duplicates produce hair-thin, OVERLAPPING
-	 * pieces instead of one boundary (measured: 140 pieces with 65 overlapping pairs for 134 rails).</p>
+	 * Whether any vehicle footprint stands inside {@code block} (the occupancy half of the layer, so the
+	 * map can show which cells are taken right now - 一区段一车).
 	 */
-	private static ObjectArrayList<Double> dedupeCuts(java.util.TreeSet<Double> cuts) {
-		final ObjectArrayList<Double> ordered = new ObjectArrayList<>();
-		for (final double cut : cuts) {
-			if (ordered.isEmpty() || cut - ordered.get(ordered.size() - 1) > CUT_MERGE_M) {
-				ordered.add(cut);
+	public boolean isOccupied(GateBlock block, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return isOccupied(block, trees, 0);
+	}
+
+	/** As above, ignoring the footprints of {@code excludeVehicleId} (a train does not occupy itself). */
+	public boolean isOccupied(GateBlock block, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
+			trees == null ? simulator.mmtrOccupancyTrees() : trees;
+		if (occupancyTrees == null || occupancyTrees.isEmpty()) {
+			return false;
+		}
+		for (final RailSpan span : block.spans) {
+			final Rail rail = railByHex.get(span.railHex);
+			if (rail == null || span.lengthM() <= 1e-9) {
+				continue;
+			}
+			final Position[] ordered = rail.mmtrOrderedPositions();
+			if (ordered == null || ordered.length < 2) {
+				continue;
+			}
+			for (int i = 0; i < occupancyTrees.size(); i++) {
+				final VehiclePosition vehiclePosition = Data.tryGet(occupancyTrees.get(i), ordered[0], ordered[1]);
+				if (vehiclePosition != null && vehiclePosition.getClosestOverlap(span.arcFromM, span.arcToM, false, excludeVehicleId) >= 0) {
+					return true;
+				}
 			}
 		}
-		return ordered;
+		return false;
 	}
 
 	/**
-	 * Every lamp that genuinely CUTS {@code rail}, added as an arc cut point.
-	 *
-	 * <p>Only lamps bound to this rail, or lamps sitting close enough that the rail is the one they stand
-	 * beside. The bind tolerance alone is not enough: stabling roads are about that far apart, so using it
-	 * let a neighbour's lamp cut this rail and produced phantom boundaries (measured: 9 cuts on one 43 m
-	 * rail where only 2 lamps actually stand on it).</p>
+	 * The aspect the block's OWN entry lamp shows: depth 0 (clear through the whole block) is green, the
+	 * next block occupied is a caution, and the block being occupied is red. Empty when the block has no
+	 * entry lamp - nobody guards it, so there is no light to read.
 	 */
-	private void addLampCuts(Rail rail, java.util.TreeSet<Double> cuts, double length) {
-		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
-			final double entryX = entry.x + 0.5;
-			final double entryY = entry.y + 0.5;
-			final double entryZ = entry.z + 0.5;
-			final boolean boundHere = entry.target != null && entry.target.equals(rail.getHexId());
-			if (!boundHere && distanceToRailM(rail, entryX, entryY, entryZ) > LAMP_CUT_TOLERANCE_M) {
-				continue;
-			}
-			final Double arc = MmtrBlockService.projectArc(rail, entryX, entryY, entryZ);
-			if (arc != null) {
-				cuts.add(clamp(arc, 0, length));
-			}
+	public String blockAspect(GateBlock block, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes) {
+		if (block.entryLampKey.isEmpty()) {
+			return "";
 		}
-	}
-
-	/** Closest distance from a world point to the rail curve (sampled, like every other projection here). */
-	private static double distanceToRailM(Rail rail, double x, double y, double z) {
-		final double length = rail.railMath.getLength();
-		double best = Double.MAX_VALUE;
-		for (double arc = 0; arc <= length; arc += 1.0) {
-			final org.mtr.core.tool.Vector point = rail.railMath.getPosition(Math.min(arc, length), false);
-			final double dx = point.x() - x;
-			final double dy = point.y() - y;
-			final double dz = point.z() - z;
-			best = Math.min(best, dx * dx + dy * dy + dz * dz);
+		final Section section = sectionsBySignal.get(block.entryLampKey);
+		if (section == null) {
+			return "";
 		}
-		return Math.sqrt(best);
-	}
-
-	/** The key of the lamp standing at {@code arc} of {@code rail} (empty when no lamp is there). */
-	private String lampAtArc(Rail rail, double arc, double length) {
-		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
-			final Double projected = MmtrBlockService.projectArc(rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
-			if (projected != null && Math.abs(clamp(projected, 0, length) - arc) <= 0.5) {
-				return MmtrSignalRegistry.key(entry.x, entry.y, entry.z);
-			}
-		}
-		return "";
-	}
-
-	/** One piece of the 区间图层 partition: a slice of one rail that belongs to exactly one block. */
-	public static final class PartitionPiece {
-		public final String railHex;
-		public final double arcFromM;
-		public final double arcToM;
-		/**
-		 * The block this piece belongs to = the lamp at its own start (empty when the piece starts at a
-		 * plain rail end with no lamp before it, i.e. unsignalled line).
-		 */
-		public final String sectionId;
-		/** The lamp standing at this piece's start - the boundary a driver sees (empty at a plain rail end). */
-		public final String boundaryLampKey;
-
-		PartitionPiece(String railHex, double arcFromM, double arcToM, String sectionId, String boundaryLampKey) {
-			this.railHex = railHex;
-			this.arcFromM = arcFromM;
-			this.arcToM = arcToM;
-			this.sectionId = sectionId;
-			this.boundaryLampKey = boundaryLampKey;
-		}
+		return aspectName(depthAt(section, trees, restrictedNodes));
 	}
 
 	/** The rail onto which {@code section} continues after {@code railHex} (the next span), or null. */
@@ -915,6 +896,28 @@ public final class MmtrDirectionalBlockService {
 	}
 
 	// ---------------------------------------------------------------- build
+
+	/**
+	 * Record one walked span, keeping at most ONE span per rail.
+	 *
+	 * <p>Why: at a junction the walk follows every leg that keeps the travel direction (岔口多腿), and each
+	 * of those branches then walks the SAME rails of the trunk, in this same direction - so the same
+	 * stretch was appended once per branch. Measured on the dev world, 103 of 448 spans were such exact
+	 * duplicates (up to 17 in one lamp's block of 37), which made a block claim the same track two or
+	 * three times: the map drew the phantom second copy and the length was inflated.</p>
+	 *
+	 * <p>A block cannot legitimately visit one rail twice in the same direction (that would need a loop
+	 * with no lamp on it), so the first visit wins and later duplicates are dropped. A visit in the
+	 * OPPOSITE direction is kept: it is a different movement through the same track.</p>
+	 */
+	private static void addSpan(Section section, RailSpan span) {
+		for (final RailSpan existing : section.spans) {
+			if (existing.railHex.equals(span.railHex) && existing.matchesHeading(span.headingX, span.headingZ)) {
+				return;
+			}
+		}
+		section.spans.add(span);
+	}
 
 	private void refresh() {
 		final String signature = signature();
@@ -1128,13 +1131,13 @@ public final class MmtrDirectionalBlockService {
 		if (Math.abs(exitArc - entryArc) > 1e-6) {
 			// A lamp standing mid-rail is a boundary too (v2 keeps v1's geometric cut, not only node binds):
 			// truncate the span at the nearest such lamp ahead and end the section there.
-			final MidRailLamp midRail = nearestLampOnSpan(firstRail, entryArc, exitArc, forward);
+			final MidRailLamp midRail = nearestLampOnSpan(firstRail, entryArc, exitArc, forward, headingX, headingZ);
 			if (midRail != null) {
-				section.spans.add(new RailSpan(firstHex, entryArc, midRail.arcM, headingX, headingZ));
+				addSpan(section, new RailSpan(firstHex, entryArc, midRail.arcM, headingX, headingZ));
 				section.exitSignalKey = midRail.key;
 				return section;
 			}
-			section.spans.add(new RailSpan(firstHex, entryArc, exitArc, headingX, headingZ));
+			addSpan(section, new RailSpan(firstHex, entryArc, exitArc, headingX, headingZ));
 		}
 
 		final Position exitNode = forward ? farNode(firstRail, true) : farNode(firstRail, false);
@@ -1156,12 +1159,17 @@ public final class MmtrDirectionalBlockService {
 	}
 
 	/**
-	 * The nearest lamp standing on {@code rail} strictly inside the arc range the movement is crossing, or
-	 * null. A lamp on a node is the walk's business (it ends sections by node), so only a lamp whose
-	 * projection is strictly inside the rail counts here - this keeps v1's geometric cut (a light beside
-	 * the middle of a rail does split it) while the node case stays with the walk.
+	 * The nearest lamp standing on {@code rail} strictly inside the arc range the movement is crossing
+	 * <em>that faces into the block being walked</em> (heading {@code headingX, headingZ}), or null. A lamp
+	 * on a node is the walk's business (it ends sections by node), so only a lamp whose projection is
+	 * strictly inside the rail counts here - this keeps v1's geometric cut (a light beside the middle of a
+	 * rail does split it) while the node case stays with the walk.
+	 *
+	 * <p>The facing test is what makes the cut correct in the OTHER direction (S6, notes/113): a head
+	 * facing AWAY belongs to the block on the other side, and letting it truncate this walk is how a
+	 * west-facing head at the east end ended up with a 50 m block instead of the whole 100 m rail.</p>
 	 */
-	private @Nullable MidRailLamp nearestLampOnSpan(Rail rail, double fromArcM, double toArcM, boolean forward) {
+	private @Nullable MidRailLamp nearestLampOnSpan(Rail rail, double fromArcM, double toArcM, boolean forward, double headingX, double headingZ) {
 		final double low = Math.min(fromArcM, toArcM);
 		final double high = Math.max(fromArcM, toArcM);
 		final double length = rail.railMath.getLength();
@@ -1178,11 +1186,37 @@ public final class MmtrDirectionalBlockService {
 			if (arc < low + 1e-6 || arc > high - 1e-6) {
 				continue; // outside the stretch being crossed
 			}
+			if (!facesInto(entry, headingX, headingZ)) {
+				continue; // faces out of this block: it bounds the NEXT one, not this one
+			}
 			if (best == null || (forward ? arc < best.arcM : arc > best.arcM)) {
 				best = new MidRailLamp(arc, MmtrSignalRegistry.key(entry.x, entry.y, entry.z));
 			}
 		}
 		return best;
+	}
+
+	/**
+	 * True when the lamp's facing points along the travel direction {@code (headingX, headingZ)} - i.e. it
+	 * guards the block a movement travelling that way is entering.
+	 */
+	private static boolean facesInto(SignalEntry entry, double headingX, double headingZ) {
+		final double[] lampHeading = headingOf(entry.angle);
+		return lampHeading[0] * headingX + lampHeading[1] * headingZ > 0.1;
+	}
+
+	/**
+	 * The lamp registered AT {@code node} that faces into a movement travelling {@code (headingX, headingZ)}.
+	 *
+	 * <p>Only a lamp facing into the block ends the walk (S6, notes/113): the boundary between two blocks
+	 * carries <em>two</em> heads in the real world - one for each direction of travel - and the one facing
+	 * BACK down the line that was just walked protects the stretch already behind the movement, so it must
+	 * not cut this block. Counting it did exactly that on the dev world: opposite heads in the same block
+	 * made the map show slivers nobody guards (notes/112 §3.1).</p>
+	 */
+	private @Nullable SignalEntry lampAt(Position node, double headingX, double headingZ) {
+		final SignalEntry entry = simulator.mmtrSignals.get((int) node.getX(), (int) node.getY(), (int) node.getZ());
+		return entry != null && facesInto(entry, headingX, headingZ) ? entry : null;
 	}
 
 	/**
@@ -1203,10 +1237,10 @@ public final class MmtrDirectionalBlockService {
 			return;
 		}
 
-		// A lamp standing at this node ends the section here: both nodes of a boundary carry a lamp (the
-		// one facing each way), and either way the lamp marks the block boundary the movement stops at.
-		// A lamp facing the same way is NOT exempt - it starts the next section, which begins here.
-		final SignalEntry lampHere = lampAt(node);
+		// A lamp standing at this node ends the section here when it faces INTO the block being walked: it
+		// is the entrance of the next block. A lamp facing the other way guards the stretch the movement
+		// has just left, and does not cut this block.
+		final SignalEntry lampHere = lampAt(node, headingX, headingZ);
 		if (lampHere != null) {
 			section.exitSignalKey = MmtrSignalRegistry.key(lampHere.x, lampHere.y, lampHere.z);
 			return;
@@ -1243,13 +1277,13 @@ public final class MmtrDirectionalBlockService {
 			final double spanHeadingZ = forward ? nextHeading[1] : -nextHeading[1];
 			if (Math.abs(toArc - arcOfNode) > 1e-6) {
 				// A lamp standing MID-RAIL is a boundary too: end the section on it instead of walking past.
-				final MidRailLamp midRail = nearestLampOnSpan(next, arcOfNode, toArc, forward);
+				final MidRailLamp midRail = nearestLampOnSpan(next, arcOfNode, toArc, forward, spanHeadingX, spanHeadingZ);
 				if (midRail != null) {
-					section.spans.add(new RailSpan(nextHex, arcOfNode, midRail.arcM, spanHeadingX, spanHeadingZ));
+					addSpan(section, new RailSpan(nextHex, arcOfNode, midRail.arcM, spanHeadingX, spanHeadingZ));
 					section.exitSignalKey = midRail.key;
 					continue;
 				}
-				section.spans.add(new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
+				addSpan(section, new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
 			}
 			anyBranchContinued = true;
 			final ObjectOpenHashSet<String> branchPath = new ObjectOpenHashSet<>(pathRails);

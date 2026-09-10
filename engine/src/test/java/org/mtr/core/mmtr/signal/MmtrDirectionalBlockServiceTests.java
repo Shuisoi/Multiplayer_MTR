@@ -2,6 +2,7 @@ package org.mtr.core.mmtr.signal;
 
 import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
@@ -38,8 +39,16 @@ public final class MmtrDirectionalBlockServiceTests {
 	private static final float NORTH = 180;
 	private static final float EAST = 270;
 
+	/**
+	 * A straight rail from {@code p1} to {@code p2}. The two end bearings are the ACTUAL bearings of the
+	 * p1 -> p2 axis, not 0/180: MTR's {@link Angle} is a bearing measured clockwise from EAST (see
+	 * {@code Angle.fromAngle}), and handing it 0/180 for a rail running north-south collapses the rail
+	 * (RailMath treats the ends as perpendicular to the axis and yields a zero-length rail), which makes a
+	 * test silently exercise nothing.
+	 */
 	private static Rail rail(Position p1, Position p2) {
-		return rail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180));
+		final double bearing = Math.toDegrees(Math.atan2(p2.getZ() - p1.getZ(), p2.getX() - p1.getX()));
+		return rail(p1, Angle.fromAngle((float) bearing), p2, Angle.fromAngle((float) (bearing + 180)));
 	}
 
 	private static Rail rail(Position p1, Angle a1, Position p2, Angle a2) {
@@ -412,6 +421,227 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertNotNull(routed);
 		assertEquals(2, routed.spans.size(), "a set MAIN route narrows the throat block to its own leg");
 		assertEquals(straight.getHexId(), routed.spans.get(1).railHex, "and it is the route's leg that is walked");
+	}
+
+	// ---------------------------------------------------------------- S6: 水闸区间 (the layer the map draws)
+
+	/** Register a BOUND lamp on {@code rail} at {@code arcM} facing {@code angle}, bound to {@code target}. */
+	private static String addBoundLamp(Simulator simulator, Rail rail, double arcM, float angle, Rail target) {
+		final int[] coords = blockCoordsAt(rail, arcM);
+		simulator.mmtrSignals.put(coords[0], coords[1], coords[2], angle, 4, "BOUND", target.getHexId());
+		return MmtrSignalRegistry.key(coords[0], coords[1], coords[2]);
+	}
+
+	private static MmtrDirectionalBlockService.GateBlock blockWithLamp(ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks, String lamp) {
+		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
+			if (block.entryLampKey.equals(lamp)) {
+				return block;
+			}
+		}
+		return null;
+	}
+
+	/** The block that owns {@code (arcFrom, arcTo)} of {@code rail}, or null - used to prove a clean partition. */
+	private static MmtrDirectionalBlockService.GateBlock blockAt(ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks, String railHex, double arcM) {
+		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
+			for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
+				if (span.railHex.equals(railHex) && arcM >= span.arcFromM - 1e-6 && arcM <= span.arcToM + 1e-6) {
+					return block;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 水闸区间 (S6, user definition 2026-09-10): the block layer is bounded by SIGNALS only.
+	 *
+	 * <p>A block runs from the lamp that faces into it to the next lamp, <em>across</em> rail boundaries -
+	 * the node between the two rails is part of the TRACK layer and must never appear in this one. Two
+	 * lamps on a three-rail corridor therefore give exactly two blocks, not "one block per rail".</p>
+	 */
+	@Test
+	public void blocksRunLampToLampAndIgnoreRailBoundaries() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Rail r3 = rail(new Position(200, 0, 0), new Position(300, 0, 0));
+		final Simulator simulator = sim("build/mmtr-gate-lamp-to-lamp", r1, r2, r3);
+		final String first = addLamp(simulator, r1, 0, EAST);
+		final String second = addLamp(simulator, r3, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
+		assertEquals(2, blocks.size(), "one block per lamp - the rail boundary between r1/r2 is NOT a boundary here");
+
+		final MmtrDirectionalBlockService.GateBlock a = blockWithLamp(blocks, first);
+		final MmtrDirectionalBlockService.GateBlock b = blockWithLamp(blocks, second);
+		assertNotNull(a, "the first lamp opens a block");
+		assertNotNull(b, "the second lamp opens the next one");
+		assertEquals(2, a.spans.size(), "the first block covers r1 AND r2: it crosses the node at z=100");
+		assertEquals(200, a.lengthM(), 1.5);
+		assertFalse(a.endsOpen, "it closes on the next lamp, it does not run out");
+		assertEquals(r1.getHexId(), a.spans.get(0).railHex);
+		assertEquals(r2.getHexId(), a.spans.get(1).railHex);
+
+		assertEquals(1, b.spans.size(), "the second block is the last rail");
+		assertEquals(r3.getHexId(), b.spans.get(0).railHex);
+		assertTrue(b.endsOpen, "nothing closes it: the walk ran to the end of the line");
+
+		// The law of the layer: nodes do not cut it. A movement standing mid-way through the first block
+		// is in ONE block whichever rail it is on.
+		assertEquals(a, blockAt(blocks, r1.getHexId(), 50), "on r1 -> block a");
+		assertEquals(a, blockAt(blocks, r2.getHexId(), 50), "across the node on r2 -> still block a");
+		assertEquals(b, blockAt(blocks, r3.getHexId(), 50), "past the second lamp -> block b");
+	}
+
+	/**
+	 * A rail that no walk reaches carries no lamp at all, so it is a block of its own - the
+	 * "无信号灯的自己成一个区间" case. It is deliberately NOT merged with its neighbours: merging would
+	 * need a node, and nodes belong to the track layer.
+	 */
+	@Test
+	public void anUnguardedRailIsABlockOfItsOwn() {
+		final Rail guarded = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		// The siding stands well clear of the guarded rail so the lamp cannot bind to it: this test is
+		// about the block layer, not about the 3 m bind tolerance (notes/105 §3.1).
+		final Rail siding = rail(new Position(500, 0, 500), new Position(500, 0, 600));		final Simulator simulator = sim("build/mmtr-gate-no-lamp", guarded, siding);
+		final String lamp = addLamp(simulator, guarded, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
+		assertEquals(2, blocks.size(), "the lamp's block plus the lamp-free rail's own block");
+
+		final MmtrDirectionalBlockService.GateBlock guardedBlock = blockWithLamp(blocks, lamp);
+		assertNotNull(guardedBlock);
+		assertEquals(guarded.getHexId(), guardedBlock.spans.get(0).railHex);
+
+		final MmtrDirectionalBlockService.GateBlock orphan = blockAt(blocks, siding.getHexId(), 25);
+		assertNotNull(orphan, "a rail with no lamp is a block by itself");
+		assertTrue(orphan.entryLampKey.isEmpty(), "nobody opens it - there is no lamp on it");
+		assertTrue(orphan.endsOpen, "and nothing closes it");
+		assertEquals(100, orphan.lengthM(), 1.0, "the whole rail, not a stub");
+	}
+
+	/**
+	 * The direction of the lamp decides whose block the rail falls in - a lamp only guards the side it
+	 * FACES (user: 反向没放灯啊). Two lamps on one 100 m rail therefore give two blocks, and a lamp facing
+	 * the way the movement travels leaves the stretch behind it to the previous block.
+	 */
+	@Test
+	public void aLampGuardsTheSideItFaces() {
+		final Rail line = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Simulator simulator = sim("build/mmtr-gate-facing", line);
+		// Mid-rail, facing east: it protects the stretch ahead of it, the part it has passed belongs to
+		// whatever was before, and there is nothing to face back east.
+		final String eastLamp = addBoundLamp(simulator, line, 50, EAST, line);
+		final String westLamp = addBoundLamp(simulator, line, 100, WEST, line);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
+		final MmtrDirectionalBlockService.GateBlock eastBlock = blockWithLamp(blocks, eastLamp);
+		final MmtrDirectionalBlockService.GateBlock westBlock = blockWithLamp(blocks, westLamp);
+		assertNotNull(eastBlock, "the east-facing lamp opens a block");
+		assertNotNull(westBlock, "the west-facing lamp opens the one it faces");
+
+		assertEquals(50, eastBlock.spans.get(0).arcFromM, 0.5, "the east-facing lamp protects only what is ahead of it");
+		assertEquals(50, eastBlock.lengthM(), 1.0, "the stretch it has already passed is NOT its block");
+		assertEquals(0, westBlock.spans.get(0).arcFromM, 0.5, "the west-facing lamp protects the whole rail");
+		assertEquals(100, westBlock.lengthM(), 1.0);
+		// Same rail, two blocks: this is what "directed" means on the map, and it is why the layer is
+		// drawn per lamp rather than per rail.
+		assertEquals(2, blocks.size());
+	}
+
+	/**
+	 * The block layer must be a clean division of the line: every metre of every rail belongs to exactly
+	 * one block. (This is the property the earlier rail-cut partition failed: it produced 137 fragments
+	 * with 64 overlapping pairs on the dev world - notes/112 §3.1, abandoned in S6.)
+	 */
+	@Test
+	public void theBlocksDivideEveryRailWithoutGapsOrOverlaps() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Rail branch = rail(new Position(100, 0, 0), new Position(200, 0, 100));
+		final Rail siding = rail(new Position(0, 0, 400), new Position(0, 0, 500));
+		final Simulator simulator = sim("build/mmtr-gate-partition", r1, r2, branch, siding);
+		addLamp(simulator, r1, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
+		final ObjectArrayList<Rail> rails = ObjectArrayList.of(r1, r2, branch, siding);
+
+		for (final Rail rail : rails) {
+			final double length = rail.railMath.getLength();
+			for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
+				for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
+					if (span.railHex.equals(rail.getHexId())) {
+						assertTrue(span.arcFromM >= -1e-6 && span.arcToM <= length + 1e-6,
+							"a span never runs off its rail: " + span);
+					}
+				}
+			}
+			// Walk the rail and ask which block owns each metre: it must always be exactly one.
+			for (double arc = 0.05; arc < length; arc += 5) {
+				int owners = 0;
+				for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
+					for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
+						if (span.railHex.equals(rail.getHexId()) && arc >= span.arcFromM - 1e-6 && arc <= span.arcToM + 1e-6) {
+							owners++;
+						}
+					}
+				}
+				assertEquals(1, owners, "at arc " + Math.round(arc) + " of rail " + rail.getHexId()
+					+ " exactly one block must own the track (0 = a gap the map would show as unassigned, 2+ = the overlap defect)");
+			}
+		}
+	}
+
+	/**
+	 * A block must name each rail ONCE per direction, whether the walk followed one branch or several.
+	 *
+	 * <p>The walk follows every leg that keeps the travel direction (岔口多腿), and each branch then walks
+	 * the SAME trunk rails, so a shared stretch could be appended once per branch. Measured on the dev
+	 * world: 103 of 448 spans were such exact duplicates - one lamp's block claimed 37 rails of which 17
+	 * were second copies of the same track - which is what made the 区间图层 draw phantom fragments on top
+	 * of each other (notes/113 §3).</p>
+	 */
+	@Test
+	public void aBlockListsEachRailOnlyOnce() {
+		final Rail throat = rail(new Position(0, 0, 0), new Position(0, 0, 100));
+		final Rail straight = rail(new Position(0, 0, 100), new Position(0, 0, 250));
+		final Rail diverge = rail(new Position(0, 0, 100), new Position(40, 0, 250));
+		final Simulator simulator = sim("build/mmtr-gate-fork-once", throat, straight, diverge);
+		final String lamp = addLamp(simulator, throat, 0, NORTH);
+		final MmtrDirectionalBlockService unrouted = new MmtrDirectionalBlockService(simulator);
+
+		// No route set: the throat block is the whole fan (岔口多腿).
+		final MmtrDirectionalBlockService.GateBlock fan = blockWithLamp(unrouted.gateBlocks(), lamp);
+		assertNotNull(fan, "the lamp opens the throat block");
+		assertEquals(3, fan.spans.size(), "the throat and both legs, each named once");
+		assertNoDuplicateSpans(fan);
+
+		// With a MAIN route through the throat the block narrows to the route's own leg - and again each
+		// rail appears once.
+		final ObjectArrayList<String> rails = new ObjectArrayList<>();
+		rails.add(throat.getHexId());
+		rails.add(diverge.getHexId());
+		simulator.mmtrRoutes.request(new org.mtr.core.mmtr.route.MmtrRoute(1L, "test", org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN,
+			rails, null, diverge.getHexId(), 0L));
+		final MmtrDirectionalBlockService routed = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.GateBlock narrowed = blockWithLamp(routed.gateBlocks(), lamp);
+		assertNotNull(narrowed);
+		assertEquals(2, narrowed.spans.size(), "the route's leg only");
+		assertEquals(diverge.getHexId(), narrowed.spans.get(1).railHex);
+		assertNoDuplicateSpans(narrowed);
+	}
+
+	/** Assert no rail is listed twice in the same travel direction (the phantom-span defect). */
+	private static void assertNoDuplicateSpans(MmtrDirectionalBlockService.GateBlock block) {
+		final ObjectOpenHashSet<String> seen = new ObjectOpenHashSet<>();
+		for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
+			assertTrue(seen.add(span.railHex),
+				"rail " + span.railHex + " is listed twice: a shared stretch was added once per branch");
+		}
 	}
 
 	/**

@@ -49,7 +49,10 @@ const lineMaterialSignalDoubleYellow = new LineMaterial({color: 0xFFE082, linewi
 const lineMaterialSectionA = new LineMaterial({color: 0x64B5F6, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
 const lineMaterialSectionB = new LineMaterial({color: 0x4DD0E1, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
 const lineMaterialSectionC = new LineMaterial({color: 0xBA68C8, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
+/** A block that no lamp guards (the end of the line, a plain siding): faint, so the coverage gap shows. */
 const lineMaterialSectionNoLamp = new LineMaterial({color: 0x8B949C, linewidth: 2 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.5, depthWrite: false});
+/** An OCCUPIED block (一区段一车): drawn fat and red on top - the cell currently holding a train. */
+const lineMaterialSectionOccupied = new LineMaterial({color: 0xFF1744, linewidth: 7 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 
 @Component({
 	selector: "app-map",
@@ -165,11 +168,11 @@ export class MapComponent implements AfterViewInit {
 			this.applySignalLayer();
 			this.applySectionLayer();
 		});
-		// 区间图层 (闭塞区间 v2): rebuild whenever the sections feed refreshes or its toggle flips. Kept
+		// 区间图层 (水闸区间): rebuild whenever the blocks feed refreshes or its toggle flips. Kept
 		// separate from the rail effect because it also has to react to occupancy changing (a block turning
 		// occupied is the thing the operator is watching for).
 		effect(() => {
-			this.mmtrSectionsService.sections();
+			this.mmtrSectionsService.blocks();
 			this.mmtrLayersService.sections();
 			this.applySectionLayer();
 		});
@@ -327,52 +330,57 @@ export class MapComponent implements AfterViewInit {
 	}
 
 	/**
-	 * 区间图层 (闭塞区间 v2): draw every directional block section as a slice of the rails it covers.
+	 * 区间图层 (水闸区间): draw every BLOCK the engine holds trains with as a slice of the rails it covers.
 	 *
-	 * <p>A section is what ONE lamp protects, walked lamp to lamp, so it crosses rail ends and a lamp
-	 * standing mid-rail splits a single rail into two slices. The feed ships sampled points per span, so
-	 * this draws them straight through instead of re-deriving MTR's curve maths. Each section gets its own
-	 * tint (cycled); an OCCUPIED section is drawn in the red tier on top, which is what the console most
-	 * wants to see at a glance - the block that is holding a train.</p>
+	 * <p>A block is bounded by the lamps that face INTO it, so it crosses rail ends (the node between two
+	 * rails belongs to the TRACK layer) and a lamp standing mid-rail splits a single rail. The feed ships
+	 * sampled points per span, so this draws them straight through instead of re-deriving MTR's curve
+	 * maths. Each block gets its own tint (cycled), an unguarded block is faint, and an OCCUPIED block is
+	 * red on top - which is what the console most wants to see at a glance: the cell holding a train.</p>
 	 */
 	private applySectionLayer() {
 		this.clearSectionLayer();
-		const pieces = this.mmtrSectionsService.pieces();
-		if (!this.mmtrLayersService.sections() || pieces.length === 0) {
+		const blocks = this.mmtrSectionsService.blocks();
+		if (!this.mmtrLayersService.sections() || blocks.length === 0) {
 			return;
 		}
 		const canvas = this.canvasRef()?.nativeElement;
 		if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
-			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionNoLamp].forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
+			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionNoLamp, lineMaterialSectionOccupied]
+				.forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
 		}
-		// One tint per BLOCK, assigned by the engine's own section key so a block keeps its colour as the
-		// map is rebuilt. A piece with no section is line no lamp reaches: drawn faint, which is exactly the
+		// One tint per BLOCK, assigned in the engine's own order so a block keeps its colour as the map is
+		// rebuilt. A block with no lamp is line no lamp reaches: drawn faint, which is exactly the
 		// signal-lamp coverage gap the operator wants to see.
 		const tints = new Map<string, LineMaterial>();
 		const tiers = [lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC];
 		const group = new THREE.Group();
-		for (const piece of pieces) {
-			if (piece.points.length < 4) {
-				continue;
-			}
+		for (const block of blocks) {
 			let material = lineMaterialSectionNoLamp;
-			if (piece.section) {
-				let tint = tints.get(piece.section);
+			if (block.occupied) {
+				material = lineMaterialSectionOccupied;
+			} else if (block.lamp) {
+				let tint = tints.get(block.id);
 				if (!tint) {
 					tint = tiers[tints.size % tiers.length];
-					tints.set(piece.section, tint);
+					tints.set(block.id, tint);
 				}
 				material = tint;
 			}
-			const positions: number[] = [];
-			for (let i = 0; i + 1 < piece.points.length; i += 2) {
-				positions.push(piece.points[i], -piece.points[i + 1], MapComponent.RAIL_Z_INDEX + 0.25);
+			for (const span of block.spans) {
+				if (span.points.length < 4) {
+					continue;
+				}
+				const positions: number[] = [];
+				for (let i = 0; i + 1 < span.points.length; i += 2) {
+					positions.push(span.points[i], -span.points[i + 1], MapComponent.RAIL_Z_INDEX + 0.25);
+				}
+				const geometry = new LineGeometry();
+				geometry.setPositions(positions);
+				const line = new Line2(geometry, material);
+				line.computeLineDistances();
+				group.add(line);
 			}
-			const geometry = new LineGeometry();
-			geometry.setPositions(positions);
-			const line = new Line2(geometry, material);
-			line.computeLineDistances();
-			group.add(line);
 		}
 		this.sectionLayer = group;
 		this.scene.add(this.sectionLayer);

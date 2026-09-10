@@ -583,35 +583,50 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 		result.add("sections", sections);
 		result.addProperty("railCount", simulator.rails.size());
-		// 区间图层的划分: the line cut AT the lamps, one piece per block, no overlaps. The sections above
-		// are each lamp's own block (they overlap by design when a lamp has no next lamp in its direction);
-		// this is what a driver sees on the ground, so the map draws THIS.
-		final com.google.gson.JsonArray pieces = new com.google.gson.JsonArray();
+		// 区间图层 = 水闸区间: the cells between SIGNALS (a signal is a gate; nodes do NOT cut blocks - that is
+		// the TRACK layer's business). Every block the engine holds trains with is emitted whole, with its
+		// spans and the sampled world points of each span, so the console draws the engine's own division
+		// and computes nothing itself.
+		final com.google.gson.JsonArray blocks = new com.google.gson.JsonArray();
 		final java.util.HashMap<String, org.mtr.core.data.Rail> railsByHex = new java.util.HashMap<>();
 		simulator.rails.forEach(rail -> railsByHex.put(rail.getHexId(), rail));
-		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.PartitionPiece piece : simulator.mmtrDirectionalBlocks.partitionViews()) {
-			final com.google.gson.JsonObject p = new com.google.gson.JsonObject();
-			p.addProperty("hex", piece.railHex);
-			p.addProperty("from", piece.arcFromM);
-			p.addProperty("to", piece.arcToM);
-			p.addProperty("section", piece.sectionId);
-			p.addProperty("lamp", piece.boundaryLampKey);
-			// Geometry ships with the data: the console draws what it is given and decides nothing, so the
-			// piece's shape (a slice of a rail when a lamp stands mid-rail) comes from the engine.
-			final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
-			final org.mtr.core.data.Rail rail = railsByHex.get(piece.railHex);
-			if (rail != null && piece.arcToM > piece.arcFromM) {
-				for (int i = 0; i <= 8; i++) {
-					final double arc = piece.arcFromM + (piece.arcToM - piece.arcFromM) * i / 8;
-					final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
-					points.add(Math.round(point.x() * 100) / 100.0);
-					points.add(Math.round(point.z() * 100) / 100.0);
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.GateBlock> gateBlocks = simulator.mmtrDirectionalBlocks.gateBlocks();
+		for (int blockIndex = 0; blockIndex < gateBlocks.size(); blockIndex++) {
+			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.GateBlock block = gateBlocks.get(blockIndex);
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			// A block is identified by the lamp that opens it; a block nobody guards is keyed by its ordinal
+			// so the map still gives each one a stable colour of its own.
+			out.addProperty("id", block.entryLampKey.isEmpty() ? ("无灯#" + blockIndex) : block.entryLampKey);
+			out.addProperty("lamp", block.entryLampKey);
+			out.addProperty("open", block.endsOpen);
+			out.addProperty("length", block.lengthM());
+			out.addProperty("occupied", simulator.mmtrDirectionalBlocks.isOccupied(block, trees));
+			out.addProperty("aspect", block.entryLampKey.isEmpty() ? "" : simulator.mmtrDirectionalBlocks.blockAspect(block, trees, restricted::contains));
+			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : block.spans) {
+				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
+				s.addProperty("hex", span.railHex);
+				s.addProperty("from", span.arcFromM);
+				s.addProperty("to", span.arcToM);
+				// Sampled world points, so the console draws a slice without re-implementing MTR's rail
+				// maths: a block cut mid-rail by a lamp is exactly what the layer has to show.
+				final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
+				final org.mtr.core.data.Rail rail = railsByHex.get(span.railHex);
+				if (rail != null && span.arcToM > span.arcFromM) {
+					for (int i = 0; i <= 8; i++) {
+						final double arc = span.arcFromM + (span.arcToM - span.arcFromM) * i / 8;
+						final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
+						points.add(Math.round(point.x() * 100) / 100.0);
+						points.add(Math.round(point.z() * 100) / 100.0);
+					}
 				}
+				s.add("points", points);
+				spans.add(s);
 			}
-			p.add("points", points);
-			pieces.add(p);
+			out.add("spans", spans);
+			blocks.add(out);
 		}
-		result.add("pieces", pieces);
+		result.add("blocks", blocks);
 		return result;
 	}
 
