@@ -156,6 +156,11 @@ public class Simulator extends Data implements Utilities {
 	 * SECTION boundary instead of the rail end, so a train may run up to the signal protecting an
 	 * occupied section. Lazy + rails/signals-signature gated. */
 	public final org.mtr.core.mmtr.signal.MmtrBlockService mmtrBlocks = new org.mtr.core.mmtr.signal.MmtrBlockService(this);
+	/** 闭塞区间 v2 (S1-S3): <strong>directional, lamp-to-lamp</strong> sections - what one lamp protects,
+	 * walked the way it faces until the next lamp, so a section spans rail boundaries. S1 stops at this
+	 * model's boundary ({@code Vehicle.directionalSectionStopM}) with the v1 service above as the
+	 * fallback on rails no lamp reaches. Lazy + rails/signals-signature gated. */
+	public final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService mmtrDirectionalBlocks = new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(this);
 	/** 硬默认 0 (option 3): real servers preset every turnout to operator branch 0. Engines tests keep
 	 * this false so authority/mission semantics stay synthetic; {@link org.mtr.core.Main} enables it. */
 	public boolean mmtrDefaultPointsZero;

@@ -284,6 +284,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private static final int MMTR_AWS_ACKED = 2;
 	/** Minimum gap between two "waiting for turnout authority" reports, ms. */
 	private static final long MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS = 5000;
+	/**
+	 * 闭塞区间 v2 (S3): the arc step used to read the movement's heading on its current rail when asking
+	 * the directional section model which block it is in. Small enough to stay inside a rail, big enough
+	 * that a sampled two-arc curve gives a usable direction.
+	 */
+	private static final double MMTR_SECTION_ARC_EPS_M = 0.05;
 	private static long mmtrLastTurnoutWaitLogMillis;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
@@ -3282,12 +3288,56 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * 闭塞区间 v2 (S3): the walker-space stop forced by the movement's <strong>directional section</strong>
+	 * being occupied, or null when the directional model has nothing to say about this position.
+	 *
+	 * <p>A v2 section is what one lamp protects, walked the way the lamp faces, so it normally spans
+	 * several rails. The movement may run its own section out while that section is clear; when another
+	 * train is inside it, the movement holds at the section boundary - the next lamp - instead of at the
+	 * end of the current rail (v1's only possible boundary).</p>
+	 *
+	 * <p>Null is the normal answer on the 99 of 134 rails in the dev world that no lamp reaches: the
+	 * caller then falls back to the v1 per-rail rule, so <strong>unsignalled line keeps the pre-v2
+	 * behaviour exactly</strong>. This is deliberate - replacing the rule outright would leave most of
+	 * the network with no occupancy stop at all.</p>
+	 */
+	private @Nullable Double directionalSectionStopM(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, Rail rail, double headArc) {
+		if (vehiclePositions == null || !(data instanceof final Simulator simulator)) {
+			return null;
+		}		final double railLength = rail.railMath.getLength();
+		if (railLength <= MMTR_SECTION_ARC_EPS_M) {
+			return null;
+		}
+		final double clampedArc = Math.max(0, Math.min(railLength, headArc));
+		final double aheadArc = Math.max(0, Math.min(railLength, clampedArc + MMTR_SECTION_ARC_EPS_M));
+		final org.mtr.core.data.RailMath railMath = rail.railMath;
+		final double dx = railMath.getPosition(aheadArc, false).x() - railMath.getPosition(clampedArc, false).x();
+		final double dz = railMath.getPosition(aheadArc, false).z() - railMath.getPosition(clampedArc, false).z();
+		final double norm = Math.sqrt(dx * dx + dz * dz);
+		if (norm < 1e-9) {
+			return null;
+		}
+		final double headingX = dx / norm;
+		final double headingZ = dz / norm;
+		final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService service = simulator.mmtrDirectionalBlocks;
+		final double toBoundaryM = service.sectionBoundaryAheadM(rail.getHexId(), clampedArc, headingX, headingZ, vehiclePositions);
+		if (toBoundaryM == Double.MAX_VALUE || toBoundaryM <= 0) {
+			return null;
+		}
+		return mmtrMotionWalker.distanceM() + Math.max(0, toBoundaryM - MMTR_BLOCK_NODE_EPS_M);
+	}
+
+	/**
 	 * B2: the walker-space stop point forced by the NEXT block section ahead being occupied, or null
 	 * when nothing ahead is blocked (or the movement is authorised over that section's rail).
 	 *
 	 * <p>The section ahead is the next one on the current rail when a signal splits it, otherwise the
 	 * first section of the rail the walker would elect - which reproduces the pre-B2 "next rail closed"
 	 * rule exactly on rails with no signals (the synthetic nets and most yard tracks).</p>
+	 *
+	 * <p>S3: the <strong>directional</strong> section model is consulted first
+	 * ({@link #directionalSectionStopM}); it only answers on rails a lamp actually reaches, so this v1
+	 * rule remains the fallback for unsignalled line.</p>
 	 */
 	private @Nullable Double nextSectionStopM(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
 		if (vehiclePositions == null || mmtrMotionWalker == null || mmtrMotionLegs.isEmpty() || !(data instanceof final Simulator simulator)) {
@@ -3306,6 +3356,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final double legLength = segment.getEndDistance() - segment.getStartDistance();
 		final double headOffsetInLeg = Math.max(0, Math.min(legLength, railProgress - segment.getStartDistance()));
 		final double headArc = segment.reversePositions ? legLength - headOffsetInLeg : headOffsetInLeg;
+
+		// S3: directional sections first (a lamp's own block, crossing rail ends).
+		final org.mtr.core.mmtr.signal.MmtrShuntAuthority directionalAuthority = getMmtrShuntAuthority();
+		if (directionalAuthority == null || !directionalAuthority.covers(rail.getHexId())) {
+			final Double directionalStop = directionalSectionStopM(vehiclePositions, rail, headArc);
+			if (directionalStop != null) {
+				return directionalStop;
+			}
+		}
+
 		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
 		if (current == null) {
 			return null;

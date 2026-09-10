@@ -296,6 +296,125 @@ public final class MmtrDirectionalBlockService {
 		return isOccupied(current, trees) ? following(current) : current;
 	}
 
+	/**
+	 * S3: how far ahead (metres) the movement may run before it would ENTER an occupied part of its own
+	 * section - or {@link Double#MAX_VALUE} when there is nothing to hold it.
+	 *
+	 * <p>The rule mirrors v1's structure, only the unit is now the lamp-to-lamp section instead of a
+	 * single rail: a movement is held at the checkpoint in front of the blocked stretch it is about to
+	 * need. Concretely, walking the section's spans from the one the movement is on:</p>
+	 * <ul>
+	 *   <li>the span it is on is occupied ahead of it → hold at that occupancy face (that is the
+	 *       same-rail rule the caller already applies, so this returns the boundary instead);</li>
+	 *   <li>the NEXT span of the section is occupied → hold at the end of the current span, i.e. at the
+	 *       lamp/node boundary between them. <strong>This is the case v1 could not express</strong>: the
+	 *       boundary is a lamp, which may be several rails ahead of where the movement was stopped
+	 *       before;</li>
+	 *   <li>nothing occupied → no hold, the movement may run its section out.</li>
+	 * </ul>
+	 *
+	 * @param trees occupancy trees to test (null = the simulator's live train trees)
+	 */
+	public double sectionBoundaryAheadM(@Nullable String railHex, double arcM, double headingX, double headingZ, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		final Section section = sectionAt(railHex, arcM, headingX, headingZ);
+		if (section == null) {
+			return Double.MAX_VALUE;
+		}
+		for (int i = 0; i < section.spans.size(); i++) {
+			final RailSpan span = section.spans.get(i);
+			if (!span.railHex.equals(railHex) || !span.containsArc(arcM)) {
+				continue;
+			}
+			final boolean forward = span.matchesHeading(headingX, headingZ);
+			final double toSpanEndM = forward ? span.arcToM - arcM : arcM - span.arcFromM;
+			// The stretch of this span the movement still has to cross (from the head to the span's end).
+			final double from = forward ? arcM : span.arcFromM;
+			final double to = forward ? span.arcToM : arcM;
+			if (isSpanOccupied(span.railHex, from, to, trees)) {
+				// Someone is inside what we are about to cross: hold where it starts.
+				final double toOccupancyM = distanceToOccupancyM(span.railHex, from, to, trees, forward);
+				return Math.max(0, toOccupancyM);
+			}
+			final RailSpan nextSpan = i + 1 < section.spans.size() ? section.spans.get(i + 1) : null;
+			if (nextSpan != null && isSpanOccupied(nextSpan.railHex, nextSpan.arcFromM, nextSpan.arcToM, trees)) {
+				// The next stretch of our own section is taken: hold at the boundary between them.
+				return Math.max(0, toSpanEndM);
+			}
+			return Double.MAX_VALUE;
+		}
+		return Double.MAX_VALUE;
+	}
+
+	/** Whether any vehicle footprint overlaps the arc window on {@code railHex}. */
+	private boolean isSpanOccupied(String railHex, double fromM, double toM, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		if (toM - fromM <= 1e-9) {
+			return false;
+		}
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
+			trees == null ? simulator.mmtrOccupancyTrees() : trees;
+		if (occupancyTrees == null || occupancyTrees.isEmpty()) {
+			return false;
+		}
+		final Rail rail = railByHex.get(railHex);
+		if (rail == null) {
+			return false;
+		}
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		if (ordered == null || ordered.length < 2) {
+			return false;
+		}
+		for (int i = 0; i < occupancyTrees.size(); i++) {
+			final VehiclePosition vehiclePosition = Data.tryGet(occupancyTrees.get(i), ordered[0], ordered[1]);
+			if (vehiclePosition != null && vehiclePosition.getClosestOverlap(fromM, toM, false, 0) >= 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** How far from {@code fromM} the nearest external occupancy inside the window begins. */
+	private double distanceToOccupancyM(String railHex, double fromM, double toM, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, boolean forward) {
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
+			trees == null ? simulator.mmtrOccupancyTrees() : trees;
+		final Rail rail = railByHex.get(railHex);
+		if (occupancyTrees == null || rail == null) {
+			return 0;
+		}
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		if (ordered == null || ordered.length < 2) {
+			return 0;
+		}
+		double best = Double.MAX_VALUE;
+		for (int i = 0; i < occupancyTrees.size(); i++) {
+			final VehiclePosition vehiclePosition = Data.tryGet(occupancyTrees.get(i), ordered[0], ordered[1]);
+			if (vehiclePosition == null) {
+				continue;
+			}
+			for (final double[] segment : vehiclePosition.segmentsExcluding(0)) {
+				final double start = Math.max(fromM, segment[0]);
+				final double end = Math.min(toM, segment[1]);
+				if (end - start <= 1e-9) {
+					continue;
+				}
+				best = Math.min(best, forward ? start - fromM : toM - end);
+			}
+		}
+		return best == Double.MAX_VALUE ? 0 : Math.max(0, best);
+	}
+
+	/** The rail onto which {@code section} continues after {@code railHex} (the next span), or null. */
+	public @Nullable String nextRailOf(@Nullable Section section, String railHex) {
+		if (section == null) {
+			return null;
+		}
+		for (int i = 0; i < section.spans.size() - 1; i++) {
+			if (section.spans.get(i).railHex.equals(railHex)) {
+				return section.spans.get(i + 1).railHex;
+			}
+		}
+		return null;
+	}
+
 	/** Lamp key -> section (diagnostics/tests). */
 	public Map<String, Section> allSections() {
 		refresh();
