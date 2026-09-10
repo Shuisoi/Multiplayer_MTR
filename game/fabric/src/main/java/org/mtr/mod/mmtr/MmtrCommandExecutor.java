@@ -65,6 +65,15 @@ public final class MmtrCommandExecutor {
 				: org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describeAll(simulator));
 			return;
 		}
+		// 闭塞区间 v2 (S4, observable before it is wired): what every lamp WOULD show under the v2 rule.
+		if (parts.length >= 1 && parts[0].equals("lamps-v2")) {
+			// `var`, not an explicit ObjectArrayList: the engine jar ships its own relocated fastutil
+			// (org.mtr.libraries.*), so naming the type here would clash with the game's copy.
+			final var restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, null);
+			final var lines = simulator.mmtrDirectionalBlocks.describeLampAspects(null, restricted::contains);
+			simulator.mmtrCommandResult(String.join("\n", lines));
+			return;
+		}
 		// B3 闭塞区间诊断: blocks [all|<railHex>] - 哪些轨被灯切成多段、每架灯绑到哪根轨。
 		if (parts[0].equals("blocks")) {
 			simulator.mmtrCommandResult(parts.length >= 2 && !parts[1].equals("all")
@@ -91,7 +100,7 @@ public final class MmtrCommandExecutor {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | lamps-v2 | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
 	}
 
 	/**

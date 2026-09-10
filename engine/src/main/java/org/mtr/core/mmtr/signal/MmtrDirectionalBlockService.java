@@ -402,6 +402,181 @@ public final class MmtrDirectionalBlockService {
 		return best == Double.MAX_VALUE ? 0 : Math.max(0, best);
 	}
 
+	/**
+	 * S4 (显示层): the section that protects {@code railHex} for a movement entering it from {@code
+	 * entryNode} - i.e. the section whose FIRST span starts at that node, which is exactly the movement a
+	 * lamp standing there authorises. Null on rails no lamp reaches (the caller then keeps the v1 per-rail
+	 * reading).
+	 *
+	 * <p>The entry node matters: a rail in the middle of a section is protected by it, but the same rail
+	 * entering from the other end belongs to the opposite direction's section, which is a different block
+	 * and must not be reported as this one.</p>
+	 */
+	public @Nullable Section sectionProtecting(@Nullable String railHex, @Nullable Position entryNode) {
+		if (railHex == null || railHex.isEmpty() || entryNode == null) {
+			return null;
+		}
+		final Rail rail = railByHex.get(railHex);
+		if (rail == null) {
+			return null;
+		}
+		final double entryArc = MmtrBlockService.arcOfNode(rail, entryNode);
+		if (Double.isNaN(entryArc)) {
+			return null;
+		}
+		for (final Section section : sectionsOfRail(railHex)) {
+			for (final RailSpan span : section.spans) {
+				if (!span.railHex.equals(railHex)) {
+					continue;
+				}
+				if (Math.abs(span.arcFromM - entryArc) <= 0.5) {
+					return section;
+				}
+				break; // this section covers the rail once; move on to the next candidate section
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * S4: how far ahead (in SECTIONS, the protected one included) the nearest occupied section sits for a
+	 * movement entering {@code railHex} from {@code entryNode}: 1 = the protected section itself, 2 = the
+	 * section beyond it, 3 = the one after that, 0 = clear (or no directional section here at all, in
+	 * which case the caller falls back to the v1 per-rail chain).
+	 *
+	 * <p>This is the v2 counterpart of {@code MmtrSignalAspect.chainDepth}: the unit of the walk is the
+	 * lamp-to-lamp section instead of a rail, so a train standing three rails ahead inside the same
+	 * section now reads as depth 1 (red) rather than as "three blocks away".</p>
+	 *
+	 * @param restrictedNodes    {@code x,y,z} keys of nodes that cannot be cleared (④: fouled clearance
+	 *                           zone or undecided points) - stepping through one counts as occupied
+	 * @param maxDepth           chain depth to model (3 = red / single / double yellow / green)
+	 */
+	public int chainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth) {
+		Section section = sectionProtecting(railHex, entryNode);
+		if (section == null) {
+			return 0;
+		}
+		for (int depth = 1; depth <= maxDepth; depth++) {
+			if (isOccupied(section, trees)) {
+				return depth;
+			}
+			for (final String nodeKey : boundaryNodeKeys(section)) {
+				if (restrictedNodes.test(nodeKey)) {
+					return depth;
+				}
+			}
+			if (depth == maxDepth) {
+				break;
+			}
+			final Section next = following(section);
+			if (next == null) {
+				break;
+			}
+			section = next;
+		}
+		return 0;
+	}
+
+	/**
+	 * The {@code x,y,z} keys of the node a section is entered through and the one it leaves through (④:
+	 * the caller tests these against its restricted-junction set). Both are rail endpoints, so they key
+	 * straight into the same node space the rest of the signal layer uses.
+	 */
+	public ObjectArrayList<String> boundaryNodeKeys(Section section) {
+		final ObjectArrayList<String> keys = new ObjectArrayList<>();
+		if (section.spans.isEmpty()) {
+			return keys;
+		}
+		final RailSpan first = section.spans.get(0);
+		final RailSpan last = section.spans.get(section.spans.size() - 1);
+		final Rail firstRail = railByHex.get(first.railHex);
+		final Rail lastRail = railByHex.get(last.railHex);
+		if (firstRail != null) {
+			// The span runs low..high arc; the movement travels from the arcFrom side when its heading
+			// agrees with the increasing-arc direction, else from the arcTo side.
+			final boolean travelsUpward = first.matchesHeading(1, 0) || first.matchesHeading(-1, 0)
+				? first.headingX * thisRailHeadingX(firstRail, first.arcFromM) + first.headingZ * thisRailHeadingZ(firstRail, first.arcFromM) > 0
+				: true;
+			final Position entry = nodeAtEndpoint(firstRail, travelsUpward ? first.arcFromM : first.arcToM);
+			final Position exitOfFirst = nodeAtEndpoint(firstRail, travelsUpward ? first.arcToM : first.arcFromM);
+			if (entry != null) {
+				keys.add(MmtrJunctionState.nodeKey(entry));
+			}
+			if (first == last && exitOfFirst != null) {
+				keys.add(MmtrJunctionState.nodeKey(exitOfFirst));
+			}
+		}
+		if (last != first && lastRail != null) {
+			final boolean travelsUpward = last.headingX * thisRailHeadingX(lastRail, last.arcFromM) + last.headingZ * thisRailHeadingZ(lastRail, last.arcFromM) > 0;
+			final Position exit = nodeAtEndpoint(lastRail, travelsUpward ? last.arcToM : last.arcFromM);
+			if (exit != null) {
+				keys.add(MmtrJunctionState.nodeKey(exit));
+			}
+		}
+		return keys;
+	}
+
+	private static double thisRailHeadingX(Rail rail, double arcM) {
+		return headingAt(rail, arcM)[0];
+	}
+
+	private static double thisRailHeadingZ(Rail rail, double arcM) {
+		return headingAt(rail, arcM)[1];
+	}
+
+	/** The end node of {@code rail} nearest to {@code arcM} (arc space is ordered-position-1). */
+	private static @Nullable Position nodeAtEndpoint(Rail rail, double arcM) {
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		if (ordered == null || ordered.length < 2) {
+			return null;
+		}
+		return arcM <= rail.railMath.getLength() / 2 ? ordered[0] : ordered[1];
+	}
+
+	/**
+	 * S4 (显示层, observable before it is wired): what every lamp would show under the v2 rule.
+	 *
+	 * <p>Each lamp owns exactly one section, so its display is the occupancy depth of the chain that
+	 * STOPS AT IT: 1 = its own section is occupied (red), 2 = the next section is (single yellow), 3 = the
+	 * one after that (double yellow), 0 = clear (green). This is the v2 counterpart of
+	 * {@code MmtrSignalAspect}: the same red/single/double convention, but the unit is the lamp-to-lamp
+	 * section, so a train standing three rails ahead inside the same section reads red here instead of
+	 * "three blocks away".</p>
+	 */
+	public ObjectArrayList<String> describeLampAspects(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes) {
+		refresh();
+		final ObjectArrayList<String> out = new ObjectArrayList<>();
+		final ObjectArrayList<String> keys = new ObjectArrayList<>(sectionsBySignal.keySet());
+		keys.sort(String::compareTo);
+		for (final String key : keys) {
+			final Section section = sectionsBySignal.get(key);
+			int depth = 0;
+			Section walk = section;
+			for (int level = 1; level <= 3 && walk != null; level++) {
+				boolean hit = isOccupied(walk, trees);
+				if (!hit) {
+					for (final String nodeKey : boundaryNodeKeys(walk)) {
+						if (restrictedNodes.test(nodeKey)) {
+							hit = true;
+							break;
+						}
+					}
+				}
+				if (hit) {
+					depth = level;
+					break;
+				}
+				walk = following(walk);
+			}
+			final String aspect = depth == 1 ? "RED" : depth == 2 ? "SINGLE_YELLOW" : depth == 3 ? "DOUBLE_YELLOW" : "GREEN";
+			final Section next = following(section);
+			out.add("[blocks-v2] 灯 " + key + " → " + aspect + "（区间 " + section.spans.size() + " 段/长="
+				+ round(section.lengthM()) + "，后继=" + (next == null ? "无" : next.id) + "）");
+		}
+		return out;
+	}
+
 	/** The rail onto which {@code section} continues after {@code railHex} (the next span), or null. */
 	public @Nullable String nextRailOf(@Nullable Section section, String railHex) {
 		if (section == null) {

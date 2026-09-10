@@ -287,4 +287,58 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertEquals(b, service.sectionAhead(r1.getHexId(), 10, 1, 0, occupancy(r1, 10, 30)));
 		assertNull(service.sectionAhead(r1.getHexId(), 10, -1, 0, ObjectArrayList.of()), "no westbound section");
 	}
+
+	// ---------------------------------------------------------------- S4: display queries
+
+	@Test
+	public void aTrainInsideTheSectionReadsAsRedNotAsBlocksAway() {
+		// The point of the display half of v2: the unit of the chain is the LAMP-TO-LAMP section, so a
+		// train standing three rails ahead inside the same section means "the block I am about to enter is
+		// occupied" = RED. The v1 per-rail chain would call that three blocks away (double yellow).
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Rail r3 = rail(new Position(200, 0, 0), new Position(300, 0, 0));
+		final Rail r4 = rail(new Position(300, 0, 0), new Position(400, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-display", r1, r2, r3, r4);
+		final String lamp = addLamp(simulator, r1, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(lamp);
+		assertNotNull(section);
+		assertEquals(4, section.spans.size(), "the lamp's section runs the whole corridor");
+
+		// The lamp protects r1 entered from its west end.
+		assertEquals(section, service.sectionProtecting(r1.getHexId(), new Position(0, 0, 0)),
+			"entering r1 from the lamp's node is inside the lamp's section");
+		assertNull(service.sectionProtecting(r1.getHexId(), new Position(100, 0, 0)),
+			"entering r1 from the other end belongs to the opposite direction, not this section");
+		assertNull(service.sectionProtecting("missing", new Position(0, 0, 0)), "unknown rails are safe");
+
+		assertEquals(0, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), ObjectArrayList.of(), key -> false, 3),
+			"nothing occupied: the chain is clear");
+
+		// A train on r3 - two rails beyond the next one - is still inside the lamp's own section: depth 1.
+		assertEquals(1, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), occupancy(r3, 20, 60), key -> false, 3),
+			"a train inside the protected section is the next block, however many rails away it stands");
+
+		assertEquals(1, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), ObjectArrayList.of(),
+			key -> key.equals(MmtrJunctionState.nodeKey(new Position(0, 0, 0))), 3),
+			"an uncleared junction at the step's boundary restricts the same step (④)");
+	}
+
+	@Test
+	public void theChainStepsToTheNextLampWhenThereIsOne() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Rail r3 = rail(new Position(200, 0, 0), new Position(300, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-display-chain", r1, r2, r3);
+		final String first = addLamp(simulator, r1, 0, EAST);
+		final String second = addLamp(simulator, r3, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		assertEquals(second, service.sectionOfSignal(first).exitSignalKey, "section 1 ends at lamp 2");
+
+		// A train in the SECOND section is one step beyond the first: depth 2 = single yellow.
+		assertEquals(2, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), occupancy(r3, 10, 40), key -> false, 3),
+			"the next lamp's own block occupied reads as a caution, not as red");
+	}
 }
