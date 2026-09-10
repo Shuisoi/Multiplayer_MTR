@@ -3032,7 +3032,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final Position signalEntryNode = nextRailAws == null ? mmtrMotionWalker.enteredFromPosition() : mmtrMotionWalker.aheadNode();
 		final org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect signalAspect = awsSimulator == null || signalRailHex == null
 			? org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect.GREEN
-			: awsSimulator.mmtrSignalAspectView().aspectFrom(signalRailHex, signalEntryNode);
+			: awsSimulator.mmtrSignalAspectView().aspectFrom(signalRailHex, signalEntryNode, id);
 		final double remainingToSignalM = MmtrRunPlanner.remainingToAheadNodeM(mmtrMotionWalker);
 		final boolean signalInLead = signalAspect != org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect.GREEN && remainingToSignalM <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
 		// Restricted boundary ahead: nearest of the occupancy block stop and a slower next rail.
@@ -3320,7 +3320,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final double headingX = dx / norm;
 		final double headingZ = dz / norm;
 		final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService service = simulator.mmtrDirectionalBlocks;
-		final double toBoundaryM = service.sectionBoundaryAheadM(rail.getHexId(), clampedArc, headingX, headingZ, vehiclePositions);
+		// Exclude THIS vehicle's own footprint: a train's body shadow is stored under its own id, and when
+		// the shadow's anchor sits at or ahead of the head, counting it as "occupied ahead" puts the stop
+		// point at the train's own feet - the throttle then does nothing and the train can never move far
+		// enough to rewrite the shadow (measured live, notes/112 §4: a train at offset 5.46 on a 43 m rail
+		// wrote [5.5, 37.5) under its own id and was deadlocked at a 0.04 m block stop).
+		final double toBoundaryM = service.sectionBoundaryAheadM(rail.getHexId(), clampedArc, headingX, headingZ, vehiclePositions, id);
 		if (toBoundaryM == Double.MAX_VALUE || toBoundaryM <= 0) {
 			return null;
 		}

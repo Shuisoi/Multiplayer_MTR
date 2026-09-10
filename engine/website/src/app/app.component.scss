@@ -145,6 +145,21 @@
 	font-weight: 600;
 }
 
+/* 区间图层: the occupied-block badge - the one number an operator watches (a block is holding a train). */
+.mmtr-chip .mmtr-chip-alert {
+	margin-left: 6px;
+	padding: 0 4px;
+	border-radius: 2px;
+	background: #ff4d4f;
+	color: #ffffff;
+	font-size: 10px;
+	font-weight: 600;
+}
+
+.mmtr-chip.on .mmtr-chip-alert {
+	background: #d9363e;
+}
+
 .mmtr-drawer {
 	position: absolute;
 	top: 0;

@@ -74,6 +74,11 @@ public final class MmtrCommandExecutor {
 			simulator.mmtrCommandResult(String.join("\n", lines));
 			return;
 		}
+		// 占用转储: whose footprint is on a rail right now (why a train is "blocked ahead").
+		if (parts.length >= 2 && parts[0].equals("occ")) {
+			simulator.mmtrCommandResult(String.join("\n", simulator.mmtrDirectionalBlocks.describeOccupancy(parts[1])));
+			return;
+		}
 		// B3 闭塞区间诊断: blocks [all|<railHex>] - 哪些轨被灯切成多段、每架灯绑到哪根轨。
 		if (parts[0].equals("blocks")) {
 			simulator.mmtrCommandResult(parts.length >= 2 && !parts[1].equals("all")

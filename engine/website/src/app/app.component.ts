@@ -8,6 +8,7 @@ import {MmtrTrainsService} from "./service/mmtr-trains.service";
 import {MmtrPointsService} from "./service/mmtr-points.service";
 import {MmtrLinesService} from "./service/mmtr-lines.service";
 import {MmtrLayersService} from "./service/mmtr-layers.service";
+import {MmtrSectionsService} from "./service/mmtr-sections.service";
 import {ThemeService} from "./service/theme.service";
 
 /**
@@ -32,6 +33,7 @@ export class AppComponent {
 	private readonly trainsService = inject(MmtrTrainsService);
 	private readonly pointsService = inject(MmtrPointsService);
 	private readonly linesService = inject(MmtrLinesService);
+	private readonly sectionsService = inject(MmtrSectionsService);
 	private readonly themeService = inject(ThemeService);
 	private readonly destroyRef = inject(DestroyRef);
 
@@ -45,6 +47,9 @@ export class AppComponent {
 	protected manualPoints = () => this.pointsService.points().filter(point => point.manual >= 0).length;
 	protected lockedPoints = () => this.pointsService.points().filter(point => point.locked).length;
 	protected lineCount = () => this.linesService.lines().length;
+	/** 区间图层 summary: how many directional blocks, and how many of them are occupied right now. */
+	protected sectionCount = () => this.sectionsService.sections().length;
+	protected occupiedSectionCount = () => this.sectionsService.occupiedCount();
 
 	constructor() {
 		// Monochrome console: the management view is dark (white strokes, gray tiers).
@@ -70,6 +75,7 @@ export class AppComponent {
 		this.layersService.rails.set(true);
 		this.layersService.linesLayer.set(true);
 		this.layersService.points.set(true);
+		this.layersService.sections.set(true);
 		this.layersService.visibleLines.set([]);
 		this.layersService.focusedLine.set("");
 	}

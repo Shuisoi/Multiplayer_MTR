@@ -30,6 +30,19 @@ public class VehiclePosition {
 	}
 
 	/**
+	 * Every footprint id recorded on this rail (diagnostics): which vehicles own the occupied intervals.
+	 * A train "blocked ahead" by an interval that turns out to carry its OWN id is being held by its own
+	 * shadow, which is a different bug from being held by another train.
+	 */
+	public ObjectArrayList<Long> footprintIds() {
+		final ObjectArrayList<Long> out = new ObjectArrayList<>(blockedSegments.size());
+		for (final BlockedSegment blockedSegment : blockedSegments) {
+			out.add(blockedSegment.id());
+		}
+		return out;
+	}
+
+	/**
 	 * C5: every blocked interval on this rail except {@code id}'s own, as {@code [start, end]} pairs in
 	 * this rail's ordered-position-1 distance space. Callers that need the exact geometry (a consist
 	 * body measuring the gap to the train it is coupling to) work from these intervals directly.

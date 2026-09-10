@@ -135,13 +135,25 @@ public final class MmtrSignalAspect {
 	 * entry node falls back to the most restrictive of both directions.
 	 */
 	public Aspect aspectFrom(@Nullable String railHex, @Nullable Position entryNode) {
+		return aspectFrom(railHex, entryNode, 0);
+	}
+
+	/**
+	 * As above, but ignoring {@code excludeVehicleId}'s own footprints.
+	 *
+	 * <p>The AWS trigger asks this about the signal the driver is about to pass, and the asking train must
+	 * not read its OWN body shadow as the reason that signal is red: on the dev world a train whose shadow
+	 * anchor sat at its head had the block ahead painted red by itself, so the AWS horn sounded the moment
+	 * the driver touched the throttle and the emergency brake stopped the train dead (notes/112 §4).</p>
+	 */
+	public Aspect aspectFrom(@Nullable String railHex, @Nullable Position entryNode, long excludeVehicleId) {
 		if (railHex == null || railHex.isEmpty() || !byHex.containsKey(railHex)) {
 			return Aspect.GREEN;
 		}
 		if (routes.pendingEntryRails().contains(railHex)) {
 			return Aspect.RED;
 		}
-		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode));
+		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode, excludeVehicleId));
 	}
 	private static Aspect fromDepth(int depth) {
 		return switch (depth) {
@@ -169,9 +181,13 @@ public final class MmtrSignalAspect {
 	 * reaches keep the v1 per-rail walk below, bit for bit.</p>
 	 */
 	private int chainDepth(String hex, Position entryPos) {
+		return chainDepth(hex, entryPos, 0);
+	}
+
+	private int chainDepth(String hex, Position entryPos, long excludeVehicleId) {
 		final MmtrDirectionalBlockService directional = simulator.mmtrDirectionalBlocks;
 		if (directional.hasSection(hex)) {
-			final int directionalDepth = directional.chainDepth(hex, entryPos, occupancyTrees, this::junctionRestrictedKey, MAX_DEPTH);
+			final int directionalDepth = directional.chainDepth(hex, entryPos, occupancyTrees, this::junctionRestrictedKey, MAX_DEPTH, excludeVehicleId);
 			if (directionalDepth > 0) {
 				return directionalDepth;
 			}

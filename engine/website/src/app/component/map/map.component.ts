@@ -21,6 +21,7 @@ import {MmtrPoint, MmtrPointsService} from "../../service/mmtr-points.service";
 import {MmtrTopologyService} from "../../service/mmtr-topology.service";
 import {MmtrLinesService} from "../../service/mmtr-lines.service";
 import {MmtrLayersService} from "../../service/mmtr-layers.service";
+import {MmtrSectionsService} from "../../service/mmtr-sections.service";
 import {TooltipModule} from "primeng/tooltip";
 import {NgOptimizedImage} from "@angular/common";
 import {TranslocoDirective} from "@jsverse/transloco";
@@ -44,6 +45,11 @@ const lineMaterialRailCore = new LineMaterial({color: 0xFFFFFF, linewidth: 5 * S
 const lineMaterialSignalRed = new LineMaterial({color: 0xFF4D4F, linewidth: 6 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 const lineMaterialSignalYellow = new LineMaterial({color: 0xFFB300, linewidth: 6 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 const lineMaterialSignalDoubleYellow = new LineMaterial({color: 0xFFE082, linewidth: 6 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
+// 区间图层 (闭塞区间 v2): thin tiers under the信号 reds, so blocks read as划分 rather than as occupancy.
+const lineMaterialSectionA = new LineMaterial({color: 0x64B5F6, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
+const lineMaterialSectionB = new LineMaterial({color: 0x4DD0E1, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
+const lineMaterialSectionC = new LineMaterial({color: 0xBA68C8, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
+const lineMaterialSectionOccupied = new LineMaterial({color: 0xFF4D4F, linewidth: 5 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 
 @Component({
 	selector: "app-map",
@@ -70,6 +76,7 @@ export class MapComponent implements AfterViewInit {
 	private readonly mmtrTopologyService = inject(MmtrTopologyService);
 	private readonly mmtrLinesService = inject(MmtrLinesService);
 	readonly mmtrLayersService = inject(MmtrLayersService);
+	private readonly mmtrSectionsService = inject(MmtrSectionsService);
 	private readonly themeService = inject(ThemeService);
 
 	readonly stationClicked = output<string>();
@@ -100,6 +107,8 @@ export class MapComponent implements AfterViewInit {
 	private railLayer: THREE.Group | undefined;
 	/** MMTR signal layer: aspect-coloured cores over the white rail topology. */
 	private signalLayer: THREE.Group | undefined;
+	/** 区间图层 (闭塞区间 v2): one tinted slice per directional block section. */
+	private sectionLayer: THREE.Group | undefined;
 	private readonly lineGroups = new Map<string, THREE.Group>();
 	private readonly liveLineMaterials: LineMaterial[] = [];
 	private static readonly RAIL_Z_INDEX = 0;
@@ -154,6 +163,15 @@ export class MapComponent implements AfterViewInit {
 			this.mmtrLayersService.focusedLine();
 			this.applyRailLayer();
 			this.applySignalLayer();
+			this.applySectionLayer();
+		});
+		// 区间图层 (闭塞区间 v2): rebuild whenever the sections feed refreshes or its toggle flips. Kept
+		// separate from the rail effect because it also has to react to occupancy changing (a block turning
+		// occupied is the thing the operator is watching for).
+		effect(() => {
+			this.mmtrSectionsService.sections();
+			this.mmtrLayersService.sections();
+			this.applySectionLayer();
 		});
 		// MMTR live overlay (信号 + 车辆): repaint whenever the trains feed refreshes (3s poll) and
 		// after every map move - vehicle positions and signal aspects follow the simulation.
@@ -305,6 +323,60 @@ export class MapComponent implements AfterViewInit {
 			});
 			this.scene.remove(this.signalLayer);
 			this.signalLayer = undefined;
+		}
+	}
+
+	/**
+	 * 区间图层 (闭塞区间 v2): draw every directional block section as a slice of the rails it covers.
+	 *
+	 * <p>A section is what ONE lamp protects, walked lamp to lamp, so it crosses rail ends and a lamp
+	 * standing mid-rail splits a single rail into two slices. The feed ships sampled points per span, so
+	 * this draws them straight through instead of re-deriving MTR's curve maths. Each section gets its own
+	 * tint (cycled); an OCCUPIED section is drawn in the red tier on top, which is what the console most
+	 * wants to see at a glance - the block that is holding a train.</p>
+	 */
+	private applySectionLayer() {
+		this.clearSectionLayer();
+		const sections = this.mmtrSectionsService.sections();
+		if (!this.mmtrLayersService.sections() || sections.length === 0) {
+			return;
+		}
+		const canvas = this.canvasRef()?.nativeElement;
+		if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionOccupied].forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
+		}
+		const tiers = [lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC];
+		const group = new THREE.Group();
+		sections.forEach((section, index) => {
+			const material = section.occupied ? lineMaterialSectionOccupied : tiers[index % tiers.length];
+			for (const span of section.spans) {
+				if (span.points.length < 4) {
+					continue;
+				}
+				const positions: number[] = [];
+				for (let i = 0; i + 1 < span.points.length; i += 2) {
+					positions.push(span.points[i], -span.points[i + 1], MapComponent.RAIL_Z_INDEX + 0.25);
+				}
+				const geometry = new LineGeometry();
+				geometry.setPositions(positions);
+				const line = new Line2(geometry, material);
+				line.computeLineDistances();
+				group.add(line);
+			}
+		});
+		this.sectionLayer = group;
+		this.scene.add(this.sectionLayer);
+	}
+
+	private clearSectionLayer() {
+		if (this.sectionLayer) {
+			this.sectionLayer.children.forEach(child => {
+				if ((child as unknown as Line2).isLine2) {
+					(child as unknown as Line2).geometry.dispose();
+				}
+			});
+			this.scene.remove(this.sectionLayer);
+			this.sectionLayer = undefined;
 		}
 	}
 

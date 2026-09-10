@@ -203,14 +203,57 @@ public final class MmtrDirectionalBlockServiceTests {
 
 	/** An occupancy tree holding one vehicle footprint on {@code rail} between the two arcs. */
 	private static ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancy(Rail rail, double fromM, double toM) {
+		return occupancy(rail, fromM, toM, 1);
+	}
+
+	/** As above, with an explicit owner id (so self-exclusion can be exercised). */
+	private static ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancy(Rail rail, double fromM, double toM, long vehicleId) {
 		final Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> tree = new Object2ObjectAVLTreeMap<>();
 		final VehiclePosition vehiclePosition = new VehiclePosition();
-		vehiclePosition.addSegment(fromM, toM, 1);
+		vehiclePosition.addSegment(fromM, toM, vehicleId);
 		final Position[] ordered = rail.mmtrOrderedPositions();
 		final Object2ObjectAVLTreeMap<Position, VehiclePosition> inner = new Object2ObjectAVLTreeMap<>();
 		inner.put(ordered[1], vehiclePosition);
 		tree.put(ordered[0], inner);
 		return ObjectArrayList.of(tree);
+	}
+
+	/**
+	 * A train must never be held by ITS OWN body shadow (live defect, notes/112 §4).
+	 *
+	 * <p>Measured on the dev world: a train parked at offset 5.46 on a 43 m rail had written its own
+	 * footprint as [5.5, 37.5) - the shadow's anchor sat ahead of its head - so S1 read a 0.04 m block stop
+	 * (the stop point at the train's own feet, where the throttle does nothing) and the AWS rule read its
+	 * own shadow as a RED signal ahead and stopped the train dead the moment the driver touched the
+	 * throttle. The rule now ignores the asking vehicle's own footprints while still seeing everyone
+	 * else's.</p>
+	 */
+	@Test
+	public void aTrainIsNeverHeldByItsOwnFootprint() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(60, 0, 0));
+		final Rail r2 = rail(new Position(60, 0, 0), new Position(120, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-self", r1, r2);
+		final String lamp = addLamp(simulator, r1, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		assertNotNull(service.sectionOfSignal(lamp));
+
+		final long me = 4242L;
+		// My own footprint covering the very stretch the rule inspects: must NOT block me.
+		assertEquals(Double.MAX_VALUE, service.sectionBoundaryAheadM(r1.getHexId(), 10, 1, 0, occupancy(r1, 12, 40, me), me), 1e-9,
+			"a train's own footprint is not an obstruction ahead of it");
+		assertFalse(service.isOccupied(service.sectionOfSignal(lamp), occupancy(r1, 12, 40, me), me),
+			"nor does it make its own block read occupied (the AWS trigger asks the same question)");
+		assertEquals(0, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), occupancy(r1, 12, 40, me), key -> false, 3, me), 1e-9,
+			"and the aspect chain stays clear for it");
+
+		// Someone ELSE's footprint in the same place still blocks, as it must.
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> other = occupancy(r1, 12, 40, me + 1);
+		assertTrue(service.isOccupied(service.sectionOfSignal(lamp), other, me), "another train in my block is still an obstruction");
+		assertEquals(1, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), other, key -> false, 3, me),
+			"another train in my block still reads red for me");
+		// The stop rule also still holds me at that face (12 - the head at 10 is 2 m short of it).
+		assertEquals(2.0, service.sectionBoundaryAheadM(r1.getHexId(), 10, 1, 0, other, me), 0.01,
+			"a foreign footprint is held at its face, exactly as before");
 	}
 
 	@Test

@@ -240,6 +240,17 @@ public final class MmtrDirectionalBlockService {
 	 * @param trees the occupancy trees to test (null = the simulator's live train trees)
 	 */
 	public boolean isOccupied(Section section, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return isOccupied(section, trees, 0);
+	}
+
+	/**
+	 * As above, but ignoring footprints owned by {@code excludeVehicleId} (pass 0 to count every vehicle).
+	 *
+	 * <p>A vehicle asking about the signal it is about to pass must not read ITS OWN body shadow as the
+	 * obstruction: with a shadow whose anchor sits ahead of the head, that paints the block ahead red and
+	 * the AWS horn sounds the moment the driver touches the throttle (notes/112 §4).</p>
+	 */
+	public boolean isOccupied(Section section, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
 			trees == null ? simulator.mmtrOccupancyTrees() : trees;
 		if (occupancyTrees == null || occupancyTrees.isEmpty()) {
@@ -256,7 +267,7 @@ public final class MmtrDirectionalBlockService {
 			}
 			for (int i = 0; i < occupancyTrees.size(); i++) {
 				final VehiclePosition vehiclePosition = Data.tryGet(occupancyTrees.get(i), ordered[0], ordered[1]);
-				if (vehiclePosition != null && vehiclePosition.getClosestOverlap(span.arcFromM, span.arcToM, false, 0) >= 0) {
+				if (vehiclePosition != null && vehiclePosition.getClosestOverlap(span.arcFromM, span.arcToM, false, excludeVehicleId) >= 0) {
 					return true;
 				}
 			}
@@ -328,6 +339,21 @@ public final class MmtrDirectionalBlockService {
 	 * @param trees occupancy trees to test (null = the simulator's live train trees)
 	 */
 	public double sectionBoundaryAheadM(@Nullable String railHex, double arcM, double headingX, double headingZ, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return sectionBoundaryAheadM(railHex, arcM, headingX, headingZ, trees, 0);
+	}
+
+	/**
+	 * As above, but <strong>excluding one vehicle's own footprints</strong> ({@code excludeVehicleId}).
+	 *
+	 * <p>A vehicle's body shadow is stored under its own id, and a train may be asking about a stretch its
+	 * own shadow already covers - either because its body is genuinely long or because the shadow's anchor
+	 * sits ahead of its head. Counting that as "occupied ahead" makes the train stop at its own feet: with
+	 * the stop point at the head, the throttle does nothing and the train can never move far enough to
+	 * rewrite the shadow. <strong>Measured on the dev world</strong> (notes/112 §4): a train parked at
+	 * offset 5.46 on a 43 m rail wrote its own footprint as [5.5, 37.5), so S1 read a 0.04 m block stop and
+	 * the AWS rule read its own shadow as a RED signal ahead. Excluding self is the fix.</p>
+	 */
+	public double sectionBoundaryAheadM(@Nullable String railHex, double arcM, double headingX, double headingZ, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
 		final Section section = sectionAt(railHex, arcM, headingX, headingZ);
 		if (section == null) {
 			return Double.MAX_VALUE;
@@ -342,13 +368,13 @@ public final class MmtrDirectionalBlockService {
 			// The stretch of this span the movement still has to cross (from the head to the span's end).
 			final double from = forward ? arcM : span.arcFromM;
 			final double to = forward ? span.arcToM : arcM;
-			if (isSpanOccupied(span.railHex, from, to, trees)) {
+			if (isSpanOccupied(span.railHex, from, to, trees, excludeVehicleId)) {
 				// Someone is inside what we are about to cross: hold where it starts.
-				final double toOccupancyM = distanceToOccupancyM(span.railHex, from, to, trees, forward);
+				final double toOccupancyM = distanceToOccupancyM(span.railHex, from, to, trees, forward, excludeVehicleId);
 				return Math.max(0, toOccupancyM);
 			}
 			final RailSpan nextSpan = i + 1 < section.spans.size() ? section.spans.get(i + 1) : null;
-			if (nextSpan != null && isSpanOccupied(nextSpan.railHex, nextSpan.arcFromM, nextSpan.arcToM, trees)) {
+			if (nextSpan != null && isSpanOccupied(nextSpan.railHex, nextSpan.arcFromM, nextSpan.arcToM, trees, excludeVehicleId)) {
 				// The next stretch of our own section is taken: hold at the boundary between them.
 				return Math.max(0, toSpanEndM);
 			}
@@ -359,6 +385,14 @@ public final class MmtrDirectionalBlockService {
 
 	/** Whether any vehicle footprint overlaps the arc window on {@code railHex}. */
 	private boolean isSpanOccupied(String railHex, double fromM, double toM, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return isSpanOccupied(railHex, fromM, toM, trees, 0);
+	}
+
+	/**
+	 * Whether any footprint OTHER than {@code excludeVehicleId}'s overlaps the arc window (pass 0 to count
+	 * every footprint).
+	 */
+	private boolean isSpanOccupied(String railHex, double fromM, double toM, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
 		if (toM - fromM <= 1e-9) {
 			return false;
 		}
@@ -377,7 +411,7 @@ public final class MmtrDirectionalBlockService {
 		}
 		for (int i = 0; i < occupancyTrees.size(); i++) {
 			final VehiclePosition vehiclePosition = Data.tryGet(occupancyTrees.get(i), ordered[0], ordered[1]);
-			if (vehiclePosition != null && vehiclePosition.getClosestOverlap(fromM, toM, false, 0) >= 0) {
+			if (vehiclePosition != null && vehiclePosition.getClosestOverlap(fromM, toM, false, excludeVehicleId) >= 0) {
 				return true;
 			}
 		}
@@ -385,7 +419,7 @@ public final class MmtrDirectionalBlockService {
 	}
 
 	/** How far from {@code fromM} the nearest external occupancy inside the window begins. */
-	private double distanceToOccupancyM(String railHex, double fromM, double toM, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, boolean forward) {
+	private double distanceToOccupancyM(String railHex, double fromM, double toM, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, boolean forward, long excludeVehicleId) {
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
 			trees == null ? simulator.mmtrOccupancyTrees() : trees;
 		final Rail rail = railByHex.get(railHex);
@@ -402,7 +436,7 @@ public final class MmtrDirectionalBlockService {
 			if (vehiclePosition == null) {
 				continue;
 			}
-			for (final double[] segment : vehiclePosition.segmentsExcluding(0)) {
+			for (final double[] segment : vehiclePosition.segmentsExcluding(excludeVehicleId)) {
 				final double start = Math.max(fromM, segment[0]);
 				final double end = Math.min(toM, segment[1]);
 				if (end - start <= 1e-9) {
@@ -465,12 +499,17 @@ public final class MmtrDirectionalBlockService {
 	 * @param maxDepth           chain depth to model (3 = red / single / double yellow / green)
 	 */
 	public int chainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth) {
+		return chainDepth(railHex, entryNode, trees, restrictedNodes, maxDepth, 0);
+	}
+
+	/** As above, ignoring {@code excludeVehicleId}'s own footprints (the asking vehicle's body shadow). */
+	public int chainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth, long excludeVehicleId) {
 		Section section = sectionProtecting(railHex, entryNode);
 		if (section == null) {
 			return 0;
 		}
 		for (int depth = 1; depth <= maxDepth; depth++) {
-			if (isOccupied(section, trees)) {
+			if (isOccupied(section, trees, excludeVehicleId)) {
 				return depth;
 			}
 			for (final String nodeKey : boundaryNodeKeys(section)) {
@@ -611,6 +650,99 @@ public final class MmtrDirectionalBlockService {
 
 	private static String aspectName(int depth) {
 		return depth == 1 ? "RED" : depth == 2 ? "SINGLE_YELLOW" : depth == 3 ? "DOUBLE_YELLOW" : "GREEN";
+	}
+
+	/**
+	 * 占用转储 (operator diagnostic): every vehicle footprint recorded on {@code railHex} in the live
+	 * occupancy trees, as {@code [vehicleId] arcFrom..arcTo}. This is what a "blocked ahead" hold is
+	 * actually reading, so it is the first thing to look at when a train refuses to move - and it shows
+	 * whose id owns each footprint, which is how a train being held by ITS OWN shadow is spotted.
+	 */
+	public ObjectArrayList<String> describeOccupancy(String railHex) {
+		refresh();
+		final ObjectArrayList<String> out = new ObjectArrayList<>();
+		final Rail rail = railByHex.get(railHex);
+		if (rail == null) {
+			out.add("[occ] 找不到轨 " + railHex);
+			return out;
+		}
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		if (trees == null) {
+			out.add("[occ] 当前没有占用树（simulator 未 sync？）");
+			return out;
+		}
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		out.add("[occ] 轨 " + shortHex(railHex) + " 长=" + round(rail.railMath.getLength()) + " 树=" + trees.size());
+		for (int i = 0; i < trees.size(); i++) {
+			final VehiclePosition vehiclePosition = Data.tryGet(trees.get(i), ordered[0], ordered[1]);
+			if (vehiclePosition == null) {
+				continue;
+			}
+			for (final double[] segment : vehiclePosition.segmentsExcluding(Long.MIN_VALUE)) {
+				out.add("[occ]   树" + i + " 区间 [" + round(segment[0]) + ", " + round(segment[1]) + ")");
+			}
+			// The per-footprint ids: this is how a train held by ITS OWN shadow is told apart from one
+			// held by a genuinely different vehicle.
+			for (final long footprintId : vehiclePosition.footprintIds()) {
+				out.add("[occ]   树" + i + " 占用者 id=" + footprintId);
+			}
+		}
+		if (out.size() == 1) {
+			out.add("[occ]   该轨上没有外部占用（占用树里没有它）");
+		}
+		return out;
+	}
+
+	/**
+	 * WEB 区间图层: one entry per directional section, shaped for the management console's map.
+	 *
+	 * <p>Each section is what one lamp protects, walked lamp to lamp, so the console can draw the block
+	 * boundaries the engine actually uses - including the ones that cross rail ends, which no per-rail
+	 * view can show. Spans carry the rail and the arc window so the front end can project them onto the
+	 * drawn map (a span may be a PART of a rail when a lamp splits it mid-rail).</p>
+	 *
+	 * @param trees occupancy trees the "occupied" flag is computed against (null = the live trees)
+	 */
+	public ObjectArrayList<SectionView> sectionViews(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes) {
+		refresh();
+		final ObjectArrayList<SectionView> out = new ObjectArrayList<>();
+		final ObjectArrayList<String> keys = new ObjectArrayList<>(sectionsBySignal.keySet());
+		keys.sort(String::compareTo);
+		for (final String key : keys) {
+			final Section section = sectionsBySignal.get(key);
+			final Section next = following(section);
+			out.add(new SectionView(
+				section.id,
+				section.exitSignalKey == null ? "" : section.exitSignalKey,
+				next == null ? "" : next.id,
+				aspectName(depthAt(section, trees, restrictedNodes)),
+				isOccupied(section, trees),
+				section.lengthM(),
+				section.spans
+			));
+		}
+		return out;
+	}
+
+	/** One section as the web console consumes it (see {@link #sectionViews}). */
+	public static final class SectionView {
+		public final String id;
+		public final String exitSignalKey;
+		public final String nextSectionId;
+		public final String aspect;
+		public final boolean occupied;
+		public final double lengthM;
+		public final ObjectArrayList<RailSpan> spans;
+
+		SectionView(String id, String exitSignalKey, String nextSectionId, String aspect, boolean occupied, double lengthM, ObjectArrayList<RailSpan> spans) {
+			this.id = id;
+			this.exitSignalKey = exitSignalKey;
+			this.nextSectionId = nextSectionId;
+			this.aspect = aspect;
+			this.occupied = occupied;
+			this.lengthM = lengthM;
+			this.spans = spans;
+		}
 	}
 
 	/** The rail onto which {@code section} continues after {@code railHex} (the next span), or null. */

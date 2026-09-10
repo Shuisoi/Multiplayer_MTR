@@ -221,6 +221,7 @@ public final class SystemMapServlet extends ServletBase {
 					yield result;
 				}
 				case "mmtr-signals" -> getMmtrSignals(simulator);
+				case "mmtr-sections" -> getMmtrSections(simulator);
 				case "mmtr-command" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					final String command = jsonReader.getString("command", "");
@@ -529,6 +530,60 @@ public final class SystemMapServlet extends ServletBase {
 		new org.mtr.core.mmtr.signal.MmtrSignalAspect(simulator, simulator.mmtrRoutes).aspectsForAllRails()
 			.forEach((hex, aspect) -> aspects.put(hex, aspect.name()));
 		return aspects;
+	}
+
+	/**
+	 * 闭塞区间 v2 feed (区间图层): every directional block section - the stretch ONE lamp protects,
+	 * walked lamp to lamp - with its exit/next section, its aspect, whether it is occupied right now, and
+	 * its spans {@code (rail, arcFrom, arcTo)}.
+	 *
+	 * <p>This is the layer the console could not show before: sections are what the engine actually
+	 * divides the line into, and they cross rail ends (in the dev world one is 30 rails / 601 m), so a
+	 * per-rail colouring can never make them visible. The arcs let the front end draw a PART of a rail
+	 * when a lamp splits it mid-rail.</p>
+	 */
+	private static JsonObject getMmtrSections(Simulator simulator) {
+		final com.google.gson.JsonArray sections = new com.google.gson.JsonArray();
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.SectionView view : simulator.mmtrDirectionalBlocks.sectionViews(trees, restricted::contains)) {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", view.id);
+			out.addProperty("exitSignal", view.exitSignalKey);
+			out.addProperty("next", view.nextSectionId);
+			out.addProperty("aspect", view.aspect);
+			out.addProperty("occupied", view.occupied);
+			out.addProperty("length", view.lengthM);
+			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : view.spans) {
+				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
+				s.addProperty("hex", span.railHex);
+				s.addProperty("from", span.arcFromM);
+				s.addProperty("to", span.arcToM);
+				// Sampled world points along the arc window, so the console can draw a slice WITHOUT
+				// re-implementing MTR's two-arc rail maths: a lamp standing mid-rail gives a span shorter
+				// than the rail, and where the slice starts is exactly what the layer has to show.
+				final org.mtr.core.data.Rail rail = simulator.rails.stream().filter(candidate -> candidate.getHexId().equals(span.railHex)).findFirst().orElse(null);
+				final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
+				if (rail != null && span.arcToM > span.arcFromM) {
+					final int steps = 8;
+					for (int i = 0; i <= steps; i++) {
+						final double arc = span.arcFromM + (span.arcToM - span.arcFromM) * i / steps;
+						final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
+						points.add(Math.round(point.x() * 100) / 100.0);
+						points.add(Math.round(point.z() * 100) / 100.0);
+					}
+				}
+				s.add("points", points);
+				spans.add(s);
+			}
+			out.add("spans", spans);
+			sections.add(out);
+		}
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("sections", sections);
+		result.addProperty("railCount", simulator.rails.size());
+		return result;
 	}
 
 	/**

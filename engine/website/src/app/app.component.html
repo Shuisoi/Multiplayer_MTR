@@ -22,6 +22,7 @@
 			<div class="mmtr-layer-switch">
 				<span class="mmtr-layer-switch-title">图层</span>
 				<button class="mmtr-chip" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">道岔</button>
+				<button class="mmtr-chip" [class.on]="layersService.sections()" (click)="layersService.sections.set(!layersService.sections())" title="闭塞区间 v2：一盏灯保护的那一段（灯到灯、可跨多根轨）">区间 <b>{{ sectionCount() }}</b></button>
 				<button class="mmtr-chip" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">线路</button>
 				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>
 				<button class="mmtr-chip mmtr-chip-reset" (click)="resetLayers()">重置</button>
@@ -32,6 +33,7 @@
 				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>
 				<button class="mmtr-chip" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">线路</button>
 				<button class="mmtr-chip" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">道岔</button>
+				<button class="mmtr-chip" [class.on]="layersService.sections()" (click)="layersService.sections.set(!layersService.sections())" title="闭塞区间 v2：一盏灯保护的那一段（灯到灯、可跨多根轨）">区间 <b>{{ sectionCount() }}</b>@if (occupiedSectionCount() > 0) {<span class="mmtr-chip-alert">占用 {{ occupiedSectionCount() }}</span>}</button>
 			</div>
 			<app-mmtr-lines-panel/>
 		</div>
