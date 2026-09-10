@@ -655,7 +655,7 @@ public final class MmtrDirectionalBlockService {
 			if (sectionsBySignal.containsKey(key)) {
 				continue;
 			}
-			final ProtectedRail protectedRail = resolveProtectedRail(entry);
+			final ProtectedRail protectedRail = resolveProtectedRailInternal(entry);
 			if (protectedRail == null) {
 				continue;
 			}
@@ -683,13 +683,25 @@ public final class MmtrDirectionalBlockService {
 	}
 
 	/**
+	 * The rail a lamp protects and the direction it authorises - the public entry point, which refreshes
+	 * the rail index first so a caller running before any section query (the game-side bind tool) does not
+	 * read a stale index.
+	 */
+	public @Nullable ProtectedRail resolveProtectedRail(SignalEntry entry) {
+		refresh();
+		return resolveProtectedRailInternal(entry);
+	}
+
+	/**
 	 * The rail a lamp protects and the direction it authorises.
 	 *
 	 * <p>An explicit {@code target} (a BOUND bind) wins. Otherwise the lamp is matched <strong>by
 	 * direction</strong>: among the rails within tolerance take the one the lamp stands beside and looks
 	 * along. The v1 inference used nearest-rail-only, so a lamp could bind to a rail behind it.</p>
+	 *
+	 * <p>Internal: no refresh - {@code rebuild()} calls this while it is itself the refresh.</p>
 	 */
-	public @Nullable ProtectedRail resolveProtectedRail(SignalEntry entry) {
+	private @Nullable ProtectedRail resolveProtectedRailInternal(SignalEntry entry) {
 		final double lampX = entry.x + 0.5;
 		final double lampY = entry.y + 0.5;
 		final double lampZ = entry.z + 0.5;

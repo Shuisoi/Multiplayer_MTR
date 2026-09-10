@@ -370,4 +370,31 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertEquals(2, routed.spans.size(), "a set MAIN route narrows the throat block to its own leg");
 		assertEquals(straight.getHexId(), routed.spans.get(1).railHex, "and it is the route's leg that is walked");
 	}
+
+	/**
+	 * The game-side BIND tool must resolve the same rail the section model does (notes/111): it used to
+	 * re-implement the facing maths with a "the renderer applies a 90 degree offset" assumption, and a
+	 * bind tool that disagrees with the model by a quarter turn is how a light ends up bound to a rail
+	 * running ACROSS its facing - the dead binding at {@code -163,-60,-189} (notes/105 §3.1).
+	 */
+	@Test
+	public void theBindToolChoosesTheRailTheSectionModelWouldProtect() {
+		final Rail westbound = rail(new Position(-50, 0, 0), new Position(0, 0, 0));
+		final Rail eastbound = rail(new Position(0, 0, 0), new Position(50, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-bind", westbound, eastbound);
+
+		// A lamp standing on the shared node, facing EAST: it must bind the rail that leaves east.
+		// (The op's boolean is "the registry CHANGED", so the assertion is on the resulting BOUND target.)
+		simulator.mmtrSignalBindAtNode(0, 0, 0, EAST, 4, 0, 0, 0);
+		final MmtrSignalRegistry.SignalEntry registered = simulator.mmtrSignals.get(0, 0, 0);
+		assertNotNull(registered, "the bind tool must register the lamp");
+		assertEquals(eastbound.getHexId(), registered.target,
+			"a lamp facing east binds the eastbound rail, not the one running across it");
+		assertEquals("BOUND", registered.mode, "a bind with a target is a covered bind");
+
+		// The other direction of the same node binds the other rail - the two heads are independent.
+		simulator.mmtrSignalBindAtNode(0, 0, 0, WEST, 4, 0, 0, 0);
+		assertEquals(westbound.getHexId(), simulator.mmtrSignals.get(0, 0, 0).target,
+			"a lamp facing west binds the westbound rail");
+	}
 }

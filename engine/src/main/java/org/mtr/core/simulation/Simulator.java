@@ -740,10 +740,18 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
-	 * Covered bind helper (游戏侧工具/扫描上行): given the light position/angle and a clicked
-	 * rail node, choose the rail leaving that node whose heading best matches the light's facing
-	 * (MTR angle semantics: 0=E, 90=S(+z); the light faces the rail it reads with a 90 degree
-	 * offset applied by the renderer), then register the light BOUND to that rail.
+	 * Covered bind helper (游戏侧工具/扫描上行): given the light position/angle and a clicked rail node,
+	 * choose the rail leaving that node whose heading best matches the light's facing, then register the
+	 * light BOUND to that rail.
+	 *
+	 * <p><strong>Single source of truth (闭塞区间 v2).</strong> The rail is chosen by the SAME resolution
+	 * the section model uses ({@code MmtrDirectionalBlockService.resolveProtectedRail}), which resolves by
+	 * the lamp's facing angle. An earlier version re-implemented the facing maths here with a
+	 * "the renderer applies a 90 degree offset" assumption; a bind tool that disagrees with the model by a
+	 * quarter turn is exactly how a light ends up bound to a rail running ACROSS its facing - the dead
+	 * binding found at {@code -163,-60,-189} (notes/105 §3.1), which then neither cuts a section nor shows
+	 * a trustworthy aspect.</p>
+	 *
 	 * @return whether a matching rail was found and the light registered
 	 */
 	public boolean mmtrSignalBindAtNode(int x, int y, int z, float angle, int aspects, long nodeX, long nodeY, long nodeZ) {
@@ -751,6 +759,15 @@ public class Simulator extends Data implements Utilities {
 		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<org.mtr.core.data.Position, org.mtr.core.data.Rail> neighbours = positionsToRail.get(node);
 		if (neighbours == null || neighbours.isEmpty()) {
 			return false;
+		}
+		// Ask the v2 model which rail this lamp protects (by its facing). Fall back to the nearest-heading
+		// search only when the model cannot answer (no rail within tolerance of the light).
+		final org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry probe =
+			new org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry(x, y, z, angle, aspects);
+		final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.ProtectedRail resolved =
+			mmtrDirectionalBlocks.resolveProtectedRail(probe);
+		if (resolved != null) {
+			return mmtrSignalOp(x, y, z, angle, aspects, "set", resolved.rail.getHexId());
 		}
 		final double want = Math.toRadians(angle + 90.0);
 		final double[] best = {Double.MAX_VALUE};
