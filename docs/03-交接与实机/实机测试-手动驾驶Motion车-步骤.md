@@ -104,21 +104,25 @@
 ## 9. 信号 × 道岔 × 任务集成（A2/A3/S5）实机验收清单
 
 > 代码面已交付并有引擎用例：notes/78（进路对象）、79（信号=进路×闭塞）、80（游戏内镜像）、
-> 81（AWS 绑信号）、82（冲突进路互斥 + 分段释放）。本节是**实机目视**部分（尚未跑过）。
+> 81（AWS 绑信号）、82（冲突进路互斥 + 分段释放）。本节是**实机目视**部分。
+> **第 5、6 条已于 2026-09-10 实机通过（notes/103）**；其余项待跑，逐条状态见下表。
 
 前置：停服后同步引擎 jar（`mmtr\scripts\sync-engine.bat`；**服务器运行时不要覆盖 `game/libs` 的 jar**，
 notes/77 红线的崩溃就是这么来的），再启动 dev 服务端。
+**引擎侧对照一律走 8888 的指令栏**（`POST /mtr/api/map/mmtr-command`，如 `interlock <id>`、`blocks all`）——
+RCON 里没有这些指令。部署现场踩过的坑（Forge 插件瞬时解析失败）见 notes/103 §1。
 
-| # | 场景 | 期望证据 |
-|---|------|---------|
-| 1 | 给一列车派任务（`mmtr-vehicle-task` / 作业单），观察 WEB `mmtr-trains` | 该车出现 `route{state:"SET",kind:"MAIN",entryRail,targetRail,rails[]}`；`routes[]` 顶层也有它；**同时**在网页指令栏发 `interlock <该车id>` 得到引擎侧对照（进路/道岔持有/每条轨显示/客户端收窄） |
-| 2 | 该车经过分岔 | 分岔处信号灯按**进路放行**（不再因另一支被占而保守显黄/红）；`[MMTR-DRV] motion seg=` 沿进路推进 |
-| 3 | 人为 `mmtr-point-lock` 该进路的一个道岔（或让另一列车先持有） | 该车进路变 `state:"PENDING"`，`stateReason` 点名道岔与 `lock=true`/`holder=v…`；**车不越过该道岔**，信号显红 |
-| 4 | 解锁 / 对方释放 | 进路自动回到 `SET`，车继续（分段释放：越过第一个道岔后进路仍为 `SET`） |
-| 5 | 黄灯区段手动开车 | 接近**非绿**信号时 `[MMTR-AWS] warning on … signal SINGLE_YELLOW/DOUBLE_YELLOW/RED …`；驾驶室 AWS 灯闪"警示-按 H 确认"，按 **H**（默认键，可在 选项→控制 改）后 `[MMTR-AWS] acknowledged`、灯转"已确认"；信号转绿时 `[MMTR-AWS] warning cleared` |
-| 6 | 未确认并继续行驶 | 约 2.5 s 后 `[MMTR-AWS] unacknowledged warning - SPAD emergency engaged`，车紧急制动停稳 |
-| 7 | 双车咽喉（两条股道同抢一个岔，不同腿） | WEB `routes[]`：先 SET 者持有；后者 `PENDING` 且车留在自己股道；前者越岔后后者自动 SET 并通过 |
-| 8 | 双车同腿跟随 | 后车进路点被独占而等待；点释放后跟进，最终被 **S1 占用**停在闭塞边界（不撞前车） |
+| # | 场景 | 期望证据 | 状态 |
+|---|------|---------|------|
+| 1 | 给一列车派任务（`mmtr-vehicle-task` / 作业单），观察 WEB `mmtr-trains` | 该车出现 `route{state:"SET",kind:"MAIN",entryRail,targetRail,rails[]}`；`routes[]` 顶层也有它；**同时**在网页指令栏发 `interlock <该车id>` 得到引擎侧对照（进路/道岔持有/每条轨显示/客户端收窄） | ⬜ 待跑（服务端侧见 notes/83/84） |
+| 2 | 该车经过分岔 | 分岔处信号灯按**进路放行**（不再因另一支被占而保守显黄/红）；`[MMTR-DRV] motion seg=` 沿进路推进 | ⬜ 待跑 |
+| 3 | 人为 `mmtr-point-lock` 该进路的一个道岔（或让另一列车先持有） | 该车进路变 `state:"PENDING"`，`stateReason` 点名道岔与 `lock=true`/`holder=v…`；**车不越过该道岔**，信号显红 | ⬜ 待跑 |
+| 4 | 解锁 / 对方释放 | 进路自动回到 `SET`，车继续（分段释放：越过第一个道岔后进路仍为 `SET`） | ⬜ 待跑 |
+| 5 | 黄灯区段手动开车 | 接近**非绿**信号时 `[MMTR-AWS] warning on … signal SINGLE_YELLOW/DOUBLE_YELLOW/RED …`；驾驶室 AWS 灯闪"警示-按 H 确认"，按 **H**（默认键，可在 选项→控制 改）后 `[MMTR-AWS] acknowledged`、灯转"已确认"；信号转绿时 `[MMTR-AWS] warning cleared` | ✅ **红灯光路通过**（notes/103：26.9 m 触发 → 1 s 确认 → 3 s 复位）；黄灯光路待复跑 |
+| 6 | 未确认并继续行驶 | 约 2.5 s 后 `[MMTR-AWS] unacknowledged warning - SPAD emergency engaged`，车紧急制动停稳 | ✅ **通过**（notes/103：14.66 → 0.49 km/h，只多走 3.7 m；`protections=1` → 自动释放） |
+| 7 | 双车咽喉（两条股道同抢一个岔，不同腿） | WEB `routes[]`：先 SET 者持有；后者 `PENDING` 且车留在自己股道；前者越岔后后者自动 SET 并通过 | ⬜ 待跑 |
+| 8 | 双车同腿跟随 | 后车进路点被独占而等待；点释放后跟进，最终被 **S1 占用**停在闭塞边界（不撞前车） | ⬜ 待跑 |
+| 9 | 同一根轨、同一盏灯**反向**再跑一次 | 向北经过该灯有 AWS（notes/103 §2），向南却全程无 `[MMTR-AWS]`（notes/103 §4）——需定性是方向语义正确还是漏触发 | ⬜ 待跑（新增） |
 
 > 客户端要看到信号灯变化，客户端 JVM 需与服务器同一 jar 版本；进路镜像包只在**变化时**推送
 > （`[MMTR-CL] routes mirror: N locked rail(s)`，需 `-Dmmtr.trace=true` 才打印）。
