@@ -107,10 +107,15 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 					case 3 -> aspects >= 4 ? 3 : 2;
 					default -> 0;
 				};
-				render(storedMatrixTransformationsNew, entity, tickDelta, occupiedAspect, isBackSide);
+				// S4: 闭塞区间 v2 hands the engine's own conclusion for THIS lamp (keyed by the block it
+				// stands on). The engine's unit is the lamp-to-lamp section and it is direction-aware, so
+				// when it has an answer it replaces the local per-rail chain entirely - that is what makes
+				// the light agree with the stop rule and with the ops feed, instead of the client guessing.
+				final int engineAspect = mmtrEngineAspect(pos, aspectState.mmtrChainDepth);
+				render(storedMatrixTransformationsNew, entity, tickDelta, engineAspect, isBackSide);
 
-				if (occupiedAspect > 0 && occupiedAspect < aspects) {
-					redstoneLevel = Math.max(redstoneLevel, (4 - occupiedAspect) * 5);
+				if (engineAspect > 0 && engineAspect < aspects) {
+					redstoneLevel = Math.max(redstoneLevel, (4 - engineAspect) * 5);
 				}
 
 				(isBackSide ? railIds2 : railIds1).addAll(aspectState.railIds);
@@ -121,6 +126,30 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 	}
 
 	protected abstract void render(StoredMatrixTransformations storedMatrixTransformations, T entity, float tickDelta, int occupiedAspect, boolean isBackSide);
+
+	/**
+	 * S4: the aspect the ENGINE's 闭塞区间 v2 model gives the lamp standing on {@code pos}, translated into
+	 * this renderer's 0..3 form, or {@code localDepth} translated when the engine has no v2 section for it
+	 * (an unsignalled rail keeps the local per-rail chain, exactly as before).
+	 */
+	private static int mmtrEngineAspect(BlockPos pos, int localDepth) {
+		final int local = switch (localDepth) {
+			case 1 -> 1;
+			case 2 -> 2;
+			case 3 -> 3;
+			default -> 0;
+		};
+		final String mirrored = org.mtr.mod.client.MmtrClientRoutes.lampAspect(pos.getX(), pos.getY(), pos.getZ());
+		if (mirrored == null) {
+			return local;
+		}
+		return switch (mirrored) {
+			case "RED" -> 1;
+			case "SINGLE_YELLOW" -> 2;
+			case "DOUBLE_YELLOW" -> 3;
+			default -> 0;
+		};
+	}
 
 	@Nullable
 	public static AspectState getAspectState(BlockPos blockPos, float angle) {

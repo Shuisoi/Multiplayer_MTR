@@ -53,12 +53,15 @@ public final class MmtrRouteMirror {
 			// ④: junctions the engine cannot clear (undecided points or a fouled clearance zone) - the
 			// client's chain counts a step through them as occupied, so the lights agree with the holds.
 			final ObjectOpenHashSet<String> restrictedNodes = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, simulator.mmtrOccupancyTrees());
-			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + splitRails.toString() + "|" + restrictedNodes.toString();
+			// S4: every lamp's v2 display. The engine owns the 闭塞区间 v2 walk, so it ships its conclusion
+			// per lamp; the renderer (which works per rail block) looks its own lamp key up.
+			final Object2ObjectOpenHashMap<String, String> lampAspects = simulator.mmtrDirectionalBlocks.lampAspectNames(simulator.mmtrOccupancyTrees(), restrictedNodes::contains);
+			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + splitRails.toString() + "|" + restrictedNodes.toString() + "|" + lampAspects.toString();
 			if (signature.equals(LAST_SIGNATURE.get(worldId))) {
 				continue;
 			}
 			LAST_SIGNATURE.put(worldId, signature);
-			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, splitRails, restrictedNodes);
+			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, lampAspects);
 			final org.mtr.mapping.holder.ServerWorld mappedWorld = new org.mtr.mapping.holder.ServerWorld(serverWorld);
 			MinecraftServerHelper.iteratePlayers(mappedWorld, serverPlayerEntity -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketMmtrRoutes(content)));
 		}

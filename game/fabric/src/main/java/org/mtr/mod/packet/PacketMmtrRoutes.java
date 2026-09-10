@@ -48,6 +48,18 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 	 * occupied, so the lights agree with the motion rules.</p>
 	 */
 	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes) {
+		return contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, new Object2ObjectOpenHashMap<>());
+	}
+
+	/**
+	 * S4: the same payload plus every lamp's <strong>v2 display</strong>, flattened as
+	 * {@code [lampKey, aspectName] * n} where the key is the lamp's {@code x,y,z} registry key.
+	 *
+	 * <p>The engine hands the client its own conclusion (闭塞区间 v2 computes the aspect per LAMP - what one
+	 * lamp protects, walked lamp to lamp - while the client renderer works per rail block, so it looks its
+	 * own key up). That way the two sides cannot disagree, and the client needs no copy of the section walk.</p>
+	 */
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
 		nextRails.forEach((from, tos) -> tos.forEach(to -> {
@@ -69,6 +81,12 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		final JsonArray restricted = new JsonArray();
 		restrictedNodes.forEach(restricted::add);
 		json.add("restrictedNodes", restricted);
+		final JsonArray lamps = new JsonArray();
+		lampAspects.forEach((key, aspect) -> {
+			lamps.add(key);
+			lamps.add(aspect);
+		});
+		json.add("lamps", lamps);
 		return json.toString();
 	}
 
@@ -97,8 +115,15 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		// ④: the junctions the engine cannot clear, as x,y,z keys.
 		final ObjectOpenHashSet<String> restrictedNodes = new ObjectOpenHashSet<>();
 		jsonReader.iterateStringArray("restrictedNodes", restrictedNodes::clear, restrictedNodes::add);
-		MmtrClientRoutes.update(next, pending, sections, restrictedNodes);
-		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s), " + restrictedNodes.size() + " restricted junction(s)");
+		// S4: every lamp's v2 display, as [lampKey, aspectName] pairs.
+		final ObjectArrayList<String> lampEntries = new ObjectArrayList<>();
+		jsonReader.iterateStringArray("lamps", lampEntries::clear, lampEntries::add);
+		final Map<String, String> lampAspects = new HashMap<>();
+		for (int i = 0; i + 1 < lampEntries.size(); i += 2) {
+			lampAspects.put(lampEntries.get(i), lampEntries.get(i + 1));
+		}
+		MmtrClientRoutes.update(next, pending, sections, restrictedNodes, lampAspects);
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s)");
 	}
 
 	@Override

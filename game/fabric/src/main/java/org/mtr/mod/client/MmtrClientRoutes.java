@@ -37,17 +37,28 @@ public final class MmtrClientRoutes {
 	private static volatile Set<String> pendingEntries = Collections.emptySet();
 	private static volatile Map<String, List<MmtrSignalChain.Section>> sections = Collections.emptyMap();
 	private static volatile Set<String> restrictedNodes = Collections.emptySet();
+	/** S4: lamp {@code x,y,z} key -&gt; the aspect the ENGINE's v2 model gives that lamp. */
+	private static volatile Map<String, String> lampAspects = Collections.emptyMap();
 
 	private MmtrClientRoutes() {
 	}
 
 	/** Replace the mirror (called from the packet handler on the client thread). */
 	public static void update(Map<String, List<String>> next, Set<String> pending) {
-		update(next, pending, Collections.emptyMap(), Collections.emptySet());
+		update(next, pending, Collections.emptyMap(), Collections.emptySet(), Collections.emptyMap());
 	}
 
 	/** Replace the mirror including the B3b section map and the ④ restricted-junction node keys. */
 	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted) {
+		update(next, pending, sectionMap, restricted, Collections.emptyMap());
+	}
+
+	/**
+	 * Replace the mirror including the S4 lamp aspects: the engine computes the 闭塞区间 v2 aspect per LAMP
+	 * (what one lamp protects, walked lamp to lamp), so it ships its conclusion instead of the raw walk and
+	 * the client renderer looks its own block position up.
+	 */
+	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted, Map<String, String> lampAspectMap) {
 		final Map<String, List<String>> copy = new HashMap<>();
 		next.forEach((railHex, nexts) -> copy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(nexts))));
 		nextRails = Collections.unmodifiableMap(copy);
@@ -56,6 +67,7 @@ public final class MmtrClientRoutes {
 		sectionMap.forEach((railHex, railSections) -> sectionCopy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(railSections))));
 		sections = Collections.unmodifiableMap(sectionCopy);
 		restrictedNodes = Collections.unmodifiableSet(new HashSet<>(restricted));
+		lampAspects = Collections.unmodifiableMap(new HashMap<>(lampAspectMap));
 	}
 
 	public static void clear() {
@@ -63,6 +75,19 @@ public final class MmtrClientRoutes {
 		pendingEntries = Collections.emptySet();
 		sections = Collections.emptyMap();
 		restrictedNodes = Collections.emptySet();
+		lampAspects = Collections.emptyMap();
+	}
+
+	/**
+	 * S4: the aspect the engine's 闭塞区间 v2 model gives the lamp at {@code x,y,z}, or null when the engine
+	 * has no v2 section for that lamp - the renderer then keeps its local (v1) chain reading.
+	 */
+	public static String lampAspect(int x, int y, int z) {
+		return lampAspects.get(x + "," + y + "," + z);
+	}
+
+	public static int lampAspectCount() {
+		return lampAspects.size();
 	}
 
 	/** The rails a SET main route runs onto after {@code railHex}; empty when no route covers it. */

@@ -69,4 +69,32 @@ public final class MmtrClientRoutesTests {
 		assertTrue(MmtrClientRoutes.nextRails("railA").isEmpty(), "a new mirror replaces the previous one");
 		assertEquals(List.of("railN"), MmtrClientRoutes.nextRails("railM"));
 	}
+
+	/**
+	 * S4: the engine's 闭塞区间 v2 conclusion per LAMP. The renderer works per rail block, so it looks its
+	 * own block position up by the lamp key the engine uses.
+	 */
+	@Test
+	public void theEnginesPerLampAspectIsMirroredAndLookedUpByBlockPosition() {
+		MmtrClientRoutes.clear();
+		assertEquals(null, MmtrClientRoutes.lampAspect(-170, -60, -122), "no mirror -> the renderer keeps its local chain");
+		assertEquals(0, MmtrClientRoutes.lampAspectCount());
+
+		final Map<String, String> lamps = new HashMap<>();
+		lamps.put("-170,-60,-122", "RED");
+		lamps.put("-149,-60,-169", "GREEN");
+		MmtrClientRoutes.update(Map.of(), Set.of(), Map.of(), Set.of(), lamps);
+
+		assertEquals("RED", MmtrClientRoutes.lampAspect(-170, -60, -122), "the lamp's own block position finds it");
+		assertEquals("GREEN", MmtrClientRoutes.lampAspect(-149, -60, -169));
+		assertEquals(null, MmtrClientRoutes.lampAspect(0, 0, 0), "a lamp the engine did not send stays local");
+		assertEquals(2, MmtrClientRoutes.lampAspectCount());
+
+		// The store copies: mutating the caller's map afterwards must not leak in.
+		lamps.put("1,2,3", "DOUBLE_YELLOW");
+		assertEquals(null, MmtrClientRoutes.lampAspect(1, 2, 3), "the store copied the lamp map");
+
+		MmtrClientRoutes.clear();
+		assertEquals(null, MmtrClientRoutes.lampAspect(-170, -60, -122), "clear() drops the lamp aspects too");
+	}
 }

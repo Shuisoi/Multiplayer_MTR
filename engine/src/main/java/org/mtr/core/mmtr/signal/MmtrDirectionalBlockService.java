@@ -563,30 +563,54 @@ public final class MmtrDirectionalBlockService {
 		keys.sort(String::compareTo);
 		for (final String key : keys) {
 			final Section section = sectionsBySignal.get(key);
-			int depth = 0;
-			Section walk = section;
-			for (int level = 1; level <= 3 && walk != null; level++) {
-				boolean hit = isOccupied(walk, trees);
-				if (!hit) {
-					for (final String nodeKey : boundaryNodeKeys(walk)) {
-						if (restrictedNodes.test(nodeKey)) {
-							hit = true;
-							break;
-						}
-					}
-				}
-				if (hit) {
-					depth = level;
-					break;
-				}
-				walk = following(walk);
-			}
-			final String aspect = depth == 1 ? "RED" : depth == 2 ? "SINGLE_YELLOW" : depth == 3 ? "DOUBLE_YELLOW" : "GREEN";
+			final String aspect = aspectName(depthAt(section, trees, restrictedNodes));
 			final Section next = following(section);
 			out.add("[blocks-v2] 灯 " + key + " → " + aspect + "（区间 " + section.spans.size() + " 段/长="
 				+ round(section.lengthM()) + "，后继=" + (next == null ? "无" : next.id) + "）");
 		}
 		return out;
+	}
+
+	/**
+	 * S4 (客户端镜像): every lamp's v2 display, keyed by the lamp's {@code x,y,z} registry key.
+	 *
+	 * <p>The ENGINE hands the client its conclusion rather than the raw walk: the client renders per lamp
+	 * block and can look its own key up, so the two sides cannot disagree and the client needs no copy of
+	 * the section walk. Values are the aspect names the engine uses everywhere else
+	 * ({@code RED} / {@code SINGLE_YELLOW} / {@code DOUBLE_YELLOW} / {@code GREEN}).</p>
+	 */
+	public Object2ObjectOpenHashMap<String, String> lampAspectNames(@Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes) {
+		refresh();
+		final Object2ObjectOpenHashMap<String, String> out = new Object2ObjectOpenHashMap<>();
+		for (final Map.Entry<String, Section> entry : sectionsBySignal.entrySet()) {
+			out.put(entry.getKey(), aspectName(depthAt(entry.getValue(), trees, restrictedNodes)));
+		}
+		return out;
+	}
+
+	/** The chain depth of the lamp owning {@code section}: 1 red / 2 single / 3 double / 0 clear. */
+	private int depthAt(@Nullable Section section, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes) {
+		Section walk = section;
+		for (int level = 1; level <= 3 && walk != null; level++) {
+			boolean hit = isOccupied(walk, trees);
+			if (!hit) {
+				for (final String nodeKey : boundaryNodeKeys(walk)) {
+					if (restrictedNodes.test(nodeKey)) {
+						hit = true;
+						break;
+					}
+				}
+			}
+			if (hit) {
+				return level;
+			}
+			walk = following(walk);
+		}
+		return 0;
+	}
+
+	private static String aspectName(int depth) {
+		return depth == 1 ? "RED" : depth == 2 ? "SINGLE_YELLOW" : depth == 3 ? "DOUBLE_YELLOW" : "GREEN";
 	}
 
 	/** The rail onto which {@code section} continues after {@code railHex} (the next span), or null. */
