@@ -1,10 +1,12 @@
 package org.mtr.core.mmtr.signal;
 
+import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
 import org.mtr.core.data.TransportMode;
+import org.mtr.core.data.VehiclePosition;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Angle;
 import org.mtr.core.tool.Vector;
@@ -12,6 +14,7 @@ import org.mtr.core.tool.Vector;
 import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -194,5 +197,94 @@ public final class MmtrDirectionalBlockServiceTests {
 			MmtrSignalRegistry.key(coords[0], coords[1], coords[2]));
 		assertNotNull(section, "the explicit target wins");
 		assertEquals(r1.getHexId(), section.entryRailHex(), "the bound rail is the one protected");
+	}
+
+	// ---------------------------------------------------------------- S2: occupancy and queries
+
+	/** An occupancy tree holding one vehicle footprint on {@code rail} between the two arcs. */
+	private static ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancy(Rail rail, double fromM, double toM) {
+		final Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> tree = new Object2ObjectAVLTreeMap<>();
+		final VehiclePosition vehiclePosition = new VehiclePosition();
+		vehiclePosition.addSegment(fromM, toM, 1);
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		final Object2ObjectAVLTreeMap<Position, VehiclePosition> inner = new Object2ObjectAVLTreeMap<>();
+		inner.put(ordered[1], vehiclePosition);
+		tree.put(ordered[0], inner);
+		return ObjectArrayList.of(tree);
+	}
+
+	@Test
+	public void occupancyProjectsOntoASectionThatSpansSeveralRails() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-occupancy", r1, r2);
+		final String lamp = addLamp(simulator, r1, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(lamp);
+		assertNotNull(section);
+		assertEquals(2, section.spans.size(), "the section spans two rails");
+
+		assertFalse(service.isOccupied(section, null), "no train -> not occupied (live trees are empty)");
+
+		// A footprint in the SECOND rail of the section still occupies the whole section.
+		assertTrue(service.isOccupied(section, occupancy(r2, 20, 40)),
+			"a train standing in the far span occupies the section - this is the cross-rail win");
+		// A footprint in the first rail does too.
+		assertTrue(service.isOccupied(section, occupancy(r1, 10, 30)), "a train in the near span occupies it");
+	}
+
+	@Test
+	public void aFootprintOutsideTheSectionDoesNotOccupyIt() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-occupancy-outside", r1);
+		final String lamp = addLamp(simulator, r1, 40, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(lamp);
+		assertNotNull(section);
+		assertEquals(40, section.entryArcM(), 1.0, "the section starts at the lamp (arc 40)");
+
+		assertFalse(service.isOccupied(section, occupancy(r1, 0, 20)),
+			"a train BEHIND the lamp is in the previous section, not this one");
+		assertTrue(service.isOccupied(section, occupancy(r1, 50, 70)), "a train ahead of the lamp is in it");
+	}
+
+	@Test
+	public void theSectionEndIsTheDistanceToItsOwnBoundary() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Rail r3 = rail(new Position(200, 0, 0), new Position(300, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-end-ahead", r1, r2, r3);
+		addLamp(simulator, r1, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		// The one lamp's section covers all three rails (300 m); from arc 50 that is 250 m to its end.
+		assertEquals(250, service.sectionEndAheadM(r1.getHexId(), 50, 1, 0), 2.0);
+		assertEquals(Double.MAX_VALUE, service.sectionEndAheadM(r1.getHexId(), 50, -1, 0), 1e-9,
+			"no section is directed westbound on this rail");
+		assertEquals(Double.MAX_VALUE, service.sectionEndAheadM("missing", 50, 1, 0), 1e-9, "unknown rails are safe");
+	}
+
+	@Test
+	public void sectionsChainThroughConsecutiveLamps() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Rail r3 = rail(new Position(200, 0, 0), new Position(300, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-chain", r1, r2, r3);
+		final String first = addLamp(simulator, r1, 0, EAST);
+		final String second = addLamp(simulator, r3, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final MmtrDirectionalBlockService.Section a = service.sectionOfSignal(first);
+		final MmtrDirectionalBlockService.Section b = service.sectionOfSignal(second);
+		assertNotNull(a);
+		assertNotNull(b);
+		assertEquals(b, service.following(a), "the section beyond a lamp is the one that lamp starts");
+		assertNull(service.following(b), "nothing follows the last section of the line");
+
+		// While the near section is clear the movement is admitted to it; once occupied it waits for the
+		// section beyond - which is exactly the rule S3 will wire into the S1 stop.
+		assertEquals(a, service.sectionAhead(r1.getHexId(), 10, 1, 0, ObjectArrayList.of()));
+		assertEquals(b, service.sectionAhead(r1.getHexId(), 10, 1, 0, occupancy(r1, 10, 30)));
+		assertNull(service.sectionAhead(r1.getHexId(), 10, -1, 0, ObjectArrayList.of()), "no westbound section");
 	}
 }

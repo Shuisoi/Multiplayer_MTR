@@ -1,10 +1,13 @@
 package org.mtr.core.mmtr.signal;
 
+import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.Data;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
+import org.mtr.core.data.VehiclePosition;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry;
 import org.mtr.core.tool.Vector;
@@ -153,6 +156,8 @@ public final class MmtrDirectionalBlockService {
 	private final Object2ObjectOpenHashMap<String, Section> sectionsBySignal = new Object2ObjectOpenHashMap<>();
 	/** Rail hex -> every section covering it (a rail belongs to sections in both directions). */
 	private final Object2ObjectOpenHashMap<String, ObjectArrayList<Section>> sectionsByRail = new Object2ObjectOpenHashMap<>();
+	/** Section id -> the section that continues it (the exit lamp's section), when the walk ended at a lamp. */
+	private final Object2ObjectOpenHashMap<String, Section> followingBySection = new Object2ObjectOpenHashMap<>();
 	private String cachedSignature = "";
 
 	public MmtrDirectionalBlockService(Simulator simulator) {
@@ -207,6 +212,90 @@ public final class MmtrDirectionalBlockService {
 		return sectionsByRail.size();
 	}
 
+	/** The section that continues {@code section} in its travel direction, or null at the end of the line. */
+	public @Nullable Section following(@Nullable Section section) {
+		return section == null ? null : followingBySection.get(section.id);
+	}
+
+	/**
+	 * 占用投影: whether any vehicle's footprint overlaps {@code section}.
+	 *
+	 * <p>Section occupancy is a plain interval test per span against the shared occupancy trees - the
+	 * span is already an arc window on one rail in the same ordered-position-1 space the trees use, so
+	 * no conversion and no write-side change is needed. A section spanning several rails is occupied if
+	 * ANY of its spans is.</p>
+	 *
+	 * @param trees the occupancy trees to test (null = the simulator's live train trees)
+	 */
+	public boolean isOccupied(Section section, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
+			trees == null ? simulator.mmtrOccupancyTrees() : trees;
+		if (occupancyTrees == null || occupancyTrees.isEmpty()) {
+			return false;
+		}
+		for (final RailSpan span : section.spans) {
+			final Rail rail = railByHex.get(span.railHex);
+			if (rail == null || span.lengthM() <= 1e-9) {
+				continue;
+			}
+			final Position[] ordered = rail.mmtrOrderedPositions();
+			if (ordered == null || ordered.length < 2) {
+				continue;
+			}
+			for (int i = 0; i < occupancyTrees.size(); i++) {
+				final VehiclePosition vehiclePosition = Data.tryGet(occupancyTrees.get(i), ordered[0], ordered[1]);
+				if (vehiclePosition != null && vehiclePosition.getClosestOverlap(span.arcFromM, span.arcToM, false, 0) >= 0) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * How far the movement may still run before its section ends, or {@link Double#MAX_VALUE} when it is
+	 * not in any section of {@code railHex} for that heading (an unsignalled stretch: nothing to hold at).
+	 *
+	 * <p>This is the S2 building block for the S1 stop rule ("a movement stops at its section boundary"),
+	 * not yet wired: callers decide whether to hold at the boundary or only when the section beyond is
+	 * occupied.</p>
+	 */
+	public double sectionEndAheadM(@Nullable String railHex, double arcM, double headingX, double headingZ) {
+		final Section section = sectionAt(railHex, arcM, headingX, headingZ);
+		if (section == null) {
+			return Double.MAX_VALUE;
+		}
+		double remaining = 0;
+		boolean reached = false;
+		for (final RailSpan span : section.spans) {
+			if (!reached) {
+				if (!span.railHex.equals(railHex) || !span.containsArc(arcM)) {
+					continue;
+				}
+				reached = true;
+				// The span is stored low..high; the travel direction decides which end we are heading for.
+				remaining += span.matchesHeading(headingX, headingZ) ? span.arcToM - arcM : arcM - span.arcFromM;
+				continue;
+			}
+			remaining += span.lengthM();
+		}
+		// The arc can sit exactly on the section's far boundary (half-open spans): not in it any more.
+		return reached ? Math.max(0, remaining) : Double.MAX_VALUE;
+	}
+
+	/**
+	 * The section a movement at {@code (railHex, arcM)} heading {@code (headingX, headingZ)} must be
+	 * cleared to enter next: its own section while that is clear, otherwise the section beyond it.
+	 * Null when the movement is not in a section at all.
+	 */
+	public @Nullable Section sectionAhead(@Nullable String railHex, double arcM, double headingX, double headingZ, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		final Section current = sectionAt(railHex, arcM, headingX, headingZ);
+		if (current == null) {
+			return null;
+		}
+		return isOccupied(current, trees) ? following(current) : current;
+	}
+
 	/** Lamp key -> section (diagnostics/tests). */
 	public Map<String, Section> allSections() {
 		refresh();
@@ -228,6 +317,7 @@ public final class MmtrDirectionalBlockService {
 		railByHex.clear();
 		sectionsBySignal.clear();
 		sectionsByRail.clear();
+		followingBySection.clear();
 		simulator.rails.forEach(rail -> railByHex.put(rail.getHexId(), rail));
 
 		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
@@ -246,6 +336,18 @@ public final class MmtrDirectionalBlockService {
 			sectionsBySignal.put(key, section);
 			for (final RailSpan span : section.spans) {
 				sectionsByRail.computeIfAbsent(span.railHex, ignored -> new ObjectArrayList<>()).add(section);
+			}
+		}
+
+		// Chain the sections: a section that ended at a lamp is continued by the section that lamp starts.
+		for (final Section section : sectionsBySignal.values()) {
+			final String exitKey = section.exitSignalKey;
+			if (exitKey == null || exitKey.isEmpty()) {
+				continue;
+			}
+			final Section next = sectionsBySignal.get(exitKey);
+			if (next != null && next != section) {
+				followingBySection.put(section.id, next);
 			}
 		}
 	}
