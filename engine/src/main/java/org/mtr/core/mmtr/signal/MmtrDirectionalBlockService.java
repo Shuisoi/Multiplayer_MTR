@@ -1,0 +1,573 @@
+package org.mtr.core.mmtr.signal;
+
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.jspecify.annotations.Nullable;
+import org.mtr.core.data.Position;
+import org.mtr.core.data.Rail;
+import org.mtr.core.simulation.Simulator;
+import org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry;
+import org.mtr.core.tool.Vector;
+
+import java.util.Map;
+
+/**
+ * 闭塞区间 v2（S1，纯数据）: <strong>灯到灯的跨轨有向区间</strong>.
+ *
+ * <p>The v1 service ({@link MmtrBlockService}) cut sections <em>inside one rail</em> and treated every
+ * rail end node as a boundary. That model cannot represent how signals are actually placed on a real
+ * map: a lamp stands next to a node, so its projection arc is 0 or the rail length, and the v1 guard
+ * "sitting at an end node -&gt; skip" therefore discarded <strong>every</strong> lamp. The live world
+ * ended up partitioned into "one rail = one section" with no lamp involved at all
+ * ({@code blocks all}: 134 rails = 134 sections, 0 rails cut by a lamp).</p>
+ *
+ * <p>v2 restores the real meaning:</p>
+ * <blockquote>
+ *   A section is what one lamp protects: starting at the lamp, walking in the direction the lamp faces,
+ *   up to the next lamp facing the same way (exclusive) - or until the walk cannot continue.
+ * </blockquote>
+ *
+ * <p>Consequences, all deliberate:</p>
+ * <ul>
+ *   <li>a section <strong>spans rail boundaries</strong>: an ordered list of
+ *       {@code (railHex, arcFrom, arcTo)} spans, not a single-rail arc interval;</li>
+ *   <li>sections are <strong>directed</strong>: the same arc of the same rail belongs to different
+ *       sections in the two travel directions;</li>
+ *   <li><strong>only lamps create boundaries</strong> - rail end nodes no longer do.</li>
+ * </ul>
+ *
+ * <p>Arc space is the ordered-position-1 space the shared occupancy trees already use
+ * ({@link MmtrBlockService#projectArc} documents the mapping), so occupancy projection and S1 stops can
+ * consume these sections without conversion.</p>
+ */
+public final class MmtrDirectionalBlockService {
+
+	/** How far from a rail a lamp may stand and still be taken as protecting it. */
+	public static final double SIGNAL_BIND_TOLERANCE_M = 8.0;
+
+	/** Sampling step for projecting a lamp and for reading a rail's heading. */
+	private static final double SAMPLE_STEP_M = 0.25;
+
+	/** Safety caps: a malformed graph must never spin forever. */
+	private static final int MAX_RAILS_PER_SECTION = 256;
+	private static final double MAX_SECTION_LENGTH_M = 4000;
+
+	/** One rail's slice of a section, in ordered-position-1 arc space, with its travel direction. */
+	public static final class RailSpan {
+		public final String railHex;
+		public final double arcFromM;
+		public final double arcToM;
+		/** Unit travel direction (x, z) over this span. */
+		public final double headingX;
+		public final double headingZ;
+
+		RailSpan(String railHex, double arcFromM, double arcToM, double headingX, double headingZ) {
+			this.railHex = railHex;
+			this.arcFromM = Math.min(arcFromM, arcToM);
+			this.arcToM = Math.max(arcFromM, arcToM);
+			this.headingX = headingX;
+			this.headingZ = headingZ;
+		}
+
+		public double lengthM() {
+			return arcToM - arcFromM;
+		}
+
+		/** Whether {@code arc} lies in this span (half-open). */
+		public boolean containsArc(double arc) {
+			return arc >= arcFromM - 1e-6 && arc < arcToM - 1e-6;
+		}
+
+		/** Whether a movement heading {@code (x, z)} travels this span the same way. */
+		public boolean matchesHeading(double x, double z) {
+			return headingX * x + headingZ * z > 0.1;
+		}
+
+		@Override
+		public String toString() {
+			return shortHex(railHex) + "[" + round(arcFromM) + ".." + round(arcToM) + "]";
+		}
+	}
+
+	/** One directed block section: the movement a single lamp authorises. */
+	public static final class Section {
+		/** Stable id: the protecting lamp's {@code x,y,z} key (a lamp has one outgoing section). */
+		public final String id;
+		/** The lamp that starts this section. */
+		public final String entrySignalKey;
+		/** The lamp that ends it, or empty when the walk ran out (dead end / no further lamp). */
+		public @Nullable String exitSignalKey;
+		/** Ordered spans, in the direction of travel. */
+		public final ObjectArrayList<RailSpan> spans = new ObjectArrayList<>();
+		/** Whether the walk stopped because it could not continue rather than at another lamp. */
+		public boolean endsAtDeadEnd;
+
+		Section(String id, String entrySignalKey) {
+			this.id = id;
+			this.entrySignalKey = entrySignalKey;
+		}
+
+		public double lengthM() {
+			double length = 0;
+			for (final RailSpan span : spans) {
+				length += span.lengthM();
+			}
+			return length;
+		}
+
+		/** The arc at which this section begins, on the rail it begins on. */
+		public double entryArcM() {
+			return spans.isEmpty() ? 0 : spans.get(0).arcFromM;
+		}
+
+		/** The rail the movement enters this section on. */
+		public @Nullable String entryRailHex() {
+			return spans.isEmpty() ? null : spans.get(0).railHex;
+		}
+
+		@Override
+		public String toString() {
+			return id + " -> " + (exitSignalKey == null || exitSignalKey.isEmpty() ? "DEAD_END" : exitSignalKey)
+				+ " spans=" + spans.size() + " len=" + round(lengthM());
+		}
+	}
+
+	/** One lamp resolved to the rail it protects and the direction it authorises. */
+	public static final class ProtectedRail {
+		public final Rail rail;
+		public final double arcM;
+		public final double headingX;
+		public final double headingZ;
+
+		ProtectedRail(Rail rail, double arcM, double headingX, double headingZ) {
+			this.rail = rail;
+			this.arcM = arcM;
+			this.headingX = headingX;
+			this.headingZ = headingZ;
+		}
+	}
+
+	private final Simulator simulator;
+	private final Object2ObjectOpenHashMap<String, Rail> railByHex = new Object2ObjectOpenHashMap<>();
+	/** Lamp key -> the section it starts. */
+	private final Object2ObjectOpenHashMap<String, Section> sectionsBySignal = new Object2ObjectOpenHashMap<>();
+	/** Rail hex -> every section covering it (a rail belongs to sections in both directions). */
+	private final Object2ObjectOpenHashMap<String, ObjectArrayList<Section>> sectionsByRail = new Object2ObjectOpenHashMap<>();
+	private String cachedSignature = "";
+
+	public MmtrDirectionalBlockService(Simulator simulator) {
+		this.simulator = simulator;
+	}
+
+	// ---------------------------------------------------------------- queries
+
+	/** The section a lamp starts, or null when the lamp protects nothing. */
+	public @Nullable Section sectionOfSignal(String signalKey) {
+		refresh();
+		return sectionsBySignal.get(signalKey);
+	}
+
+	/** Every section covering {@code railHex} (both directions); empty when unknown. */
+	public ObjectArrayList<Section> sectionsOfRail(@Nullable String railHex) {
+		refresh();
+		if (railHex == null || railHex.isEmpty()) {
+			return new ObjectArrayList<>();
+		}
+		final ObjectArrayList<Section> sections = sectionsByRail.get(railHex);
+		return sections == null ? new ObjectArrayList<>() : sections;
+	}
+
+	/**
+	 * The section containing {@code arcM} of {@code railHex} for a movement heading {@code (headingX,
+	 * headingZ)}, or null. The heading filter is what makes this directional: the same point belongs to
+	 * different sections in opposite directions.
+	 */
+	public @Nullable Section sectionAt(@Nullable String railHex, double arcM, double headingX, double headingZ) {
+		if (railHex == null || railHex.isEmpty()) {
+			return null;
+		}
+		for (final Section section : sectionsOfRail(railHex)) {
+			for (final RailSpan span : section.spans) {
+				if (span.railHex.equals(railHex) && span.containsArc(arcM) && span.matchesHeading(headingX, headingZ)) {
+					return section;
+				}
+			}
+		}
+		return null;
+	}
+
+	public int sectionCount() {
+		refresh();
+		return sectionsBySignal.size();
+	}
+
+	/** How many rails carry at least one directional section (diagnostics). */
+	public int railsWithSections() {
+		refresh();
+		return sectionsByRail.size();
+	}
+
+	/** Lamp key -> section (diagnostics/tests). */
+	public Map<String, Section> allSections() {
+		refresh();
+		return sectionsBySignal;
+	}
+
+	// ---------------------------------------------------------------- build
+
+	private void refresh() {
+		final String signature = signature();
+		if (signature.equals(cachedSignature)) {
+			return;
+		}
+		rebuild();
+		cachedSignature = signature;
+	}
+
+	private void rebuild() {
+		railByHex.clear();
+		sectionsBySignal.clear();
+		sectionsByRail.clear();
+		simulator.rails.forEach(rail -> railByHex.put(rail.getHexId(), rail));
+
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			final String key = MmtrSignalRegistry.key(entry.x, entry.y, entry.z);
+			if (sectionsBySignal.containsKey(key)) {
+				continue;
+			}
+			final ProtectedRail protectedRail = resolveProtectedRail(entry);
+			if (protectedRail == null) {
+				continue;
+			}
+			final Section section = buildSection(key, protectedRail);
+			if (section.spans.isEmpty()) {
+				continue;
+			}
+			sectionsBySignal.put(key, section);
+			for (final RailSpan span : section.spans) {
+				sectionsByRail.computeIfAbsent(span.railHex, ignored -> new ObjectArrayList<>()).add(section);
+			}
+		}
+	}
+
+	/**
+	 * The rail a lamp protects and the direction it authorises.
+	 *
+	 * <p>An explicit {@code target} (a BOUND bind) wins. Otherwise the lamp is matched <strong>by
+	 * direction</strong>: among the rails within tolerance take the one the lamp stands beside and looks
+	 * along. The v1 inference used nearest-rail-only, so a lamp could bind to a rail behind it.</p>
+	 */
+	public @Nullable ProtectedRail resolveProtectedRail(SignalEntry entry) {
+		final double lampX = entry.x + 0.5;
+		final double lampY = entry.y + 0.5;
+		final double lampZ = entry.z + 0.5;
+		final double[] heading = headingOf(entry.angle);
+
+		if (entry.target != null && !entry.target.isEmpty()) {
+			final Rail bound = railByHex.get(entry.target);
+			if (bound != null) {
+				final Double arc = MmtrBlockService.projectArc(bound, lampX, lampY, lampZ);
+				if (arc != null) {
+					return new ProtectedRail(bound, arc, heading[0], heading[1]);
+				}
+			}
+			// A stale target falls through to directional inference (the rail was redrawn).
+		}
+
+		Rail best = null;
+		double bestArc = 0;
+		double bestScore = Double.MAX_VALUE;
+		for (final Rail rail : simulator.rails) {
+			final Double arc = MmtrBlockService.projectArc(rail, lampX, lampY, lampZ);
+			if (arc == null) {
+				continue;
+			}
+			final double length = rail.railMath.getLength();
+			if (length <= 1e-6) {
+				continue;
+			}
+			// A lamp that projects into the MIDDLE of a rail protects that rail, and the usable stretch
+			// is the part ahead of it in the facing direction.
+			final boolean interior = arc > SAMPLE_STEP_M && arc < length - SAMPLE_STEP_M;
+			if (!interior) {
+				continue;
+			}
+			final double[] railHeading = headingAt(rail, arc);
+			final double dot = railHeading[0] * heading[0] + railHeading[1] * heading[1];
+			if (dot <= 0.1) {
+				continue;
+			}
+			final double aheadM = length - arc;
+			if (aheadM <= 1e-3) {
+				continue;
+			}
+			final double score = (1.0 - dot) * 1000 + distanceSq(rail, arc, lampX, lampY, lampZ);
+			if (score < bestScore) {
+				bestScore = score;
+				best = rail;
+				bestArc = arc;
+			}
+		}
+		if (best != null) {
+			return new ProtectedRail(best, bestArc, heading[0], heading[1]);
+		}
+
+		// No rail under the lamp: it stands on a node (the normal case for a wayside signal, and the
+		// case v1 could not express). The node is shared by several rails, so pick the one that LEAVES
+		// the node along the direction the lamp faces - never the rail that merely ends there, which is
+		// the stretch the lamp has already passed and therefore does not protect.
+		final Position node = nearestNode(lampX, lampY, lampZ);
+		if (node == null) {
+			return null;
+		}
+		final Object2ObjectOpenHashMap<Position, Rail> atNode = simulator.positionsToRail.get(node);
+		if (atNode == null) {
+			return null;
+		}
+		Rail chosen = null;
+		double chosenDot = 0.1;
+		for (final Rail candidate : atNode.values()) {
+			final double arc = MmtrBlockService.arcOfNode(candidate, node);
+			if (Double.isNaN(arc)) {
+				continue;
+			}
+			final double length = candidate.railMath.getLength();
+			if (length <= 1e-6) {
+				continue;
+			}
+			// Direction leaving the node: increasing arc when the node is at arc 0, else decreasing arc.
+			final double[] outgoing = outgoingHeading(candidate, arc, length);
+			final double dot = outgoing[0] * heading[0] + outgoing[1] * heading[1];
+			if (dot > chosenDot) {
+				chosenDot = dot;
+				chosen = candidate;
+			}
+		}
+		return chosen == null ? null : new ProtectedRail(chosen, MmtrBlockService.arcOfNode(chosen, node), heading[0], heading[1]);
+	}
+
+	/**
+	 * The node nearest to a world position (a lamp block sits on a node block). Only real graph nodes
+	 * count: a rail endpoint with no connecting rails is not a node a signal would stand on, and binding
+	 * to it would leave the lamp protecting nothing.
+	 */
+	private @Nullable Position nearestNode(double x, double y, double z) {
+		Position best = null;
+		double bestDistanceSq = Double.MAX_VALUE;
+		for (final Position node : simulator.positionsToRail.keySet()) {
+			final Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
+			if (neighbours == null || neighbours.isEmpty()) {
+				continue;
+			}
+			final double dx = node.getX() - x;
+			final double dy = node.getY() - y;
+			final double dz = node.getZ() - z;
+			final double distanceSq = dx * dx + dy * dy + dz * dz;
+			if (distanceSq < bestDistanceSq) {
+				bestDistanceSq = distanceSq;
+				best = node;
+			}
+		}
+		return bestDistanceSq <= SIGNAL_BIND_TOLERANCE_M * SIGNAL_BIND_TOLERANCE_M ? best : null;
+	}
+
+	/** Unit heading (x, z) leaving {@code node} along {@code rail} (the node sits at {@code nodeArc}). */
+	private static double[] outgoingHeading(Rail rail, double nodeArc, double length) {
+		final boolean nodeAtLowArc = nodeArc <= length / 2;
+		final double[] positiveArcHeading = headingAt(rail, nodeAtLowArc ? 0 : length);
+		return nodeAtLowArc ? positiveArcHeading : new double[]{-positiveArcHeading[0], -positiveArcHeading[1]};
+	}
+
+	/**
+	 * Walk from the lamp in the direction it faces until the next lamp (exclusive) or the end of the
+	 * line, collecting the spans walked.
+	 *
+	 * <p>Exactly one continuation is followed at a node: the straightest one (highest dot product).
+	 * Taking every branch would make one lamp authorise a whole junction fan, which is not what a
+	 * wayside signal means; which branch is actually set is the point authority's business, and the S4
+	 * display layer narrows by the set route on top of this.</p>
+	 */
+	private Section buildSection(String entrySignalKey, ProtectedRail protectedRail) {
+		final Section section = new Section(entrySignalKey, entrySignalKey);
+		final Rail firstRail = protectedRail.rail;
+		final String firstHex = firstRail.getHexId();
+		final double length = firstRail.railMath.getLength();
+		final double[] railHeading = headingAt(firstRail, protectedRail.arcM);
+		final boolean forward = railHeading[0] * protectedRail.headingX + railHeading[1] * protectedRail.headingZ > 0;
+		final double entryArc = clamp(protectedRail.arcM, 0, length);
+		final double exitArc = forward ? length : 0;
+		final double headingX = forward ? railHeading[0] : -railHeading[0];
+		final double headingZ = forward ? railHeading[1] : -railHeading[1];
+
+		if (Math.abs(exitArc - entryArc) > 1e-6) {
+			section.spans.add(new RailSpan(firstHex, entryArc, exitArc, headingX, headingZ));
+		}
+
+		final Position exitNode = forward ? farNode(firstRail, true) : farNode(firstRail, false);
+		walk(section, firstHex, exitNode, headingX, headingZ, 1);
+		return section;
+	}
+
+	/** Continue the section from {@code node} (having just left {@code cameFromHex}) in {@code heading}. */
+	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount) {
+		if (node == null) {
+			section.endsAtDeadEnd = true;
+			return;
+		}
+
+		// A lamp standing at this node ends the section here: both nodes of a boundary carry a lamp (the
+		// one facing each way), and either way the lamp marks the block boundary the movement stops at.
+		// A lamp facing the same way is NOT exempt - it starts the next section, which begins here.
+		final SignalEntry lampHere = lampAt(node);
+		if (lampHere != null) {
+			section.exitSignalKey = MmtrSignalRegistry.key(lampHere.x, lampHere.y, lampHere.z);
+			return;
+		}
+
+		final Rail next = nextRail(node, cameFromHex, headingX, headingZ);
+		if (next == null) {
+			section.endsAtDeadEnd = true;
+			return;
+		}
+		if (railCount >= MAX_RAILS_PER_SECTION || section.lengthM() >= MAX_SECTION_LENGTH_M) {
+			section.endsAtDeadEnd = true;
+			return;
+		}
+
+		final String nextHex = next.getHexId();
+		final double arcOfNode = MmtrBlockService.arcOfNode(next, node);
+		final double nextLength = next.railMath.getLength();
+		if (Double.isNaN(arcOfNode)) {
+			section.endsAtDeadEnd = true;
+			return;
+		}
+		final double[] nextHeading = headingAt(next, arcOfNode);
+		final boolean forward = nextHeading[0] * headingX + nextHeading[1] * headingZ > 0;
+		final double toArc = forward ? nextLength : 0;
+		final double spanHeadingX = forward ? nextHeading[0] : -nextHeading[0];
+		final double spanHeadingZ = forward ? nextHeading[1] : -nextHeading[1];
+		if (Math.abs(toArc - arcOfNode) > 1e-6) {
+			section.spans.add(new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
+		}
+		walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1);
+	}
+
+	/** The lamp registered at {@code node}, if any (a lamp sits on a node block). */
+	private @Nullable SignalEntry lampAt(Position node) {
+		return simulator.mmtrSignals.get((int) node.getX(), (int) node.getY(), (int) node.getZ());
+	}
+
+	/**
+	 * The rail to continue onto at {@code node}: the straightest continuation in the travel direction,
+	 * never the rail just left.
+	 */
+	private @Nullable Rail nextRail(Position node, String cameFromHex, double headingX, double headingZ) {
+		final Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
+		if (neighbours == null) {
+			return null;
+		}
+		Rail best = null;
+		double bestDot = 0.1;
+		for (final Map.Entry<Position, Rail> entry : neighbours.entrySet()) {
+			final Rail candidate = entry.getValue();
+			if (candidate.getHexId().equals(cameFromHex)) {
+				continue;
+			}
+			final double arc = MmtrBlockService.arcOfNode(candidate, node);
+			if (Double.isNaN(arc)) {
+				continue;
+			}
+			final double[] candidateHeading = headingAt(candidate, arc);
+			for (final double sign : new double[]{1, -1}) {
+				final double dot = sign * (candidateHeading[0] * headingX + candidateHeading[1] * headingZ);
+				if (dot > bestDot) {
+					bestDot = dot;
+					best = candidate;
+				}
+			}
+		}
+		return best;
+	}
+
+	// ---------------------------------------------------------------- geometry helpers
+
+	/** The rail's two end nodes as {@code [lowArcNode, highArcNode]} (arc 0 first). */
+	private static Position @Nullable [] orderedNodes(Rail rail) {
+		final Position[] positions = rail.mmtrOrderedPositions();
+		if (positions == null || positions.length < 2 || positions[0] == null || positions[1] == null) {
+			return null;
+		}
+		return positions;
+	}
+
+	/** The far end node of {@code rail} in the direction of increasing ({@code true}) or decreasing arc. */
+	private static @Nullable Position farNode(Rail rail, boolean towardPositiveArc) {
+		final Position[] nodes = orderedNodes(rail);
+		if (nodes == null) {
+			return null;
+		}
+		// mmtrOrderedPositions() returns the endpoints ordered by Position.compareTo, which is the same
+		// ordering RailMath's arc space is built from: index 0 = arc 0.
+		return towardPositiveArc ? nodes[1] : nodes[0];
+	}
+
+	/** Unit heading (x, z) for an MTR signal facing angle. */
+	private static double[] headingOf(float angleDegrees) {
+		// MTR stores the signal block's FACING rotation (Minecraft convention: south = 0, west = 90,
+		// north = 180, east = 270). DirectionHelper maps SOUTH->0 / WEST->90 / NORTH->180 / EAST->270,
+		// and BlockSignalBase.getAngle adds 22.5/45 for the diagonal states.
+		final double radians = Math.toRadians(angleDegrees);
+		final double sin = Math.sin(radians);
+		final double cos = Math.cos(radians);
+		// Minecraft facing vectors: rotation 0 -> +Z (south), 90 -> -X (west), 180 -> -Z (north),
+		// 270 -> +X (east).
+		return new double[]{-sin, -cos};
+	}
+
+	/** Unit heading (x, z) of a rail at {@code arcM}, in the direction of increasing arc. */
+	private static double[] headingAt(Rail rail, double arcM) {
+		final double length = rail.railMath.getLength();
+		final double a = clamp(arcM - SAMPLE_STEP_M, 0, length);
+		final double b = clamp(arcM + SAMPLE_STEP_M, 0, length);
+		final Vector from = rail.railMath.getPosition(a, false);
+		final Vector to = rail.railMath.getPosition(b, false);
+		final double dx = to.x() - from.x();
+		final double dz = to.z() - from.z();
+		final double norm = Math.sqrt(dx * dx + dz * dz);
+		return norm < 1e-9 ? new double[]{0, 0} : new double[]{dx / norm, dz / norm};
+	}
+
+	private static double distanceSq(Rail rail, double arcM, double x, double y, double z) {
+		final Vector position = rail.railMath.getPosition(clamp(arcM, 0, rail.railMath.getLength()), false);
+		final double dx = position.x() - x;
+		final double dy = position.y() - y;
+		final double dz = position.z() - z;
+		return dx * dx + dy * dy + dz * dz;
+	}
+
+	private String signature() {
+		int hash = simulator.rails.size() * 31 + 1;
+		for (final Rail rail : simulator.rails) {
+			hash = hash * 31 + rail.getHexId().hashCode();
+		}
+		hash = hash * 31 + simulator.mmtrSignals.signals.size();
+		for (final Map.Entry<String, SignalEntry> entry : simulator.mmtrSignals.signals.entrySet()) {
+			hash = hash * 31 + entry.getKey().hashCode();
+			hash = hash * 31 + Float.floatToIntBits(entry.getValue().angle);
+			hash = hash * 31 + (entry.getValue().target == null ? 0 : entry.getValue().target.hashCode());
+		}
+		return Integer.toHexString(hash);
+	}
+
+	private static double clamp(double value, double min, double max) {
+		return value < min ? min : Math.min(value, max);
+	}
+
+	private static String shortHex(String hex) {
+		return hex.length() <= 6 ? hex : hex.substring(0, 6);
+	}
+
+	private static double round(double value) {
+		return Math.round(value * 100.0) / 100.0;
+	}
+}
