@@ -25,16 +25,32 @@ export interface MmtrSectionEntry {
 	spans: MmtrSectionSpan[];
 }
 
+/** One piece of the server-side 区间 partition: a slice of one rail owned by exactly one block. */
+export interface MmtrSectionPiece {
+	hex: string;
+	from: number;
+	to: number;
+	/** The block (lamp key) this piece belongs to; empty on a piece that starts at a plain rail end. */
+	section: string;
+	/** The lamp standing at this piece's start - the boundary a driver sees. */
+	lamp: string;
+	/** Sampled world points along the piece, flattened [x, z, x, z, ...] - drawn as-is. */
+	points: number[];
+}
+
 /**
- * 区间图层 feed (闭塞区间 v2): polls {@code mmtr-sections}, the layer the console could not show before.
+ * 区间图层 feed (闭塞区间 v2): polls {@code mmtr-sections}.
  *
- * <p>A section is not a rail: it is what one lamp protects, so it crosses rail ends (in the dev world one
- * section is 30 rails / 601 m) and a lamp standing mid-rail splits one rail into two spans. That is why
- * each span carries an arc window rather than just a rail hex - the map slices the drawn rail.</p>
+ * <p>The ENGINE decides everything here - which pieces the line is divided into, and which block each
+ * piece belongs to. This service only stores and counts what it is sent: the console must not re-derive
+ * division (the whole point of 信号 = 进路 × 闭塞 is that the engine is the single source of truth).</p>
  */
 @Injectable({providedIn: "root"})
 export class MmtrSectionsService {
+	/** Each lamp's own block (what one lamp protects, walked lamp to lamp) - overlaps by design. */
 	public readonly sections = signal<MmtrSectionEntry[]>([]);
+	/** The line cut AT the lamps: one owner per piece, no overlaps - this is what the map draws. */
+	public readonly pieces = signal<MmtrSectionPiece[]>([]);
 	public readonly loading = signal(true);
 
 	private readonly httpClient = inject(HttpClient);
@@ -51,9 +67,10 @@ export class MmtrSectionsService {
 	}
 
 	private poll() {
-		this.httpClient.get<{data: {sections: MmtrSectionEntry[], railCount: number}}>(this.mapUrl("mmtr-sections")).subscribe({
+		this.httpClient.get<{data: {sections: MmtrSectionEntry[], pieces: MmtrSectionPiece[], railCount: number}}>(this.mapUrl("mmtr-sections")).subscribe({
 			next: response => {
 				this.sections.set(response.data.sections ?? []);
+				this.pieces.set(response.data.pieces ?? []);
 				this.loading.set(false);
 				this.schedule();
 			},

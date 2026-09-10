@@ -49,7 +49,7 @@ const lineMaterialSignalDoubleYellow = new LineMaterial({color: 0xFFE082, linewi
 const lineMaterialSectionA = new LineMaterial({color: 0x64B5F6, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
 const lineMaterialSectionB = new LineMaterial({color: 0x4DD0E1, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
 const lineMaterialSectionC = new LineMaterial({color: 0xBA68C8, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
-const lineMaterialSectionOccupied = new LineMaterial({color: 0xFF4D4F, linewidth: 5 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
+const lineMaterialSectionNoLamp = new LineMaterial({color: 0x8B949C, linewidth: 2 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.5, depthWrite: false});
 
 @Component({
 	selector: "app-map",
@@ -337,33 +337,43 @@ export class MapComponent implements AfterViewInit {
 	 */
 	private applySectionLayer() {
 		this.clearSectionLayer();
-		const sections = this.mmtrSectionsService.sections();
-		if (!this.mmtrLayersService.sections() || sections.length === 0) {
+		const pieces = this.mmtrSectionsService.pieces();
+		if (!this.mmtrLayersService.sections() || pieces.length === 0) {
 			return;
 		}
 		const canvas = this.canvasRef()?.nativeElement;
 		if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
-			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionOccupied].forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
+			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionNoLamp].forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
 		}
+		// One tint per BLOCK, assigned by the engine's own section key so a block keeps its colour as the
+		// map is rebuilt. A piece with no section is line no lamp reaches: drawn faint, which is exactly the
+		// signal-lamp coverage gap the operator wants to see.
+		const tints = new Map<string, LineMaterial>();
 		const tiers = [lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC];
 		const group = new THREE.Group();
-		sections.forEach((section, index) => {
-			const material = section.occupied ? lineMaterialSectionOccupied : tiers[index % tiers.length];
-			for (const span of section.spans) {
-				if (span.points.length < 4) {
-					continue;
-				}
-				const positions: number[] = [];
-				for (let i = 0; i + 1 < span.points.length; i += 2) {
-					positions.push(span.points[i], -span.points[i + 1], MapComponent.RAIL_Z_INDEX + 0.25);
-				}
-				const geometry = new LineGeometry();
-				geometry.setPositions(positions);
-				const line = new Line2(geometry, material);
-				line.computeLineDistances();
-				group.add(line);
+		for (const piece of pieces) {
+			if (piece.points.length < 4) {
+				continue;
 			}
-		});
+			let material = lineMaterialSectionNoLamp;
+			if (piece.section) {
+				let tint = tints.get(piece.section);
+				if (!tint) {
+					tint = tiers[tints.size % tiers.length];
+					tints.set(piece.section, tint);
+				}
+				material = tint;
+			}
+			const positions: number[] = [];
+			for (let i = 0; i + 1 < piece.points.length; i += 2) {
+				positions.push(piece.points[i], -piece.points[i + 1], MapComponent.RAIL_Z_INDEX + 0.25);
+			}
+			const geometry = new LineGeometry();
+			geometry.setPositions(positions);
+			const line = new Line2(geometry, material);
+			line.computeLineDistances();
+			group.add(line);
+		}
 		this.sectionLayer = group;
 		this.scene.add(this.sectionLayer);
 	}

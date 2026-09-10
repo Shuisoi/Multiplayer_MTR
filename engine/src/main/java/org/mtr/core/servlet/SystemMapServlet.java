@@ -583,6 +583,35 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 		result.add("sections", sections);
 		result.addProperty("railCount", simulator.rails.size());
+		// 区间图层的划分: the line cut AT the lamps, one piece per block, no overlaps. The sections above
+		// are each lamp's own block (they overlap by design when a lamp has no next lamp in its direction);
+		// this is what a driver sees on the ground, so the map draws THIS.
+		final com.google.gson.JsonArray pieces = new com.google.gson.JsonArray();
+		final java.util.HashMap<String, org.mtr.core.data.Rail> railsByHex = new java.util.HashMap<>();
+		simulator.rails.forEach(rail -> railsByHex.put(rail.getHexId(), rail));
+		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.PartitionPiece piece : simulator.mmtrDirectionalBlocks.partitionViews()) {
+			final com.google.gson.JsonObject p = new com.google.gson.JsonObject();
+			p.addProperty("hex", piece.railHex);
+			p.addProperty("from", piece.arcFromM);
+			p.addProperty("to", piece.arcToM);
+			p.addProperty("section", piece.sectionId);
+			p.addProperty("lamp", piece.boundaryLampKey);
+			// Geometry ships with the data: the console draws what it is given and decides nothing, so the
+			// piece's shape (a slice of a rail when a lamp stands mid-rail) comes from the engine.
+			final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
+			final org.mtr.core.data.Rail rail = railsByHex.get(piece.railHex);
+			if (rail != null && piece.arcToM > piece.arcFromM) {
+				for (int i = 0; i <= 8; i++) {
+					final double arc = piece.arcFromM + (piece.arcToM - piece.arcFromM) * i / 8;
+					final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
+					points.add(Math.round(point.x() * 100) / 100.0);
+					points.add(Math.round(point.z() * 100) / 100.0);
+				}
+			}
+			p.add("points", points);
+			pieces.add(p);
+		}
+		result.add("pieces", pieces);
 		return result;
 	}
 

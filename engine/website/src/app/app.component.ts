@@ -48,7 +48,7 @@ export class AppComponent {
 	protected lockedPoints = () => this.pointsService.points().filter(point => point.locked).length;
 	protected lineCount = () => this.linesService.lines().length;
 	/** 区间图层 summary: how many directional blocks, and how many of them are occupied right now. */
-	protected sectionCount = () => this.sectionsService.sections().length;
+	protected sectionCount = () => this.sectionsService.pieces().filter(piece => !!piece.section).length;
 	protected occupiedSectionCount = () => this.sectionsService.occupiedCount();
 
 	constructor() {

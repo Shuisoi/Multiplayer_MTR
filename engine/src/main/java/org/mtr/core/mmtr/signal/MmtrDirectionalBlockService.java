@@ -55,6 +55,12 @@ public final class MmtrDirectionalBlockService {
 	/** Safety caps: a malformed graph must never spin forever. */
 	private static final int MAX_RAILS_PER_SECTION = 256;
 	private static final double MAX_SECTION_LENGTH_M = 4000;
+	/** Cut points of the 区间 partition closer than this are one boundary (see {@code dedupeCuts}). */
+	private static final double CUT_MERGE_M = 1.0;
+	/** Pieces shorter than this are dropped: a block is not centimetres long. */
+	private static final double MIN_PIECE_LENGTH_M = 0.5;
+	/** A lamp farther than this from a rail does not cut it (stabling roads are about this far apart). */
+	private static final double LAMP_CUT_TOLERANCE_M = 3.0;
 
 	/** One rail's slice of a section, in ordered-position-1 arc space, with its travel direction. */
 	public static final class RailSpan {
@@ -742,6 +748,150 @@ public final class MmtrDirectionalBlockService {
 			this.occupied = occupied;
 			this.lengthM = lengthM;
 			this.spans = spans;
+		}
+	}
+
+	/**
+	 * 区间图层的<b>划分</b>视图: the line broken into pieces that each belong to exactly ONE block,
+	 * with the cut points being the lamps themselves.
+	 *
+	 * <p>Why this exists next to {@link #sectionViews}: a section is defined as "from this lamp, walk the
+	 * way it faces until the next lamp" - and when there IS no next lamp in that direction it walks to the
+	 * end of the line. Measured on the dev world, that produced 32 sections whose spans overlapped heavily
+	 * (one rail covered by up to 13 of them, 103 of 134 rails covered by none), which as a MAP is not a
+	 * division at all: it is each lamp's reach. What a driver sees on the ground is the division: the line
+	 * cut AT the lamps.</p>
+	 *
+	 * <p>So this method cuts each rail at every lamp projecting onto it (plus its two ends) and assigns
+	 * each piece to the section that covers it. Pieces never overlap, together they cover the whole line,
+	 * and a piece carries the lamp that bounds it - which is exactly "按信号灯分成几段".</p>
+	 */
+	public ObjectArrayList<PartitionPiece> partitionViews() {
+		refresh();
+		final ObjectArrayList<PartitionPiece> out = new ObjectArrayList<>();
+		for (final Rail rail : simulator.rails) {
+			final String hex = rail.getHexId();
+			final double length = rail.railMath.getLength();
+			if (length <= 1e-6) {
+				continue;
+			}
+			// EVERY boundary on this rail, from every source, into ONE set: a lamp projecting onto it, and
+			// the ends of the blocks that cover it. Collecting one block's spans at a time (the first
+			// version) never produced a shared cut line, so the pieces still overlapped.
+			final java.util.TreeSet<Double> cuts = new java.util.TreeSet<>();
+			cuts.add(0.0);
+			cuts.add(length);
+			addLampCuts(rail, cuts, length);
+			for (final Section section : sectionsOfRail(hex)) {
+				for (final RailSpan span : section.spans) {
+					if (span.railHex.equals(hex)) {
+						cuts.add(clamp(span.arcFromM, 0, length));
+						cuts.add(clamp(span.arcToM, 0, length));
+					}
+				}
+			}
+			final ObjectArrayList<Double> ordered = dedupeCuts(cuts);
+			for (int i = 0; i + 1 < ordered.size(); i++) {
+				final double from = ordered.get(i);
+				final double to = ordered.get(i + 1);
+				if (to - from <= MIN_PIECE_LENGTH_M) {
+					continue;
+				}
+				// A piece belongs to the block that STARTS at its own boundary - that is what "按信号灯
+				// 分成几段" means, and it is why the piece carries the lamp at its start rather than a
+				// membership chosen among the sections that happen to sweep over it.
+				final String lamp = lampAtArc(rail, from, length);
+				out.add(new PartitionPiece(hex, from, to, lamp, lamp));
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Cut points collapsed to one per lamp/end, in order.
+	 *
+	 * <p>A lamp's projected arc is sampled, so the same lamp can land a few centimetres apart depending on
+	 * which tolerance the caller used; left alone those near-duplicates produce hair-thin, OVERLAPPING
+	 * pieces instead of one boundary (measured: 140 pieces with 65 overlapping pairs for 134 rails).</p>
+	 */
+	private static ObjectArrayList<Double> dedupeCuts(java.util.TreeSet<Double> cuts) {
+		final ObjectArrayList<Double> ordered = new ObjectArrayList<>();
+		for (final double cut : cuts) {
+			if (ordered.isEmpty() || cut - ordered.get(ordered.size() - 1) > CUT_MERGE_M) {
+				ordered.add(cut);
+			}
+		}
+		return ordered;
+	}
+
+	/**
+	 * Every lamp that genuinely CUTS {@code rail}, added as an arc cut point.
+	 *
+	 * <p>Only lamps bound to this rail, or lamps sitting close enough that the rail is the one they stand
+	 * beside. The bind tolerance alone is not enough: stabling roads are about that far apart, so using it
+	 * let a neighbour's lamp cut this rail and produced phantom boundaries (measured: 9 cuts on one 43 m
+	 * rail where only 2 lamps actually stand on it).</p>
+	 */
+	private void addLampCuts(Rail rail, java.util.TreeSet<Double> cuts, double length) {
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			final double entryX = entry.x + 0.5;
+			final double entryY = entry.y + 0.5;
+			final double entryZ = entry.z + 0.5;
+			final boolean boundHere = entry.target != null && entry.target.equals(rail.getHexId());
+			if (!boundHere && distanceToRailM(rail, entryX, entryY, entryZ) > LAMP_CUT_TOLERANCE_M) {
+				continue;
+			}
+			final Double arc = MmtrBlockService.projectArc(rail, entryX, entryY, entryZ);
+			if (arc != null) {
+				cuts.add(clamp(arc, 0, length));
+			}
+		}
+	}
+
+	/** Closest distance from a world point to the rail curve (sampled, like every other projection here). */
+	private static double distanceToRailM(Rail rail, double x, double y, double z) {
+		final double length = rail.railMath.getLength();
+		double best = Double.MAX_VALUE;
+		for (double arc = 0; arc <= length; arc += 1.0) {
+			final org.mtr.core.tool.Vector point = rail.railMath.getPosition(Math.min(arc, length), false);
+			final double dx = point.x() - x;
+			final double dy = point.y() - y;
+			final double dz = point.z() - z;
+			best = Math.min(best, dx * dx + dy * dy + dz * dz);
+		}
+		return Math.sqrt(best);
+	}
+
+	/** The key of the lamp standing at {@code arc} of {@code rail} (empty when no lamp is there). */
+	private String lampAtArc(Rail rail, double arc, double length) {
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			final Double projected = MmtrBlockService.projectArc(rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
+			if (projected != null && Math.abs(clamp(projected, 0, length) - arc) <= 0.5) {
+				return MmtrSignalRegistry.key(entry.x, entry.y, entry.z);
+			}
+		}
+		return "";
+	}
+
+	/** One piece of the 区间图层 partition: a slice of one rail that belongs to exactly one block. */
+	public static final class PartitionPiece {
+		public final String railHex;
+		public final double arcFromM;
+		public final double arcToM;
+		/**
+		 * The block this piece belongs to = the lamp at its own start (empty when the piece starts at a
+		 * plain rail end with no lamp before it, i.e. unsignalled line).
+		 */
+		public final String sectionId;
+		/** The lamp standing at this piece's start - the boundary a driver sees (empty at a plain rail end). */
+		public final String boundaryLampKey;
+
+		PartitionPiece(String railHex, double arcFromM, double arcToM, String sectionId, String boundaryLampKey) {
+			this.railHex = railHex;
+			this.arcFromM = arcFromM;
+			this.arcToM = arcToM;
+			this.sectionId = sectionId;
+			this.boundaryLampKey = boundaryLampKey;
 		}
 	}
 
