@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -281,37 +282,70 @@ public final class MmtrSignalAspectTests {
 	}
 
 	/**
-	 * B3b: the chain counts SECTIONS. A rail split by a wayside signal is two steps, so a train standing
-	 * in the far section leaves the signal protecting the near one at a caution - it must not paint it red
-	 * (B2 already lets the movement run up to that signal). Without a split the same layout is red, which
-	 * is the pre-B3b reading and is asserted on its own network first.
+	 * B3b, re-expressed for 闭塞区间 v2: the chain counts BLOCKS. Under v2 a block is what one lamp
+	 * protects, so a train standing beyond the NEXT lamp leaves the signal protecting the near block at a
+	 * caution - it must not paint it red (B2/S3 already let the movement run up to that signal). Without a
+	 * second lamp the whole rail is one block, so the same occupancy reads red.
+	 *
+	 * <p>Changed from the v1 case on purpose (notes/109): v1 put both "sections" on one rail by cutting it
+	 * at a mid-rail lamp. v2 is direction-aware - a lamp protects the rail it LOOKS along - so the same
+	 * two-block reading is now created by a SECOND LAMP, which is what actually happens on a map. The
+	 * occupancy is also written into the shared occupancy trees, because the v2 chain reads them (the same
+	 * source S1's own stop uses); the v1 reserved-colour channel alone no longer decides the aspect.</p>
 	 */
 	@Test
-	public void theChainCountsSectionsOnASplitRail() {
-		// Unsplit: one section, so an occupied rail is the protected section itself.
-		final Simulator whole = splitRailSim("build/mmtr-aspect-whole-rail", false);
-		final Rail wholeRail = whole.rails.stream().filter(rail -> rail.railMath.getLength() > 100).findFirst().orElseThrow();
-		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> oneSection = whole.mmtrBlocks.blocksOf(wholeRail.getHexId());
-		assertEquals(1, oneSection.size(), "no light on the rail: one section");
-		occupySection(whole, wholeRail, oneSection.get(0));
-		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(whole, whole.mmtrRoutes).aspectFrom(wholeRail.getHexId(), new Position(0, 0, 0)),
-			"unsplit rail: the occupied rail is the protected section itself (red)");
-
-		// Split by a wayside light at arc 100 of the 200 m rail.
+	public void theChainCountsBlocksBetweenLamps() {
+		// Two lamps on the rail: the first protects [0, 100), the second protects [100, 200).
 		final Simulator sim = splitRailSim("build/mmtr-aspect-sections", true);
 		final Rail longRail = sim.rails.stream().filter(rail -> rail.railMath.getLength() > 100).findFirst().orElseThrow();
-		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> sections = sim.mmtrBlocks.blocksOf(longRail.getHexId());
-		assertEquals(2, sections.size(), "the light splits the rail");
+		assertEquals(2, sim.mmtrBlocks.blocksOf(longRail.getHexId()).size(), "the two lights split the rail (v1 view)");
+		assertEquals(2, sim.mmtrDirectionalBlocks.allSections().size(), "and v2 sees two lamp-to-lamp blocks");
 		final MmtrSignalAspect aspect = new MmtrSignalAspect(sim, sim.mmtrRoutes);
 		assertEquals(MmtrSignalAspect.Aspect.GREEN, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)), "clear: green");
 
-		occupySection(sim, longRail, sections.get(1));
+		// Occupancy beyond the NEXT lamp (the second block) is a caution for the first lamp, not red.
+		occupyArcInTrees(sim, longRail, 120, 160);
 		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
-			"B3b: only the FAR section is occupied, so the signal protecting the near one shows a caution");
+			"a train in the block beyond the next lamp shows a caution at the first lamp");
 
-		occupySection(sim, longRail, sections.get(0));
+		// Occupancy inside the first lamp's own block is red.
+		occupyArcInTrees(sim, longRail, 10, 60);
 		assertEquals(MmtrSignalAspect.Aspect.RED, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
-			"the protected (near) section occupied is red");
+			"the protected block itself occupied is red");
+	}
+
+	/**
+	 * S4 safety net: the v2 chain reads the shared occupancy TREES, so a hold that only ever went through
+	 * the v1 per-section reserved-colour channel must not read as green. The v1 walk still speaks when v2
+	 * finds nothing, and the more restrictive answer wins - a signal must never clear because the two
+	 * occupancy channels disagree.
+	 */
+	@Test
+	public void aReservedColourOnlyHoldStillShowsDangerOnAV2Rail() {
+		final Simulator sim = splitRailSim("build/mmtr-aspect-colour-only", true);
+		final Rail longRail = sim.rails.stream().filter(rail -> rail.railMath.getLength() > 100).findFirst().orElseThrow();
+		final MmtrSignalAspect aspect = new MmtrSignalAspect(sim, sim.mmtrRoutes);
+		assertEquals(MmtrSignalAspect.Aspect.GREEN, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
+			"nothing held: green");
+
+		// Reserve the near block's colour the v1 way, with NO footprint in the trees.
+		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> blocks = sim.mmtrBlocks.blocksOf(longRail.getHexId());
+		occupySection(sim, longRail, blocks.get(0));
+		assertEquals(MmtrSignalAspect.Aspect.RED, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
+			"the v1 colour channel alone still holds the signal at danger");
+	}
+
+	/** Write a foreign footprint on {@code rail} between two arcs into the simulator's own occupancy trees. */
+	private static void occupyArcInTrees(Simulator sim, Rail rail, double fromM, double toM) {
+		final ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = sim.mmtrOccupancyTrees();
+		assertNotNull(trees, "the simulator must have occupancy trees");
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		Data.put(trees.get(1), ordered[0], ordered[1],
+			vehiclePosition -> {
+				final VehiclePosition value = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+				value.addSegment(fromM, toM, 999_999_005L);
+				return value;
+			}, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap::new);
 	}
 
 	/** Entry rail (-20..0) + a 200 m rail, optionally cut in two by a wayside light at arc 100. */
@@ -323,8 +357,12 @@ public final class MmtrSignalAspectTests {
 		sim.rails.add(longRail);
 		sim.sync();
 		if (withSignal) {
+			// Two lamps facing EAST along the rail: one at its near node, one at arc 100. Under the v2
+			// directional model a lamp protects the rail it looks along, so a SECOND LAMP (not a mid-rail
+			// light beside the track) is what creates the next block.
+			sim.mmtrSignals.put(0, 0, 0, 270, 2, "set", longRail.getHexId());
 			final org.mtr.core.tool.Vector middle = longRail.railMath.getPosition(100, false);
-			sim.mmtrSignals.put((int) Math.floor(middle.x()), (int) Math.floor(middle.y()), (int) Math.floor(middle.z()), 0, 2, "set", longRail.getHexId());
+			sim.mmtrSignals.put((int) Math.floor(middle.x()), (int) Math.floor(middle.y()), (int) Math.floor(middle.z()), 270, 2, "set", longRail.getHexId());
 		}
 		sim.mmtrEnsureSignalColors();
 		return sim;

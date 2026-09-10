@@ -207,8 +207,19 @@ public final class MmtrDirectionalBlockService {
 		return sectionsBySignal.size();
 	}
 
+	/** Whether any directional section covers {@code railHex} (the caller's "is v2 my business here"). */
+	public boolean hasSection(@Nullable String railHex) {
+		return !sectionsOfRail(railHex).isEmpty();
+	}
+
+	/** Every rail hex that carries at least one directional section. */
+	public ObjectOpenHashSet<String> railsWithSections() {
+		refresh();
+		return new ObjectOpenHashSet<>(sectionsByRail.keySet());
+	}
+
 	/** How many rails carry at least one directional section (diagnostics). */
-	public int railsWithSections() {
+	public int railsWithSectionsCount() {
 		refresh();
 		return sectionsByRail.size();
 	}
@@ -797,6 +808,14 @@ public final class MmtrDirectionalBlockService {
 		final double headingZ = forward ? railHeading[1] : -railHeading[1];
 
 		if (Math.abs(exitArc - entryArc) > 1e-6) {
+			// A lamp standing mid-rail is a boundary too (v2 keeps v1's geometric cut, not only node binds):
+			// truncate the span at the nearest such lamp ahead and end the section there.
+			final MidRailLamp midRail = nearestLampOnSpan(firstRail, entryArc, exitArc, forward);
+			if (midRail != null) {
+				section.spans.add(new RailSpan(firstHex, entryArc, midRail.arcM, headingX, headingZ));
+				section.exitSignalKey = midRail.key;
+				return section;
+			}
 			section.spans.add(new RailSpan(firstHex, entryArc, exitArc, headingX, headingZ));
 		}
 
@@ -805,6 +824,47 @@ public final class MmtrDirectionalBlockService {
 		pathRails.add(firstHex);
 		walk(section, firstHex, exitNode, headingX, headingZ, 1, pathRails);
 		return section;
+	}
+
+	/** A lamp standing in the middle of a rail (not at a node): the arc it sits at and its registry key. */
+	private static final class MidRailLamp {
+		final double arcM;
+		final String key;
+
+		MidRailLamp(double arcM, String key) {
+			this.arcM = arcM;
+			this.key = key;
+		}
+	}
+
+	/**
+	 * The nearest lamp standing on {@code rail} strictly inside the arc range the movement is crossing, or
+	 * null. A lamp on a node is the walk's business (it ends sections by node), so only a lamp whose
+	 * projection is strictly inside the rail counts here - this keeps v1's geometric cut (a light beside
+	 * the middle of a rail does split it) while the node case stays with the walk.
+	 */
+	private @Nullable MidRailLamp nearestLampOnSpan(Rail rail, double fromArcM, double toArcM, boolean forward) {
+		final double low = Math.min(fromArcM, toArcM);
+		final double high = Math.max(fromArcM, toArcM);
+		final double length = rail.railMath.getLength();
+		MidRailLamp best = null;
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			final Double projected = MmtrBlockService.projectArc(rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
+			if (projected == null) {
+				continue;
+			}
+			final double arc = clamp(projected, 0, length);
+			if (arc <= 0.5 || arc >= length - 0.5) {
+				continue; // on one of this rail's nodes: not a mid-rail cut
+			}
+			if (arc < low + 1e-6 || arc > high - 1e-6) {
+				continue; // outside the stretch being crossed
+			}
+			if (best == null || (forward ? arc < best.arcM : arc > best.arcM)) {
+				best = new MidRailLamp(arc, MmtrSignalRegistry.key(entry.x, entry.y, entry.z));
+			}
+		}
+		return best;
 	}
 
 	/**
@@ -864,6 +924,13 @@ public final class MmtrDirectionalBlockService {
 			final double spanHeadingX = forward ? nextHeading[0] : -nextHeading[0];
 			final double spanHeadingZ = forward ? nextHeading[1] : -nextHeading[1];
 			if (Math.abs(toArc - arcOfNode) > 1e-6) {
+				// A lamp standing MID-RAIL is a boundary too: end the section on it instead of walking past.
+				final MidRailLamp midRail = nearestLampOnSpan(next, arcOfNode, toArc, forward);
+				if (midRail != null) {
+					section.spans.add(new RailSpan(nextHex, arcOfNode, midRail.arcM, spanHeadingX, spanHeadingZ));
+					section.exitSignalKey = midRail.key;
+					continue;
+				}
 				section.spans.add(new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
 			}
 			anyBranchContinued = true;

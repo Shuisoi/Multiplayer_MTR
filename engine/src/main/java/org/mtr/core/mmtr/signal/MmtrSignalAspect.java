@@ -69,6 +69,9 @@ public final class MmtrSignalAspect {
 	 * simulator's live train trees on every query, which is what the feed and the AWS trigger want).
 	 */
 	private final @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees;
+	/** Cached restricted-junction keys for {@link #restrictedNodeKeys()} (S4: the v2 walk asks per step). */
+	private @Nullable ObjectOpenHashSet<String> restrictedNodeCache;
+	private int restrictedNodeSignature = -1;
 
 	public MmtrSignalAspect(Simulator simulator, MmtrRouteRegistry routes) {
 		this(simulator, routes, null);
@@ -140,7 +143,6 @@ public final class MmtrSignalAspect {
 		}
 		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode));
 	}
-
 	private static Aspect fromDepth(int depth) {
 		return switch (depth) {
 			case 1 -> Aspect.RED;
@@ -160,8 +162,29 @@ public final class MmtrSignalAspect {
 	 * section no longer paints the signal protecting the near one red - which is exactly what B2's S1
 	 * stop already promises (the movement may run up to that signal). A rail that is not split keeps
 	 * one section = one rail, i.e. the pre-B3b behaviour bit for bit.</p>
+	 *
+	 * <p>S4: when the 闭塞区间 v2 model reaches this rail, the unit of the walk becomes the
+	 * <strong>lamp-to-lamp directional section</strong> instead of a rail - a train standing three rails
+	 * ahead inside the same section now reads depth 1 (red) rather than "three blocks away". Rails no lamp
+	 * reaches keep the v1 per-rail walk below, bit for bit.</p>
 	 */
 	private int chainDepth(String hex, Position entryPos) {
+		final MmtrDirectionalBlockService directional = simulator.mmtrDirectionalBlocks;
+		if (directional.hasSection(hex)) {
+			final int directionalDepth = directional.chainDepth(hex, entryPos, occupancyTrees, this::junctionRestrictedKey, MAX_DEPTH);
+			if (directionalDepth > 0) {
+				return directionalDepth;
+			}
+			// v2 reads the shared occupancy TREES. A hold that only ever went through the v1 per-section
+			// reserved-colour channel (a legacy/manual block, or a caller that reserved a colour without
+			// writing a footprint) would otherwise read as GREEN here, so the v1 walk still gets to speak -
+			// and being the more restrictive of the two is the safe direction for a signal.
+			return v1ChainDepth(hex, entryPos);
+		}
+		return v1ChainDepth(hex, entryPos);
+	}
+
+	private int v1ChainDepth(String hex, Position entryPos) {
 		final List<Object[]> level = new ObjectArrayList<>();
 		level.add(new Object[]{entryPos, hex, entryArcOf(hex, entryPos)});
 		for (int depth = 1; depth <= MAX_DEPTH; depth++) {
@@ -210,6 +233,26 @@ public final class MmtrSignalAspect {
 			return false;
 		}
 		return MmtrJunctionState.isUncleared(simulator, node, occupancyTrees == null ? simulator.mmtrOccupancyTrees() : occupancyTrees);
+	}
+
+	/** The same test keyed by the {@code x,y,z} node key the v2 section walk uses. */
+	private boolean junctionRestrictedKey(String nodeKey) {
+		return restrictedNodeKeys().contains(nodeKey);
+	}
+
+	/**
+	 * The restricted junction keys for this view's occupancy trees, cached: computing them walks every
+	 * node's clearance zone, and the v2 chain asks per step.
+	 */
+	private ObjectOpenHashSet<String> restrictedNodeKeys() {
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees =
+			occupancyTrees == null ? simulator.mmtrOccupancyTrees() : occupancyTrees;
+		final int signature = trees == null ? 0 : trees.hashCode();
+		if (restrictedNodeCache == null || restrictedNodeSignature != signature) {
+			restrictedNodeCache = MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+			restrictedNodeSignature = signature;
+		}
+		return restrictedNodeCache;
 	}
 
 	/** The arc of {@code hex}'s entry node in ordered-position-1 space (0 when it is not an endpoint). */

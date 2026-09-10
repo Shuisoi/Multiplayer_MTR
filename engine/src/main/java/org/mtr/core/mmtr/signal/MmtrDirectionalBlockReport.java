@@ -28,7 +28,7 @@ public final class MmtrDirectionalBlockReport {
 		sections.sort((a, b) -> a.id.compareTo(b.id));
 
 		final StringBuilder out = new StringBuilder("[blocks-v2] 有向区间 ").append(sections.size())
-			.append(" 个 / 覆盖轨 ").append(service.railsWithSections())
+			.append(" 个 / 覆盖轨 ").append(service.railsWithSectionsCount())
 			.append(" 根 / 灯 ").append(simulator.mmtrSignals.signals.size()).append(" 架");
 		if (sections.isEmpty()) {
 			out.append("（没有任何灯能定出区间：检查灯的朝向是否沿轨）");
