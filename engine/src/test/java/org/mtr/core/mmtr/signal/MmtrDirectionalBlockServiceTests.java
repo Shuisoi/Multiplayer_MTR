@@ -341,4 +341,33 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertEquals(2, service.chainDepth(r1.getHexId(), new Position(0, 0, 0), occupancy(r3, 10, 40), key -> false, 3),
 			"the next lamp's own block occupied reads as a caution, not as red");
 	}
+
+	@Test
+	public void atAForkTheSectionCoversEveryLegAndNarrowsToTheRouteWhenOneIsSet() {
+		// 岔口多腿 (user ruling 2026-09-10): a lamp at a yard throat protects the WHOLE throat, not just the
+		// leg it happens to face. Without a route every forward leg is the same block; with a MAIN route
+		// set through the throat the block narrows to that route's own next rail.
+		final Rail throat = rail(new Position(0, 0, 0), new Position(50, 0, 0));
+		final Rail straight = rail(new Position(50, 0, 0), new Position(100, 0, 0));
+		final Rail diverge = rail(new Position(50, 0, 0), new Position(100, 0, 12));
+		final Simulator simulator = sim("build/mmtr-dirblock-fork-legs", throat, straight, diverge);
+		final String lamp = addLamp(simulator, throat, 0, EAST);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final MmtrDirectionalBlockService.Section unrouted = service.sectionOfSignal(lamp);
+		assertNotNull(unrouted);
+		assertEquals(3, unrouted.spans.size(),
+			"no route set: the throat block covers the approach AND both legs (they are one block)");
+
+		// A MAIN route through the throat onto the straight leg narrows the walk to that leg.
+		final ObjectArrayList<String> rails = new ObjectArrayList<>();
+		rails.add(throat.getHexId());
+		rails.add(straight.getHexId());
+		simulator.mmtrRoutes.request(new org.mtr.core.mmtr.route.MmtrRoute(1L, "test", org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN,
+			rails, null, straight.getHexId(), 0L));
+		final MmtrDirectionalBlockService.Section routed = new MmtrDirectionalBlockService(simulator).sectionOfSignal(lamp);
+		assertNotNull(routed);
+		assertEquals(2, routed.spans.size(), "a set MAIN route narrows the throat block to its own leg");
+		assertEquals(straight.getHexId(), routed.spans.get(1).railHex, "and it is the route's leg that is walked");
+	}
 }

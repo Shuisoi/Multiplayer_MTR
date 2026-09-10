@@ -162,6 +162,19 @@ public final class MmtrRouteRegistry {
 		return byVehicle.size();
 	}
 
+	/**
+	 * Every installed route regardless of state (SET or PENDING), in the same deterministic order
+	 * {@link #routesOverRail} uses.
+	 *
+	 * <p>For the 闭塞区间 walk's narrowing: a train whose route is still PENDING is already committed to
+	 * that movement, so the block it is about to occupy is that route's own leg - narrowing on SET routes
+	 * only would leave it on the whole-throat block until the interlocking grants it, which is exactly the
+	 * "why is the whole yard one block" symptom.</p>
+	 */
+	public ObjectArrayList<MmtrRoute> allRoutes() {
+		return new ObjectArrayList<>(sorted());
+	}
+
 	public void clear() {
 		byVehicle.clear();
 	}

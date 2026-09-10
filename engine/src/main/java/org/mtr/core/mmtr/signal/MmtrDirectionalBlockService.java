@@ -3,6 +3,7 @@ package org.mtr.core.mmtr.signal;
 import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Data;
 import org.mtr.core.data.Position;
@@ -800,12 +801,25 @@ public final class MmtrDirectionalBlockService {
 		}
 
 		final Position exitNode = forward ? farNode(firstRail, true) : farNode(firstRail, false);
-		walk(section, firstHex, exitNode, headingX, headingZ, 1);
+		final ObjectOpenHashSet<String> pathRails = new ObjectOpenHashSet<>();
+		pathRails.add(firstHex);
+		walk(section, firstHex, exitNode, headingX, headingZ, 1, pathRails);
 		return section;
 	}
 
-	/** Continue the section from {@code node} (having just left {@code cameFromHex}) in {@code heading}. */
-	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount) {
+	/**
+	 * Continue the section from {@code node} (having just left {@code cameFromHex}) in {@code heading}.
+	 *
+	 * <p><strong>岔口多腿 (user ruling 2026-09-10, route B)</strong>: at a junction the walk follows
+	 * <em>every</em> leg that continues in the travel direction, so one lamp protects the whole throat
+	 * rather than the single leg it happens to face - which is what a real exit signal does. When a MAIN
+	 * route is set through {@code cameFromHex} in this direction, the walk narrows to that route's own
+	 * next rail instead (the same rule {@code MmtrSignalAspect} already used for the display).</p>
+	 *
+	 * <p>The first version followed only the straightest leg. That is wrong for a yard throat: the dev
+	 * world's exit lamps then protected one of six parallel stabling roads (notes/107 §4).</p>
+	 */
+	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount, ObjectOpenHashSet<String> pathRails) {
 		if (node == null) {
 			section.endsAtDeadEnd = true;
 			return;
@@ -820,8 +834,8 @@ public final class MmtrDirectionalBlockService {
 			return;
 		}
 
-		final Rail next = nextRail(node, cameFromHex, headingX, headingZ);
-		if (next == null) {
+		final ObjectArrayList<Leg> legs = nextLegs(node, cameFromHex, headingX, headingZ);
+		if (legs.isEmpty()) {
 			section.endsAtDeadEnd = true;
 			return;
 		}
@@ -830,22 +844,36 @@ public final class MmtrDirectionalBlockService {
 			return;
 		}
 
-		final String nextHex = next.getHexId();
-		final double arcOfNode = MmtrBlockService.arcOfNode(next, node);
-		final double nextLength = next.railMath.getLength();
-		if (Double.isNaN(arcOfNode)) {
+		boolean anyBranchContinued = false;
+		for (final Leg leg : legs) {
+			final Rail next = leg.rail;
+			final String nextHex = next.getHexId();
+			// Cycle guard: a rail this branch has already walked cannot be entered twice (a diamond - the
+			// same rail reachable two ways - is fine, because each branch carries its own path set).
+			if (pathRails.contains(nextHex)) {
+				continue;
+			}
+			final double arcOfNode = MmtrBlockService.arcOfNode(next, node);
+			if (Double.isNaN(arcOfNode)) {
+				continue;
+			}
+			final double nextLength = next.railMath.getLength();
+			final double[] nextHeading = headingAt(next, arcOfNode);
+			final boolean forward = leg.forward;
+			final double toArc = forward ? nextLength : 0;
+			final double spanHeadingX = forward ? nextHeading[0] : -nextHeading[0];
+			final double spanHeadingZ = forward ? nextHeading[1] : -nextHeading[1];
+			if (Math.abs(toArc - arcOfNode) > 1e-6) {
+				section.spans.add(new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
+			}
+			anyBranchContinued = true;
+			final ObjectOpenHashSet<String> branchPath = new ObjectOpenHashSet<>(pathRails);
+			branchPath.add(nextHex);
+			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath);
+		}
+		if (!anyBranchContinued) {
 			section.endsAtDeadEnd = true;
-			return;
 		}
-		final double[] nextHeading = headingAt(next, arcOfNode);
-		final boolean forward = nextHeading[0] * headingX + nextHeading[1] * headingZ > 0;
-		final double toArc = forward ? nextLength : 0;
-		final double spanHeadingX = forward ? nextHeading[0] : -nextHeading[0];
-		final double spanHeadingZ = forward ? nextHeading[1] : -nextHeading[1];
-		if (Math.abs(toArc - arcOfNode) > 1e-6) {
-			section.spans.add(new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
-		}
-		walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1);
 	}
 
 	/** The lamp registered at {@code node}, if any (a lamp sits on a node block). */
@@ -853,17 +881,31 @@ public final class MmtrDirectionalBlockService {
 		return simulator.mmtrSignals.get((int) node.getX(), (int) node.getY(), (int) node.getZ());
 	}
 
+	/** One continuation at a node: the rail, and whether the travel direction runs up its arc. */
+	private static final class Leg {
+		final Rail rail;
+		final boolean forward;
+		/** Where the leg leaves the node: its far node, so callers can match a route. */
+		final Position farEnd;
+
+		Leg(Rail rail, boolean forward, Position farEnd) {
+			this.rail = rail;
+			this.forward = forward;
+			this.farEnd = farEnd;
+		}
+	}
+
 	/**
-	 * The rail to continue onto at {@code node}: the straightest continuation in the travel direction,
-	 * never the rail just left.
+	 * Every rail the movement may continue onto at {@code node}: all legs that keep the travel direction,
+	 * narrowed to the SET MAIN route's own next rail when a route runs through {@code cameFromHex} this
+	 * way. Never the rail just left.
 	 */
-	private @Nullable Rail nextRail(Position node, String cameFromHex, double headingX, double headingZ) {
+	private ObjectArrayList<Leg> nextLegs(Position node, String cameFromHex, double headingX, double headingZ) {
+		final ObjectArrayList<Leg> legs = new ObjectArrayList<>();
 		final Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
 		if (neighbours == null) {
-			return null;
+			return legs;
 		}
-		Rail best = null;
-		double bestDot = 0.1;
 		for (final Map.Entry<Position, Rail> entry : neighbours.entrySet()) {
 			final Rail candidate = entry.getValue();
 			if (candidate.getHexId().equals(cameFromHex)) {
@@ -874,15 +916,56 @@ public final class MmtrDirectionalBlockService {
 				continue;
 			}
 			final double[] candidateHeading = headingAt(candidate, arc);
-			for (final double sign : new double[]{1, -1}) {
-				final double dot = sign * (candidateHeading[0] * headingX + candidateHeading[1] * headingZ);
-				if (dot > bestDot) {
-					bestDot = dot;
-					best = candidate;
+			final double dot = candidateHeading[0] * headingX + candidateHeading[1] * headingZ;
+			if (dot > 0.1) {
+				legs.add(new Leg(candidate, true, entry.getKey()));
+			} else if (dot < -0.1) {
+				legs.add(new Leg(candidate, false, entry.getKey()));
+			}
+		}
+		if (legs.size() <= 1) {
+			return legs;
+		}
+		final String routeNext = routeNextRailOn(cameFromHex, node);
+		if (routeNext == null) {
+			return legs; // no route: the whole throat is one block (岔口多腿)
+		}
+		for (final Leg leg : legs) {
+			if (leg.rail.getHexId().equals(routeNext)) {
+				final ObjectArrayList<Leg> narrowed = new ObjectArrayList<>();
+				narrowed.add(leg);
+				return narrowed;
+			}
+		}
+		return legs;
+	}
+
+	/**
+	 * The rail a route runs onto after {@code curHex} when the route leaves {@code curHex} through
+	 * {@code node} - i.e. the route covers this rail in THIS travel direction. Null when no route does (a
+	 * shunt keeps the main head at danger and narrows nothing).
+	 *
+	 * <p>PENDING routes count: the train is committed to that movement even while it waits for the
+	 * interlocking, so its own leg is the block it will occupy.</p>
+	 */
+	private @Nullable String routeNextRailOn(String curHex, Position node) {
+		for (final org.mtr.core.mmtr.route.MmtrRoute route : simulator.mmtrRoutes.allRoutes()) {
+			if (route.getKind() != org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN) {
+				continue;
+			}
+			final ObjectArrayList<String> rails = route.getRailHexes();
+			for (int i = 0; i + 1 < rails.size(); i++) {
+				if (!rails.get(i).equals(curHex)) {
+					continue;
+				}
+				final String nextHex = rails.get(i + 1);
+				final Rail nextRail = railByHex.get(nextHex);
+				if (nextRail != null && !Double.isNaN(MmtrBlockService.arcOfNode(nextRail, node))) {
+					return nextHex;
 				}
 			}
 		}
-		return best;
+		return null;
 	}
 
 	// ---------------------------------------------------------------- geometry helpers
