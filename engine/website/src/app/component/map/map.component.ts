@@ -22,6 +22,7 @@ import {MmtrTopologyService} from "../../service/mmtr-topology.service";
 import {MmtrLinesService} from "../../service/mmtr-lines.service";
 import {MmtrLayersService} from "../../service/mmtr-layers.service";
 import {MmtrSectionsService} from "../../service/mmtr-sections.service";
+import {MmtrSchematicService, MmtrSchematicBlock} from "../../service/mmtr-schematic.service";
 import {TooltipModule} from "primeng/tooltip";
 import {NgOptimizedImage} from "@angular/common";
 import {TranslocoDirective} from "@jsverse/transloco";
@@ -50,9 +51,14 @@ const lineMaterialSectionA = new LineMaterial({color: 0x64B5F6, linewidth: 3 * S
 const lineMaterialSectionB = new LineMaterial({color: 0x4DD0E1, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
 const lineMaterialSectionC = new LineMaterial({color: 0xBA68C8, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.85, depthWrite: false});
 /** A block that no lamp guards (the end of the line, a plain siding): faint, so the coverage gap shows. */
-const lineMaterialSectionNoLamp = new LineMaterial({color: 0x8B949C, linewidth: 2 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.5, depthWrite: false});
+const lineMaterialDiagramNoLamp = new LineMaterial({color: 0x8B949C, linewidth: 2 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.5, depthWrite: false});
 /** An OCCUPIED block (一区段一车): drawn fat and red on top - the cell currently holding a train. */
 const lineMaterialSectionOccupied = new LineMaterial({color: 0xFF1744, linewidth: 7 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
+// 区间图 (格对齐拓扑图): faint 1x1 lattice guides, a white rail under every coloured block, and a dashed
+// bridge where two different blocks meet at one square (a phase break, as a signal engineer draws it).
+const lineMaterialDiagramGrid = new LineMaterial({color: 0x3A4048, linewidth: 1 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.55, depthWrite: false});
+const lineMaterialDiagramRail = new LineMaterial({color: 0xE6EAF0, linewidth: 3 * SETTINGS.scale * devicePixelRatio, transparent: true, opacity: 0.9, depthWrite: false});
+const lineMaterialDiagramBridge = new LineMaterial({color: 0x0B0D10, linewidth: 5 * SETTINGS.scale * devicePixelRatio, depthWrite: false});
 
 @Component({
 	selector: "app-map",
@@ -80,6 +86,7 @@ export class MapComponent implements AfterViewInit {
 	private readonly mmtrLinesService = inject(MmtrLinesService);
 	readonly mmtrLayersService = inject(MmtrLayersService);
 	private readonly mmtrSectionsService = inject(MmtrSectionsService);
+	private readonly mmtrSchematicService = inject(MmtrSchematicService);
 	private readonly themeService = inject(ThemeService);
 
 	readonly stationClicked = output<string>();
@@ -115,8 +122,12 @@ export class MapComponent implements AfterViewInit {
 	private readonly lineGroups = new Map<string, THREE.Group>();
 	private readonly liveLineMaterials: LineMaterial[] = [];
 	private static readonly RAIL_Z_INDEX = 0;
-	/** Radius of the 区间图层 ring drawn at each track-layer node (world metres, so it scales with the map). */
-	private static readonly NODE_RING_RADIUS_M = 1.5;
+	/**
+	 * Where the 区间图 is parked in scene coordinates. The console's camera frames the world map, so the
+	 * diagram is offset by a fixed amount the console chooses (the engine's own cell coordinates stay small
+	 * positive numbers and know nothing about it).
+	 */
+	private static readonly SCHEMATIC_OFFSET_X = 6000;
 	/** Monochrome line styling: gray tiers + focus emphasis (black & white console). */
 	private static readonly LINE_GRAYS = [0xFFFFFF, 0xD4DAE0, 0xAEB6BE, 0x8B949C];
 	private static readonly LINE_NAMES = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"];
@@ -158,7 +169,8 @@ export class MapComponent implements AfterViewInit {
 			}
 			this.updatePointOverlays();
 		});
-		// Rail topology + automatic lines: rebuilt whenever data or layer visibility changes.
+		// Rail topology + automatic lines: rebuilt whenever data or layer visibility changes. In the 区间图
+		// view the world drawing stands down - the diagram replaces it rather than being drawn over it.
 		effect(() => {
 			this.mmtrTopologyService.rails();
 			this.mmtrLinesService.lines();
@@ -166,18 +178,20 @@ export class MapComponent implements AfterViewInit {
 			this.mmtrLayersService.linesLayer();
 			this.mmtrLayersService.visibleLines();
 			this.mmtrLayersService.focusedLine();
+			this.mmtrLayersService.view();
+			if (this.mmtrLayersService.view() === "schematic") {
+				this.clearWorldLayers();
+				return;
+			}
 			this.applyRailLayer();
 			this.applySignalLayer();
-			this.applySectionLayer();
 		});
-		// 区间图层 (水闸区间): rebuild whenever the blocks feed refreshes or its toggle flips. Kept
-		// separate from the rail effect because it also has to react to occupancy changing (a block turning
-		// occupied is the thing the operator is watching for).
+		// 区间图 (格对齐拓扑图): rebuilt whenever the engine's diagram refreshes or the view flips. The world
+		// layers stand down in this view - the diagram IS the drawing then.
 		effect(() => {
-			this.mmtrSectionsService.blocks();
-			this.mmtrSectionsService.nodes();
-			this.mmtrLayersService.sections();
-			this.applySectionLayer();
+			this.mmtrSchematicService.data();
+			this.mmtrLayersService.view();
+			this.applySchematicLayer();
 		});
 		// MMTR live overlay (信号 + 车辆): repaint whenever the trains feed refreshes (3s poll) and
 		// after every map move - vehicle positions and signal aspects follow the simulation.
@@ -187,8 +201,10 @@ export class MapComponent implements AfterViewInit {
 			this.mmtrTrainsService.lastUpdated();
 			const canvas = this.canvasRef()?.nativeElement;
 			if (!this.loading() && this.controls && canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
-				this.applySignalLayer();
-				this.updateLabels();
+				if (this.mmtrLayersService.view() === "world") {
+					this.applySignalLayer();
+					this.updateLabels();
+				}
 			}
 		});
 	}
@@ -269,6 +285,7 @@ export class MapComponent implements AfterViewInit {
 		}
 	}
 
+	/** Empty rail layer: the 区间图 view draws the diagram instead of the world's geometry. */
 	private clearRailLayer() {
 		if (this.railLayer) {
 			this.railLayer.children.forEach(child => {
@@ -289,6 +306,9 @@ export class MapComponent implements AfterViewInit {
 	 */
 	private applySignalLayer() {
 		this.clearSignalLayer();
+		if (this.mmtrLayersService.view() === "schematic") {
+			return; // the 区间图 view is the diagram; world-scale signal cores would draw in empty space
+		}
 		const rails = this.mmtrTopologyService.rails();
 		const aspects = this.mmtrTrainsService.signals();
 		if (rails.length === 0 || aspects.length === 0) {
@@ -341,70 +361,132 @@ export class MapComponent implements AfterViewInit {
 	 * maths. Each block gets its own tint (cycled), an unguarded block is faint, and an OCCUPIED block is
 	 * red on top - which is what the console most wants to see at a glance: the cell holding a train.</p>
 	 */
-	private applySectionLayer() {
+	/**
+	 * 区间图 (格对齐的拓扑区间图): draw the ENGINE's lattice diagram.
+	 *
+	 * <p>The console used to paint the block layer onto the real track geometry - parallel stabling roads 8
+	 * blocks apart, lamp boundaries landing mid-rail - which read as noise rather than as a division. The
+	 * engine now folds the world onto a 1x1 lattice (16 m per square) and hands over cell coordinates with
+	 * each block's edges and squares, so this only draws: grid, rails, per-direction block colours, one tick
+	 * per lamp at the block's entrance, and a ring per lattice node. Nothing here derives geometry.</p>
+	 */
+	private applySchematicLayer() {
 		this.clearSectionLayer();
-		const blocks = this.mmtrSectionsService.blocks();
-		if (!this.mmtrLayersService.sections() || blocks.length === 0) {
+		const schematic = this.mmtrSchematicService.data();
+		if (this.mmtrLayersService.view() !== "schematic" || schematic.nodes.length === 0) {
 			return;
 		}
 		const canvas = this.canvasRef()?.nativeElement;
 		if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
-			[lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionNoLamp, lineMaterialSectionOccupied]
+			[lineMaterialDiagramGrid, lineMaterialDiagramRail, lineMaterialDiagramBridge, lineMaterialDiagramNoLamp,
+				lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC, lineMaterialSectionOccupied]
 				.forEach(material => material.resolution.set(canvas.clientWidth, canvas.clientHeight));
 		}
-		// One tint per BLOCK, assigned by the engine's own block index so a block keeps its colour as the map
-		// is rebuilt and two blocks never share one. A block with no lamp is line no lamp reaches: drawn
-		// faint, which is exactly the signal-lamp coverage gap the operator wants to see.
-		const tints = new Map<string, LineMaterial>();
+
+		// Tint per BLOCK, by the engine's own block index: stable across refreshes and never shared.
+		const tints = new Map<number, LineMaterial>();
 		const tiers = [lineMaterialSectionA, lineMaterialSectionB, lineMaterialSectionC];
-		const group = new THREE.Group();
-		for (const block of blocks) {
-			let material = lineMaterialSectionNoLamp;
-			if (block.occupied) {
-				material = lineMaterialSectionOccupied;
-			} else if (block.lamp) {
-				let tint = tints.get(String(block.index));
-				if (!tint) {
-					tint = tiers[tints.size % tiers.length];
-					tints.set(String(block.index), tint);
-				}
-				material = tint;
+		const tintOf = (index: number) => {
+			let tint = tints.get(index);
+			if (!tint) {
+				tint = tiers[tints.size % tiers.length];
+				tints.set(index, tint);
 			}
-			for (const span of block.spans) {
-				if (span.points.length < 4) {
+			return tint;
+		};
+		const group = new THREE.Group();
+		group.position.set(MapComponent.SCHEMATIC_OFFSET_X, 0, 0);
+		const step = schematic.cellSize;
+		const width = Math.max(1, schematic.cellWidth) * step;
+		const height = Math.max(1, schematic.cellHeight) * step;
+
+		// 1x1 lattice: faint guides, so the diagram visibly sits on whole squares (the operator's ask).
+		const gridPositions: number[] = [];
+		for (let column = 0; column <= schematic.cellWidth; column++) {
+			gridPositions.push(column * step, 0, MapComponent.RAIL_Z_INDEX, column * step, -height, MapComponent.RAIL_Z_INDEX);
+		}
+		for (let row = 0; row <= schematic.cellHeight; row++) {
+			gridPositions.push(0, -row * step, MapComponent.RAIL_Z_INDEX, width, -row * step, MapComponent.RAIL_Z_INDEX);
+		}
+		group.add(MapComponent.line(gridPositions, lineMaterialDiagramGrid));
+
+		// Rails: ONE line per distinct lattice edge. A phase break is a break in the drawing, not a bridge.
+		for (const rail of schematic.rails) {
+			const breaksPhase = rail.forwardBlock >= 0 && rail.backwardBlock >= 0
+				&& schematic.blocks[rail.forwardBlock]?.lamp !== schematic.blocks[rail.backwardBlock]?.lamp;
+			group.add(MapComponent.line([rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX + 0.1, rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX + 0.1], lineMaterialDiagramRail));
+			if (breaksPhase) {
+				group.add(MapComponent.line([rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX + 0.12, rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX + 0.12], lineMaterialDiagramBridge));
+			}
+		}
+
+		// Block colours: each direction of an edge takes the colour of the block that owns it. An edge whose
+		// two directions differ is split at its middle, so a lamp boundary reads as a change of colour.
+		for (const block of schematic.blocks) {
+			const material = block.occupied ? lineMaterialSectionOccupied : (block.lamp ? tintOf(block.index) : lineMaterialDiagramNoLamp);
+			for (const edgeIndex of block.edges) {
+				const rail = schematic.rails[edgeIndex];
+				if (!rail) {
 					continue;
 				}
-				const positions: number[] = [];
-				for (let i = 0; i + 1 < span.points.length; i += 2) {
-					positions.push(span.points[i], -span.points[i + 1], MapComponent.RAIL_Z_INDEX + 0.25);
-				}
-				const geometry = new LineGeometry();
-				geometry.setPositions(positions);
-				const line = new Line2(geometry, material);
-				line.computeLineDistances();
-				group.add(line);
+				group.add(MapComponent.line([rail.x1, -rail.z1, MapComponent.RAIL_Z_INDEX + 0.3, rail.x2, -rail.z2, MapComponent.RAIL_Z_INDEX + 0.3], material));
 			}
 		}
-		// Every TRACK-layer node is drawn as a small ring in the colour of the block it belongs to. The
-		// engine guarantees exactly one block per node, so a node is never uncoloured and never split: this
-		// ring is what makes the "每个节点都有且只有一个区间层所属" requirement visible on the map.
-		for (const node of this.mmtrSectionsService.nodes()) {
-			const tint = tints.get(String(node.index)) ?? lineMaterialSectionNoLamp;
-			const x = node.x + 0.5;
-			const z = -(node.z + 0.5);
+
+		// One ring per lattice square, in its block's colour: the "every node belongs to exactly one block"
+		// promise, made visible. The engine ships each block's squares, so this is a lookup, not a decision.
+		const squareOwner = new Map<number, number>();
+		for (const block of schematic.blocks) {
+			for (const square of block.squares) {
+				squareOwner.set(square, block.index);
+			}
+		}
+		const blockByIndex = new Map<number, MmtrSchematicBlock>();
+		for (const block of schematic.blocks) {
+			blockByIndex.set(block.index, block);
+		}
+		for (const node of schematic.nodes) {
+			const owner = blockByIndex.get(squareOwner.get(node.id) ?? -1);
+			const tint = owner?.occupied ? lineMaterialSectionOccupied : (owner?.lamp ? tintOf(owner.index) : lineMaterialDiagramNoLamp);
 			const ring: number[] = [];
-			for (let i = 0; i <= 12; i++) {
-				const angle = (i / 12) * Math.PI * 2;
-				ring.push(x + Math.cos(angle) * MapComponent.NODE_RING_RADIUS_M, z + Math.sin(angle) * MapComponent.NODE_RING_RADIUS_M, MapComponent.RAIL_Z_INDEX + 0.5);
+			for (let i = 0; i <= 16; i++) {
+				const angle = (i / 16) * Math.PI * 2;
+				ring.push(node.x + Math.cos(angle) * step * 0.16, -(node.z + Math.sin(angle) * step * 0.16), MapComponent.RAIL_Z_INDEX + 0.5);
 			}
-			const geometry = new LineGeometry();
-			geometry.setPositions(ring);
-			const circle = new Line2(geometry, tint);
-			circle.computeLineDistances();
-			group.add(circle);
+			group.add(MapComponent.line(ring, tint));
 		}
+
 		this.sectionLayer = group;
 		this.scene.add(this.sectionLayer);
+	}
+
+	/**
+	 * Stand the world drawing down (the 区间图 view shows a diagram, not the track at world scale) and frame
+	 * the diagram: the console's camera is orthographic, so framing is just a pan.
+	 */
+	private clearWorldLayers() {
+		this.clearRailLayer();
+		this.clearLineLayers();
+		this.clearSectionLayer();
+		this.pointMarkers.set([]);
+		this.selectedNodePoints.set([]);
+		const schematic = this.mmtrSchematicService.data();
+		if (schematic.nodes.length > 0) {
+			const step = schematic.cellSize;
+			this.moveMap(
+				MapComponent.SCHEMATIC_OFFSET_X + Math.max(1, schematic.cellWidth) * step / 2,
+				-Math.max(1, schematic.cellHeight) * step / 2,
+			);
+		}
+	}
+
+	/** A Line2 from a flat [x, z, x, z, ...] list in the scene's own plane convention. */
+	private static line(positions: number[], material: LineMaterial): Line2 {
+		const geometry = new LineGeometry();
+		geometry.setPositions(positions);
+		const line = new Line2(geometry, material);
+		line.computeLineDistances();
+		return line;
 	}
 
 	private clearSectionLayer() {

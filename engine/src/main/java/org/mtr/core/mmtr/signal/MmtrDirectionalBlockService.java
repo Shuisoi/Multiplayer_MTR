@@ -852,6 +852,10 @@ public final class MmtrDirectionalBlockService {
 	 */
 	public ObjectArrayList<GateBlock> gateBlocks() {
 		refresh();
+		return computeGateBlocks();
+	}
+
+	private ObjectArrayList<GateBlock> computeGateBlocks() {
 		// Lamp -> the block id the console uses (a lamp-less block is numbered by its order of appearance).
 		final ObjectArrayList<GateBlock> out = new ObjectArrayList<>();
 		final Object2ObjectOpenHashMap<String, GateBlock> blocksByLamp = new Object2ObjectOpenHashMap<>();
@@ -1130,6 +1134,11 @@ public final class MmtrDirectionalBlockService {
 	 * belongs to exactly one block, that block just has no entry lamp.</p>
 	 */
 	public Object2ObjectOpenHashMap<String, String> nodeOwners() {
+		refresh();
+		return computeNodeOwners();
+	}
+
+	private Object2ObjectOpenHashMap<String, String> computeNodeOwners() {
 		final Object2ObjectOpenHashMap<String, String> owners = new Object2ObjectOpenHashMap<>();
 		final ObjectArrayList<GateBlock> blocks = gateBlocks();
 		for (final Map.Entry<Position, Object2ObjectOpenHashMap<Position, Rail>> entry : simulator.positionsToRail.entrySet()) {
@@ -1857,6 +1866,16 @@ public final class MmtrDirectionalBlockService {
 		// Minecraft facing vectors: rotation 0 -> +Z (south), 90 -> -X (west), 180 -> -Z (north),
 		// 270 -> +X (east).
 		return new double[]{-sin, -cos};
+	}
+
+	/**
+	 * Unit heading (x, z) of a rail at {@code arcM}, in the direction of increasing arc.
+	 *
+	 * <p>Public so the 区间图 (schematic) builder reads a rail's direction the same way this model does,
+	 * instead of re-deriving it and drifting from it.</p>
+	 */
+	public static double[] railHeadingAt(Rail rail, double arcM) {
+		return headingAt(rail, arcM);
 	}
 
 	/** Unit heading (x, z) of a rail at {@code arcM}, in the direction of increasing arc. */

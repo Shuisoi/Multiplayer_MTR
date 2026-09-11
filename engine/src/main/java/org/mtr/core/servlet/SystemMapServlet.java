@@ -222,6 +222,7 @@ public final class SystemMapServlet extends ServletBase {
 				}
 				case "mmtr-signals" -> getMmtrSignals(simulator);
 				case "mmtr-sections" -> getMmtrSections(simulator);
+				case "mmtr-schematic" -> getMmtrSchematic(simulator);
 				case "mmtr-command" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					final String command = jsonReader.getString("command", "");
@@ -657,6 +658,85 @@ public final class SystemMapServlet extends ServletBase {
 			blockNodes.add(n);
 		});
 		result.add("nodes", blockNodes);
+		return result;
+	}
+
+	/**
+	 * 区间图 feed (格对齐的拓扑区间图): the block layer folded onto a 1x1 lattice, ready to draw.
+	 *
+	 * <p>The console draws a DIAGRAM here, not the world: every track node snaps to a square of a fixed
+	 * lattice (16 m per square), rails between two squares become one line, and each line carries the block
+	 * index of each travel direction. The engine owns the transform, so the operator UI cannot drift from the
+	 * simulation - and the console needs no geometry maths of its own.</p>
+	 */
+	private static JsonObject getMmtrSchematic(org.mtr.core.simulation.Simulator simulator) {
+		final org.mtr.core.mmtr.signal.MmtrBlockSchematic.Schematic schematic = org.mtr.core.mmtr.signal.MmtrBlockSchematic.build(simulator);
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.addProperty("cellSize", schematic.cellSize);
+		result.addProperty("cellM", schematic.cellM);
+		result.addProperty("cellWidth", schematic.cellWidth);
+		result.addProperty("cellHeight", schematic.cellHeight);
+		result.addProperty("originCellX", schematic.originCellX);
+		result.addProperty("originCellZ", schematic.originCellZ);
+		result.addProperty("worldWidthM", schematic.worldWidthM);
+		result.addProperty("worldHeightM", schematic.worldHeightM);
+
+		final com.google.gson.JsonArray nodes = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.signal.MmtrBlockSchematic.DiagramNode node : schematic.nodes) {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", node.id);
+			out.addProperty("cellX", node.cellX);
+			out.addProperty("cellZ", node.cellZ);
+			out.addProperty("x", node.x);
+			out.addProperty("z", node.z);
+			out.addProperty("merged", node.mergedCount);
+			out.addProperty("block", node.block);
+			nodes.add(out);
+		}
+		result.add("nodes", nodes);
+
+		final com.google.gson.JsonArray rails = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.signal.MmtrBlockSchematic.DiagramRail rail : schematic.rails) {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("from", rail.fromNode);
+			out.addProperty("to", rail.toNode);
+			out.addProperty("x1", rail.x1);
+			out.addProperty("z1", rail.z1);
+			out.addProperty("x2", rail.x2);
+			out.addProperty("z2", rail.z2);
+			out.addProperty("rails", rail.rails);
+			out.addProperty("length", rail.lengthM);
+			out.addProperty("forwardBlock", rail.forwardBlock);
+			out.addProperty("backwardBlock", rail.backwardBlock);
+			rails.add(out);
+		}
+		result.add("rails", rails);
+
+		final com.google.gson.JsonArray blocks = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.signal.MmtrBlockSchematic.DiagramBlock block : schematic.blocks) {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("index", block.index);
+			out.addProperty("id", block.id);
+			out.addProperty("lamp", block.lamp);
+			out.addProperty("open", block.endsOpen);
+			out.addProperty("occupied", block.occupied);
+			out.addProperty("length", block.lengthM);
+			final com.google.gson.JsonArray edges = new com.google.gson.JsonArray();
+			for (final int edge : block.railEdges) {
+				edges.add(edge);
+			}
+			out.add("edges", edges);
+			final com.google.gson.JsonArray squares = new com.google.gson.JsonArray();
+			for (final int node : block.nodeIds) {
+				squares.add(node);
+			}
+			out.add("squares", squares);
+			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
+			block.spans.forEach(spans::add);
+			out.add("spans", spans);
+			blocks.add(out);
+		}
+		result.add("blocks", blocks);
 		return result;
 	}
 

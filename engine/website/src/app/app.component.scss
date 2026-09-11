@@ -114,50 +114,184 @@
 	pointer-events: auto;
 }
 
-.mmtr-layer-chips {
+/* 图层切换器 (卡片式): the single place where the console's view and layers are chosen. Cards rather than
+   chips so each one can carry a title, a live状态 line and a badge - the old chip rows said "区间 83" and
+   nothing about what that meant. */
+.mmtr-switcher {
+	position: absolute;
+	top: 12px;
+	left: 12px;
+	z-index: 24;
+	width: 288px;
 	display: flex;
-	gap: 6px;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px;
+	border-radius: 10px;
 	background: rgba(10, 12, 15, 0.92);
-	border: 1px solid rgba(255, 255, 255, 0.18);
-	border-radius: 6px;
-	padding: 5px 8px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+	backdrop-filter: blur(6px);
+	color: #e8eaed;
 }
 
-.mmtr-layer-chips .mmtr-chip {
+.mmtr-switcher-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.mmtr-switcher-title {
+	font-size: 10px;
+	letter-spacing: 0.28em;
+	color: #8b949c;
+}
+
+.mmtr-card-reset {
 	background: transparent;
-	border: 1px solid rgba(255, 255, 255, 0.25);
+	border: 1px solid rgba(255, 255, 255, 0.2);
 	color: #9aa1aa;
-	border-radius: 3px;
-	font-size: 12px;
-	padding: 2px 10px;
+	border-radius: 4px;
+	font-size: 11px;
+	padding: 2px 8px;
 	cursor: pointer;
 }
 
-.mmtr-layer-chips .mmtr-chip:hover {
+.mmtr-card-reset:hover {
 	color: #fff;
 	border-color: #fff;
 }
 
-.mmtr-layer-chips .mmtr-chip.on {
+.mmtr-card-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+}
+
+.mmtr-card-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.mmtr-card {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	text-align: left;
+	padding: 9px 10px;
+	border-radius: 8px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+	color: #cfd4da;
+	cursor: pointer;
+	transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+
+.mmtr-card:hover {
+	border-color: rgba(255, 255, 255, 0.42);
+	transform: translateY(-1px);
+}
+
+.mmtr-card.on {
+	border-color: #ffffff;
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05));
+	color: #ffffff;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.mmtr-card-slim {
+	padding: 6px 10px;
+	gap: 8px;
+}
+
+.mmtr-card-glyph {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	border-radius: 6px;
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	font-size: 13px;
+	font-weight: 700;
+	color: #9aa1aa;
+}
+
+.mmtr-card.on .mmtr-card-glyph {
 	background: #ffffff;
 	border-color: #ffffff;
 	color: #0b0d10;
-	font-weight: 600;
 }
 
-/* 区间图层: the occupied-block badge - the one number an operator watches (a block is holding a train). */
-.mmtr-chip .mmtr-chip-alert {
+.mmtr-card-body {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.mmtr-card-title {
+	font-size: 13px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.mmtr-card-sub {
+	font-size: 10.5px;
+	color: #8b949c;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.mmtr-card.on .mmtr-card-sub {
+	color: #c6ccd3;
+}
+
+.mmtr-card-state {
+	margin-left: auto;
+	font-size: 10px;
+	color: #8b949c;
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	border-radius: 3px;
+	padding: 1px 5px;
+}
+
+.mmtr-card.on .mmtr-card-state {
+	color: #0b0d10;
+	background: #ffffff;
+	border-color: #ffffff;
+	font-weight: 700;
+}
+
+/* 区间图 badge: the one number an operator watches - how many blocks hold a train right now. */
+.mmtr-card-badge {
 	margin-left: 6px;
-	padding: 0 4px;
-	border-radius: 2px;
+	padding: 0 5px;
+	border-radius: 3px;
 	background: #ff4d4f;
 	color: #ffffff;
 	font-size: 10px;
-	font-weight: 600;
+	font-weight: 700;
 }
 
-.mmtr-chip.on .mmtr-chip-alert {
-	background: #d9363e;
+.mmtr-card-section-title {
+	margin-top: 2px;
+	font-size: 10px;
+	letter-spacing: 0.22em;
+	color: #6f7780;
+}
+
+.mmtr-card-note {
+	font-size: 11px;
+	line-height: 1.55;
+	color: #9aa1aa;
+	padding: 8px 10px;
+	border-radius: 8px;
+	border: 1px dashed rgba(255, 255, 255, 0.16);
+	background: rgba(255, 255, 255, 0.02);
 }
 
 .mmtr-drawer {

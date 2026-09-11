@@ -18,23 +18,68 @@
 		<div class="mmtr-map">
 			<app-map/>
 		</div>
-		<div class="mmtr-map-overlays-right">
-			<div class="mmtr-layer-switch">
-				<span class="mmtr-layer-switch-title">图层</span>
-				<button class="mmtr-chip" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">道岔</button>
-				<button class="mmtr-chip" [class.on]="layersService.sections()" (click)="layersService.sections.set(!layersService.sections())" title="区间（水闸区间）：以朝内的信号灯为界的闭塞分区，可跨多根轨道；道岔节点属于轨道层，不切分区间">区间 <b>{{ sectionCount() }}</b></button>
-				<button class="mmtr-chip" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">线路</button>
-				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>
-				<button class="mmtr-chip mmtr-chip-reset" (click)="resetLayers()">重置</button>
+
+		<!-- 图层切换器: one card per view / layer, in one readable place (replaces the old chip rows). -->
+		<div class="mmtr-switcher">
+			<div class="mmtr-switcher-head">
+				<span class="mmtr-switcher-title">显示</span>
+				<button class="mmtr-card-reset" (click)="resetLayers()">重置</button>
 			</div>
+
+			<div class="mmtr-card-grid">
+				<button class="mmtr-card" [class.on]="view() === 'world'" (click)="setView('world')">
+					<span class="mmtr-card-glyph">图</span>
+					<span class="mmtr-card-body">
+						<span class="mmtr-card-title">世界地图</span>
+						<span class="mmtr-card-sub">真实轨道几何 · 道岔 · 信号</span>
+					</span>
+				</button>
+				<button class="mmtr-card" [class.on]="view() === 'schematic'" (click)="setView('schematic')">
+					<span class="mmtr-card-glyph">格</span>
+					<span class="mmtr-card-body">
+						<span class="mmtr-card-title">区间图</span>
+						<span class="mmtr-card-sub">
+							{{ squareCount() }} 格 · {{ sectionCount() }} 区间
+							@if (occupiedSectionCount() > 0) {<span class="mmtr-card-badge">占用 {{ occupiedSectionCount() }}</span>}
+						</span>
+					</span>
+				</button>
+			</div>
+
+			@if (view() === "world") {
+				<div class="mmtr-card-section-title">世界图层</div>
+				<div class="mmtr-card-list">
+					<button class="mmtr-card mmtr-card-slim" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">
+						<span class="mmtr-card-body">
+							<span class="mmtr-card-title">轨道</span>
+							<span class="mmtr-card-sub">拓扑边</span>
+						</span>
+						<span class="mmtr-card-state">{{ layersService.rails() ? "开" : "关" }}</span>
+					</button>
+					<button class="mmtr-card mmtr-card-slim" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">
+						<span class="mmtr-card-body">
+							<span class="mmtr-card-title">线路</span>
+							<span class="mmtr-card-sub">{{ lineCount() }} 条</span>
+						</span>
+						<span class="mmtr-card-state">{{ layersService.linesLayer() ? "开" : "关" }}</span>
+					</button>
+					<button class="mmtr-card mmtr-card-slim" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">
+						<span class="mmtr-card-body">
+							<span class="mmtr-card-title">道岔</span>
+							<span class="mmtr-card-sub">{{ forks() }} 个 · 锁定 {{ lockedPoints() }}</span>
+						</span>
+						<span class="mmtr-card-state">{{ layersService.points() ? "开" : "关" }}</span>
+					</button>
+				</div>
+			} @else {
+				<div class="mmtr-card-section-title">区间图</div>
+				<div class="mmtr-card-note">
+					1 格 = {{ cellMeters() }} m：轨道节点折到最近的格，每条线按方向着色，信号灯就是格与格之间的分界；无人看守的区间画淡灰，占用区间画红。
+				</div>
+			}
 		</div>
+
 		<div class="mmtr-map-overlays">
-			<div class="mmtr-layer-chips">
-				<button class="mmtr-chip" [class.on]="layersService.rails()" (click)="layersService.rails.set(!layersService.rails())">轨道</button>
-				<button class="mmtr-chip" [class.on]="layersService.linesLayer()" (click)="layersService.linesLayer.set(!layersService.linesLayer())">线路</button>
-				<button class="mmtr-chip" [class.on]="layersService.points()" (click)="layersService.points.set(!layersService.points())">道岔</button>
-				<button class="mmtr-chip" [class.on]="layersService.sections()" (click)="layersService.sections.set(!layersService.sections())" title="区间（水闸区间）：以朝内的信号灯为界的闭塞分区，可跨多根轨道；道岔节点属于轨道层，不切分区间">区间 <b>{{ sectionCount() }}</b>@if (occupiedSectionCount() > 0) {<span class="mmtr-chip-alert">占用 {{ occupiedSectionCount() }}</span>}</button>
-			</div>
 			<app-mmtr-lines-panel/>
 		</div>
 		<aside class="mmtr-drawer" [class.open]="drawerOpen()">

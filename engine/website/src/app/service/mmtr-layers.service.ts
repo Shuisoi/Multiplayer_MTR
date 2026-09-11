@@ -6,6 +6,11 @@ import {Injectable, signal} from "@angular/core";
  */
 @Injectable({providedIn: "root"})
 export class MmtrLayersService {
+	/**
+	 * Which figure the console draws: the world map (real geometry) or the 区间图 (the block layer folded
+	 * onto a 1x1 lattice). They are different drawings of the same simulation, so they are exclusive.
+	 */
+	public readonly view = signal<"world" | "schematic">("world");
 	/** Raw track topology edges (fat white, plain). */
 	public readonly rails = signal(true);
 	/** Colored-by-line rendering (per visible line a distinct monochrome gray tier). */

@@ -9,6 +9,7 @@ import {MmtrPointsService} from "./service/mmtr-points.service";
 import {MmtrLinesService} from "./service/mmtr-lines.service";
 import {MmtrLayersService} from "./service/mmtr-layers.service";
 import {MmtrSectionsService} from "./service/mmtr-sections.service";
+import {MmtrSchematicService} from "./service/mmtr-schematic.service";
 import {ThemeService} from "./service/theme.service";
 
 /**
@@ -34,6 +35,7 @@ export class AppComponent {
 	private readonly pointsService = inject(MmtrPointsService);
 	private readonly linesService = inject(MmtrLinesService);
 	private readonly sectionsService = inject(MmtrSectionsService);
+	private readonly schematicService = inject(MmtrSchematicService);
 	private readonly themeService = inject(ThemeService);
 	private readonly destroyRef = inject(DestroyRef);
 
@@ -47,9 +49,13 @@ export class AppComponent {
 	protected manualPoints = () => this.pointsService.points().filter(point => point.manual >= 0).length;
 	protected lockedPoints = () => this.pointsService.points().filter(point => point.locked).length;
 	protected lineCount = () => this.linesService.lines().length;
-	/** 区间图层 summary: how many blocks the engine's division has, and how many hold a train right now. */
+	/** 区间图 summary: how many blocks the engine's division has, and how many hold a train right now. */
 	protected sectionCount = () => this.sectionsService.blockCount();
 	protected occupiedSectionCount = () => this.sectionsService.occupiedCount();
+	/** 区间图: which figure is drawn (world map or the lattice diagram) and how big it is. */
+	protected view = () => this.layersService.view();
+	protected squareCount = () => this.schematicService.squareCount();
+	protected cellMeters = () => this.schematicService.data().cellM;
 
 	constructor() {
 		// Monochrome console: the management view is dark (white strokes, gray tiers).
@@ -70,8 +76,14 @@ export class AppComponent {
 		this.drawerOpen.set(!this.drawerOpen());
 	}
 
-	/** Layer switches back to their defaults (all on, all lines visible, no focus). */
+	/** Switch the drawn figure: the world map, or the 区间图 (the block layer on a 1x1 lattice). */
+	protected setView(view: "world" | "schematic") {
+		this.layersService.view.set(view);
+	}
+
+	/** Layer switches back to their defaults (world view, all layers on, no focus). */
 	protected resetLayers() {
+		this.layersService.view.set("world");
 		this.layersService.rails.set(true);
 		this.layersService.linesLayer.set(true);
 		this.layersService.points.set(true);
