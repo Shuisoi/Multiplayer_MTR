@@ -3,26 +3,43 @@
 > 2026-09-11：原 Angular 脚手架（连同 MTR 官网整套前端）已整体删除，改为 **Vite 7 + Vue 3 + TypeScript + Naive UI**，
 > 从零重建。本文件记录**接线与硬约定**，避免再踩已经踩过的坑。
 
+## 〇、前后端分离（最重要的一条）
+
+**Java 侧只做两件事：把静态文件发出去、把标准 HTTP 接口暴露出来。** 网页是**独立构建、独立部署**的前端应用。
+
+- **dev（默认）**：`scripts/dev-server.ps1` 会设 `MMTR_WEB_ROOT=engine\website\dist\website\browser`，
+  引擎（`Main.resolveWebContentProvider`）于是**直接从磁盘读**这个目录。改前端只要：
+
+  ```powershell
+  cd engine\website; npm run build      # 然后刷新浏览器
+  ```
+
+  **不需要**重打 jar、**不需要**重启服务端。（早期把前端焊进 jar，改一行 CSS 都要重启 40 秒的服务端，
+  这是调试慢的根结构原因。）
+- **前端热重载**：`npm run dev`（5173），`vite.config.ts` 已把 `/mtr/api` 代理到 `127.0.0.1:8888`。
+- **发布**：Gradle 的 `setupWebserver` 仍会把 `dist/website/browser` 嵌进 jar（`WebserverResources`），
+  没有 `MMTR_WEB_ROOT` 时引擎就用内嵌那份。发布包因此仍然是自包含的单 jar。
+- **接口即契约**：前端的唯一数据来源是 `/mtr/api/map/*`（清单见第四节）。Java 改接口要当成契约变更：
+  要么加字段、要么开新版本路径，别让网页跟着一起炸。
+
 ## 一、构建与部署（三个硬约定）
 
 1. **`base: "/"`** —— 引擎静态服务把 index.html 挂在 `/`，资源必须从根路径解析。
    用 `base: "a"`（Angular 时代遗留的 `--base-href a`）会让 `/a/*.js` 落到 index 回退，**页面永远白屏**。
-2. **`build.outDir = "dist/website/browser"`** —— 引擎 Gradle 任务 `WebserverSetup` 固定从
-   `website/dist/website/browser/` 递归读文件、生成 `WebserverResources.java` 嵌进 jar。改了这个目录，jar 里就没有前端。
+2. **`build.outDir = "dist/website/browser"`** —— 这个目录既是 dev 的 `MMTR_WEB_ROOT`，
+   也是 Gradle 任务 `WebserverSetup` 嵌 jar 的来源。改了它，两边都断。
 3. **不要开 CSP 自动注入**（Angular 的 `security.autoCsp` 那类）——它会用 CSP 把样式表锁成 `media="print"`，
    再靠一个内联脚本放行；脚本一旦被 CSP 自己挡住，页面就变成"无样式 + 无框架"的裸 HTML。
 
-改前端的固定流程：
+构建：
 
 ```powershell
 cd engine\website
-npm run build                     # vue-tsc 类型检查 + vite build
-# 然后（服务端要先停）
-Remove-Item ..\src\main\java\org\mtr\core\generated\WebserverResources.java
-cd ..\..; .\scripts\sync-engine.ps1
+npm run build                     # vue-tsc 类型检查 + vite build → dist/website/browser
 ```
 
 验证：`http://127.0.0.1:8888/index.html`（`/` 同页），静态资源在 `/assets/*.js|css`、字体在 `/media/*.woff2`。
+
 
 ## 二、目录
 

@@ -21,6 +21,8 @@ const props = defineProps<{
 	worldHeight: number;
 	/** 取景留白（世界单位；按内容尺寸的百分比理解更稳，所以这里用比例）。 */
 	paddingRatio?: number;
+	/** 取景时内容占视口较短边的比例（0.9 = 四周留 10%）。 */
+	fillRatio?: number;
 	/** 缩小/放大倍率上下限。 */
 	minScale?: number;
 	maxScale?: number;
@@ -49,17 +51,51 @@ const view = computed(() => {
 	};
 });
 
-/** 把整张图放进视口：viewBox 盖住内容包围盒并留出 padding。 */
+/**
+ * 取景：让内容"填满"视口（内容占较短边的 `fill`），并保持 viewBox 与容器同比例。
+ *
+ * <p>两个要点，都是踩出来的：</p>
+ * <ol>
+ *   <li><b>viewBox 宽高比 = 容器宽高比</b>。`preserveAspectRatio="meet"` 是等比缩放，
+ *       若 viewBox 比例与容器不同，两轴的实际比例就不一样；拖动/缩放若按"每轴各自的比例"换算，
+ *       纵向会用到一个被等比缩放抛弃的假比例（实测 495 vs 13.9），表现就是"左右能拖、上下拖不动"。</li>
+ *   <li><b>内容要填满，不能只保证"装得下"</b>。只按内容尺寸取景时，一个 80×1 的单行节点在
+ *       1244×554 的容器里会被缩得很小、拖动一像素就跨过好几个内容宽度（实测 200px 拖动 = 2777 世界单位，
+ *       节点直接飞出屏幕）。按"占满较短边"取景后，拖动距离与内容尺寸同量级，手感正常。</li>
+ * </ol>
+ */
 function fit() {
-	const padding = props.paddingRatio ?? 0.06;
-	const padX = props.worldWidth * padding;
-	const padY = props.worldHeight * padding;
-	viewMinX.value = props.worldMinX - padX;
-	viewMinY.value = props.worldMinY - padY;
-	viewWidth.value = Math.max(1e-3, props.worldWidth + padX * 2);
-	viewHeight.value = Math.max(1e-3, props.worldHeight + padY * 2);
-	baseWidth.value = viewWidth.value;
-	baseHeight.value = viewHeight.value;
+	const fill = props.fillRatio ?? 0.9;
+	const contentWidth = Math.max(1e-3, props.worldWidth);
+	const contentHeight = Math.max(1e-3, props.worldHeight);
+
+	const rect = host.value?.getBoundingClientRect();
+	const containerAspect = rect && rect.width > 0 && rect.height > 0 ? rect.width / rect.height : contentWidth / contentHeight;
+
+	/*
+	 * 一个比例同时满足三件事：
+	 *   1. viewBox 与容器同比例（等比缩放才两轴一致）；
+	 *   2. 内容在较短边方向占 `fill`（内容太扁时由高度决定）；
+	 *   3. 内容完整可见（另一个方向按比例补足）。
+	 */
+	const scale = fill / Math.max(contentWidth / contentHeight, containerAspect) / contentHeight;
+	const viewW = contentWidth * scale;
+	const viewH = contentHeight * scale;
+
+	viewMinX.value = props.worldMinX + props.worldWidth / 2 - viewW / 2;
+	viewMinY.value = props.worldMinY + props.worldHeight / 2 - viewH / 2;
+	viewWidth.value = viewW;
+	viewHeight.value = viewH;
+	baseWidth.value = viewW;
+	baseHeight.value = viewH;
+}
+
+/** 屏幕像素 → 世界单位的统一比例（等比缩放下两轴相同）。 */
+function worldPerPixel(rect: DOMRect) {
+	if (rect.width <= 0 || rect.height <= 0) {
+		return 1;
+	}
+	return Math.min(rect.width / viewWidth.value, rect.height / viewHeight.value);
 }
 
 /** 缩放到指定倍率（相对取景基准），锚点为屏幕像素点。 */
@@ -73,9 +109,10 @@ function zoomAt(clientX: number, clientY: number, factor: number) {
 	if (scale < (props.minScale ?? 0.05) || scale > (props.maxScale ?? 200)) {
 		return;
 	}
-	// 锚点在世界坐标里的位置保持不变
-	const anchorX = viewMinX.value + ((clientX - rect.left) / rect.width) * viewWidth.value;
-	const anchorY = viewMinY.value + ((clientY - rect.top) / rect.height) * viewHeight.value;
+	// 锚点在世界坐标里的位置保持不变（viewBox 与容器同比例，所以两轴用同一个比例）
+	const perPixel = worldPerPixel(rect);
+	const anchorX = viewMinX.value + (clientX - rect.left) * perPixel;
+	const anchorY = viewMinY.value + (clientY - rect.top) * perPixel;
 	const ratio = nextWidth / viewWidth.value;
 	viewMinX.value = anchorX - (anchorX - viewMinX.value) * ratio;
 	viewMinY.value = anchorY - (anchorY - viewMinY.value) * ratio;
@@ -105,9 +142,11 @@ function onPointerMove(event: PointerEvent) {
 	if (!rect || rect.width <= 0) {
 		return;
 	}
-	// 屏幕像素位移 → 世界坐标位移
-	viewMinX.value = dragStart.minX - (event.clientX - dragStart.clientX) * (viewWidth.value / rect.width);
-	viewMinY.value = dragStart.minY - (event.clientY - dragStart.clientY) * (viewHeight.value / rect.height);
+	// 屏幕像素位移 → 世界坐标位移。viewBox 与容器同比例，所以两轴用同一个比例：
+	// 早期按"每轴各自的比例"算，纵向用了被等比缩放抛弃的假比例，导致上下拖不动。
+	const perPixel = worldPerPixel(rect);
+	viewMinX.value = dragStart.minX - (event.clientX - dragStart.clientX) * perPixel;
+	viewMinY.value = dragStart.minY - (event.clientY - dragStart.clientY) * perPixel;
 }
 
 function onPointerUp(event: PointerEvent) {
@@ -130,6 +169,18 @@ onMounted(() => {
 });
 
 defineExpose({view, fit, zoomAt, centerOn});
+
+/*
+ * 诊断：`?viewportDebug=1` 时把取景的输入与输出挂出来。
+ * 取景这类"算出来不对但看不出哪一步错"的问题，只看 viewBox 猜不出来，得能看到输入。
+ */
+if (typeof window !== "undefined" && window.location.search.includes("viewportDebug")) {
+	(window as unknown as {__viewportFit: unknown}).__viewportFit = () => ({
+		props: {worldMinX: props.worldMinX, worldMinY: props.worldMinY, worldWidth: props.worldWidth, worldHeight: props.worldHeight, fillRatio: props.fillRatio},
+		rect: host.value ? {width: host.value.clientWidth, height: host.value.clientHeight} : null,
+		viewBox: `${viewMinX.value} ${viewMinY.value} ${viewWidth.value} ${viewHeight.value}`,
+	});
+}
 </script>
 
 <template>
