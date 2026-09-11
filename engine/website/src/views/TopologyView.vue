@@ -63,23 +63,12 @@ const degreeCount = computed(() => {
 });
 
 /**
- * 线型统计：多少条按直线画、多少条按曲线画。
+ * 线型统计：**实际画出来的**直线 / 曲线条数，由轨道层上报。
  *
- * <p>放在 HUD 上是有用的自检：这个数字应当等于"轴对齐的轨数 / 斜向的轨数"，
- * 一眼能看出规则有没有按预期生效（实测 93 直线 / 41 曲线）。</p>
+ * <p>不在这里按"x 或 z 相同"的规则重算：斜向轨也可能因为真实轨道几乎共线而画成直线，
+ * 那时它不是曲线。两边各算一遍必然出现"HUD 41、页面 40"这种差异（实测被它带偏过一轮排查）。</p>
  */
-const shapeCount = computed(() => {
-	let line = 0;
-	let arc = 0;
-	for (const rail of rails.value) {
-		if (rail.isAxisAligned) {
-			line++;
-		} else {
-			arc++;
-		}
-	}
-	return {line, arc};
-});
+const shapeCount = ref({straight: 0, curve: 0});
 
 /**
  * 视图读数：缩放倍率由画布上报。
@@ -149,6 +138,7 @@ function onAction({node, action}: {node: Node; action: string}) {
 			:rails="rails"
 			@action="onAction"
 			@camera="onCamera"
+			@shapes="shapeCount = $event"
 		/>
 
 		<!-- 取数状态：加载中 / 失败时给明确提示，不要让人对着空画布猜 -->
@@ -168,7 +158,7 @@ function onAction({node, action}: {node: Node; action: string}) {
 				通过 <b class="value">{{ degreeCount.through }}</b>
 				道岔 <b class="value">{{ degreeCount.fork }}</b>
 			</span>
-			<span class="group">轨 <b class="value">{{ rails.length }}</b><span class="note">直线 {{ shapeCount.line }} · 曲线 {{ shapeCount.arc }}</span></span>
+			<span class="group">轨 <b class="value">{{ rails.length }}</b><span class="note">画成 直线 {{ shapeCount.straight }} · 曲线 {{ shapeCount.curve }}</span></span>
 			<span class="group">缩放 <b class="value">{{ zoomText }}</b></span>
 			<span class="tip">悬停看信息 · 左键开菜单 · 滚轮缩放 · 拖动平移</span>
 			<button class="action" type="button" @click="load">重新读取</button>

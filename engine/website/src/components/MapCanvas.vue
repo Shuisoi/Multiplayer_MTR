@@ -75,6 +75,8 @@ const emit = defineEmits<{
 	 * 从此读数永远是错的——实测显示 0.02× 而画面完全正常。</p>
 	 */
 	(e: "camera", payload: {camera: Camera; zoom: number}): void;
+	/** 实际画出来的直线/曲线条数（由轨道层统计，HUD 直接显示，不再自己按规则重算）。 */
+	(e: "shapes", summary: {straight: number; curve: number}): void;
 }>();
 
 /*
@@ -180,6 +182,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 				:camera="camera"
 				:hover-key="hoveredKey"
 				:select-key="selectedKey"
+				@shapes="emit('shapes', $event)"
 			/>
 		</svg>
 
