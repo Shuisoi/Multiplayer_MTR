@@ -1,0 +1,62 @@
+/* 全局基线：全黑满屏、无滚动条、字体与数值约定。 */
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+/*
+ * 高度链保险丝：` html → body → #app → .console(100%) → .content(绝对定位)` 这条链上，
+ * 任何一层塌成 0 都会让整页没有高度（实测踩过：内容区量到 1244x0，视口自动缩放算错、节点全挤在一起）。
+ * 所以这里同时给 html/body 上 `height:100%` 和 `min-height:100vh`：百分比解析不了时还有视口兜底。
+ */
+html,
+body,
+#app {
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	height: 100%;
+	min-height: 100vh;
+}
+
+html {
+	background: var(--bg);
+}
+
+body {
+	background: var(--bg);
+	color: var(--fg);
+	font-family: var(--font-ui);
+	font-size: 13px;
+	line-height: 1.45;
+	overflow: hidden;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+/* 数值一律走 DIN：状态读数、编号、坐标都用它。 */
+.value {
+	font-family: var(--font-value);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 极简滚动条（深色）：只在需要滚动的面板里出现。 */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+	background: #262626;
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: #333333;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}

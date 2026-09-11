@@ -1,8 +1,6 @@
-import {bootstrapApplication} from "@angular/platform-browser";
-import {AppComponent} from "./app/app.component";
-import {registerIcons} from "./app/utility/icons";
-import {appConfig} from "./app/app.config";
+import {createApp} from "vue";
+import App from "./App.vue";
+import "./styles/tokens.css";
+import "./styles/base.css";
 
-registerIcons();
-
-bootstrapApplication(AppComponent, appConfig).catch(error => console.error(error));
+createApp(App).mount("#app");

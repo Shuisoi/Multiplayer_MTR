@@ -121,11 +121,16 @@ tasks {
 
 		doLast {
 			val tokens = mapOf("version" to version)
-			copy {
-				from("website/version-template.txt")
-				into("website/src")
-				filter(mapOf("tokens" to tokens), ReplaceTokens::class.java)
-				rename { "version.ts" }
+			// 前端已换成 Vite + Vue（原来 Angular 的 version-template.txt 与 src/app/entity/generated 都不在了）。
+			// 网页目前不需要版本号文件，只在文件存在时才生成，避免给构建塞一个无主的产物。
+			val template = file("website/version-template.txt")
+			if (template.exists()) {
+				copy {
+					from("website/version-template.txt")
+					into("website/src")
+					filter(mapOf("tokens" to tokens), ReplaceTokens::class.java)
+					rename { "version.ts" }
+				}
 			}
 			copy {
 				from("src/main/VersionTemplate.java")
@@ -141,7 +146,9 @@ tasks {
 		inputs.dir("buildSrc/src/main/resources/schema")
 		outputs.dir("src/main/java/org/mtr/core/generated")
 		outputs.dir("src/main/java/org/mtr/legacy/generated")
-		outputs.dir("website/src/app/entity/generated")
+		// 前端（Vue + Vite）不再消费 schema 生成的 TypeScript 类型：网页只读引擎自己的 /mtr/api/map/* JSON，
+		// 类型在网站里手写。这条 outputs/生成保留给将来需要时用，但不再指向已经删除的 Angular 目录。
+		outputs.dir("website/src/api/generated")
 
 		doLast {
 			Generator.generateJava(project, "schema/data", "core/generated/data", "core.data", "core.simulation")
@@ -150,7 +157,6 @@ tasks {
 			Generator.generateJava(project, "schema/map", "core/generated/map", "core.map")
 			Generator.generateJava(project, "schema/oba", "core/generated/oba", "core.oba")
 			Generator.generateJava(project, "schema/operation", "core/generated/operation", "core.data", "core.operation")
-			Generator.generateTypeScript(project, "schema/map", "website/src/app/entity/generated")
 		}
 	}
 
