@@ -1,325 +1,205 @@
+:host {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.wrapper {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	background: #0b0d10;
+}
+
+.wrapper.dim {
+	opacity: 0.6;
+}
+
 canvas {
-	background: var(--background-color);
-	position: absolute;
+	display: block;
+	width: 100%;
+	height: 100%;
 	touch-action: none;
-	transition: opacity 0.2s;
-	width: 100%;
-	height: 100%;
 }
 
-.label {
-	cursor: pointer;
+/* Train markers: DOM (they carry text), positioned in CSS pixels by the component. */
+.train {
 	position: absolute;
-	transition: color 0.2s;
-	will-change: transform;
-}
-
-.label:hover {
-	color: var(--p-button-primary-hover-background);
-}
-
-.station-name {
-	font-size: 0.6rem;
-	line-height: 1.2em; /* Intentionally em rather than rem to scale line height based on font size */
-	white-space: nowrap;
-	text-shadow: -2px -2px 0 var(--background-color),
-	0 -2px 0 var(--background-color),
-	2px -2px 0 var(--background-color),
-	2px 0 0 var(--background-color),
-	2px 2px 0 var(--background-color),
-	0 2px 0 var(--background-color),
-	-2px 2px 0 var(--background-color),
-	-2px 0 0 var(--background-color);
-}
-
-.station-name.cjk {
-	font-size: 1.2rem;
-}
-
-.station-name.text {
-	font-weight: 600;
-}
-
-.station-name.icon {
-	font-size: 1.2rem;
-	width: unset;
-	filter: drop-shadow(-1px -1px 0 var(--background-color)) drop-shadow(0 -1px 0 var(--background-color)) drop-shadow(1px -1px 0 var(--background-color)) drop-shadow(1px 0 0 var(--background-color)) drop-shadow(1px 1px 0 var(--background-color)) drop-shadow(0 1px 0 var(--background-color)) drop-shadow(-1px 1px 0 var(--background-color)) drop-shadow(-1px 0 0 var(--background-color));
-}
-
-.loading-background {
-	background-color: var(--background-color);
-	justify-content: center;
-	position: absolute;
-	width: 100%;
-	height: 100%;
-}
-
-.train-marker {
-	position: absolute;
-	top: 0;
-	left: 0;
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	background: rgba(0, 0, 0, 0.6);
-	color: #ffffff;
-	border-radius: 999px;
-	padding: 2px 7px;
-	font-size: 0.62rem;
-	line-height: 1.2;
-	white-space: nowrap;
-	pointer-events: auto;
-	cursor: default;
-	z-index: 2;
-}
-
-.train-marker-dot {
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	flex: none;
-	box-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
-}
-.point-marker {
-	position: absolute;
-	top: 0;
-	left: 0;
-	width: 12px;
-	height: 12px;
-	border-radius: 50%;
-	border: 2px solid var(--background-color);
-	cursor: pointer;
-	pointer-events: auto;
-	z-index: 3;
-	box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
-	will-change: transform;
-}
-
-.point-marker.state-locked { background: #ff6d6d; }
-.point-marker.state-manual { background: #3ddc84; }
-.point-marker.state-held { background: #f6c343; }
-.point-marker.state-idle { background: #9aa0a6; }
-
-.point-console {
-	position: absolute;
-	top: 12px;
-	right: 12px;
-	width: min(320px, calc(100% - 24px));
-	max-height: calc(100% - 24px);
-	overflow-y: auto;
-	background: color-mix(in srgb, var(--background-color) 92%, transparent);
-	border: 1px solid var(--p-content-border-color);
-	border-radius: 8px;
-	padding: 8px;
-	z-index: 4;
-	pointer-events: auto;
-	font-size: 0.72rem;
-	line-height: 1.4;
-	color: var(--p-text-color);
-}
-
-.point-console-header {
-	align-items: center;
-	margin-bottom: 4px;
-}
-
-.point-console-title {
+	top: 50%;
+	left: 50%;
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	font-weight: 600;
-	font-size: 0.78rem;
+	padding: 2px 7px 2px 4px;
+	border-radius: 11px;
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	background: rgba(10, 12, 15, 0.88);
+	color: #e8eaed;
+	font-size: 11px;
 	white-space: nowrap;
-}
-
-.point-console .icon-button {
-	width: 24px;
-	height: 24px;
-	padding: 0;
-	font-size: 0.7rem;
-}
-
-.point-feedback {
-	padding: 2px 6px;
-	border-radius: 4px;
-	margin-bottom: 4px;
-	background: rgba(255, 109, 109, 0.15);
-	color: #ff6d6d;
-}
-
-.point-feedback.ok {
-	background: rgba(61, 220, 132, 0.15);
-	color: #3ddc84;
-}
-
-.point-row {
-	border-top: 1px solid var(--p-content-border-color);
-	padding: 4px 0;
-}
-
-.point-row:first-of-type {
-	border-top: none;
-}
-
-.point-row-locked .point-via {
-	color: #ff6d6d;
-}
-
-.point-via {
-	font-family: monospace;
-	font-size: 0.68rem;
-	word-break: break-all;
-}
-
-.point-form {
-	opacity: 0.7;
-	font-family: inherit;
-	margin-left: 4px;
-}
-
-.point-status {
-	opacity: 0.85;
-	font-size: 0.66rem;
-	margin: 2px 0;
-}
-
-.point-legs {
-	flex-wrap: wrap;
-}
-
-.point-leg {
-	border: 1px solid var(--p-content-border-color);
-	background: transparent;
-	color: var(--p-text-color);
-	border-radius: 4px;
-	padding: 1px 7px;
-	font-size: 0.68rem;
 	cursor: pointer;
+	z-index: 5;
 }
 
-.point-leg.active {
-	background: #3ddc84;
-	border-color: #3ddc84;
-	color: #06210f;
-	font-weight: 600;
+.train:hover {
+	border-color: #ffffff;
 }
 
-.point-leg-clear {
-	color: #ff6d6d;
+.train-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #8b949c;
 }
 
-.small-button {
-	font-size: 0.66rem;
-	padding: 1px 8px;
+.train.moving .train-dot {
+	background: #ffffff;
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
 }
 
-.point-console button {
-	border: 1px solid var(--p-content-border-color);
-	background: transparent;
-	color: var(--p-text-color);
-	border-radius: 4px;
-	cursor: pointer;
+.train.parked .train-label {
+	color: #9aa1aa;
 }
 
-.point-close {
-	width: 22px;
-	height: 22px;
-	line-height: 1;
-	font-size: 0.75rem;
-}
-
-.point-lock {
-	font-size: 0.66rem;
-	padding: 1px 8px;
-}
-
-.point-lock.locked {
-	color: #ff6d6d;
-	border-color: #ff6d6d;
-}
-
-/* --- MMTR live overlay: train markers + signal legend (信号/列车覆盖层) --- */
-
-.train-marker {
-	pointer-events: none;
-	z-index: 2;
-}
-
-.train-marker.parked {
-	background: color-mix(in srgb, var(--background-color) 78%, transparent);
-	border: 1px dashed #9aa0a6;
-	color: #9aa0a6;
-	padding: 1px 6px;
-}
-
-.train-marker .train-marker-dot {
-	width: 7px;
-	height: 7px;
-	box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
-}
-
-.train-marker.parked .train-marker-dot {
-	background: #9aa0a6 !important;
-}
-
-.train-marker-text {
-	font-size: 0.6rem;
-	line-height: 1.1;
-}
-
-.train-marker.moving {
-	box-shadow: 0 0 8px rgba(160, 230, 160, 0.55);
-}
-
-.mmtr-map-legend {
+/* Fork panel: the operator's branch console for the node that was clicked. */
+.fork-panel {
 	position: absolute;
-	left: 12px;
+	right: 12px;
 	bottom: 12px;
+	width: 260px;
+	max-height: 60%;
+	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
-	gap: 3px;
-	background: color-mix(in srgb, var(--background-color) 90%, transparent);
-	border: 1px solid var(--p-content-border-color);
-	border-radius: 6px;
-	padding: 6px 9px;
-	font-size: 0.64rem;
-	line-height: 1.25;
-	color: var(--p-text-color);
-	z-index: 4;
-	pointer-events: auto;
-	user-select: none;
+	gap: 8px;
+	padding: 10px;
+	border-radius: 10px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	background: rgba(10, 12, 15, 0.94);
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+	color: #e8eaed;
+	z-index: 8;
 }
 
-.mmtr-legend-row {
+.fork-head {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	white-space: nowrap;
+	justify-content: space-between;
 }
 
-.mmtr-legend-dot {
-	width: 14px;
-	height: 5px;
-	border-radius: 2px;
-	flex: none;
+.fork-title {
+	font-size: 12px;
+	font-weight: 700;
+	color: #ffffff;
 }
 
-.mmtr-legend-red { background: #ff4d4f; }
-.mmtr-legend-yellow { background: #ffb300; }
-.mmtr-legend-yy { background: #ffe082; }
-.mmtr-legend-white { background: #ffffff; border: 1px solid #9aa0a6; }
-
-.mmtr-legend-train {
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	background: #4fb0ff;
-	flex: none;
-	border: 1px solid var(--background-color);
-}
-
-.mmtr-legend-train.parked {
+.fork-close {
 	background: transparent;
-	border: 1.5px dashed #9aa0a6;
+	border: none;
+	color: #8b949c;
+	font-size: 13px;
+	cursor: pointer;
 }
 
+.fork-close:hover {
+	color: #ffffff;
+}
+
+.fork-feedback {
+	font-size: 11px;
+	padding: 4px 6px;
+	border-radius: 4px;
+	background: rgba(255, 77, 79, 0.16);
+	color: #ff8a8c;
+}
+
+.fork-feedback.ok {
+	background: rgba(77, 208, 225, 0.14);
+	color: #7fe3ef;
+}
+
+.fork-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 7px 8px;
+	border-radius: 7px;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.fork-row.locked {
+	border-color: rgba(255, 77, 79, 0.5);
+}
+
+.fork-row-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+}
+
+.fork-via {
+	font-size: 11px;
+	color: #cfd4da;
+}
+
+.fork-via em {
+	font-style: normal;
+	color: #8b949c;
+}
+
+.fork-lock {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: #9aa1aa;
+	border-radius: 4px;
+	font-size: 10px;
+	padding: 1px 6px;
+	cursor: pointer;
+}
+
+.fork-lock.on {
+	background: #ff4d4f;
+	border-color: #ff4d4f;
+	color: #ffffff;
+}
+
+.fork-status {
+	font-size: 10px;
+	color: #8b949c;
+}
+
+.fork-legs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.fork-leg {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: #cfd4da;
+	border-radius: 4px;
+	font-size: 11px;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+
+.fork-leg:hover {
+	border-color: #ffffff;
+	color: #ffffff;
+}
+
+.fork-leg.active {
+	background: #ffffff;
+	border-color: #ffffff;
+	color: #0b0d10;
+	font-weight: 700;
+}
+
+.fork-leg.clear {
+	color: #ff8a8c;
+	border-color: rgba(255, 77, 79, 0.5);
+}

@@ -87,7 +87,7 @@ export class AppComponent {
 		this.layersService.rails.set(true);
 		this.layersService.linesLayer.set(true);
 		this.layersService.points.set(true);
-		this.layersService.sections.set(true);
+		this.layersService.signals.set(true);
 		this.layersService.visibleLines.set([]);
 		this.layersService.focusedLine.set("");
 	}

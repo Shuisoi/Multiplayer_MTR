@@ -70,6 +70,13 @@
 						</span>
 						<span class="mmtr-card-state">{{ layersService.points() ? "开" : "关" }}</span>
 					</button>
+					<button class="mmtr-card mmtr-card-slim" [class.on]="layersService.signals()" (click)="layersService.signals.set(!layersService.signals())">
+						<span class="mmtr-card-body">
+							<span class="mmtr-card-title">信号</span>
+							<span class="mmtr-card-sub">按灯显给轨上色（红/黄）</span>
+						</span>
+						<span class="mmtr-card-state">{{ layersService.signals() ? "开" : "关" }}</span>
+					</button>
 				</div>
 			} @else {
 				<div class="mmtr-card-section-title">区间图</div>

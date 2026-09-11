@@ -17,13 +17,8 @@ export class MmtrLayersService {
 	public readonly linesLayer = signal(true);
 	/** Fork (道岔) markers + console. */
 	public readonly points = signal(true);
-	/**
-	 * 区间图层 (闭塞区间 v2): the directional block sections - what one lamp protects, walked lamp to
-	 * lamp. Drawn as a coloured slice of each rail between the two lamps that bound the block, so the
-	 * blocks the engine actually divides the line into become visible (a rail can carry two sections when
-	 * a lamp stands mid-rail, and one section can span many rails).
-	 */
-	public readonly sections = signal(true);
+	/** 信号显示: rails coloured by the aspect of the signal protecting them (red / yellow / double yellow). */
+	public readonly signals = signal(true);
 	/** Visible line ids (all by default). */
 	public readonly visibleLines = signal<string[]>([]);
 	/** Focused line id (empty = none); focused lines draw bold white. */

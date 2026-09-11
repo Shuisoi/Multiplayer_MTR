@@ -1,125 +1,44 @@
-<ng-container *transloco="let t">
-	<div class="column center loading-background" role="status" [attr.aria-hidden]="!loading()">
-		<p-progress-spinner [ariaLabel]="t('map.loadingMap')"/>
-	</div>
-	<div class="wrapper" #wrapper [style.opacity]="loading() ? 0 : 1" [attr.aria-busy]="loading()">
-		<canvas #canvas role="img" [attr.aria-label]="t('map.transitMap')"></canvas>
-		<div>
-			@for (clientGroupOnRoute of clientGroupsOnRoute(); track $index) {
-				<div class="row label" [style.transform]="'translate(-50%,0) translate(' + clientGroupOnRoute.x + 'px, ' + clientGroupOnRoute.y + 'px)'" [style.gap]="clientGroupOnRoute.clientImagePadding + 'px'">
-					@for (client of clientGroupOnRoute.clients; track client.id) {
-						<img [ngSrc]="'https://mc-heads.net/avatar/' + client.id" [width]="clientImageSize" [height]="clientImageSize" [alt]="client.name"
-						     role="button" tabindex="0"
-						     (mousedown)="clientClicked.emit(client.id); $event.stopPropagation()"
-						     (keydown.enter)="clientClicked.emit(client.id); $event.stopPropagation()"
-						     (keydown.space)="clientClicked.emit(client.id); $event.stopPropagation(); $event.preventDefault()"
-						     [pTooltip]="client.name" tooltipPosition="top"/>
-					}
-				</div>
+<div class="wrapper" #wrapper [class.dim]="loading()">
+	<canvas #canvas role="img" aria-label="MMTR 运营台地图"
+	        (mousedown)="onCanvasDown()" (mousemove)="onCanvasMove($event)" (click)="onCanvasClick($event)"></canvas>
+
+	@for (marker of trainMarkers(); track marker.vehicleId) {
+		<button class="train" [class.moving]="marker.moving" [class.parked]="marker.parked"
+		        [style.transform]="'translate(-50%,-50%) translate(' + marker.x + 'px,' + marker.y + 'px)'"
+		        (click)="selectTrain(marker.vehicleId)" [title]="marker.label">
+			<span class="train-dot"></span>
+			<span class="train-label">{{ marker.label }}</span>
+		</button>
+	}
+
+	@if (selectedNodeKey()) {
+		<div class="fork-panel" (mousedown)="$event.stopPropagation()">
+			<div class="fork-head">
+				<span class="fork-title">道岔 {{ selectedNodeKey() }}</span>
+				<button class="fork-close" (click)="closeFork()" title="关闭">✕</button>
+			</div>
+			@if (feedback(); as note) {
+				<div class="fork-feedback" [class.ok]="note.ok">{{ note.text }}</div>
 			}
-			@for (textLabel of textLabels(); track textLabel.id) {
-				<div class="column center label" [style.transform]="'translate(-50%,0) translate(' + textLabel.x + 'px, ' + textLabel.y + 'px)'"
-				     role="button" tabindex="0" [attr.aria-label]="textLabel.text"
-				     (mousedown)="stationClicked.emit(textLabel.id)"
-				     (keydown.enter)="stationClicked.emit(textLabel.id)"
-				     (keydown.space)="stationClicked.emit(textLabel.id); $event.preventDefault()"
-				     (mouseenter)="textLabel.hoverOverride = true"
-				     (mouseleave)="textLabel.hoverOverride = false"
-				     (focus)="textLabel.hoverOverride = true"
-				     (blur)="textLabel.hoverOverride = false">
-					<div class="column center" [style.width]="textLabel.stationWidth + 'px'" [style.height]="textLabel.stationHeight + 'px'">
-						@if (textLabel.clients) {
-							<div class="spacing"></div>
-							<div class="row" [style.gap]="textLabel.clientImagePadding + 'px'">
-								@for (client of textLabel.clients; track client.id) {
-									<img [ngSrc]="'https://mc-heads.net/avatar/' + client.id" [width]="clientImageSize" [height]="clientImageSize" [alt]="client.name"
-									     role="button" tabindex="0"
-									     (mousedown)="clientClicked.emit(client.id); $event.stopPropagation()"
-									     (keydown.enter)="clientClicked.emit(client.id); $event.stopPropagation()"
-									     (keydown.space)="clientClicked.emit(client.id); $event.stopPropagation(); $event.preventDefault()"
-									     [pTooltip]="client.name" tooltipPosition="top"/>
-								}
-							</div>
-							<div class="spacing"></div>
+			@for (point of forkRows(); track point.via) {
+				<div class="fork-row" [class.locked]="point.locked">
+					<div class="fork-row-head">
+						<span class="fork-via">进向 {{ shortHex(point.via) }} <em>{{ point.form }}</em></span>
+						<button class="fork-lock" [class.on]="point.locked" (click)="toggleLock(point)">{{ point.locked ? "解锁" : "锁定" }}</button>
+					</div>
+					<div class="fork-status">{{ statusText(point) }}</div>
+					<div class="fork-legs">
+						@for (leg of point.legs; track $index) {
+							<button class="fork-leg" [class.active]="point.manual === $index" (click)="throwBranch(point, $index)" [title]="leg.hex">
+								{{ $index }} {{ kindText(leg.kind) }}
+							</button>
+						}
+						@if (point.manual >= 0) {
+							<button class="fork-leg clear" (click)="clearBranch(point)" title="清除人工设岔">✕</button>
 						}
 					</div>
-					@if (textLabel.shouldRenderText || textLabel.hoverOverride) {
-						<div class="column center">
-							@for (textLabelPart of textLabel.text | splitName; track $index) {
-								<div class="station-name text" [class.cjk]="textLabelPart.isCjk">{{ textLabelPart.text }}</div>
-							}
-							<div class="row" aria-hidden="true">
-								@for (icon of textLabel.icons; track $index) {
-									<iconify-icon class="station-name icon" [icon]="icon"></iconify-icon>
-								}
-							</div>
-						</div>
-					}
-				</div>
-			}
-			@for (pointMarker of pointMarkers(); track pointMarker.key) {
-				<div class="point-marker" [class.state-locked]="pointMarker.state === 'locked'" [class.state-manual]="pointMarker.state === 'manual'" [class.state-held]="pointMarker.state === 'held'" [class.state-idle]="pointMarker.state === 'idle'"
-				     [style.transform]="'translate(-50%,-50%) translate(' + pointMarker.x + 'px, ' + pointMarker.y + 'px)'"
-				     role="button" tabindex="0" [attr.aria-label]="'道岔 ' + pointMarker.key"
-				     (mousedown)="selectNode(pointMarker.key); $event.stopPropagation()"
-				     (keydown.enter)="selectNode(pointMarker.key); $event.stopPropagation()"
-				     (keydown.space)="selectNode(pointMarker.key); $event.stopPropagation(); $event.preventDefault()"
-				     [pTooltip]="pointMarker.key + (pointMarker.count > 1 ? ' · ' + pointMarker.count + ' 个进向' : '')" tooltipPosition="top"></div>
-			}
-			@for (trainMarker of trainMarkers(); track trainMarker.vehicleId) {
-				<div class="train-marker" [class.parked]="trainMarker.parked" [class.moving]="trainMarker.moving"
-				     [style.transform]="'translate(-50%,-50%) translate(' + trainMarker.x + 'px, ' + trainMarker.y + 'px)'">
-					<span class="train-marker-dot" [style.background]="trainMarker.color || undefined"></span>
-					<span class="train-marker-text">{{ trainMarker.label }}</span>
-				</div>
-			}
-			@if (trainMarkers().length > 0 || liveSignals().length > 0) {
-				<div class="mmtr-map-legend" (mousedown)="$event.stopPropagation()">
-					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-red"></span>占用(红)</div>
-					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-yellow"></span>单黄</div>
-					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-yy"></span>双黄</div>
-					<div class="mmtr-legend-row"><span class="mmtr-legend-dot mmtr-legend-white"></span>空闲</div>
-					<div class="mmtr-legend-row"><span class="mmtr-legend-train"></span>列车(色=任务态)</div>
-					<div class="mmtr-legend-row"><span class="mmtr-legend-train parked"></span>停场车</div>
-				</div>
-			}
-			@if (selectedNodePoints().length > 0) {
-				<div class="point-console" (mousedown)="$event.stopPropagation()">
-					<div class="row space-between point-console-header">
-						<div class="point-console-title">
-							<iconify-icon icon="mdi:sign-direction" aria-hidden="true"></iconify-icon>
-							道岔 {{ selectedNodePoints()[0].x }}, {{ selectedNodePoints()[0].y }}, {{ selectedNodePoints()[0].z }}
-						</div>
-						<button class="point-close" (click)="closeNode()" aria-label="关闭" title="关闭">✕</button>
-					</div>
-					@if (mmtrPointsService.feedback(); as feedback) {
-						<div class="point-feedback" [class.ok]="feedback.ok">{{ feedback.text }}</div>
-					}
-					@for (point of selectedNodePoints(); track point.via) {
-						<div class="point-row" [class.point-row-locked]="point.locked">
-							<div class="row gap-small space-between">
-								<div class="point-via">进向 {{ shortHex(point.via) }} <span class="point-form">{{ formText(point.form) }}</span></div>
-								<button class="point-lock" [class.locked]="point.locked" (click)="toggleLock(point)" [pTooltip]="point.locked ? '锁定中：自动申请排队，解锁后自动可接管' : '锁定：自动申请排队，人工独占'" tooltipPosition="left">
-									{{ point.locked ? '解锁' : '锁定' }}
-								</button>
-							</div>
-							<div class="point-status">{{ pointStatus(point) }}</div>
-							<div class="row gap-small point-legs">
-								@for (leg of point.legs; track $index) {
-									<button class="point-leg" [class.active]="point.manual === $index"
-									        (click)="throwBranch(point, $index)" [pTooltip]="leg.hex" tooltipPosition="top">
-										{{ $index }} {{ kindText(leg.kind) }}
-									</button>
-								}
-								@if (point.manual >= 0) {
-									<button class="point-leg point-leg-clear" (click)="clearBranch(point)" [pTooltip]="'清除人工设岔：未设=等待/自动可接管'" tooltipPosition="top">✕设</button>
-								}
-							</div>
-						</div>
-					}
 				</div>
 			}
 		</div>
-	</div>
-	<div #stats aria-hidden="true"></div>
-</ng-container>
+	}
+</div>
