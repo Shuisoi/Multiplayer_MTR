@@ -1,105 +1,106 @@
 <script setup lang="ts">
 import {computed, ref, useTemplateRef} from "vue";
 import {NModal, useMessage} from "naive-ui";
-import Viewport from "@/components/Viewport.vue";
-import NodeMarker from "@/components/NodeMarker.vue";
+import MapCanvas from "@/components/MapCanvas.vue";
 import {Node} from "@/domain/Node";
 import {sampleNodes} from "@/domain/sampleNodes";
+import type {Camera} from "@/domain/camera";
 
 /*
- * 轨道层视图：现在只做一件事——把节点摆出来，验证节点自身的交互。
+ * 轨道层视图：把节点交给 `MapCanvas` 显示，并处理节点操作菜单的动作。
  *
- * 坐标全部是**世界坐标**，交给 SVG 的 viewBox 映射成屏幕（见 Viewport.vue）。
- * 这一层不做任何"算像素"的事：节点用 <g transform="translate(x y)"> 摆在世界坐标上；
- * 滚轮缩放、拖动平移只改 viewBox。所以没有"父组件与视口各算一半"的偏移问题。
+ * <p>分层很清楚：`MapCanvas` 负责"世界坐标怎么变成屏幕坐标"，这里负责"点了某个动作要做什么"。
+ * 视图组件不再持有任何坐标换算——这是这一版重做的核心目的。</p>
  *
- * 数据是 domain/sampleNodes.ts 的三个示例节点（通过点 / 道岔 / 端点），**不连服务端**。
+ * <p>数据是 `domain/sampleNodes.ts` 的示例节点（一段梯线），**不连服务端**。</p>
  */
 
-const viewport = useTemplateRef<InstanceType<typeof Viewport>>("viewport");
+const canvas = useTemplateRef<InstanceType<typeof MapCanvas>>("canvas");
 const message = useMessage();
 
 const nodes = ref<Node[]>(sampleNodes);
 
-/** 示例布局：三个节点沿世界 X 轴排开（间距就是世界单位，缩放时一起放大缩小）。 */
-const spacing = 40;
-const placed = computed(() => nodes.value.map((node, index) => ({node, x: index * spacing, y: 0})));
-const world = computed(() => ({
-	minX: 0,
-	minY: 0,
-	width: Math.max(1, (placed.value.length - 1) * spacing),
-	height: 1,
-}));
+/** 当前摄像机（由画布上报），只用来显示读数。 */
+const camera = ref<Camera>({originX: 0, originY: 0, scale: 1});
+/** 取景基准比例（第一次取景时的比例），用来把"缩放"显示成倍率。 */
+const baseScale = ref(0);
+
+function onCamera(value: Camera) {
+	camera.value = value;
+	if (baseScale.value === 0 && value.scale > 0) {
+		baseScale.value = value.scale;
+	}
+}
+
+const zoomText = computed(() => {
+	if (baseScale.value <= 0) {
+		return "—";
+	}
+	return `${(camera.value.scale / baseScale.value).toFixed(2)}×`;
+});
 
 const detail = ref({open: false, title: "", text: ""});
-/** 选中的节点（操作菜单打开中）。 */
-const selectedKey = ref("");
 
 function onAction({node, action}: {node: Node; action: string}) {
 	switch (action) {
 		case "center":
-			selectedKey.value = node.key;
-			viewport.value?.centerOn(worldPointOf(node)?.x ?? 0, 0);
+			canvas.value?.centerOnWorld(node.planeX, node.planeZ);
 			break;
 		case "copy":
-			void navigator.clipboard.writeText(node.coords);
+			void navigator.clipboard?.writeText(node.coords);
 			message.success(`已复制坐标 ${node.coords}`);
 			break;
 		case "neighbors":
-			void navigator.clipboard.writeText(node.neighbours.map(neighbour => neighbour.rail).join("\n"));
+			void navigator.clipboard?.writeText(node.neighbours.map(neighbour => neighbour.rail).join("\n"));
 			message.success(`已复制 ${node.neighbours.length} 条相邻轨`);
 			break;
 		case "block":
-			selectedKey.value = node.key;
 			detail.value = {
 				open: true,
 				title: `节点 ${node.coords} · 所属区间`,
-				text: `区间 id：${node.block || "（无）"}\n类型：${node.isUnguardedBlock ? "无灯区间（无人看守）" : "有灯区间"}\n\n（尚未接入引擎：接入后这里显示 blocks ${node.key} 的诊断输出。）`,
+				text: [
+					`区间 id：${node.block || "（无）"}`,
+					`类型：${node.isUnguardedBlock ? "无灯区间（无人看守）" : "有灯区间"}`,
+					"",
+					"（尚未接入引擎：接入后这里显示 blocks " + node.key + " 的诊断输出。）",
+				].join("\n"),
 			};
 			break;
 		case "fork":
-			selectedKey.value = node.key;
 			detail.value = {
 				open: true,
 				title: `道岔 ${node.coords}`,
-				text: `度数 ${node.degree} · 相邻轨 ${node.neighbours.length} 条\n\n（尚未接入引擎：接入后这里显示该节点的进向与各条腿。）`,
+				text: [
+					`度数 ${node.degree} · 相邻轨 ${node.neighbours.length} 条`,
+					"",
+					...node.neighbours.map((neighbour, index) =>
+						`腿 ${index + 1}：${neighbour.x}, ${neighbour.y}, ${neighbour.z}　轨 ${Node.shortHex(neighbour.rail)}…　${Math.round(node.distanceTo(neighbour))} m`),
+					"",
+					"（尚未接入引擎：接入后这里显示该道岔的进向与各条腿的拓扑。）",
+				].join("\n"),
 			};
 			break;
 		default:
 			break;
 	}
 }
-
-function worldPointOf(node: Node) {
-	return placed.value.find(item => item.node.key === node.key);
-}
 </script>
 
 <template>
 	<div class="wrap">
-		<Viewport
-			ref="viewport"
-			:world-min-x="world.minX"
-			:world-min-y="world.minY"
-			:world-width="world.width"
-			:world-height="world.height"
-		>
-			<!-- 节点：世界坐标里的一个 <g>；圆点与浮层都由 NodeMarker 负责。 -->
-			<NodeMarker
-				v-for="item in placed"
-				:key="item.node.key"
-				:node="item.node"
-				:x="item.x"
-				:y="item.y"
-				:selected="selectedKey === item.node.key"
-				@action="onAction"
-			/>
-		</Viewport>
+		<MapCanvas
+			ref="canvas"
+			:nodes="nodes"
+			@action="onAction"
+			@camera="onCamera"
+		/>
 
+		<!-- HUD：节点数量 / 缩放读数 / 操作提示 / 重置视图 -->
 		<div class="hud">
-			<span>示例节点 <b class="value">{{ nodes.length }}</b></span>
+			<span class="group">节点 <b class="value">{{ nodes.length }}</b></span>
+			<span class="group">缩放 <b class="value">{{ zoomText }}</b></span>
 			<span class="tip">悬停看信息 · 左键开菜单 · 滚轮缩放 · 拖动平移</span>
-			<button class="reset" @click="viewport?.fit()">重置视图</button>
+			<button class="reset" type="button" @click="canvas?.fit()">重置视图</button>
 		</div>
 
 		<NModal v-model:show="detail.open" preset="card" :title="detail.title" style="width: 680px; max-width: 92vw">
@@ -124,11 +125,18 @@ function worldPointOf(node: Node) {
 	gap: 14px;
 	font-size: 12px;
 	color: var(--fg-dim);
+	pointer-events: none;
+}
+
+.hud .group {
+	display: flex;
+	align-items: center;
+	gap: 4px;
 }
 
 .hud b {
 	color: var(--fg);
-	font-weight: 600;
+	font-family: var(--font-value);
 }
 
 .tip {
@@ -141,14 +149,15 @@ function worldPointOf(node: Node) {
 	font-family: var(--font-ui);
 	font-size: 12px;
 	color: var(--fg-secondary);
-	background: #0f0f0f;
-	border: 1px solid #262626;
+	background: var(--panel);
+	border: 1px solid var(--line);
 	border-radius: var(--radius);
 	cursor: pointer;
+	pointer-events: auto;
 }
 
 .reset:hover {
-	color: #fff;
+	color: var(--fg);
 	border-color: #4a4a4a;
 }
 

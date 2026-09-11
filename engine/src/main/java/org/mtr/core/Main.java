@@ -126,7 +126,14 @@ public class Main {
 
 		if (webserverPort > 0) {
 			webserver = new Webserver(webserverPort);
-			webserver.addServlet(new ServletHolder(new MainWebServlet(resolveWebContentProvider(), "/")), "/");
+			// 前端静态文件：有 mmtr.web.root 就从磁盘按字节发（见 StaticFileServlet），
+			// 否则用 jar 内嵌的那份（发布包仍是自包含单 jar）。
+			final Path webRoot = resolveWebRoot();
+			if (webRoot != null) {
+				webserver.addServlet(new ServletHolder(new StaticFileServlet(webRoot, "/", "index.html")), "/");
+			} else {
+				webserver.addServlet(new ServletHolder(new MainWebServlet(WebserverResources::get, "/")), "/");
+			}
 			webserver.addServlet(new ServletHolder(new SystemMapServlet(simulators)), "/mtr/api/map/*");
 			webserver.addServlet(new ServletHolder(new OBAServlet(simulators)), "/oba/api/where/*");
 			webserver.addServlet(new ServletHolder(new BridgeServlet(simulators)), "/mmtr/api/bridge/*");
@@ -259,42 +266,25 @@ public class Main {
 	}
 
 	/**
-	 * 静态前端（web 控制台）的内容来源。
+	 * 静态前端（web 控制台）的磁盘目录。
 	 *
 	 * <p><strong>前后端分离的关键点</strong>：网页是独立构建、独立部署的前端应用，Java 这边只负责
-	 * "发文件"和"给接口"。默认用 jar 内嵌的那份（发布用）；但若通过系统属性
-	 * {@code -Dmmtr.web.root=<dir>} 或环境变量 {@code MMTR_WEB_ROOT=<dir>} 指定了一个目录，
-	 * 就直接从磁盘读——这样改一行前端只需重新构建前端、刷新页面，
-	 * 不必重打 jar、也不必重启服务端（早期把前端焊进 jar，调一行 CSS 都要重启 40 秒的服务端）。</p>
-	 *
-	 * <p>目录内读取：缺失的文件返回 null，由 {@link WebServlet} 决定回退行为；路径做了规范化，
-	 * 越出根目录的请求一律拒绝。</p>
+	 * "发文件"和"给接口"。系统属性 {@code -Dmmtr.web.root=<dir>} 或环境变量 {@code MMTR_WEB_ROOT=<dir>}
+	 * 指定目录时，就用 {@link StaticFileServlet} 从磁盘按字节发——于是改前端只需重新构建前端、刷新页面，
+	 * 不必重打 jar、也不必重启服务端。没指定或目录不存在则返回 null，由调用方回落到 jar 内嵌的副本。</p>
 	 */
-	private static Function<String, String> resolveWebContentProvider() {
+	private static @Nullable Path resolveWebRoot() {
 		final String root = System.getProperty("mmtr.web.root", System.getenv("MMTR_WEB_ROOT"));
-		if (root != null && !root.isBlank()) {
-			final Path base = Path.of(root).toAbsolutePath().normalize();
-			if (java.nio.file.Files.isDirectory(base)) {
-				log.info("Serving the web console from {} (jar-embedded copy is ignored)", base);
-				return path -> readFileFromDirectory(base, path);
-			}
-			log.warn("mmtr.web.root={} is not a directory; falling back to the embedded web console", root);
-		}
-		return WebserverResources::get;
-	}
-
-	/** 从磁盘目录读一个静态文件；越界或不存在返回 null。 */
-	private static @Nullable String readFileFromDirectory(Path base, String requestPath) {
-		try {
-			final Path resolved = base.resolve(requestPath).normalize();
-			if (!resolved.startsWith(base) || !java.nio.file.Files.isRegularFile(resolved)) {
-				return null;
-			}
-			return java.nio.file.Files.readString(resolved, StandardCharsets.UTF_8);
-		} catch (Exception exception) {
-			log.warn("Failed to read static file {} from {}", requestPath, base, exception);
+		if (root == null || root.isBlank()) {
 			return null;
 		}
+		final Path base = Path.of(root).toAbsolutePath().normalize();
+		if (java.nio.file.Files.isDirectory(base)) {
+			log.info("Serving the web console from {} (the jar-embedded copy is ignored)", base);
+			return base;
+		}
+		log.warn("mmtr.web.root={} is not a directory; falling back to the embedded web console", root);
+		return null;
 	}
 
 	/**
