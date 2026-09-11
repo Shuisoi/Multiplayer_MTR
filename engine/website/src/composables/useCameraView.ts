@@ -1,4 +1,4 @@
-import {onBeforeUnmount, onMounted, ref, watch, type Ref} from "vue";
+import {computed, onBeforeUnmount, onMounted, ref, watch, type Ref} from "vue";
 import {
 	boundsOf,
 	centerOn,
@@ -12,6 +12,7 @@ import {
 	screenToWorld,
 	worldToScreen,
 	zoomAt,
+	zoomRatio,
 	type Camera,
 	type Rect,
 } from "@/domain/camera";
@@ -59,10 +60,19 @@ export function useCameraView(options: {
 	function fit() {
 		const view = viewport();
 		const next = fitView(options.content.value, view, options.fill ?? DEFAULT_FILL);
-		options.camera.value = next;
+		/*
+		 * 顺序很重要：**先更新基准比例，再写摄像机**。
+		 *
+		 * 摄像机一变就会被上层 watch 到并上报（`MapCanvas` → HUD），而 HUD 的倍率是
+		 * `camera.scale / baseScale`。写成先写摄像机、后写基准，就会用**上一版**的基准去算这一次的倍率。
+		 * 实测撞过一次：首次取景发生在节点还没取回来的时候（内容框是退化的 1×1，基准算成 ~15 px/单位），
+		 * 真实节点到了之后取景比例是 0.31，HUD 却一直显示 0.02× ——刚好是 0.31/15。
+		 * 画面是对的、读数不对，这种"只错一处"的 bug 最难看出来，所以把顺序写死并留这段注释。
+		 */
 		if (view.width > 0 && view.height > 0) {
 			baseScale.value = next.scale;
 		}
+		options.camera.value = next;
 		touched = false;
 	}
 
@@ -81,6 +91,16 @@ export function useCameraView(options: {
 		}
 	}
 
+	/**
+	 * 把"用户已经手动调过视图"的状态清掉。
+	 *
+	 * <p>数据重新取回来时要用：新数据应当重新取景，而不是沿用上一次的视角——
+	 * 否则用户拖到一边之后再点"重新读取"，新节点会落在视野外，看起来像"没数据"。</p>
+	 */
+	function resetTouched() {
+		touched = false;
+	}
+
 	/** 手动设置内容包围盒（路径数据到了以后调用，会按当前策略决定是否重新取景）。 */
 	function setContent(rect: Rect) {
 		options.content.value = rect;
@@ -95,7 +115,7 @@ export function useCameraView(options: {
 		touched = true;
 	}
 
-	/** 以视口内的屏幕点（相对视口左上角）为锚点缩放。 */
+	/** 以视口内的屏幕点（相对视口左上角）为锚点缩放。注意与下面返回的 `zoomRatio` 不是一个东西。 */
 	function zoom(screenX: number, screenY: number, factor: number) {
 		options.camera.value = zoomAt(options.camera.value, screenX, screenY, factor, baseScale.value || options.camera.value.scale);
 		touched = true;
@@ -165,6 +185,21 @@ export function useCameraView(options: {
 
 	let observer: ResizeObserver | undefined;
 
+	/*
+	 * 诊断：`?cameraDebug=1` 时把取景与水位的内部状态挂到 window 上。
+	 * "画面对、读数不对"这类问题光看屏幕猜不出来（倍率是 camera.scale / baseScale 两个值的商），
+	 * 必须能看到两个值各自是多少。
+	 */
+	if (typeof window !== "undefined" && window.location.search.includes("cameraDebug")) {
+		(window as unknown as {__mmtrView: unknown}).__mmtrView = () => ({
+			viewport: {width: width.value, height: height.value},
+			camera: options.camera.value,
+			baseScale: baseScale.value,
+			zoom: baseScale.value > 0 ? options.camera.value.scale / baseScale.value : 0,
+			touched,
+		});
+	}
+
 	onMounted(() => {
 		// 挂载当帧容器可能还没有尺寸（父层定位、字体加载都可能晚一拍），
 		// 所以先量一次、取一次景，再挂 ResizeObserver 等真实尺寸出现后补一次。
@@ -193,9 +228,17 @@ export function useCameraView(options: {
 		width,
 		height,
 		dragging,
+		/**
+		 * 相对取景基准的倍率（1 = 正好取景）。
+		 *
+		 * <p>名字带 Ratio 是为了和上面的 `zoom()` 命令区分开——那两个是不同的东西：
+		 * 一个是"缩放到某处"的动作，一个是"现在多大"的读数。</p>
+		 */
+		zoomRatio: computed(() => zoomRatio(options.camera.value, baseScale.value)),
 		viewport,
 		fit,
 		measure,
+		resetTouched,
 		setContent,
 		pan,
 		zoom,

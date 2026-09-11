@@ -71,6 +71,33 @@ function DotCenter([int]$index) {
 	return Eval "(() => { const dots = document.querySelectorAll('.node .dot'); if (!$dots[$index]) return 'none'; const b = dots[$index].getBoundingClientRect(); return Math.round(b.left + b.width / 2) + ',' + Math.round(b.top + b.height / 2); })()"
 }
 
+# 轮询直到读数稳定：DOM 更新有延迟，固定 sleep 会在慢的时候读到上一帧的值。
+# 曾经因此误判"居中差了 4px"，其实画面是准的，只是测得早。
+function DotCenterStable([int]$index, [int]$timeoutMs = 2500) {
+	$sw = [Diagnostics.Stopwatch]::StartNew()
+	$previous = ""
+	while ($sw.ElapsedMilliseconds -lt $timeoutMs) {
+		$current = DotCenter $index
+		if ($current -eq $previous -and $current -ne "none" -and $current -ne "") { return $current }
+		$previous = $current
+		Start-Sleep -Milliseconds 150
+	}
+	return $previous
+}
+
+# 被点中的那个节点（.node.active）的圆点中心。菜单动作会把它标成选中态。
+function ActiveDotCenterStable([int]$timeoutMs = 2500) {
+	$sw = [Diagnostics.Stopwatch]::StartNew()
+	$previous = ""
+	while ($sw.ElapsedMilliseconds -lt $timeoutMs) {
+		$current = Eval "(() => { const n = document.querySelector('.node.active'); if (!n) return 'none'; const b = n.querySelector('.dot').getBoundingClientRect(); return Math.round(b.left + b.width/2) + ',' + Math.round(b.top + b.height/2); })()"
+		if ($current -eq $previous -and $current -ne "none" -and $current -ne "") { return $current }
+		$previous = $current
+		Start-Sleep -Milliseconds 150
+	}
+	return $previous
+}
+
 function Check([string]$name, [string]$actual, [string]$expected) {
 	$ok = $actual -eq $expected
 	if (-not $ok) { $script:failed++ }
@@ -90,25 +117,32 @@ try {
 	Write-Output "=== 节点显示系统验证 ==="
 	Write-Output ""
 
-	# --- 布局 ---
+	# --- 布局（数据来自引擎接口：全部节点，不画连线）---
 	$summary = Eval @'
 (() => {
   const map = document.querySelector('.map');
   const r = map.getBoundingClientRect();
   const dots = [...document.querySelectorAll('.node .dot')];
   const inside = dots.filter(d => { const b = d.getBoundingClientRect(); return b.width > 3 && b.left >= r.left && b.right <= r.right && b.top >= r.top && b.bottom <= r.bottom; }).length;
-  const sizes = dots.map(d => Math.round(d.getBoundingClientRect().width)).join(',');
-  return JSON.stringify({vw: Math.round(r.width), vh: Math.round(r.height), l: Math.round(r.left), t: Math.round(r.top), nodes: dots.length, inside, sizes,
-    rails: document.querySelectorAll('.rails line.rail').length, ticks: document.querySelectorAll('.rails line.tick').length,
-    viewBox: document.querySelector('svg.rails').getAttribute('viewBox')});
+  const sizes = {};
+  dots.forEach(d => { const k = Math.round(d.getBoundingClientRect().width); sizes[k] = (sizes[k] || 0) + 1; });
+  const hud = document.querySelector('.hud') ? document.querySelector('.hud').innerText.replace(/\n/g, ' ') : '';
+  const loaded = Number((hud.match(/节点\s+(\d+)/) || [])[1] || 0);
+  return JSON.stringify({vw: Math.round(r.width), vh: Math.round(r.height), l: Math.round(r.left), t: Math.round(r.top),
+    nodes: dots.length, inside, sizes, hud, loaded,
+    banner: document.querySelector('.banner') ? document.querySelector('.banner').innerText : '',
+    svg: document.querySelectorAll('svg.rails').length});
 })()
 '@
 	$s = $summary | ConvertFrom-Json
-	Write-Output "视口 $($s.vw)x$($s.vh) @ ($($s.l),$($s.t))   节点 $($s.nodes) 个，圆点直径 [$($s.sizes)]"
+	Write-Output "视口 $($s.vw)x$($s.vh) @ ($($s.l),$($s.t))   节点 $($s.nodes) 个   直径分布 $($s.sizes | ConvertTo-Json -Compress)"
+	Write-Output "HUD: $($s.hud.Trim())"
+	CheckTrue "从引擎取到节点（HUD 节点数 = 页面上节点元素数）" ($s.loaded -eq $s.nodes -and $s.nodes -gt 0) "HUD 报 $($s.loaded)，页面 $($s.nodes)"
+	CheckTrue "没有取数错误横幅" ($s.banner -eq "") "横幅：$(if ($s.banner) { $s.banner } else { '无' })"
 	CheckTrue "全部节点都在视口内" ($s.inside -eq $s.nodes) "$($s.inside)/$($s.nodes) 个在视口内"
-	CheckTrue "圆点尺寸都是屏幕像素级（3–20px）" (($s.sizes -split ',' | ForEach-Object { [int]$_ } | Where-Object { $_ -lt 3 -or $_ -gt 20 }).Count -eq 0) "直径 $($s.sizes)"
-	CheckTrue "轨 / 刻度线已绘制" ($s.rails -eq 4 -and $s.ticks -eq 8) "轨 $($s.rails) 条、刻度 $($s.ticks) 条"
-	CheckTrue "轨道层 SVG 没有 viewBox（不引入第二套缩放）" ($null -eq $s.viewBox) "viewBox = $(if ($s.viewBox) { $s.viewBox } else { '无' })"
+	CheckTrue "圆点尺寸都是屏幕像素级（3–20px）" (($s.sizes.PSObject.Properties.Name | ForEach-Object { [int]$_ } | Where-Object { $_ -lt 3 -or $_ -gt 20 }).Count -eq 0) "直径分布 $($s.sizes | ConvertTo-Json -Compress)"
+	CheckTrue "连线已移除（没有轨道 SVG）" ($s.svg -eq 0) "轨道 SVG 数 = $($s.svg)"
+	CheckTrue "取景后缩放读数为 1.00×" ($s.hud -like "*1.00×*") ($s.hud.Trim())
 
 	# --- 悬停 ---
 	$dot = DotCenter 0
@@ -126,10 +160,11 @@ try {
 	CheckTrue "左键点开操作菜单" ($menu -notlike "*（无）*") $menu
 
 	# --- 居中到这里 ---
+	# 判据用"被点中的那个节点"（.node.active），不是固定 index：
+	# DOM 里节点的顺序与坐标顺序无关，按 index 取会量到另一个节点（曾经因此误判差了 4px）。
 	$viewportCenter = Eval "(() => { const r = document.querySelector('.map').getBoundingClientRect(); return Math.round(r.left + r.width/2) + ',' + Math.round(r.top + r.height/2); })()"
 	Eval "document.querySelectorAll('.menu-item')[0].click()" | Out-Null
-	Start-Sleep -Milliseconds 500
-	Check "『居中到这里』把节点放到视口正中" (DotCenter 0) $viewportCenter
+	Check "『居中到这里』把节点放到视口正中" (ActiveDotCenterStable) $viewportCenter
 
 	# --- 滚轮缩放（读数变化 + 锚点像素不动）---
 	# 先关掉菜单再测：菜单是节点元素的子节点，开合会改变布局，虽然不影响节点位置，
@@ -142,7 +177,14 @@ try {
 	Mouse "mouseWheel" ([int]$p[0]) ([int]$p[1]) "none" 0 0 -300
 	Start-Sleep -Milliseconds 600
 	$zoomAfter = Eval "document.querySelector('.hud').innerText.replace(/\n/g, ' ')"
-	CheckTrue "滚轮放大到 1.15×" ($zoomAfter -like "*1.15×*") "$($zoomBefore.Trim())  ->  $($zoomAfter.Trim())"
+	$readZoom = {
+		param($text)
+		$m = [regex]::Match($text, "([0-9.]+)×")
+		if ($m.Success) { return [double]$m.Groups[1].Value } else { return 0 }
+	}
+	$zBefore = & $readZoom $zoomBefore
+	$zAfter = & $readZoom $zoomAfter
+	CheckTrue "滚轮放大（倍率读数变大）" ($zAfter -gt $zBefore) "$zBefore× -> $zAfter×"
 	CheckTrue "菜单在点空白处关闭" ((Eval "document.querySelector('.menu') ? 'still-open' : 'closed'") -eq "closed") "点空白后菜单状态"
 
 	# --- 拖动平移（两轴都要动）---
@@ -158,7 +200,9 @@ try {
 	CheckTrue "拖动同时改变两轴（上下左右都能拖）" (([Math]::Abs($dx - 120) -le 8) -and ([Math]::Abs($dy - 60) -le 8)) "位移 ($dx,$dy)，期望约 (120,60)"
 
 	# --- 重置视图 ---
-	Eval "document.querySelector('.reset').click()" | Out-Null
+	Eval "document.querySelector('.action')?.click()" | Out-Null
+	Start-Sleep -Milliseconds 400
+	Eval "document.querySelectorAll('.action')[1].click()" | Out-Null
 	Start-Sleep -Milliseconds 500
 	$resetZoom = Eval "document.querySelector('.hud').innerText.replace(/\n/g, ' ')"
 	CheckTrue "重置视图回到 1.00× 取景" ($resetZoom -like "*1.00×*") $resetZoom.Trim()

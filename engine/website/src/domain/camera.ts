@@ -65,6 +65,19 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * "相对取景基准"的缩放倍率：1 = 正好取景，2 = 放大一倍。
+ *
+ * <p><b>基准比例必须由持有摄像机的那一层传进来，不能在各处自己记。</b>
+ * 理由是一次实测翻车：视图组件自己 latch 了一个基准（`if (baseScale === 0)` 只赋值一次），
+ * 它 latch 到的却是**节点还没从接口取回来时**那次退化取景的比例（内容框是 1×1，比例约 1120 px/单位），
+ * 之后真实比例的读数一直是 0.02×，而画面完全正常——"画面对、读数不对"。
+ * 基准是"最后一次取景得到的比例"，只有取景的实现知道它是什么，所以它跟着摄像机走。</p>
+ */
+export function zoomRatio(camera: Camera, baseScale: number): number {
+	return baseScale > 0 ? camera.scale / baseScale : 1;
+}
+
+/**
  * 取景：让整个内容框完整落进视口，四周留 `fill` 的边距，并居中。
  *
  * <p>这就是"世界→屏幕"的初始化，也是唯一一处把内容尺寸和视口尺寸放在一起算的地方。

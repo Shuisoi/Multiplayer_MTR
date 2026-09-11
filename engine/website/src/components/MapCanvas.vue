@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import {computed, provide, ref, useTemplateRef, watch} from "vue";
+import {computed, nextTick, provide, ref, useTemplateRef, watch} from "vue";
 import {contentBounds, useCameraView} from "@/composables/useCameraView";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import {CAMERA} from "@/views/mapContext";
-import RailLayer from "./RailLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
 
 /*
- * 地图画布：视口 + 摄像机 + 三层内容。
+ * 地图画布：视口 + 摄像机 + 内容层。
  *
- * 三层从下到上：
+ * 两层从下到上：
  *   1. 点阵背景（纯装饰，不随摄像机变，给人"有地方可以拖"的感觉）；
- *   2. 轨道层 `RailLayer`（SVG，画节点之间的轨 + 从节点伸出的股道刻度）；
- *   3. 节点层 `NodeLayer`（**普通 HTML**，节点圆点、悬停信息卡、左键操作菜单）。
+ *   2. 节点层 `NodeLayer`（**普通 HTML**，节点圆点、悬停信息卡、左键操作菜单）。
+ *
+ * **不画连线**（用户明确要求）：节点之间不画轨、也不画股道刻度，节点本身就是全部内容。
  *
  * 为什么节点不画在 SVG 里：见 `domain/camera.ts` 顶部。现在世界坐标只由 `toScreen()` 换算一次，
- * SVG 与 HTML 都用同一个投影，不再有 `viewBox` + `preserveAspectRatio` + `foreignObject` 三方对账。
+ * 不存在 `viewBox` + `preserveAspectRatio` + `foreignObject` 三方对账的问题。
  *
  * 交互状态（悬停 / 选中 / 菜单）由这里持有，节点组件只负责显示与上报，
  * 所以"菜单跟着节点走"是自动的：菜单是节点元素的子元素，节点动它就动。
@@ -49,15 +49,22 @@ const selectedKey = ref("");
 const emit = defineEmits<{
 	/** 节点操作菜单被点了某一项。 */
 	(e: "action", payload: {node: Node; action: string}): void;
-	/** 视图变化（取景 / 平移 / 缩放），供外部显示比例等读数。 */
-	(e: "camera", camera: Camera): void;
+	/**
+	 * 视图变化（取景 / 平移 / 缩放）。
+	 *
+	 * <p>`zoom` 是相对取景基准的倍率，**由这里给出而不是让上层自己算**：
+	 * 它依赖"最后一次取景得到的比例"这份状态，而那份状态归摄像机所有。上层自己存一份基准的话，
+	 * 一旦在数据到达之前先取了一次景，就会 latch 到那次退化取景的比例（内容框 1×1，比例约 1120），
+	 * 从此读数永远是错的——实测显示 0.02× 而画面完全正常。</p>
+	 */
+	(e: "camera", payload: {camera: Camera; zoom: number}): void;
 }>();
 
 /*
- * 摄像机一变就上报。用 watch 而不是在每次改摄像机的地方手动 emit：
+ * 摄像机或倍率一变就上报。用 watch 而不是在每次改摄像机的地方手动 emit：
  * 平移、缩放、取景、居中四条路径都会写 camera，逐个 emit 迟早漏一条。
  */
-watch(camera, value => emit("camera", value), {deep: true});
+watch([camera, view.zoomRatio], () => emit("camera", {camera: camera.value, zoom: view.zoomRatio.value}), {deep: true});
 
 function onHover(key: string) {
 	hoveredKey.value = key;
@@ -92,6 +99,25 @@ defineExpose({
 	centerOnWorld: view.centerOnWorld,
 	zoom: view.zoom,
 });
+
+/*
+ * 节点集合变化时重新取景。
+ *
+ * <p>用 watch 而不是指望 `setContent()`：数据是从接口拿的，会晚于挂载到达，
+ * 而且用户可能已经拖过视图（那样 `touched` 会挡住自动取景）。节点列表变了就是"新数据"，
+ * 这时候重新取景是唯一合理的行为——否则新节点落在视野外，看起来像"没数据"。</p>
+ *
+ * <p>空列表要跳过：那时候包围盒是退化的 1×1，取景会把比例算到极大（实测 ~15 px/单位，
+ * 之后真实数据的倍率读数就成了 0.02×）。</p>
+ */
+watch(() => props.nodes, async () => {
+	if (props.nodes.length === 0) {
+		return;
+	}
+	await nextTick();
+	view.resetTouched();
+	view.fit();
+}, {immediate: true});
 </script>
 
 <template>
@@ -108,16 +134,6 @@ defineExpose({
 		@contextmenu.prevent
 	>
 		<div class="grid" aria-hidden="true"/>
-
-		<!--
-			轨道层：SVG，**故意不设 viewBox**。
-			SVG 的用户单位默认就是 CSS 像素，所以这里的坐标可以直接写屏幕坐标，1 单位 = 1px。
-			一旦给了 viewBox 就会引入又一次缩放映射（以及 preserveAspectRatio 的第二套对账），
-			这正是上一版三次翻车的来源，所以这里连机会都不留。
-		-->
-		<svg class="rails">
-			<RailLayer :nodes="nodes" :camera="camera"/>
-		</svg>
 
 		<!-- 节点层：普通 HTML。这一层整体不吃事件，只有节点自己吃。 -->
 		<div class="nodes">
@@ -163,14 +179,6 @@ defineExpose({
 	inset: 0;
 	background-image: radial-gradient(circle, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
 	background-size: 24px 24px;
-	pointer-events: none;
-}
-
-.rails {
-	position: absolute;
-	inset: 0;
-	width: 100%;
-	height: 100%;
 	pointer-events: none;
 }
 
