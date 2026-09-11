@@ -1,40 +1,57 @@
 <script setup lang="ts">
 import {computed, nextTick, provide, ref, useTemplateRef, watch} from "vue";
-import {contentBounds, useCameraView} from "@/composables/useCameraView";
+import {useCameraView} from "@/composables/useCameraView";
+import {boundsOf} from "@/domain/camera";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
+import type {Rail} from "@/domain/Rail";
 import {CAMERA} from "@/views/mapContext";
+import RailLayer from "./RailLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
 
 /*
  * 地图画布：视口 + 摄像机 + 内容层。
  *
- * 两层从下到上：
+ * 三层从下到上：
  *   1. 点阵背景（纯装饰，不随摄像机变，给人"有地方可以拖"的感觉）；
- *   2. 节点层 `NodeLayer`（**普通 HTML**，节点圆点、悬停信息卡、左键操作菜单）。
+ *   2. 轨道层 `RailLayer`（SVG，屏幕坐标；同一轴画直线、斜向画圆弧）；
+ *   3. 节点层 `NodeLayer`（**普通 HTML**，节点圆点、悬停信息卡、左键操作菜单）。
  *
- * **不画连线**（用户明确要求）：节点之间不画轨、也不画股道刻度，节点本身就是全部内容。
+ * 为什么节点不画在 SVG 里：见 `domain/camera.ts` 顶部。世界坐标只由 `worldToScreen()` 换算一次，
+ * 两层共用同一份摄像机，不存在 `viewBox` + `preserveAspectRatio` + `foreignObject` 三方对账。
  *
- * 为什么节点不画在 SVG 里：见 `domain/camera.ts` 顶部。现在世界坐标只由 `toScreen()` 换算一次，
- * 不存在 `viewBox` + `preserveAspectRatio` + `foreignObject` 三方对账的问题。
- *
- * 交互状态（悬停 / 选中 / 菜单）由这里持有，节点组件只负责显示与上报，
- * 所以"菜单跟着节点走"是自动的：菜单是节点元素的子元素，节点动它就动。
+ * 交互状态（悬停 / 选中 / 菜单）由这里持有，节点组件只负责显示与上报；
+ * 轨道层也读同一份状态，所以"悬停节点时与它相连的轨加亮"是自动的。
  */
 
 const props = defineProps<{
 	/** 要显示的节点（世界坐标在 `Node.planeX / planeZ`）。 */
 	nodes: readonly Node[];
+	/** 要显示的轨。 */
+	rails: readonly Rail[];
 }>();
 
 const host = useTemplateRef<HTMLElement>("host");
 const camera = ref<Camera>({originX: 0, originY: 0, scale: 1});
 
-/** 内容包围盒：所有节点位置，外扩一点留白。 */
-const content = computed(() => contentBounds(
-	props.nodes.map(node => ({x: node.planeX, y: node.planeZ})),
-	12,
-));
+/**
+ * 内容包围盒：**节点与轨的全部采样点一起**算。
+ *
+ * <p>轨的采样点必须算进去：U 型轨的弯折部分会伸出两端点构成的包围盒，只用端点取景的话
+ * 弯出去的那一段会被切在视口外。</p>
+ *
+ * <p>这里**不**做留白：留白是屏幕观感（"内容不要贴边"），所以由 `fitView` 按屏幕像素加，
+ * 而不是在这里按世界单位或内容比例加——那两种口径换算成像素都要再乘当前比例，
+ * 而比例取决于世界有多大，实测两次都导致边缘内容越界（见 `camera.fitView`）。</p>
+ */
+const content = computed(() => boundsOf([
+	...props.nodes.map(node => ({x: node.planeX, y: node.planeZ})),
+	...props.rails.flatMap(rail => [
+		{x: rail.planeX1, y: rail.planeY1},
+		{x: rail.planeX2, y: rail.planeY2},
+		...rail.path.map(point => ({x: point.x, y: -point.z})),
+	]),
+]));
 
 const view = useCameraView({host, camera, content});
 provide(CAMERA, camera);
@@ -101,23 +118,39 @@ defineExpose({
 });
 
 /*
- * 节点集合变化时重新取景。
+ * 节点集合或轨集合变化时重新取景。
  *
  * <p>用 watch 而不是指望 `setContent()`：数据是从接口拿的，会晚于挂载到达，
- * 而且用户可能已经拖过视图（那样 `touched` 会挡住自动取景）。节点列表变了就是"新数据"，
+ * 而且用户可能已经拖过视图（那样 `touched` 会挡住自动取景）。数据变了就是"新数据"，
  * 这时候重新取景是唯一合理的行为——否则新节点落在视野外，看起来像"没数据"。</p>
  *
  * <p>空列表要跳过：那时候包围盒是退化的 1×1，取景会把比例算到极大（实测 ~15 px/单位，
  * 之后真实数据的倍率读数就成了 0.02×）。</p>
  */
-watch(() => props.nodes, async () => {
-	if (props.nodes.length === 0) {
+watch([() => props.nodes, () => props.rails], async () => {
+	if (props.nodes.length === 0 && props.rails.length === 0) {
 		return;
 	}
 	await nextTick();
 	view.resetTouched();
 	view.fit();
 }, {immediate: true});
+
+/*
+ * 诊断：`?cameraDebug=1` 时把"拟合用的内容框"和"算出来的摄像机"一起挂出来。
+ * 曾经出现"画面看着正常但边缘越界 20px"，只查摄像机看不出问题——内容框也要能看到
+ * （结果是拟合发生在轨数据到达之前，用的内容框偏小，而 watch 当时只盯着节点）。
+ */
+if (typeof window !== "undefined" && window.location.search.includes("cameraDebug")) {
+	(window as unknown as {__mmtrContent: unknown}).__mmtrContent = () => ({
+		content: content.value,
+		camera: camera.value,
+		nodes: props.nodes.length,
+		rails: props.rails.length,
+		pathPoints: props.rails.reduce((sum, rail) => sum + rail.path.length, 0),
+		viewport: {width: view.width.value, height: view.height.value},
+	});
+}
 </script>
 
 <template>
@@ -134,6 +167,21 @@ watch(() => props.nodes, async () => {
 		@contextmenu.prevent
 	>
 		<div class="grid" aria-hidden="true"/>
+
+		<!--
+			轨道层：SVG，**故意不设 viewBox**。
+			SVG 的用户单位默认就是 CSS 像素，所以这里可以直接写屏幕坐标，1 单位 = 1px。
+			一旦给了 viewBox 就引入又一次缩放映射（以及 preserveAspectRatio 的第二套对账），
+			这正是旧版三次翻车的来源，所以这里连机会都不留。
+		-->
+		<svg class="rails">
+			<RailLayer
+				:rails="rails"
+				:camera="camera"
+				:hover-key="hoveredKey"
+				:select-key="selectedKey"
+			/>
+		</svg>
 
 		<!-- 节点层：普通 HTML。这一层整体不吃事件，只有节点自己吃。 -->
 		<div class="nodes">
@@ -179,6 +227,15 @@ watch(() => props.nodes, async () => {
 	inset: 0;
 	background-image: radial-gradient(circle, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
 	background-size: 24px 24px;
+	pointer-events: none;
+}
+
+.rails {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	/* 轨道层不参与命中测试：节点的交互不该被线抢走，空白处的拖动也要能穿透到画布。 */
 	pointer-events: none;
 }
 

@@ -52,8 +52,8 @@ export interface Camera {
 	readonly scale: number;
 }
 
-/** 取景留白：内容占视口的比例（0.9 = 四周各留 5%）。 */
-export const DEFAULT_FILL = 0.9;
+/** 取景留白：四周各留多少**屏幕像素**（口径见 `fitView` 的注释）。 */
+export const DEFAULT_PADDING_PX = 28;
 
 /** 缩放范围（相对取景基准），防止缩到看不见或放到失控。 */
 export const MIN_ZOOM = 0.02;
@@ -78,19 +78,27 @@ export function zoomRatio(camera: Camera, baseScale: number): number {
 }
 
 /**
- * 取景：让整个内容框完整落进视口，四周留 `fill` 的边距，并居中。
+ * 取景：让整个内容框完整落进视口，四周留白，并居中。
  *
  * <p>这就是"世界→屏幕"的初始化，也是唯一一处把内容尺寸和视口尺寸放在一起算的地方。
  * 两个方向各算一个比例，取**较小**的那个——保证内容两个方向都装得下（与 SVG `meet` 同义），
  * 而不是让某一轴溢出。</p>
  *
+ * <p>留白按**屏幕像素**算，不按世界单位、也不按内容尺寸的比例：
+ * 它是"内容不要贴着边"这件事，而"贴着边"是屏幕上的观感。按世界单位或内容比例算，
+ * 留白换算成像素要再乘当前比例，而比例又取决于世界有多大——实测撞过两次：
+ * 写死 12 世界单位时留白不到 1 像素（32 条轨越界），改成内容 4% 后仍有 3 条轨越界 1.8px。</p>
+ *
  * @param content 内容包围盒（世界坐标）
  * @param viewport 视口尺寸（CSS 像素）
- * @param fill 内容占视口的比例
+ * @param paddingPx 四周留白（CSS 像素）
  * @returns 取景后的摄像机；视口或内容尺寸无效时返回一个不会崩的兜底值
  */
-export function fitView(content: Rect, viewport: {width: number; height: number}, fill = DEFAULT_FILL): Camera {
-	const fillRatio = clamp(fill, 0.05, 1);
+export function fitView(
+	content: Rect,
+	viewport: {width: number; height: number},
+	paddingPx = DEFAULT_PADDING_PX,
+): Camera {
 	const contentWidth = Math.max(1e-6, content.width);
 	const contentHeight = Math.max(1e-6, content.height);
 	const viewWidth = viewport.width;
@@ -101,8 +109,14 @@ export function fitView(content: Rect, viewport: {width: number; height: number}
 		return {originX: content.x, originY: content.y, scale: 1};
 	}
 
+	/*
+	 * 可用区域 = 视口去掉四周留白。留白比可用区域还大时（极小窗口）缩到 0，
+	 * 宁可贴边也不能得到负数尺寸。
+	 */
+	const usableWidth = Math.max(1, viewWidth - paddingPx * 2);
+	const usableHeight = Math.max(1, viewHeight - paddingPx * 2);
 	// 两个方向各能放多大，取小的那个：这就是"装得下"的定义。
-	const scale = Math.min(viewWidth / contentWidth, viewHeight / contentHeight) * fillRatio;
+	const scale = Math.min(usableWidth / contentWidth, usableHeight / contentHeight);
 
 	return {
 		originX: content.x + contentWidth / 2 - viewWidth / (2 * scale),
@@ -199,7 +213,11 @@ export function boundsOf(points: readonly {x: number; y: number}[]): Rect {
 	return {x: minX, y: minY, width, height};
 }
 
-/** 把包围盒四周外扩（世界单位），给内容留边。 */
-export function expand(rect: Rect, margin: number): Rect {
-	return {x: rect.x - margin, y: rect.y - margin, width: rect.width + margin * 2, height: rect.height + margin * 2};
-}
+/*
+ * 关于"给内容留边"：这里**故意没有** expand / expandBy 这类按世界单位外扩包围盒的工具。
+ *
+ * 留白是屏幕观感（"内容不要贴着边"），而世界单位或内容比例的留白换算成像素都要再乘当前比例，
+ * 比例又取决于世界有多大——实测撞过两次：写死 12 世界单位时留白不到 1 像素（32 条轨越界），
+ * 改成内容 4% 后仍有 3 条轨越界 1.8px。现在留白只由 `fitView` 的 `paddingPx` 一个地方加，
+ * 口径是屏幕像素，没有第二种写法。
+ */

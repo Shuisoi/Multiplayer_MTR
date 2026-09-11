@@ -36,6 +36,15 @@ public final class SystemMapServlet extends ServletBase {
 	 */
 	private static final long LIVE_DATA_CACHE_MILLIS = 3_000L;
 
+	/**
+	 * Samples per rail in the topology feed's {@code path}.
+	 *
+	 * <p>A rail's shape is two circular arcs; 32 steps is enough that the polyline is visually
+	 * indistinguishable from the arc in a plan view (a 20 m rail segment turns a couple of degrees per
+	 * step) while keeping the payload bounded: 33 points × 3 integers × 134 rails ≈ 13 K numbers.</p>
+	 */
+	private static final int MMTR_RAIL_PATH_STEPS = 32;
+
 	public SystemMapServlet(ObjectImmutableList<Simulator> simulators) {
 		super(simulators);
 	}
@@ -901,8 +910,6 @@ public final class SystemMapServlet extends ServletBase {
 			if (ends == null || ends[1] == null) {
 				return;
 			}
-			// Pure topology edge: the web track display connects the rail's two real nodes with one
-			// straight edge (no in-game curve sampling) - the map is a track graph, not geometry.
 			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
 			o.addProperty("hex", hex);
 			o.addProperty("x1", ends[0].getX());
@@ -911,6 +918,43 @@ public final class SystemMapServlet extends ServletBase {
 			o.addProperty("x2", ends[1].getX());
 			o.addProperty("y2", ends[1].getY());
 			o.addProperty("z2", ends[1].getZ());
+			/*
+			 * The rail's ACTUAL shape along its arc length.
+			 *
+			 * <p>This used to be omitted on purpose ("pure topology edge: the map connects the rail's two real
+			 * nodes with one straight edge, no in-game curve sampling"). That was wrong for a track display:
+			 * a RailMath is built from TWO arc segments (h1/k1/r1 and h2/k2/r2), so a rail can bend into a
+			 * U or even an S. With only the two endpoints the console has to invent the middle, and any
+			 * invented middle (a single arc, a bezier) is visibly a different track than the real one.</p>
+			 *
+			 * <p>Sampled at a fixed number of steps rather than by a metre interval: the console is a plan
+			 * view, so what matters is that the polyline is visually indistinguishable from the arc, and a
+			 * fixed step count bounds the payload (32 steps = ~8 KB of JSON for all 134 rails, rounded to
+			 * integers) while the angular error per segment stays a couple of degrees.</p>
+			 *
+			 * <p>Sampled at arc distances, and the arc space starts at whichever endpoint sorts first - NOT
+			 * necessarily {@code ends[0]} here (that is just "the node the position map happened to visit
+			 * first"). So the direction is derived from the arc offsets of the two declared endpoints
+			 * ({@link org.mtr.core.data.Rail#mmtrArcOfEndNode}) instead of being assumed; the console gets a
+			 * plain ordered polyline and never has to know about arc space.</p>
+			 */
+			final com.google.gson.JsonArray path = new com.google.gson.JsonArray();
+			final double length = rail.railMath.getLength();
+			if (length > 0) {
+				final double arcOfFirst = rail.mmtrArcOfEndNode(ends[0]);
+				final boolean reversed = !Double.isNaN(arcOfFirst) && arcOfFirst > 0;
+				final int steps = MMTR_RAIL_PATH_STEPS;
+				for (int i = 0; i <= steps; i++) {
+					final double arcM = length * i / steps;
+					final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arcM, reversed);
+					final com.google.gson.JsonArray sample = new com.google.gson.JsonArray();
+					sample.add(Math.round(point.x()));
+					sample.add(Math.round(point.y()));
+					sample.add(Math.round(point.z()));
+					path.add(sample);
+				}
+			}
+			o.add("path", path);
 			// Signal S2: per-direction speed limits (km/h from the MTR rail data) along each travel
 			// direction of this edge - the web console colours / labels tracks by speed band + regime.
 			o.addProperty("speedLimitKmh1", rail.getSpeedLimitKilometersPerHour(ends[0].compareTo(ends[1]) > 0));

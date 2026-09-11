@@ -1,10 +1,8 @@
 import {computed, onBeforeUnmount, onMounted, ref, watch, type Ref} from "vue";
 import {
-	boundsOf,
 	centerOn,
 	clamp,
-	DEFAULT_FILL,
-	expand,
+	DEFAULT_PADDING_PX,
 	fitView,
 	MAX_ZOOM,
 	MIN_ZOOM,
@@ -39,8 +37,8 @@ export function useCameraView(options: {
 	camera: Ref<Camera>;
 	/** 内容包围盒（世界坐标）：取景用。 */
 	content: Ref<Rect>;
-	/** 取景留白比例。 */
-	fill?: number;
+	/** 取景留白（CSS 像素）。留白是屏幕观感，所以按像素给，不按世界单位或内容比例。 */
+	paddingPx?: number;
 }) {
 	const width = ref(0);
 	const height = ref(0);
@@ -50,6 +48,22 @@ export function useCameraView(options: {
 	/** 用户是否手动调过视图：调过之后容器尺寸变化不再自动重新取景。 */
 	let touched = false;
 	let dragStart = {clientX: 0, clientY: 0, camera: options.camera.value};
+	/**
+	 * 最近一次取景的完整输入输出。
+	 *
+	 * <p>诊断用（`?cameraDebug=1` 时挂在 window 上）。存在的理由：出现过"边缘内容越界 20px"，
+	 * 光看摄像机看不出问题——必须同时看到**拟合时用的内容框与视口尺寸**，
+	 * 才能判断是内容框偏小（时序问题）还是公式错了。</p>
+	 */
+	const lastFit = ref<{
+		content: Rect;
+		viewport: {width: number; height: number};
+		padding: number;
+		scale: number;
+		originX: number;
+		originY: number;
+		hostRect: {left: number; top: number; width: number; height: number} | null;
+	} | null>(null);
 
 	/** 视口尺寸（CSS 像素）。 */
 	function viewport(): {width: number; height: number} {
@@ -59,7 +73,8 @@ export function useCameraView(options: {
 	/** 取景：把整个内容框放进视口并居中。 */
 	function fit() {
 		const view = viewport();
-		const next = fitView(options.content.value, view, options.fill ?? DEFAULT_FILL);
+		const padding = options.paddingPx ?? DEFAULT_PADDING_PX;
+		const next = fitView(options.content.value, view, padding);
 		/*
 		 * 顺序很重要：**先更新基准比例，再写摄像机**。
 		 *
@@ -72,6 +87,20 @@ export function useCameraView(options: {
 		if (view.width > 0 && view.height > 0) {
 			baseScale.value = next.scale;
 		}
+		lastFit.value = {
+			content: {...options.content.value},
+			viewport: view,
+			padding,
+			scale: next.scale,
+			originX: next.originX,
+			originY: next.originY,
+			// 容器自己的 rect 也记下来：曾经出现"纵向边距 −20/76、正好差一个上边栏 48px"，
+			// 只记 width/height 就看不出是"哪一次测量"出了问题，必须能看到完整 rect。
+			hostRect: (() => {
+				const rect = options.host.value?.getBoundingClientRect();
+				return rect ? {left: rect.left, top: rect.top, width: rect.width, height: rect.height} : null;
+			})(),
+		};
 		options.camera.value = next;
 		touched = false;
 	}
@@ -90,7 +119,6 @@ export function useCameraView(options: {
 			fit();
 		}
 	}
-
 	/**
 	 * 把"用户已经手动调过视图"的状态清掉。
 	 *
@@ -186,19 +214,21 @@ export function useCameraView(options: {
 	let observer: ResizeObserver | undefined;
 
 	/*
-	 * 诊断：`?cameraDebug=1` 时把取景与水位的内部状态挂到 window 上。
-	 * "画面对、读数不对"这类问题光看屏幕猜不出来（倍率是 camera.scale / baseScale 两个值的商），
-	 * 必须能看到两个值各自是多少。
+	 * 诊断：把取景与水位的内部状态挂到 window 上。
+	 *
+	 * <p><b>无条件挂</b>，不要求 `?cameraDebug=1`：验证脚本必须能用**与渲染完全相同的**摄像机
+	 * 去算坐标。曾经只在带参数时才挂，脚本只好自己从"第一条轨的端点对"反推比例与原点，
+	 * 结果因为浮点匹配容差而漏掉/错配了轨，得出一条假的"弯向不符"。
+	 * 只读的调试视图不改变行为，挂着的收益（验证可信）远大于代价。</p>
 	 */
-	if (typeof window !== "undefined" && window.location.search.includes("cameraDebug")) {
-		(window as unknown as {__mmtrView: unknown}).__mmtrView = () => ({
-			viewport: {width: width.value, height: height.value},
-			camera: options.camera.value,
-			baseScale: baseScale.value,
-			zoom: baseScale.value > 0 ? options.camera.value.scale / baseScale.value : 0,
-			touched,
-		});
-	}
+	(window as unknown as {__mmtrView: unknown}).__mmtrView = () => ({
+		viewport: {width: width.value, height: height.value},
+		camera: options.camera.value,
+		baseScale: baseScale.value,
+		zoom: baseScale.value > 0 ? options.camera.value.scale / baseScale.value : 0,
+		touched,
+		lastFit: lastFit.value,
+	});
 
 	onMounted(() => {
 		// 挂载当帧容器可能还没有尺寸（父层定位、字体加载都可能晚一拍），
@@ -248,11 +278,6 @@ export function useCameraView(options: {
 		onPointerUp,
 		onWheel,
 	};
-}
-
-/** 便捷：由一组世界点算出包围盒（带外扩）。 */
-export function contentBounds(points: readonly {x: number; y: number}[], margin = 8): Rect {
-	return expand(boundsOf(points), margin);
 }
 
 export {clamp, MAX_ZOOM, MIN_ZOOM};

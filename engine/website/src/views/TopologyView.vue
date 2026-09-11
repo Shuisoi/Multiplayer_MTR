@@ -3,27 +3,28 @@ import {computed, onMounted, ref, useTemplateRef} from "vue";
 import {NModal, useMessage} from "naive-ui";
 import MapCanvas from "@/components/MapCanvas.vue";
 import {Node} from "@/domain/Node";
+import {Rail} from "@/domain/Rail";
 import {fetchTopology} from "@/api/topology";
 import type {Camera} from "@/domain/camera";
 
 /*
- * 轨道层视图：把引擎里的**全部节点**显示出来，并处理节点操作菜单的动作。
+ * 轨道层视图：把引擎里的**全部节点与轨**显示出来，并处理节点操作菜单的动作。
  *
  * <p>分层：`MapCanvas` 负责"世界坐标怎么变成屏幕坐标"，这里负责取数与"点了某个动作要做什么"。
  * 视图组件不持有任何坐标换算——这是重做节点系统的核心目的。</p>
  *
- * <p>数据来自引擎的 `/mtr/api/map/mmtr-topology`（用户要求"把世界内所有节点全部显示"）。
- * 按用户要求**不画连线**，所以接口返回的 `rails` 只用来报数量，不参与显示。</p>
+ * <p>数据来自引擎的 `/mtr/api/map/mmtr-topology`。连线按用户规则画：
+ * x 或 z 任一相同 → 直线，其余 → 圆弧（见 `domain/railGeometry.ts`）。</p>
  *
  * <p>不做轮询：节点拓扑是"世界改了才会变"的东西，默认取一次 + 手动刷新。
- * 需要自动跟随的话以后再加，但那时候应当由服务端给出一个版本号，前端比版本号再决定要不要重取。</p>
+ * 需要自动跟随的时候应当由服务端给出一个版本号，前端比版本号再决定要不要重取。</p>
  */
 
 const canvas = useTemplateRef<InstanceType<typeof MapCanvas>>("canvas");
 const message = useMessage();
 
 const nodes = ref<Node[]>([]);
-const railCount = ref(0);
+const rails = ref<Rail[]>([]);
 /** 取数状态：loading / ready / error，界面按它显示不同提示。 */
 const status = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
@@ -33,8 +34,8 @@ async function load() {
 	errorText.value = "";
 	try {
 		const topology = await fetchTopology();
-		nodes.value = topology.nodes.map(raw => new Node(raw));
-		railCount.value = topology.rails.length;
+		nodes.value = topology.nodes;
+		rails.value = topology.rails;
 		status.value = "ready";
 	} catch (error) {
 		status.value = "error";
@@ -59,6 +60,25 @@ const degreeCount = computed(() => {
 		}
 	}
 	return {end, through, fork};
+});
+
+/**
+ * 线型统计：多少条按直线画、多少条按曲线画。
+ *
+ * <p>放在 HUD 上是有用的自检：这个数字应当等于"轴对齐的轨数 / 斜向的轨数"，
+ * 一眼能看出规则有没有按预期生效（实测 93 直线 / 41 曲线）。</p>
+ */
+const shapeCount = computed(() => {
+	let line = 0;
+	let arc = 0;
+	for (const rail of rails.value) {
+		if (rail.isAxisAligned) {
+			line++;
+		} else {
+			arc++;
+		}
+	}
+	return {line, arc};
 });
 
 /**
@@ -126,6 +146,7 @@ function onAction({node, action}: {node: Node; action: string}) {
 		<MapCanvas
 			ref="canvas"
 			:nodes="nodes"
+			:rails="rails"
 			@action="onAction"
 			@camera="onCamera"
 		/>
@@ -147,7 +168,7 @@ function onAction({node, action}: {node: Node; action: string}) {
 				通过 <b class="value">{{ degreeCount.through }}</b>
 				道岔 <b class="value">{{ degreeCount.fork }}</b>
 			</span>
-			<span class="group">轨 <b class="value">{{ railCount }}</b><span class="note">（未显示）</span></span>
+			<span class="group">轨 <b class="value">{{ rails.length }}</b><span class="note">直线 {{ shapeCount.line }} · 曲线 {{ shapeCount.arc }}</span></span>
 			<span class="group">缩放 <b class="value">{{ zoomText }}</b></span>
 			<span class="tip">悬停看信息 · 左键开菜单 · 滚轮缩放 · 拖动平移</span>
 			<button class="action" type="button" @click="load">重新读取</button>

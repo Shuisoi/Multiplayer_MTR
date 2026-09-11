@@ -130,8 +130,8 @@ try {
   const loaded = Number((hud.match(/节点\s+(\d+)/) || [])[1] || 0);
   return JSON.stringify({vw: Math.round(r.width), vh: Math.round(r.height), l: Math.round(r.left), t: Math.round(r.top),
     nodes: dots.length, inside, sizes, hud, loaded,
-    banner: document.querySelector('.banner') ? document.querySelector('.banner').innerText : '',
-    svg: document.querySelectorAll('svg.rails').length});
+    banner: document.querySelector('.banner') ? document.querySelector('.banner').innerText : '',    svg: document.querySelectorAll('svg.rails path.rail').length,
+    curve: [...document.querySelectorAll('svg.rails path.rail')].filter(p => /Q/.test(p.getAttribute('d'))).length});
 })()
 '@
 	$s = $summary | ConvertFrom-Json
@@ -141,7 +141,9 @@ try {
 	CheckTrue "没有取数错误横幅" ($s.banner -eq "") "横幅：$(if ($s.banner) { $s.banner } else { '无' })"
 	CheckTrue "全部节点都在视口内" ($s.inside -eq $s.nodes) "$($s.inside)/$($s.nodes) 个在视口内"
 	CheckTrue "圆点尺寸都是屏幕像素级（3–20px）" (($s.sizes.PSObject.Properties.Name | ForEach-Object { [int]$_ } | Where-Object { $_ -lt 3 -or $_ -gt 20 }).Count -eq 0) "直径分布 $($s.sizes | ConvertTo-Json -Compress)"
-	CheckTrue "连线已移除（没有轨道 SVG）" ($s.svg -eq 0) "轨道 SVG 数 = $($s.svg)"
+	# 连线在（用户后来要求按实际走向连线）：数量应与 HUD 报的轨数一致；线型细节由 check-web-rails.ps1 负责
+	$expectedRails = [int]([regex]::Match($s.hud, "轨\s+(\d+)").Groups[1].Value)
+	CheckTrue "连线已绘制且数量与 HUD 一致" ($s.svg -eq $expectedRails -and $s.svg -gt 0) "页面 $($s.svg) 条轨（其中曲线 $($s.curve) 条），HUD 报 $expectedRails"
 	CheckTrue "取景后缩放读数为 1.00×" ($s.hud -like "*1.00×*") ($s.hud.Trim())
 
 	# --- 悬停 ---

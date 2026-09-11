@@ -1,27 +1,23 @@
 import {requestJson} from "./client";
 import {Node, type RawTopologyNode} from "@/domain/Node";
+import {Rail, type RawRail} from "@/domain/Rail";
 
 /**
  * 轨道层拓扑：`/mtr/api/map/mmtr-topology`。
  *
- * <p>返回引擎算出来的全部节点与轨。**这里只用节点**——按用户要求"不需要连线"，
- * 所以 `rails` 原样留着（接口会给），但不参与显示。</p>
+ * <p>返回引擎算出来的全部节点与轨。轨的两个端点一定落在节点上（实测这次 dev 世界的
+ * 134 条轨全是如此），所以连线可以直接以节点为端点画，不需要额外的顶点。</p>
  */
 export interface TopologyResponse {
 	readonly nodes: readonly RawTopologyNode[];
-	readonly rails: readonly unknown[];
+	readonly rails: readonly RawRail[];
 }
 
-export async function fetchTopology(): Promise<TopologyResponse> {
+/** 取数并转成前端实体。 */
+export async function fetchTopology(): Promise<{nodes: Node[]; rails: Rail[]}> {
 	const data = await requestJson<TopologyResponse>("map/mmtr-topology");
 	return {
-		nodes: data.nodes ?? [],
-		rails: data.rails ?? [],
+		nodes: (data.nodes ?? []).map(raw => new Node(raw)),
+		rails: (data.rails ?? []).map(raw => new Rail(raw)),
 	};
-}
-
-/** 取全部节点并转成前端实体。 */
-export async function fetchNodes(): Promise<Node[]> {
-	const topology = await fetchTopology();
-	return topology.nodes.map(raw => new Node(raw));
 }
