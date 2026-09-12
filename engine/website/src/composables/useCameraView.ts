@@ -129,6 +129,29 @@ export function useCameraView(options: {
 		touched = false;
 	}
 
+	/**
+	 * 把某一块区域取景到视口里（用于"聚焦到某类设施"）。
+	 *
+	 * <p>与 `fit()` 只差一处：取景用的是传进来的区域而不是整份内容。这个区别是必要的——
+	 * 信号灯只占世界的一小块（实测 46×190 格，而世界 407×1623 格），整图取景时 32 个灯挤成
+	 * 十几像素、互相盖住（实测 86 对间距小于 8px，最小的间距是 0）。</p>
+	 *
+	 * @param region 世界坐标下的区域
+	 * @param paddingPx 留白（CSS 像素），默认与整体取景同一口径
+	 */
+	function fitRegion(region: Rect, paddingPx?: number) {
+		const view = viewport();
+		const padding = paddingPx ?? options.paddingPx ?? DEFAULT_PADDING_PX;
+		const next = fitView(region, view, padding);
+		if (view.width > 0 && view.height > 0) {
+			baseScale.value = next.scale;
+		}
+		lastFit.value = {content: {...region}, viewport: view, padding, scale: next.scale, originX: next.originX, originY: next.originY, hostRect: null};
+		options.camera.value = next;
+		// 标记成"用户动过视图"：否则下一次容器尺寸变化会把它拉回整体取景，把焦点丢掉。
+		touched = true;
+	}
+
 	/** 手动设置内容包围盒（路径数据到了以后调用，会按当前策略决定是否重新取景）。 */
 	function setContent(rect: Rect) {
 		options.content.value = rect;
@@ -267,6 +290,7 @@ export function useCameraView(options: {
 		zoomRatio: computed(() => zoomRatio(options.camera.value, baseScale.value)),
 		viewport,
 		fit,
+		fitRegion,
 		measure,
 		resetTouched,
 		setContent,

@@ -5,23 +5,27 @@ import {boundsOf} from "@/domain/camera";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import type {Rail} from "@/domain/Rail";
+import type {Signal} from "@/domain/Signal";
 import {CAMERA} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
+import SignalLayer from "./SignalLayer.vue";
 
 /*
  * 地图画布：视口 + 摄像机 + 内容层。
  *
- * 三层从下到上：
+ * 从下到上：
  *   1. 点阵背景（纯装饰，不随摄像机变，给人"有地方可以拖"的感觉）；
- *   2. 轨道层 `RailLayer`（SVG，屏幕坐标；同一轴画直线、斜向画圆弧）；
- *   3. 节点层 `NodeLayer`（**普通 HTML**，节点圆点、悬停信息卡、左键操作菜单）。
+ *   2. 轨道层 `RailLayer`（SVG，屏幕坐标；同一轴画直线、斜向画曲线）；
+ *   3. 节点层 `NodeLayer`（HTML；节点圆点、悬停信息卡、左键操作菜单）；
+ *   4. 信号灯层 `SignalLayer`（HTML；状态颜色 + `^` 方向箭头）。
  *
- * 为什么节点不画在 SVG 里：见 `domain/camera.ts` 顶部。世界坐标只由 `worldToScreen()` 换算一次，
- * 两层共用同一份摄像机，不存在 `viewBox` + `preserveAspectRatio` + `foreignObject` 三方对账。
+ * <p><b>信号灯必须在节点层之上</b>：灯位常常正好落在节点上，而节点的交互靶有 24px（为了好点），
+ * 压在灯上就会把指针整个吃掉 —— 实测"悬停灯位不出信息卡"就是这个原因。
+ * 反向的代价（灯点压住节点圆点）可以接受：灯点只有 7px，节点圆点 7~12px 且悬停时会有强调色光圈提示。</p>
  *
- * 交互状态（悬停 / 选中 / 菜单）由这里持有，节点组件只负责显示与上报；
- * 轨道层也读同一份状态，所以"悬停节点时与它相连的轨加亮"是自动的。
+ * 为什么节点与灯不画在 SVG 里：见 `domain/camera.ts` 顶部。世界坐标只由 `worldToScreen()` 换算一次，
+ * 各层共用同一份摄像机，不存在 `viewBox` + `preserveAspectRatio` + `foreignObject` 三方对账。
  */
 
 const props = defineProps<{
@@ -29,6 +33,8 @@ const props = defineProps<{
 	nodes: readonly Node[];
 	/** 要显示的轨。 */
 	rails: readonly Rail[];
+	/** 要显示的信号灯。 */
+	signals: readonly Signal[];
 }>();
 
 const host = useTemplateRef<HTMLElement>("host");
@@ -58,6 +64,8 @@ provide(CAMERA, camera);
 
 /** 悬停中的节点 key（信息卡）。 */
 const hoveredKey = ref("");
+/** 悬停中的信号灯 key（信息卡）。与节点的分开：两者的 key 空间不同（灯是方块键，节点是节点键）。 */
+const hoveredSignalKey = ref("");
 /** 打开了操作菜单的节点 key。 */
 const menuKey = ref("");
 /** 选中的节点 key（菜单动作后保持高亮）。 */
@@ -117,6 +125,20 @@ defineExpose({
 	fit: view.fit,
 	centerOnWorld: view.centerOnWorld,
 	zoom: view.zoom,
+	/**
+	 * 聚焦到信号灯那一块区域。
+	 *
+	 * <p>为什么需要：灯只占世界的一小块（实测 46×190 格 vs 世界 407×1623 格），
+	 * 整图取景时它们挤成十几像素、箭头互相盖住，看不清状态与方向。区域在这里算（信号灯层的数据在这里），
+	 * 取景交给摄像机。</p>
+	 */
+	focusSignals(paddingPx = 40) {
+		const points = props.signals.map(signal => ({x: signal.planeX, y: signal.planeY}));
+		if (points.length === 0) {
+			return;
+		}
+		view.fitRegion(boundsOf(points), paddingPx);
+	},
 });
 
 /*
@@ -201,6 +223,16 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			/>
 		</div>
 
+		<!-- 信号灯层：在节点层**之后**渲染，所以压在节点上面（否则节点的 24px 交互靶会吃掉灯的悬停）。 -->
+		<div class="signals">
+			<SignalLayer
+				:signals="signals"
+				:camera="camera"
+				:hovered-key="hoveredSignalKey"
+				@hover="hoveredSignalKey = $event"
+			/>
+		</div>
+
 		<slot/>
 	</div>
 </template>
@@ -248,6 +280,13 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
  * 整层都是命中区，空白处点不下去。
  */
 .nodes {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+/* 信号灯层：同上，只有灯自己接收事件（悬停出信息卡）。 */
+.signals {
 	position: absolute;
 	inset: 0;
 	pointer-events: none;

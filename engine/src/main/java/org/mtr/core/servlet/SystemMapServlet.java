@@ -803,6 +803,19 @@ public final class SystemMapServlet extends ServletBase {
 	 */
 	private static JsonObject getMmtrSignals(Simulator simulator) {
 		final java.util.HashMap<String, String> railAspects = computeRailAspectMap(simulator);
+		/*
+		 * v2 lamp aspects: the blockage layer already answers "what does the lamp at x,y,z show" through
+		 * `lampAspectNames` (it owns the section walk: a lamp's display is the depth of the section it opens,
+		 * with occupied / restricted sections counting as red). The console must render the ENGINE's
+		 * conclusion, not recompute it - so the feed hands the aspect over per lamp key.
+		 *
+		 * Before this the feed only filled `aspect` for BOUND signals (whose target is a rail hex); the 30
+		 * AUTO signals - the ones whose light is inferred from where they stand - came back with an empty
+		 * aspect, which is exactly the majority the console has to display.
+		 */
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> lampAspects = simulator.mmtrDirectionalBlocks.lampAspectNames(trees, restricted::contains);
 		final com.google.gson.JsonArray signals = new com.google.gson.JsonArray();
 		simulator.mmtrSignals.signals.forEach((key, entry) -> {
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
@@ -817,8 +830,12 @@ public final class SystemMapServlet extends ServletBase {
 			if ("BOUND".equals(entry.mode) && !entry.target.isEmpty() && !entry.target.contains("|")) {
 				out.addProperty("aspect", railAspects.getOrDefault(entry.target, "GREEN"));
 			} else {
-				out.addProperty("aspect", "");
+				// AUTO (or a bound node/approach target): the blockage layer's per-lamp answer.
+				out.addProperty("aspect", lampAspects.getOrDefault(key, ""));
 			}
+			// Whether a lamp opens a section at all. A lamp the blockage layer does not know protects
+			// nothing, and the console shows that as "未接入" rather than painting it as if it were green.
+			out.addProperty("hasSection", simulator.mmtrDirectionalBlocks.sectionOfSignal(key) != null);
 			signals.add(out);
 		});
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();

@@ -4,19 +4,21 @@ import {NModal, useMessage} from "naive-ui";
 import MapCanvas from "@/components/MapCanvas.vue";
 import {Node} from "@/domain/Node";
 import {Rail} from "@/domain/Rail";
-import {fetchTopology} from "@/api/topology";
+import {Signal} from "@/domain/Signal";
+import {fetchSignals, fetchTopology} from "@/api/topology";
 import type {Camera} from "@/domain/camera";
 
 /*
- * 轨道层视图：把引擎里的**全部节点与轨**显示出来，并处理节点操作菜单的动作。
+ * 轨道层视图：把引擎里的**全部节点、轨与信号灯**显示出来，并处理节点操作菜单的动作。
  *
  * <p>分层：`MapCanvas` 负责"世界坐标怎么变成屏幕坐标"，这里负责取数与"点了某个动作要做什么"。
  * 视图组件不持有任何坐标换算——这是重做节点系统的核心目的。</p>
  *
- * <p>数据来自引擎的 `/mtr/api/map/mmtr-topology`。连线按用户规则画：
- * x 或 z 任一相同 → 直线，其余 → 圆弧（见 `domain/railGeometry.ts`）。</p>
+ * <p>数据来自引擎的 `/mtr/api/map/mmtr-topology`（节点与轨）与 `/mtr/api/map/mmtr-signals`（信号灯）。
+ * 连线按用户规则画：x 或 z 任一相同 → 直线，其余 → 曲线（见 `domain/railGeometry.ts`）。
+ * 信号灯的状态（红/单黄/双黄/绿）由引擎的闭塞层给出，前端只显示，不重算。</p>
  *
- * <p>不做轮询：节点拓扑是"世界改了才会变"的东西，默认取一次 + 手动刷新。
+ * <p>不做轮询：拓扑是"世界改了才会变"的东西，默认取一次 + 手动刷新。
  * 需要自动跟随的时候应当由服务端给出一个版本号，前端比版本号再决定要不要重取。</p>
  */
 
@@ -25,6 +27,7 @@ const message = useMessage();
 
 const nodes = ref<Node[]>([]);
 const rails = ref<Rail[]>([]);
+const signals = ref<Signal[]>([]);
 /** 取数状态：loading / ready / error，界面按它显示不同提示。 */
 const status = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
@@ -33,9 +36,11 @@ async function load() {
 	status.value = "loading";
 	errorText.value = "";
 	try {
-		const topology = await fetchTopology();
+		// 两个 feed 一起取：它们描述同一个世界的两层，分两次 await 只会让画面先出现半份数据
+		const [topology, lamps] = await Promise.all([fetchTopology(), fetchSignals()]);
 		nodes.value = topology.nodes;
 		rails.value = topology.rails;
+		signals.value = lamps;
 		status.value = "ready";
 	} catch (error) {
 		status.value = "error";
@@ -44,6 +49,15 @@ async function load() {
 }
 
 onMounted(load);
+
+/** 信号灯状态统计（HUD 摘要）。 */
+const signalCount = computed(() => {
+	const counts = {red: 0, singleYellow: 0, doubleYellow: 0, green: 0, unknown: 0};
+	for (const signal of signals.value) {
+		counts[signal.state]++;
+	}
+	return counts;
+});
 
 /** 按度数统计：端点数 / 通过点数 / 道岔数，HUD 上给一句概览。 */
 const degreeCount = computed(() => {
@@ -136,6 +150,7 @@ function onAction({node, action}: {node: Node; action: string}) {
 			ref="canvas"
 			:nodes="nodes"
 			:rails="rails"
+			:signals="signals"
 			@action="onAction"
 			@camera="onCamera"
 			@shapes="shapeCount = $event"
@@ -159,8 +174,20 @@ function onAction({node, action}: {node: Node; action: string}) {
 				道岔 <b class="value">{{ degreeCount.fork }}</b>
 			</span>
 			<span class="group">轨 <b class="value">{{ rails.length }}</b><span class="note">画成 直线 {{ shapeCount.straight }} · 曲线 {{ shapeCount.curve }}</span></span>
+			<!-- 信号灯：只统计"带灯的节点"，颜色按状态（与图中的箭头/灯点同一套颜色） -->
+			<span class="group">
+				信号灯 <b class="value">{{ signals.length }}</b>
+				<span class="lamp-dot red"/><b class="value">{{ signalCount.red }}</b>
+				<span class="lamp-dot single"/><b class="value">{{ signalCount.singleYellow }}</b>
+				<span class="lamp-dot double"/><b class="value">{{ signalCount.doubleYellow }}</b>
+				<span class="lamp-dot green"/><b class="value">{{ signalCount.green }}</b>
+				<template v-if="signalCount.unknown > 0">
+					<span class="lamp-dot unknown"/><b class="value">{{ signalCount.unknown }}</b>
+				</template>
+			</span>
 			<span class="group">缩放 <b class="value">{{ zoomText }}</b></span>
 			<span class="tip">悬停看信息 · 左键开菜单 · 滚轮缩放 · 拖动平移</span>
+			<button class="action" type="button" @click="canvas?.focusSignals()">看信号灯</button>
 			<button class="action" type="button" @click="load">重新读取</button>
 			<button class="action" type="button" @click="canvas?.fit()">重置视图</button>
 		</div>
@@ -247,6 +274,34 @@ function onAction({node, action}: {node: Node; action: string}) {
 
 .tip {
 	color: var(--fg-faint);
+}
+
+/* HUD 里的状态小圆点：与图上的灯点同色，一眼能把数字对到颜色 */
+.lamp-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	margin-left: 2px;
+}
+
+.lamp-dot.red {
+	background: #ef4444;
+}
+
+.lamp-dot.single {
+	background: #f59e0b;
+}
+
+.lamp-dot.double {
+	background: #eab308;
+}
+
+.lamp-dot.green {
+	background: #22c55e;
+}
+
+.lamp-dot.unknown {
+	background: #6b7280;
 }
 
 .action {
