@@ -103,7 +103,44 @@ try {
 	Write-Output "页面侧：$($d.count) 个灯标记，旋转角 $($d.rotations -join '/')，灯点直径 $($d.sizes -join '/')，颜色 $($d.colors | ConvertTo-Json -Compress)"
 	CheckTrue "信号灯层渲染出来了" ($d.hasLayer -and $d.count -gt 0) "$($d.count) 个标记"
 	CheckTrue "数量与引擎一致" ($d.count -eq $a.count) "页面 $($d.count) vs 引擎 $($a.count)"
-	CheckTrue "方向用 `^` 字符表示" (($d.glyph.Count -eq 1) -and ($d.glyph[0] -eq "^")) "渲染出的字符：$($d.glyph -join ' ')"
+	# 方向符号：用 SVG 画的 `^` 折角（不是文字）。
+	# 为什么不用文字：实测 15px 字号下 DIN 的 `^` 字形只有约 2–3 像素高、旋转中心又正好落在灯点上，
+	# 整个符号被灯点盖住 —— 用户的原话是"显示信号灯方向的在哪？"。所以改成 SVG 折角，尺寸可控。
+	$glyph = Eval @'
+(() => {
+  const a = document.querySelector('.signals .arrow');
+  if (!a) return JSON.stringify({ok: false});
+  const r = a.getBoundingClientRect();
+  const paths = [...a.querySelectorAll('path')].map(p => p.getAttribute('d'));
+  return JSON.stringify({ok: true, tag: a.tagName.toLowerCase(), size: Math.round(r.width) + 'x' + Math.round(r.height), paths});
+})()
+'@
+	$g = $glyph | ConvertFrom-Json
+	CheckTrue "方向用 `^` 折角符号画出来（SVG，不是文字）" ($g.ok -and $g.tag -eq "svg" -and @($g.paths).Count -ge 1) "元素 <$($g.tag)> 尺寸 $($g.size)，路径 $($g.paths -join ' / ')"
+
+	# 方向真的指对了吗：折角绕**灯点**旋转，所以朝上(0°)时它的墨迹在灯点上方、朝下(180°)时在下方。
+	# 用箭头框相对灯点的位置来判（纯 DOM，不依赖截图缩放）。
+	$directional = Eval @'
+(() => {
+  const out = {};
+  for (const m of document.querySelectorAll('.signals .signal')) {
+    const arrow = m.querySelector('.arrow');
+    const rot = (arrow.style.transform.match(/rotate\(([-\d.]+)deg\)/) || [])[1];
+    if (rot !== "0" && rot !== "180") continue;
+    if (out[rot]) continue;
+    const a = arrow.getBoundingClientRect();
+    const l = m.querySelector('.lamp').getBoundingClientRect();
+    out[rot] = {dy: Math.round((a.top + a.height/2) - (l.top + l.height/2)), dx: Math.round((a.left + a.width/2) - (l.left + l.width/2))};
+    if (out["0"] && out["180"]) break;
+  }
+  return JSON.stringify(out);
+})()
+'@
+	$dir = $directional | ConvertFrom-Json
+	$up = $dir.'0'; $down = $dir.'180'
+	CheckTrue "方向符号绕灯点旋转（0° 指上、180° 指下）" `
+		($up -and $down -and $up.dy -lt -6 -and [Math]::Abs($up.dx) -le 1 -and $down.dy -gt 6 -and [Math]::Abs($down.dx) -le 1) `
+		("0°：偏移 dx=$($up.dx) dy=$($up.dy)；180°：偏移 dx=$($down.dx) dy=$($down.dy)（dy 负=在上方）")
 
 	# 朝向映射：MTR 角 180（北）→ 0°，0（南）→ 180°；页面上的旋转角集合应当等于换算结果
 	$expected = @($a.angles | ForEach-Object { [int]((($_ + 180) % 360)) })
@@ -163,3 +200,4 @@ try {
 	taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
 }
 exit $failed
+

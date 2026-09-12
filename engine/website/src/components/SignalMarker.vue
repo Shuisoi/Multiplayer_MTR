@@ -58,13 +58,25 @@ const facts = computed(() => [
 		@pointerleave="emit('hover', '')"
 	>
 		<!--
-			方向：`^` 字符按朝向角旋转（基准朝上 = 北）。用字符而不是三角形，
-			是用户要求的表现形式；好处也实在——字体里的 `^` 天然居中、旋转起来"指向哪边"一眼能看懂。
+			方向：一个 `^` 形状的折角符号，按朝向角旋转（基准朝上 = 北）。
+
+			<p>为什么不用文字 `^`：实测 15px 字号下 DIN 的 `^` 字形只有约 2–3 像素高
+			（元素框 8×15，字形在顶部一点点），加上旋转中心正好落在灯点上，整个符号被灯点盖住 ——
+			等于看不见（用户就是这么反馈的："显示信号灯方向的在哪？"）。
+			现在用 SVG 画同一个折角形状：形状就是用户要的 `^`，但线条长度/粗细/描边都可控，
+			13×16 的框里能实实在在画出来。</p>
 		-->
-		<div
-			class="arrow value"
-			:style="{transform: `translate(-50%, -50%) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
-		>^</div>
+		<svg
+			class="arrow"
+			:style="{transform: `translate(-50%, calc(-50% - var(--arrow-offset))) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
+			width="20"
+			height="20"
+			viewBox="0 0 20 20"
+		>
+			<!-- 先描一条比底色暗的粗线做"描边"，再画本色：暗底上任何颜色都能看清 -->
+			<path d="M 3 15 L 10 4 L 17 15" fill="none" stroke="#000000" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+			<path d="M 3 15 L 10 4 L 17 15" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+		</svg>
 		<!-- 灯位：一个小圆点，颜色 = 状态。 -->
 		<div class="lamp" :style="{background: stateColor}"/>
 
@@ -99,20 +111,22 @@ const facts = computed(() => [
 }
 
 /*
- * 方向符号 `^`：以灯位为原点旋转。
- * 外层 translate(-50%,-50%) 让字符的**中心**落在灯位上，再按朝向角旋转 ——
- * 顺序不能反（先旋转再位移会把位移也一起转掉，方向就会偏）。
+ * 方向符号 `^`（SVG 画的折角）：绕**灯点**旋转。
+ *
+ * <p>transform 有两件独立的事：把符号整体上移 `ARROW_OFFSET`（让折角画在灯点上方，
+ * 否则向下的朝向会正好压在灯点上），以及按朝向角旋转。旋转中心必须回到灯点，
+ * 所以 `transform-origin` 写成 `50% calc(50% + ARROW_OFFSET)` —— 不这样做的话符号会绕
+ * 自己的中心转，看起来是"歪着指"。</p>
  */
 .arrow {
 	position: absolute;
 	left: 0;
 	top: 0;
-	font-size: 15px;
-	font-weight: 700;
-	line-height: 1;
-	transform-origin: 50% 50%;
-	text-shadow: 0 0 3px #000000, 0 0 3px #000000;
+	--arrow-offset: 12px;
+	transform: translate(-50%, calc(-50% - var(--arrow-offset)));
+	transform-origin: 50% calc(50% + var(--arrow-offset));
 	pointer-events: none;
+	filter: drop-shadow(0 0 1.5px #000000);
 }
 
 /* 灯位：3.5px 的小圆点，加一圈暗描边在暗底上更清晰 */
