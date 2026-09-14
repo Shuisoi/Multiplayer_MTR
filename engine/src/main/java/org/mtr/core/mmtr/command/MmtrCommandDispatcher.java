@@ -159,7 +159,7 @@ public final class MmtrCommandDispatcher {
 		result.line(reason);
 		result.line("可用指令：");
 		result.line("  vehicle spawn <车型>... [--siding=<id|名>|--depot=<id|名> [--index=n]] [--count=n]");
-		result.line("  vehicle remove <车辆id|all|--siding=<id>|--depot=<id>>");
+		result.line("  vehicle remove <车辆id|all|--siding=<id>|--depot=<id>>   ← --depot 删该车辆段**全部股道**上的车");
 		result.line("  vehicle list [--depot=<id|名>]");
 		result.line("  train couple <主动车id> <目标车id> | train uncouple <车辆id> <在第几节之后切开>");
 		result.line("  train doors <车辆id> [open|close|toggle] [--side=left|right|both] | train changeends <车辆id> | train cab <车辆id> <A|B|out>");

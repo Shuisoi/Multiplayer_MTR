@@ -144,7 +144,39 @@ public class Simulator extends Data implements Utilities {
 	}
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
-	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis).withTurnoutLookup(this::mmtrTurnout);
+	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis)
+		.withTurnoutLookup(this::mmtrTurnout)
+		.withPositionChangeGuard(this::mmtrPositionChangeBlockedReason);
+
+	/**
+	 * **改道岔位置之前的净空闸**（授权层问过来的）：另一列车压在岔区上时不许改位置 —— 与人工扳岔、
+	 * 意图扳岔读**同一条** {@link org.mtr.core.mmtr.signal.MmtrJunctionState} 判定，所以不会出现
+	 * "这盏灯说岔区被占、道岔却照样能扳"。
+	 *
+	 * <p>为什么必须包括**授权申请**这条路（不只是每 tick 的同步）：位置由持有者决定（T1），
+	 * 所以"另一条进路的新持有人"在申请那一步就会把位置改掉 —— 前车跨过岔口后释放持有、尾巴却还压在
+	 * 净空区里时，道岔就在它脚下被换位了。</p>
+	 *
+	 * <p><b>请求方自己压在岔上不算</b>：它按着自己的位（T1），本来就该能改自己的需要（换端/折返），
+	 * 否则会把自己锁死；而"从自己车下抽走"这件事由走行侧与人工侧的闸门各自兜住。</p>
+	 */
+	public @org.jspecify.annotations.Nullable String mmtrPositionChangeBlockedReason(long x, long y, long z, int newPosition, String owner) {
+		final String reason = org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReasonExcept(this,
+			new org.mtr.core.data.Position(x, y, z), vehicleIdOfOwner(owner));
+		return reason == null ? null : reason + "（改位置的请求方 " + owner + "）";
+	}
+
+	/** {@code "v123"} → 123（不是这个写法就返回 0 = 不排除任何车）。 */
+	private static long vehicleIdOfOwner(@org.jspecify.annotations.Nullable String owner) {
+		if (owner == null || !owner.startsWith("v")) {
+			return 0;
+		}
+		try {
+			return Long.parseLong(owner.substring(1));
+		} catch (NumberFormatException e) {
+			return 0;
+		}
+	}
 
 	/**
 	 * T4 准入门槛：**无任务不得操纵**。默认关（引擎单测与工具链在"没有任务"的前提下开车），
@@ -857,7 +889,7 @@ public class Simulator extends Data implements Utilities {
 				mmtrTurnouts.put(turnout.key(), turnout);
 			}
 		});
-		boolean changed = false;
+		boolean changed = normalizeMmtrPersistedRailHexes();
 		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
 			if (!mmtrPointBranches.containsNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ)) {
 				/*
@@ -878,6 +910,73 @@ public class Simulator extends Data implements Utilities {
 		if (changed) {
 			persistMmtrPointBranches();
 		}
+	}
+
+	/**
+	 * **存档里的轨 hex 键在载入时归一化**（notes/130 §6b 的遗留）。
+	 *
+	 * <h3>问题</h3>
+	 * <p>同一条实体轨有**两种写法**（互为逆序，取决于这条 Rail 怎么被声明）。网页/接口对外一律用
+	 * 规范写法（{@code canonicalHex}），而 {@code mmtr-points.json} 的行（{@code switches[].via}）与
+	 * 人工锁（{@code locks[].via}）存的是**引擎内部写法**。同一份存档里读回来是一致的，所以今天不会
+	 * 出错；但**世界改画**（把某根轨反向重画）之后，这些键就变成孤儿键、静默失效 ——
+	 * 人工锁还在文件里，却锁不住任何东西。</p>
+	 *
+	 * <h3>为什么放在这里而不是载入的那一刻</h3>
+	 * <p>载入时轨图还没建好（{@code positionsToRail} 要等 {@code sync()}），{{@code mmtrResolveRailHex}}
+	 * 无从下手。本方法在 {@link #refreshMmtrTurnouts} 的"轨图签名变了"那一刻跑 —— 与信号绑定列表
+	 * 的处理方式对齐（它也是在读到轨图之后才解析）。</p>
+	 *
+	 * @return 是否有键被改写（调用方据此决定要不要落盘）
+	 */
+	private boolean normalizeMmtrPersistedRailHexes() {
+		boolean changed = false;
+		// ① 行视图（switches[]）
+		final java.util.List<String> rowKeys = new java.util.ArrayList<>(mmtrPointBranches.branches.keySet());
+		for (final String rowKey : rowKeys) {
+			final String[] parts = rowKey.split("\\|");
+			if (parts.length != 2) {
+				continue;
+			}
+			final String[] coords = parts[0].split(",");
+			if (coords.length != 3) {
+				continue;
+			}
+			try {
+				final long x = Long.parseLong(coords[0]);
+				final long y = Long.parseLong(coords[1]);
+				final long z = Long.parseLong(coords[2]);
+				final String resolved = mmtrResolveRailHex(x, y, z, parts[1]);
+				if (resolved != null && !resolved.equals(parts[1])) {
+					changed |= mmtrPointBranches.rekey(x, y, z, parts[1], resolved);
+				}
+			} catch (NumberFormatException ignored) {
+				// 脏键：留给 saveBranches 的既有过滤
+			}
+		}
+		// ② 人工锁（locks[]）—— 锁失效是静默的，所以这条比行视图更要紧
+		for (final String lockKey : mmtrPointAuthority.locksSnapshot()) {
+			final String[] parts = lockKey.split("\\|");
+			if (parts.length != 2) {
+				continue;
+			}
+			final String[] coords = parts[0].split(",");
+			if (coords.length != 3) {
+				continue;
+			}
+			try {
+				final long x = Long.parseLong(coords[0]);
+				final long y = Long.parseLong(coords[1]);
+				final long z = Long.parseLong(coords[2]);
+				final String resolved = mmtrResolveRailHex(x, y, z, parts[1]);
+				if (resolved != null && !resolved.equals(parts[1])) {
+					changed |= mmtrPointAuthority.rekeyLock(x, y, z, parts[1], resolved);
+				}
+			} catch (NumberFormatException ignored) {
+				// 同上
+			}
+		}
+		return changed;
 	}
 
 	/**
@@ -992,18 +1091,35 @@ public class Simulator extends Data implements Utilities {
 	 * 一旦确定，就把道岔扳到它要的那一位 —— 与设计 §5.3"玩家不扳岔，联锁扳岔"一致。
 	 *
 	 * <p>两道闸门：<b>人工锁着的不扳</b>（人工优先，见 {@link #mmtrSetTurnoutPosition}），
-	 * <b>有人物理持有也不扳</b>（T1：不许把道岔从列车脚下抽走）。</p>
+	 * <b>别人物理持有也不扳</b>（T1：不许把道岔从列车脚下抽走）。</p>
+	 *
+	 * <p><b>持有者本人是例外</b>（notes/136 §3）：那道闸门防的是"把道岔从**别人**列车脚下抽走"，
+	 * 不是防持有者自己换位。没有这条豁免时，"旧计划把它按在位置 1、新计划要位置 0"会变成死锁 ——
+	 * 车的进路判 PENDING（物理位置 ≠ 本车要的位），而扳岔又被"有人持有"挡住，持有者就是它自己，
+	 * 谁也解不开（现场：车停在出发信号前不动）。豁免不会丢掉安全性：第三道闸门
+	 * （{@link org.mtr.core.mmtr.signal.MmtrJunctionState#blockedThrowReason}：车压在岔区上不扳）
+	 * 是独立的一条，照样拦得住。</p>
 	 *
 	 * @return true = 已经（或本来就在）那一位；false = 现在不能扳，调用方应让列车在岔前等
 	 */
 	public boolean mmtrThrowTurnoutForIntent(long x, long y, long z, int position) {
+		return mmtrThrowTurnoutForIntent(x, y, z, position, null);
+	}
+
+	/**
+	 * 同上，并说明**是谁在要求**（{@code "v"+车辆id}）。
+	 *
+	 * @param requesterOwner 请求方；非空时它**自己按着的那处道岔可以自己改位**（见上面的说明）
+	 */
+	public boolean mmtrThrowTurnoutForIntent(long x, long y, long z, int position, @org.jspecify.annotations.Nullable String requesterOwner) {
 		refreshMmtrTurnouts();
 		final org.mtr.core.mmtr.point.MmtrTurnout turnout = mmtrTurnouts.get(x + "," + y + "," + z);
 		if (turnout == null) {
 			return false;
 		}
+		final String holder = mmtrPointAuthority.physicalHolder(x, y, z);
 		if (mmtrPointAuthority.isTurnoutLocked(x, y, z, turnout)
-			|| mmtrPointAuthority.physicalPosition(x, y, z) != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
+			|| (holder != null && !holder.equals(requesterOwner))) {
 			return false;
 		}
 		// 第三道闸门与人工那条一样：车压在岔上不扳（同一条判定，见 MmtrJunctionState.blockedThrowReason）。
@@ -1012,11 +1128,22 @@ public class Simulator extends Data implements Utilities {
 		}
 		final int wanted = position == org.mtr.core.mmtr.point.MmtrTurnout.REVERSE
 			? org.mtr.core.mmtr.point.MmtrTurnout.REVERSE : org.mtr.core.mmtr.point.MmtrTurnout.NORMAL;
+		/*
+		 * 持有者本人要求换位时，**改的是它自己的需求**，不是绕过它写行视图。
+		 *
+		 * <p>T1 之后"位置由持有者决定"（{@code mmtrTurnoutPosition} 与 {@code mmtrSyncTurnoutPositionToGrant}
+		 * 都先读持有者），所以只写 {@code mmtrPointBranches} 的话位置**根本没变** —— 现场的症状正是
+		 * "指令说扳过去了、车还是不动"（notes/136 §3）。所以这里把持有者按的位一起改掉，两处保持一致。</p>
+		 */
+		if (requesterOwner != null && requesterOwner.equals(holder)) {
+			mmtrPointAuthority.repointPhysicalHold(x, y, z, requesterOwner, wanted);
+		}
 		if (mmtrPointBranches.nodePosition(x, y, z) != wanted) {
 			mmtrPointBranches.setNode(x, y, z, wanted);
 			normalizeTurnoutRows(turnout);
 			persistMmtrPointBranches();
-			System.out.println("[MMTR-PT] 联锁按意图扳岔 " + turnout.key() + " -> 位置 " + wanted);
+			System.out.println("[MMTR-PT] 联锁按意图扳岔 " + turnout.key() + " -> 位置 " + wanted
+				+ (requesterOwner == null ? "" : "（请求方 " + requesterOwner + "）"));
 		}
 		return true;
 	}
@@ -1036,6 +1163,25 @@ public class Simulator extends Data implements Utilities {
 		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
 			// 人工锁着的道岔不跟着授权走（人工搬岔 = 覆盖 + 锁定，用户 2026-09-14 的选择）。
 			if (mmtrPointAuthority.isTurnoutLocked(turnout.nodeX, turnout.nodeY, turnout.nodeZ, turnout)) {
+				continue;
+			}
+			/*
+			 * **岔区没清就不扳**（notes/130 §8 第 2 条遗留）。
+			 *
+			 * <p>人工扳岔与意图扳岔这两条路早就有这道闸（{@link MmtrJunctionState#blockedThrowReason}），
+			 * 只有这条"跟着授权自动扳"的路没有 —— 于是它照样能把道岔从车下抽走：一列停/压在岔上的车
+			 * 还在净空区里，另一条进路的授权一到，位置就在它脚下变了。闸门与显示层读**同一段**
+			 * 净空判定（{@code foulingRail}），所以"这盏灯说岔区被占、道岔却照样能扳"这种自相矛盾
+			 * 不会再出现。</p>
+			 *
+			 * <p>为什么不加在单车那条 {@link #mmtrSyncTurnoutPositionToGrant} 上：那条是**列车自己**
+			 * 走到岔前、按自己的授权就位用的（{@code MmtrForkElection} 在选举之前调它）—— 车到岔前时
+			 * 车头本来就已经进了净空区，给它加闸等于"车到了、道岔却永远不同步"，那是新的死锁。
+			 * 本方法是**每 tick 的全局同步**（服务所有列车），在这里拦才拦得住"别人的道岔"。</p>
+			 */
+			final String foulReason = org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(this,
+				new org.mtr.core.data.Position(turnout.nodeX, turnout.nodeY, turnout.nodeZ));
+			if (foulReason != null) {
 				continue;
 			}
 			final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
@@ -1065,6 +1211,50 @@ public class Simulator extends Data implements Utilities {
 		if (changed) {
 			persistMmtrPointBranches();
 		}
+	}
+
+	/**
+	 * **重新规划时放掉"旧计划留下的位置"**（notes/136 §3 的自持有死锁，第 3 条修法）。
+	 *
+	 * <p>物理位置持有只在两处释放：列车**跨过**岔口时，或任务终态 {@code releaseAll}。于是
+	 * "先按了位置 1、还没跨过去、计划又被替换成要位置 0"会让这处道岔谁也扳不动 ——
+	 * 进路判 PENDING（物理位置 ≠ 本车要的位）而意图扳岔被"有人持有"挡住，持有者就是它自己。
+	 * 车停在出发信号前不动，重启也不会自己好。</p>
+	 *
+	 * <p>放哪些：本 owner 按着位置的每一处道岔，**新计划要的不是那一位**（或者新计划根本不经过它）
+	 * 就放掉。要的是同一位则原样保留 —— 既不churn，也不丢在道岔队列里的 FIFO 位置
+	 * （列车等待联锁时会每 tick 重新调用一次本方法）。</p>
+	 *
+	 * <p>放掉之后由新计划的原子申请按新需要重新拿（{@code Vehicle#armMmtrPointRun} 的顺序就是这样：
+	 * 先放旧的，再申请新的，同一次调用内完成，中间没有任何人能插进来）。</p>
+	 *
+	 * <p><b>车还压在岔区上就不放</b>：与扳岔的第三道闸门同一条判定。它一走，下一次重新规划再放。</p>
+	 *
+	 * @param wantedPositionsByNodeKey 新计划在每处道岔上要的位置（{@code "x,y,z"} → 0/1）
+	 * @return 放掉几处
+	 */
+	public int mmtrReleaseStalePhysicalHolds(String owner, java.util.Map<String, Integer> wantedPositionsByNodeKey) {
+		if (owner == null || owner.isEmpty() || wantedPositionsByNodeKey == null) {
+			return 0;
+		}
+		int released = 0;
+		for (final long[] node : mmtrPointAuthority.physicalHoldNodesOf(owner)) {
+			final int held = mmtrPointAuthority.physicalPosition(node[0], node[1], node[2]);
+			final Integer wanted = wantedPositionsByNodeKey.get(node[0] + "," + node[1] + "," + node[2]);
+			if (wanted != null && wanted == held) {
+				continue;
+			}
+			if (org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(this,
+				new org.mtr.core.data.Position(node[0], node[1], node[2])) != null) {
+				continue;
+			}
+			if (mmtrPointAuthority.releasePhysicalHold(node[0], node[1], node[2], owner)) {
+				released++;
+				System.out.println("[MMTR-PT] 重新规划：放掉旧计划在道岔 " + node[0] + "," + node[1] + "," + node[2]
+					+ " 的位置 " + held + "（新计划" + (wanted == null ? "不经过这里" : "要位置 " + wanted) + "）");
+			}
+		}
+		return released;
 	}
 
 	/** 把 (进向, 腿号) 翻译成节点位置；物理上不存在的组合返回 {@link Integer#MIN_VALUE}。 */

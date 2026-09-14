@@ -169,6 +169,120 @@ public final class MmtrTurnoutAuthorityTests {
 	}
 
 	/**
+	 * **持有者本人按着的位，只有它自己能改**（notes/136 §3 的死锁第一半）。
+	 *
+	 * <p>现场：车把某处道岔按在位置 1（旧计划要岔股），新计划要位置 0，而意图扳岔的闸门是
+	 * "有人物理持有就不扳" —— **没有"持有者就是我"这条豁免**，于是谁也扳不动它，车永远停在
+	 * 出发信号前。修法：豁免持有者本人，并且**改它自己的需求**（位置由持有者决定，只写行视图没用）。</p>
+	 */
+	@Test
+	public void onlyTheHolderItselfMayRepointATurnoutItPins() {
+		final Simulator simulator = forkNet("build/mmtr-t1-repoint-self");
+		final MmtrTurnout turnout = turnoutOf(simulator);
+		final int stemToFar = turnout.farLeg.getOrDefault(turnout.stemRailHex, -1);
+
+		assertEquals(MmtrPointAuthority.Result.GRANTED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.stemRailHex, "v1", stemToFar, until(simulator)), "v1 拿到道岔并按下位置 0");
+		assertEquals("v1", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0));
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(0, 0, 0));
+
+		assertFalse(simulator.mmtrThrowTurnoutForIntent(0, 0, 0, MmtrTurnout.REVERSE, "v2"),
+			"别人的道岔还是不许扳（T1 的原意：不许把道岔从别人列车脚下抽走）");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(0, 0, 0), "被拒时位置没动");
+
+		assertTrue(simulator.mmtrThrowTurnoutForIntent(0, 0, 0, MmtrTurnout.REVERSE, "v1"),
+			"持有者本人可以改自己按的位 —— 没有这条豁免就是死锁");
+		assertEquals(MmtrTurnout.REVERSE, simulator.mmtrTurnoutPosition(0, 0, 0), "位置真的扳过去了（不是只写了行视图）");
+		assertEquals(MmtrTurnout.REVERSE, simulator.mmtrPointAuthority.physicalPosition(0, 0, 0), "持有者按的位跟着改");
+		assertEquals("v1", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0), "持有关系不变，只是换了它要的位");
+	}
+
+	/**
+	 * **重新规划会放掉旧计划不要的位**（notes/136 §3 的死锁第二半），且**要的是同一位时一个都不放**。
+	 *
+	 * <p>这是那条死锁真正的现场形状：进路一直判 PENDING，理由是"物理道岔被 v1 按在位置 1，
+	 * 本车需要位置 0 —— 两条进路互斥"，而持有者正是它自己。放掉之后进路立刻能 SET。</p>
+	 */
+	@Test
+	public void aReplanGivesUpThePositionTheOldPlanPinnedButKeepsTheOneItStillWants() {
+		final Simulator simulator = forkNet("build/mmtr-t1-replan-release");
+		final MmtrTurnout turnout = turnoutOf(simulator);
+		final int branchToStem = turnout.stemLeg.getOrDefault(turnout.branchRailHex, -1);
+		final int stemToFar = turnout.farLeg.getOrDefault(turnout.stemRailHex, -1);
+
+		// 旧计划：把道岔按在位置 1（岔股开放）
+		assertEquals(MmtrPointAuthority.Result.GRANTED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.branchRailHex, "v1", branchToStem, until(simulator)));
+		assertEquals(MmtrTurnout.REVERSE, simulator.mmtrTurnoutPosition(0, 0, 0));
+
+		// 新计划要的是**同一位** → 保留（等联锁时每 tick 重来一次，不能churn）
+		assertEquals(0, simulator.mmtrReleaseStalePhysicalHolds("v1", java.util.Map.of("0,0,0", MmtrTurnout.REVERSE)),
+			"新计划要的就是现在按着的这一位：不动");
+		assertEquals("v1", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0));
+
+		// 新计划要位置 0 → 放掉，队列/默认位接手
+		assertEquals(1, simulator.mmtrReleaseStalePhysicalHolds("v1", java.util.Map.of("0,0,0", MmtrTurnout.NORMAL)),
+			"新计划要的是另一位：放掉旧计划的位");
+		assertNull(simulator.mmtrPointAuthority.physicalHolder(0, 0, 0), "持有没了");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(0, 0, 0), "位置回到行视图（新计划要的 0）");
+		assertEquals(0, simulator.mmtrReleaseStalePhysicalHolds("v1", java.util.Map.of("0,0,0", MmtrTurnout.NORMAL)),
+			"再放一次是幂等的（没有可放的）");
+
+		// 新计划要位置 0：这一次由它自己按上去，然后整条进路能 SET
+		assertEquals(MmtrPointAuthority.Result.GRANTED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.stemRailHex, "v1", stemToFar, until(simulator)), "新计划按新需要重新拿");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrPointAuthority.physicalPosition(0, 0, 0));
+	}
+
+	/**
+	 * **自持有不再让进路卡死**：同一条进路先因为"我自己按着另一位"PENDING，放掉之后立刻 SET。
+	 *
+	 * <p>没有这两条修法时，这个用例的中间那一步是**永久**的：进路一直 PENDING（理由点名持有者
+	 * 就是本车），而扳岔被"有人物理持有"挡住（持有者也是本车）—— 谁也解不开。</p>
+	 */
+	@Test
+	public void aRouteBlockedOnlyByTheVehiclesOwnStaleHoldBecomesSetOnceItIsDropped() {
+		final Simulator simulator = forkNet("build/mmtr-t1-self-hold-route");
+		final MmtrTurnout turnout = turnoutOf(simulator);
+		final int stemToFar = turnout.farLeg.getOrDefault(turnout.stemRailHex, -1);
+		final int branchToStem = turnout.stemLeg.getOrDefault(turnout.branchRailHex, -1);
+		final long until = until(simulator);
+
+		// 旧计划留下的持有：v1 按着位置 1
+		assertEquals(MmtrPointAuthority.Result.GRANTED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.branchRailHex, "v1", branchToStem, until));
+
+		// 新进路：从根部开往正线远端（位置 0）
+		final ObjectArrayList<String> rails = new ObjectArrayList<>();
+		rails.add(turnout.stemRailHex);
+		rails.add(turnout.farRailHex);
+		final ObjectArrayList<String[]> forks = new ObjectArrayList<>();
+		forks.add(new String[]{"0", "0", "0", turnout.stemRailHex, String.valueOf(stemToFar)});
+		final MmtrRoute route =
+			simulator.mmtrRoutes.request(new MmtrRoute(1, "v1", MmtrRoute.Kind.MAIN, rails, forks, turnout.farRailHex, simulator.getCurrentMillis()));
+		simulator.mmtrRoutes.refresh(1, simulator.mmtrPointAuthority);
+
+		assertFalse(route.isEstablished(), "物理位置（1，我自己按的）与这条腿要的（0）不一致 → PENDING");
+		assertTrue(route.getStateReason().contains("v1"), "理由点名持有者就是本车：" + route.getStateReason());
+
+		/*
+		 * 死亡的那个状态就是这里：进路 PENDING 点名"被自己按住了另一位"，而闸门又拦着"不许扳有人持有的
+		 * 道岔" —— 修前**谁也解不开**。修好的 {@code armMmtrPointRun} 按这个顺序自救：先放旧计划的位，
+		 * 再按新计划原子申请（那一步会把新的一位按上）。
+		 */
+		assertEquals(1, simulator.mmtrReleaseStalePhysicalHolds("v1", java.util.Map.of("0,0,0", MmtrTurnout.NORMAL)),
+			"重新规划先放掉旧计划不要的位");
+		final ObjectArrayList<String[]> pending = new ObjectArrayList<>();
+		pending.add(new String[]{"0", "0", "0", turnout.stemRailHex, String.valueOf(stemToFar)});
+		assertEquals(MmtrPointAuthority.Result.GRANTED,
+			simulator.mmtrPointAuthority.requestAtomically(pending, "v1", until, Long.MAX_VALUE), "再按新计划原子申请");
+		simulator.mmtrRoutes.refresh(1, simulator.mmtrPointAuthority);
+
+		assertTrue(route.isEstablished(), "自救之后进路立刻 SET（死锁解除）");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(0, 0, 0), "道岔真的在它要的 0 位上");
+	}
+
+	/**
 	 * ① + ② **两条互斥进路不可能同时 SET**，且等待方点名道岔与它需要的位置。
 	 *
 	 * <p>进路层与权限层是分开的：授权只说明"这个进向归我"，SET 还要求**道岔物理上就在我这条腿要的

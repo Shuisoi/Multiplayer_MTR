@@ -137,13 +137,26 @@ public final class MmtrDirectionalBlockService {
 		/** Unit travel direction (x, z) over this span. */
 		public final double headingX;
 		public final double headingZ;
+		/**
+		 * **这条腿是这次运行走得到的吗**（notes/132 §5 的遗留项）。
+		 *
+		 * <p>区间的 span **照旧收全部腿**（保住用户 2026-09-10 的"一盏灯守整个咽喉"：岔股上可能停着
+		 * 扳岔之前就进来的车），但道岔当前位置切掉的那条腿这次运行**进不去** —— 它上面的车不是
+		 * 这条进路的前方障碍。所以占用判定只认 {@code reachable} 的 span，而"守着"照旧。</p>
+		 */
+		public final boolean reachable;
 
 		RailSpan(String railHex, double arcFromM, double arcToM, double headingX, double headingZ) {
+			this(railHex, arcFromM, arcToM, headingX, headingZ, true);
+		}
+
+		RailSpan(String railHex, double arcFromM, double arcToM, double headingX, double headingZ, boolean reachable) {
 			this.railHex = railHex;
 			this.arcFromM = Math.min(arcFromM, arcToM);
 			this.arcToM = Math.max(arcFromM, arcToM);
 			this.headingX = headingX;
 			this.headingZ = headingZ;
+			this.reachable = reachable;
 		}
 
 		public double lengthM() {
@@ -162,7 +175,7 @@ public final class MmtrDirectionalBlockService {
 
 		@Override
 		public String toString() {
-			return shortHex(railHex) + "[" + round(arcFromM) + ".." + round(arcToM) + "]";
+			return shortHex(railHex) + "[" + round(arcFromM) + ".." + round(arcToM) + "]" + (reachable ? "" : "(走不到)");
 		}
 	}
 
@@ -504,6 +517,11 @@ public final class MmtrDirectionalBlockService {
 	 * no conversion and no write-side change is needed. A section spanning several rails is occupied if
 	 * ANY of its spans is.</p>
 	 *
+	 * <p><b>只认走得到的 span</b>（notes/132 §5）：区间把道岔切掉的那条腿也收进来（守住整个咽喉），
+	 * 但那条腿这次运行**进不去** —— 它上面停着车不是这条进路的前方障碍。把"守卫范围"与"占用范围"
+	 * 分开之后，"某列车在扳岔之前进了岔股、之后一直停在走不到的那条腿上，于是这盏灯永远红"
+	 * 这件事消失了；而它只要还在**走得到**的范围里，判定与从前逐位相同。</p>
+	 *
 	 * @param trees the occupancy trees to test (null = the simulator's live train trees)
 	 */
 	public boolean isOccupied(Section section, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
@@ -548,6 +566,14 @@ public final class MmtrDirectionalBlockService {
 			return false;
 		}
 		for (final RailSpan span : section.spans) {
+			/*
+			 * 走不到的腿：**守着、但不判断路**（notes/132 §5）。它这段弧这次运行进不去，
+			 * 上面的车不是本进路的前方障碍 —— 按"占用"处理会让一盏看着直通正线的灯永远红
+			 * （现场：车在道岔扳动之前进了岔股、之后一直停在那条腿上）。
+			 */
+			if (!span.reachable) {
+				continue;
+			}
 			final Rail rail = railByHex.get(span.railHex);
 			OCC_TRACE.set(" [占用诊断] span=" + shortHex(span.railHex) + " 弧" + round(span.arcFromM) + ".." + round(span.arcToM)
 				+ " railByHex=" + (rail == null ? "**null**" : "有")
@@ -3368,7 +3394,7 @@ public final class MmtrDirectionalBlockService {
 				// A lamp standing MID-RAIL is a boundary too: end the section on it instead of walking past.
 				final MidRailLamp midRail = nearestLampOnSpan(next, arcOfNode, toArc, forward, spanHeadingX, spanHeadingZ, section.entrySignalKey);
 				if (midRail != null) {
-					addSpan(section, new RailSpan(nextHex, arcOfNode, midRail.arcM, spanHeadingX, spanHeadingZ));
+					addSpan(section, new RailSpan(nextHex, arcOfNode, midRail.arcM, spanHeadingX, spanHeadingZ, reachable));
 					anyLegHandled = true;
 					if (reachable) {
 						section.addExitLamp(midRail.key);
@@ -3376,7 +3402,7 @@ public final class MmtrDirectionalBlockService {
 					}
 					continue;
 				}
-				addSpan(section, new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
+				addSpan(section, new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ, reachable));
 			}
 			anyLegHandled = true;
 			final ObjectOpenHashSet<String> branchPath = new ObjectOpenHashSet<>(pathRails);

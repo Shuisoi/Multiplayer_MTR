@@ -77,6 +77,19 @@ public final class MmtrPointAuthority {
 		@Nullable MmtrTurnout turnoutAt(long x, long y, long z);
 	}
 
+	/**
+	 * **改道岔位置之前的一致性检查**（谁可以做这个判断由外层决定 —— 权限层不认识车辆足迹）。
+	 *
+	 * <p>唯一的实现是 {@code Simulator}：**另一列车压在岔区上时不许改位置**（与人工扳岔、意图扳岔
+	 * 读同一条净空判定）。请求方**自己**压在岔上不算 —— 它按着自己的位（T1）本来就可以改自己的需要，
+	 * 否则换端/折返会把自己锁死。</p>
+	 *
+	 * @return 说清原因（可直接回给操作者）＝ 现在不许改；{@code null} = 可以
+	 */
+	public interface PositionChangeGuard {
+		@Nullable String blockReason(long x, long y, long z, int newPosition, String owner);
+	}
+
 	/** {@link #physicalPosition} answer when nobody currently defines this turnout's position. */
 	public static final int NO_PHYSICAL_HOLDER = Integer.MIN_VALUE;
 
@@ -130,9 +143,23 @@ public final class MmtrPointAuthority {
 	/** T1: node key -> mutually exclusive demands waiting for the turnout. */
 	private final Map<String, ArrayDeque<PhysicalReq>> physicalQueued = new HashMap<>();
 	private @Nullable TurnoutLookup turnoutLookup;
+	private @Nullable PositionChangeGuard positionChangeGuard;
 
 	public MmtrPointAuthority(LongSupplier clock) {
 		this.clock = clock;
+	}
+
+	/**
+	 * 挂上"改位置之前的一致性检查"（净空闸）。不挂 = 这一层不生效（老语义逐位不变，测试夹具就是这样）。
+	 */
+	public MmtrPointAuthority withPositionChangeGuard(@Nullable PositionChangeGuard guard) {
+		this.positionChangeGuard = guard;
+		return this;
+	}
+
+	/** 现在能不能把这处道岔改成 {@code newPosition}；返回原因 = 不能。 */
+	private @Nullable String positionChangeBlockedReason(long x, long y, long z, int newPosition, String owner) {
+		return positionChangeGuard == null ? null : positionChangeGuard.blockReason(x, y, z, newPosition, owner);
 	}
 
 	/**
@@ -196,7 +223,22 @@ public final class MmtrPointAuthority {
 		expirePhysical(nk, now);
 		final Physical holder = physicalHolders.get(nk);
 		if (holder == null || holder.owner.equals(owner)) {
-			// 没人定这个位置，或者我本来就定着它 → 位置跟着我走。
+			/*
+			 * 没人定这个位置，或者我本来就定着它 → 位置跟着我走。
+			 *
+			 * <p>但**改位置**要先过净空闸（{@link PositionChangeGuard}）：另一列车压在岔区上时不许改
+			 * —— 那正是"把道岔从车下抽走"。请求方自己压在岔上不算（它按着自己的位，本来就该能改自己
+			 * 的需要，否则换端/折返会把自己锁死）。被挡下来时与"互斥"同一处置：**收回刚发出的逐进向
+			 * 授权**、改为在道岔上排队，绝不留下"半个持有"（T1b 的不变量）。</p>
+			 */
+			if ((holder == null || holder.position != demand)
+				&& positionChangeBlockedReason(x, y, z, demand, owner) != null) {
+				holders.remove(k);
+				dropOwnerRequests(k, owner);
+				promote(k, now);
+				enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis);
+				return Result.QUEUED;
+			}
 			physicalHolders.put(nk, new Physical(owner, demand, untilMillis));
 			dropPhysicalQueued(nk, owner);
 			return Result.GRANTED;
@@ -293,11 +335,19 @@ public final class MmtrPointAuthority {
 		return h == null || h.owner.equals(owner);
 	}
 
-	/** 只读：这处道岔现在能不能按我要的位置给我（无持有者、是我自己、或位置相容）。 */
+	/** 只读：这处道岔现在能不能按我要的位置给我（无持有者、是我自己、或位置相容；改位置还要过净空闸）。 */
 	private boolean physicallyGrantableTo(String nk, int demand, String owner, long now) {
 		expirePhysical(nk, now);
 		final Physical holder = physicalHolders.get(nk);
-		return holder == null || holder.owner.equals(owner) || holder.position == demand;
+		if (holder == null || holder.owner.equals(owner) || holder.position == demand) {
+			// 位置不变（相容）就不算"改位置"，净空闸不参与；真要改一位才问它。
+			if (holder != null && holder.position == demand) {
+				return true;
+			}
+			final String[] node = nk.split(",");
+			return positionChangeBlockedReason(Long.parseLong(node[0]), Long.parseLong(node[1]), Long.parseLong(node[2]), demand, owner) == null;
+		}
+		return false;
 	}
 
 	/** 原子组的"全无"一半：把本 owner 在这组里持有的**一切**让出去（含它上一 tick 就有的）。 */
@@ -479,6 +529,22 @@ public final class MmtrPointAuthority {
 		locks.add(lockKey);
 	}
 
+	/**
+	 * **把一把人工锁换到另一个 via 键上**（hex 写法归一化用，notes/130 §6b）：世界改画之后旧键会
+	 * 静默失效（锁还在文件里，却锁不住任何东西），归一化让旧锁继续生效。
+	 *
+	 * @return 是否真的改了（没这把锁、或新旧写法相同 = false）
+	 */
+	public boolean rekeyLock(long x, long y, long z, String fromVia, String toVia) {
+		final String from = key(x, y, z, fromVia);
+		if (!locks.contains(from) || fromVia.equals(toVia)) {
+			return false;
+		}
+		locks.remove(from);
+		locks.add(key(x, y, z, toVia));
+		return true;
+	}
+
 	public boolean isLocked(long x, long y, long z, String viaRailHex) {
 		return locks.contains(key(x, y, z, viaRailHex));
 	}
@@ -589,6 +655,69 @@ public final class MmtrPointAuthority {
 		expirePhysical(nk, clock.getAsLong());
 		final Physical holder = physicalHolders.get(nk);
 		return holder == null ? null : holder.owner;
+	}
+
+	/**
+	 * **本 owner 现在按着位置的道岔**，逐处给出 {@code [x, y, z]}（按节点键定序，确定）。
+	 *
+	 * <p>给"重新规划时放掉旧计划留下的位置"用（notes/136 §3）：持有表在权限层内部，调用方只能
+	 * 通过这个只读出口看见自己按了哪些道岔，再逐个 {@link #releasePhysicalHold}。</p>
+	 */
+	public ObjectArrayList<long[]> physicalHoldNodesOf(String owner) {
+		final long now = clock.getAsLong();
+		final ObjectArrayList<String> keys = new ObjectArrayList<>(physicalHolders.keySet());
+		keys.sort(null);
+		final ObjectArrayList<long[]> out = new ObjectArrayList<>();
+		for (final String nk : keys) {
+			expirePhysical(nk, now);
+			final Physical holder = physicalHolders.get(nk);
+			if (holder == null || !holder.owner.equals(owner)) {
+				continue;
+			}
+			final String[] parts = nk.split(",");
+			out.add(new long[]{Long.parseLong(parts[0]), Long.parseLong(parts[1]), Long.parseLong(parts[2])});
+		}
+		return out;
+	}
+
+	/**
+	 * **放掉本 owner 在某处道岔上的位置持有**（重新规划 / 计划作废时用）：该处立刻让位，队列头接手
+	 * （{@link #promotePhysical}），其余持有不动。
+	 *
+	 * <p>与 {@link #releaseAll} 的区别只有粒度。为什么需要它：旧计划按下的位置**不会随计划消失**
+	 * ——它只在"列车跨过岔口"或"任务终态"时释放。于是"先按了位置 1、没跨过去、又重规划要位置 0"
+	 * 会让这处道岔谁也扳不动（持有者就是它自己），车永远停在出发信号前（notes/136 §3 的现场）。</p>
+	 *
+	 * @return 真的放掉了（没持有过 = false，调用方不必区分）
+	 */
+	public boolean releasePhysicalHold(long x, long y, long z, String owner) {
+		final String nk = nodeKey(x, y, z);
+		final Physical holder = physicalHolders.get(nk);
+		if (holder == null || !holder.owner.equals(owner)) {
+			return false;
+		}
+		physicalHolders.remove(nk);
+		promotePhysical(nk, clock.getAsLong());
+		return true;
+	}
+
+	/**
+	 * **持有者改自己按的位**（notes/136 §3）：位置跟着它的新需要走，持有关系与窗口都保持不变。
+	 *
+	 * <p>为什么必须有这一条：位置由**持有者**决定（T1），所以"只把行视图/道岔行写过去"是没用的 ——
+	 * {@code mmtrTurnoutPosition} 读的还是持有者那一位。持有者要换位（它自己的新计划要另一条腿），
+	 * 就得改它自己的需求，而不是绕开它。</p>
+	 *
+	 * @return 真的改了（没持有、或本来就是这一位 = false）
+	 */
+	public boolean repointPhysicalHold(long x, long y, long z, String owner, int position) {
+		final String nk = nodeKey(x, y, z);
+		final Physical holder = physicalHolders.get(nk);
+		if (holder == null || !holder.owner.equals(owner) || holder.position == position) {
+			return false;
+		}
+		physicalHolders.put(nk, new Physical(owner, position, holder.untilMillis));
+		return true;
 	}
 
 	/** Whether this node carries a physical turnout (false when the layer is unwired). */

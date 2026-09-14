@@ -699,6 +699,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final String owner = "v" + getId();
 		mmtrPointOwner = owner;
 		final org.mtr.core.mmtr.point.MmtrPointAuthority authority = simulator.mmtrPointAuthority;
+		/*
+		 * T1（notes/136 §3）：**旧计划按下的位置必须先放掉**。
+		 *
+		 * <p>持有只在"跨过岔口"或"任务终态"时释放，所以一份被替换掉的计划会把它的位置留在道岔上。
+		 * 新计划要的是另一位时，这处道岔就谁也扳不动了：进路判 PENDING（物理位置 ≠ 本车要的位），
+		 * 而意图扳岔被"有人物理持有"挡住 —— 持有者正是它自己。现场的样子是"车停在出发信号前不动"。
+		 * 这里在申请新的一组之前先放掉**新计划不要的**那些位（同一位保留，不churn、不丢队列位置），
+		 * 新计划要的那几位由紧随其后的原子申请按新需要重新拿。</p>
+		 */
+		mmtrReleaseStaleHoldsForPlan(simulator, authority, owner, plan);
 		if (mmtrMotionWalker != null) {
 			mmtrMotionWalker.setPointAuthority(authority, owner);
 		}
@@ -716,6 +726,27 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS, mmtrPlannedMillis());
 		simulator.mmtrRoutes.refresh(getId(), authority);
 		return allForksGranted;
+	}
+
+	/**
+	 * notes/136 §3：把"新计划在每处道岔上要的位置"整理出来，交给
+	 * {@link Simulator#mmtrReleaseStalePhysicalHolds} 放掉旧计划留下的、新计划已经不要的那些位。
+	 *
+	 * <p>判据只取**新计划自己**的腿号 → 位置（{@code turnoutDemand}），所以"计划没变"时一个都不放：
+	 * 列车等联锁时每 tick 都会重新走一遍 {@code armMmtrPointRun}，那期间不能把已经拿到的位丢掉。</p>
+	 */
+	private void mmtrReleaseStaleHoldsForPlan(Simulator simulator, org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner, MmtrRunPlanner.Plan plan) {
+		if (plan.forkOps.isEmpty()) {
+			return;
+		}
+		final java.util.HashMap<String, Integer> wanted = new java.util.HashMap<>();
+		for (final String[] op : plan.forkOps) {
+			final int demand = authority.turnoutDemand(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], Integer.parseInt(op[4]));
+			if (demand != Integer.MIN_VALUE) {
+				wanted.put(op[0] + "," + op[1] + "," + op[2], demand);
+			}
+		}
+		simulator.mmtrReleaseStalePhysicalHolds(owner, wanted);
 	}
 
 	/**

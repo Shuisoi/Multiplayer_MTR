@@ -273,14 +273,81 @@ public final class MmtrJunctionClearanceTests {
 		n.releaseOperatorHold();
 	}
 
+	/**
+	 * **自动进路扳岔也有净空闸**（notes/130 §8 第 2 条遗留）：人工扳岔与意图扳岔早就有这道闸，
+	 * 只有"跟着授权自动扳"这条路没有。
+	 *
+	 * <p>两条自动路都要拦：① 每 tick 的 {@code mmtrSyncTurnoutPositionsToGrants}（跟着授权折位置）；
+	 * ② **授权申请本身**（T1 之后位置由持有者决定，所以新的持有者在申请那一步就会把位置改掉 ——
+	 * 前车跨过岔口释放持有、尾巴却还压在净空区里时，道岔就在它脚下被换位了）。</p>
+	 *
+	 * <p>闸门与显示层读同一段代码，所以三条路（人工 / 意图 / 自动）对"能不能扳"给的是同一个答案。</p>
+	 */
+	@Test
+	public void theAutomaticGrantPathsAreRefusedWhileAConsistFoulsTheJunction() {
+		final JunctionNet n = new JunctionNet("build/mmtr-junction-auto-guard");
+		n.releaseOperatorHold();
+		n.setLegViaW(0);
+		final Vehicle first = n.spawn(n.westYard);
+		first.setMmtrMotionAuto(true);
+		first.setMmtrMotionStopTarget(n.junctionFromWestM + 1.0, true);
+		n.tickUntil(first::isMmtrMotionStoppedAtTarget, 4000);
+		assertEquals(n.e.getHexId(), first.getMmtrMotionWalker().railHex(), "车 1 的车头已经过岔（整列骑在岔上）");
+
+		final MmtrTurnout turnout = n.sim.mmtrTurnout(n.j.getX(), n.j.getY(), n.j.getZ());
+		assertNotNull(turnout, "这个岔口是真道岔（有物理模型）");
+		final int legToBranch = turnout.branchLeg.getOrDefault(n.w.getHexId(), -1);
+		assertTrue(legToBranch >= 0 && turnout.positionForLeg(n.w.getHexId(), legToBranch) == MmtrTurnout.REVERSE,
+			"夹具：从 W 进向开往岔股 S 要的就是位置 1");
+
+		// 前车仍在净空区里（引擎那份占用表按引擎的写法写）
+		setSimulatorFootprint(n.sim, n.w, 1.0, n.w.railMath.getLength());
+		assertTrue(org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(n.sim, n.j) != null, "前提：岔区净空被占");
+
+		// ① 另一条进路申请要位置 1 → 在道岔上排队，而不是把位置从车下改掉
+		assertEquals(org.mtr.core.mmtr.point.MmtrPointAuthority.Result.QUEUED,
+			n.sim.mmtrPointAuthority.request(n.j.getX(), n.j.getY(), n.j.getZ(), n.w.getHexId(), "vOther", legToBranch,
+				n.sim.getCurrentMillis() + 60_000),
+			"净空被占时，改位置的申请要排队（修前这里直接 GRANTED 并把位置改掉）");
+		assertEquals(MmtrTurnout.NORMAL, n.sim.mmtrTurnoutPosition(n.j.getX(), n.j.getY(), n.j.getZ()), "位置没被改");
+		assertFalse(n.sim.mmtrPointAuthority.isGrantedTo(n.j.getX(), n.j.getY(), n.j.getZ(), n.w.getHexId(), "vOther"),
+			"被挡下时不留半个持有（T1b：要么全有、要么全无）");
+
+		// ② 每 tick 的自动同步同样不扳
+		n.sim.mmtrSyncTurnoutPositionsToGrants();
+		assertEquals(MmtrTurnout.NORMAL, n.sim.mmtrTurnoutPosition(n.j.getX(), n.j.getY(), n.j.getZ()), "自动同步也不许扳");
+
+		// ③ 请求方**自己**压在岔上不算被挡：它按着自己的位，本来就该能改自己的需要（否则换死自己）
+		n.sim.mmtrPointAuthority.releaseAll("vOther");
+		assertEquals(org.mtr.core.mmtr.point.MmtrPointAuthority.Result.GRANTED,
+			n.sim.mmtrPointAuthority.request(n.j.getX(), n.j.getY(), n.j.getZ(), n.w.getHexId(), "v999999005", legToBranch,
+				n.sim.getCurrentMillis() + 60_000),
+			"压着岔的那列车自己申请换位不算被挡（排除请求方自己）");
+
+		// ④ 车出清净空区 → 自动同步照常把道岔扳到授权要的那一位
+		clearSimulatorFootprints(n.sim);
+		n.sim.mmtrPointAuthority.releaseAll("v999999005");
+		n.sim.mmtrPointAuthority.request(n.j.getX(), n.j.getY(), n.j.getZ(), n.w.getHexId(), "vOther", legToBranch,
+			n.sim.getCurrentMillis() + 60_000);
+		n.sim.mmtrSyncTurnoutPositionsToGrants();
+		assertEquals(MmtrTurnout.REVERSE, n.sim.mmtrTurnoutPosition(n.j.getX(), n.j.getY(), n.j.getZ()), "车出清以后照常扳");
+		n.sim.mmtrPointAuthority.releaseAll("vOther");
+		n.releaseOperatorHold();
+	}
+
 	/** 把一段足迹**覆盖式**写进引擎自己那份占用表（S1 与闸门读的就是它）。 */
 	private static void setSimulatorFootprint(Simulator sim, Rail rail, double fromM, double toM) {
+		setSimulatorFootprint(sim, rail, fromM, toM, 999_999_005L);
+	}
+
+	/** 同上，并指定这列车的 id（净空闸要能"排除请求方自己"）。 */
+	private static void setSimulatorFootprint(Simulator sim, Rail rail, double fromM, double toM, long vehicleId) {
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = sim.mmtrOccupancyTrees();
 		assertNotNull(trees, "引擎必须有占用表");
 		final Position[] ordered = rail.mmtrOrderedPositions();
 		Data.put(trees.get(1), ordered[0], ordered[1], vehiclePosition -> {
 			final VehiclePosition value = new VehiclePosition();
-			value.addSegment(fromM, toM, 999_999_005L);
+			value.addSegment(fromM, toM, vehicleId);
 			return value;
 		}, Object2ObjectAVLTreeMap::new);
 	}

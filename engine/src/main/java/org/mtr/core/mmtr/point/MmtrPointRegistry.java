@@ -58,6 +58,24 @@ public final class MmtrPointRegistry {
 			}
 		}
 
+		/**
+		 * **把一行换到另一个 via 键上**（hex 写法归一化用，notes/130 §6b）。
+		 *
+		 * <p>世界改画（某根轨反向重画）之后，存档里的 via 会变成孤儿键 —— 它还在文件里，却再也匹配不上
+		 * 任何一棵道岔。归一化把键改写成引擎内部写法，让旧键继续生效。</p>
+		 *
+		 * @return 是否真的改了（没有这一行、或新旧写法相同 = false）
+		 */
+		public boolean rekey(long x, long y, long z, String fromVia, String toVia) {
+			final String from = key(x, y, z, fromVia);
+			if (!branches.containsKey(from) || fromVia.equals(toVia)) {
+				return false;
+			}
+			final int branch = branches.remove(from);
+			branches.put(key(x, y, z, toVia), branch);
+			return true;
+		}
+
 		/** True when an operator explicitly set this turnout branch (distinguishes "0" from unset). */
 		public boolean contains(long x, long y, long z, String viaRailHex) {
 			return branches.containsKey(key(x, y, z, viaRailHex));

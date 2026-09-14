@@ -149,7 +149,7 @@ public final class MmtrForkElection {
 				}
 				final int position = leg < 0 ? Integer.MIN_VALUE : turnout.positionForLeg(viaHex, leg);
 				if (position == Integer.MIN_VALUE
-					|| !intentSimulator.mmtrThrowTurnoutForIntent(node.getX(), node.getY(), node.getZ(), position)) {
+					|| !intentSimulator.mmtrThrowTurnoutForIntent(node.getX(), node.getY(), node.getZ(), position, pointAuthorityOwner)) {
 					return null;
 				}
 			}

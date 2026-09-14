@@ -110,11 +110,22 @@ public final class MmtrJunctionState {
 	 * @return 说清原因的字符串（可直接回给操作者）；{@code null} = 净空干净，可以扳
 	 */
 	public static @org.jspecify.annotations.Nullable String blockedThrowReason(Simulator simulator, Position node) {
+		return blockedThrowReasonExcept(simulator, node, 0);
+	}
+
+	/**
+	 * 同上，但**把某一列车排除在外**（{@code excludeVehicleId}；0 = 不排除任何车）。
+	 *
+	 * <p>给"授权申请改道岔位置"那条路用：净空被**别人**占住时不许改位置，而请求方**自己**压在岔上
+	 * 不算 —— 它按着自己的位（T1），本来就该能改自己的需要（换端/折返），否则会把自己锁死。
+	 * 判定与上一条读**同一段** {@link #foulingRail}（只是多一个排除项），所以两条路不会走偏。</p>
+	 */
+	public static @org.jspecify.annotations.Nullable String blockedThrowReasonExcept(Simulator simulator, Position node, long excludeVehicleId) {
 		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
 		if (neighbours == null) {
 			return null;
 		}
-		final Rail fouled = foulingRail(node, neighbours, simulator.mmtrOccupancyTrees());
+		final Rail fouled = foulingRail(node, neighbours, simulator.mmtrOccupancyTrees(), excludeVehicleId);
 		if (fouled == null) {
 			return null;
 		}
@@ -139,6 +150,11 @@ public final class MmtrJunctionState {
 
 	/** 守不住净空的是哪根轨（没有 = 净空干净）；诊断要能点名到轨。 */
 	private static Rail foulingRail(Position node, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return foulingRail(node, neighbours, trees, 0);
+	}
+
+	/** 同上，但可以把某一列车的足迹排除在外（{@code excludeVehicleId}；0 = 不排除）。 */
+	private static Rail foulingRail(Position node, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
 		for (final Rail rail : neighbours.values()) {
 			final double length = rail.railMath.getLength();
 			if (length <= 0) {
@@ -156,7 +172,7 @@ public final class MmtrJunctionState {
 			final Position[] ordered = rail.mmtrOrderedPositions();
 			for (int i = 0; i < trees.size(); i++) {
 				final VehiclePosition vehiclePosition = MmtrDirectionalBlockService.footprintOn(trees.get(i), ordered);
-				if (vehiclePosition != null && foulsZone(vehiclePosition, from, to)) {
+				if (vehiclePosition != null && foulsZone(vehiclePosition, from, to, excludeVehicleId)) {
 					return rail;
 				}
 			}
@@ -174,7 +190,12 @@ public final class MmtrJunctionState {
 	 * 再减掉一点整数格误差的松弛。</p>
 	 */
 	private static boolean foulsZone(VehiclePosition vehiclePosition, double from, double to) {
-		for (final double[] segment : vehiclePosition.segmentsExcluding(0)) {
+		return foulsZone(vehiclePosition, from, to, 0);
+	}
+
+	/** 同上，但可以把某一列车的足迹排除在外（{@code excludeVehicleId}；0 = 不排除）。 */
+	private static boolean foulsZone(VehiclePosition vehiclePosition, double from, double to, long excludeVehicleId) {
+		for (final double[] segment : vehiclePosition.segmentsExcluding(excludeVehicleId)) {
 			final double footFrom = Math.min(segment[0], segment[1]);
 			final double footTo = Math.max(segment[0], segment[1]);
 			final double overlap = Math.min(to, footTo) - Math.max(from, footFrom);

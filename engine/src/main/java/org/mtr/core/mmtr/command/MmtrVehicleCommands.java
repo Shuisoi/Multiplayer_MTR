@@ -164,18 +164,54 @@ final class MmtrVehicleCommands {
 	private static MmtrCommandDispatcher.Result remove(Simulator simulator, List<String> positional, Map<String, String> options) {
 		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "vehicle", "remove");
 		final List<Vehicle> targets = new ArrayList<>();
+		int sidingsTouched = 0;
 
 		if (!positional.isEmpty() && positional.get(0).equalsIgnoreCase("all") && !options.containsKey("depot") && !options.containsKey("siding")) {
 			// 引擎没有全局车辆集合：按股道收集（与 mmtrFindVehicle 同一手法）
 			simulator.sidings.forEach(siding -> siding.iterateVehicles(targets::add));
-		} else if (options.containsKey("siding") || options.containsKey("depot")) {
+		} else if (options.containsKey("siding")) {
 			final Depot depotHint = MmtrCommandDispatcher.findDepot(simulator, options.get("depot"));
 			final Siding siding = MmtrCommandDispatcher.resolveSiding(simulator, options, depotHint);
 			if (siding == null) {
-				result.line("找不到目标股道（--siding / --depot）");
-				return new MmtrCommandDispatcher.Result(false, "vehicle", "remove");
+				// 注意：**要写在返回的那个 Result 上**。原来这里先往 result 里写、再 `new Result(false,…)` 返回，
+				// 于是这句话永远到不了用户（新对象是空的）——失败原因只剩一句"命令失败了"。
+				final MmtrCommandDispatcher.Result failure = new MmtrCommandDispatcher.Result(false, "vehicle", "remove");
+				failure.line("找不到目标股道（--siding / --depot）");
+				return failure;
 			}
+			sidingsTouched = 1;
 			siding.iterateVehicles(targets::add);
+		} else if (options.containsKey("depot")) {
+			/*
+			 * **按车辆段删 = 该车辆段的每一条股道都要遍历**（notes/136 §2 的指令陷阱）。
+			 *
+			 * <p>修前这里走 {@code resolveSiding}，而它给 {@code --depot} 的语义是"这个段里的第 index 条
+			 * 股道"（那是给 {@code vehicle spawn} 用的：一条股道同时只停一组车）。于是
+			 * {@code vehicle remove --depot=aassdd} **只清了一条股道**，而用法文字写的是"按车辆段删"、
+			 * 结果行也只报了一句"已删除车辆…"—— 看的人会以为删干净了（实测：那段有两辆车，
+			 * 第一次只删掉一辆，剩下的只能再按 {@code --siding} 删一次）。</p>
+			 *
+			 * <p>现在：遍历该段的**全部**股道，并把"扫了几条股道、删了几辆车、哪几条股道本来就有车"
+			 * 一并说清楚，免得再出现"以为删干净了"。</p>
+			 */
+			final Depot depot = MmtrCommandDispatcher.findDepot(simulator, options.get("depot"));
+			if (depot == null) {
+				final MmtrCommandDispatcher.Result failure = new MmtrCommandDispatcher.Result(false, "vehicle", "remove");
+				failure.line("找不到车辆段「" + options.get("depot") + "」");
+				return failure;
+			}
+			final List<Siding> sidings = new ArrayList<>(depot.savedRails);
+			sidings.sort(java.util.Comparator.comparingLong(Siding::getId));
+			for (final Siding siding : sidings) {
+				sidingsTouched++;
+				final List<Vehicle> onSiding = new ArrayList<>();
+				siding.iterateVehicles(onSiding::add);
+				if (!onSiding.isEmpty()) {
+					result.line("股道 " + siding.getId() + " 上有 " + onSiding.size() + " 辆车");
+				}
+				targets.addAll(onSiding);
+			}
+			result.line("车辆段「" + depot.getName() + "」共 " + sidings.size() + " 条股道，扫到 " + targets.size() + " 辆车");
 		} else if (!positional.isEmpty()) {
 			for (final String raw : positional) {
 				try {
@@ -193,9 +229,11 @@ final class MmtrVehicleCommands {
 			return MmtrCommandDispatcher.usage("vehicle remove 需要 <车辆id|all|--siding=<id>|--depot=<名>>");
 		}
 
+		int removed = 0;
 		for (final Vehicle vehicle : targets) {
 			final long id = vehicle.getId();
 			if (simulator.deleteMmtrVehicle(id)) {
+				removed++;
 				result.add(String.valueOf(id));
 				result.line("已删除车辆 " + id);
 			} else {
@@ -203,7 +241,10 @@ final class MmtrVehicleCommands {
 			}
 		}
 		if (targets.isEmpty()) {
-			result.line("没有匹配到任何车辆");
+			result.line("没有匹配到任何车辆"
+				+ (sidingsTouched > 0 ? "（已扫过 " + sidingsTouched + " 条股道）" : ""));
+		} else if (sidingsTouched > 0) {
+			result.line("按股道清理完成：扫 " + sidingsTouched + " 条股道，删掉 " + removed + " 辆车");
 		}
 		return result;
 	}
