@@ -220,10 +220,27 @@ public final class MmtrTaskDrivenCouplingTests {
 		// simulated seconds; run until the job itself reports done, not merely until the trains touch -
 		// with automatic couplers the latched formation is only the start of the job's last step.
 		int ticks = 0;
+		// T4 ④：作业单驱动的**驱动步**全程都要有进路对象与行车许可 —— 逐步采样，而不是只看终态。
+		//
+		// 注意口径（写作时核实过）：只有**走行类**的步骤需要进路；SPEED/SERVE 这类动作步
+		// （开关门）与 COUPLE 这类作业步（连挂手术）**本来就不该有进路** —— 本用例末尾那条
+		// "手术后不留孤儿进路"的断言正是这个意思。所以这里只对驱动步（stepIndex 0）断言。
+		boolean driveStepHadRoute = false;
+		boolean driveStepHadPermit = false;
 		while (ticks < 900 && n.sim.mmtrJobScheduler.stateOf("loco") != MmtrJobScheduler.JobState.DONE) {
 			n.tick();
 			ticks++;
+			if (n.sim.mmtrJobScheduler.stepIndexOf("loco") == 0) {
+				if (n.sim.mmtrRoutes.route(loco.getId()) != null) {
+					driveStepHadRoute = true;
+				}
+				if (loco.mmtrMovementAuthority() != null) {
+					driveStepHadPermit = true;
+				}
+			}
 		}
+		assertTrue(driveStepHadRoute, "④ 驱动步（MOVE_TO）全程都要有进路对象");
+		assertTrue(driveStepHadPermit, "④ 驱动步全程都要有行车许可（与进路同源）");
 
 		final Vehicle merged = mergedVehicle(n, rake, loco);
 		assertTrue(coupled(n, rake, loco), "the locomotive must have driven over and coupled the rake (ticks=" + ticks + ")");
