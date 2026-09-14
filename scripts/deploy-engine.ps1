@@ -20,6 +20,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# 工作区环境单一真源（JAVA_HOME 等）—— 与 dev-server.ps1 同一行写法。
+# 为什么必须这样取：这里原先自己拼 `mmtr\env\jdk-21`，而 JDK 在**工作区根**（`MC\env\jdk-21`），
+# 于是 `-Build` 直接死于 "JAVA_HOME is set to an invalid directory"（2026-09-14 实测，退出码 3）。
+# 用户级 JAVA_HOME 又是 JRE 8，所以"继承环境变量"这条退路也不存在。
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'env\workspace.env.ps1')
 $mmtr = Split-Path -Parent $PSScriptRoot
 $engine = Join-Path $mmtr 'engine'
 $built = Join-Path $engine 'build\libs\Transport-Simulation-Core-1.0.0.jar'
@@ -40,7 +45,6 @@ if ($running) {
 }
 
 if ($Build) {
-	$env:JAVA_HOME = Join-Path $mmtr 'env\jdk-21'
 	Push-Location $engine
 	try {
 		& .\gradlew.bat shadowJar --console=plain -q
