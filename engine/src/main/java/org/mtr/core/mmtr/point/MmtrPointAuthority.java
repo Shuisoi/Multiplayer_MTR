@@ -290,8 +290,26 @@ public final class MmtrPointAuthority {
 		if (ops == null || ops.isEmpty()) {
 			return Result.GRANTED;
 		}
-		final long now = clock.getAsLong();
+		/*
+		 * **同一处道岔只认最先要过的那一程**（notes/137）。
+		 *
+		 * <p>折返（牵出—推进）会让同一处道岔在一次申请里出现两次，两程要**互斥的两个位置**。
+		 * 一组自相矛盾的申请如果整组照办，最后那个需求会把它自己的位按上（一处道岔只有一个位置），
+		 * 而进路判定看的是**最先要过的那一程** —— 于是"手里按着 1、进路需要 0"，车永远停在自己的
+		 * 出发信号前（现场实测）。申请集按行进次序给（最近的在前），所以**第一个说了算**。</p>
+		 *
+		 * <p>放在这一层是刻意的：调用方（车辆）也做了同样的去重，但"一组申请不许自相矛盾"是权限层
+		 * 自己的不变量，不该依赖调用方守规矩。</p>
+		 */
+		final ObjectArrayList<String[]> effective = new ObjectArrayList<>();
+		final java.util.HashSet<String> claimedNodes = new java.util.HashSet<>();
 		for (final String[] op : ops) {
+			if (claimedNodes.add(op[0] + "," + op[1] + "," + op[2])) {
+				effective.add(op);
+			}
+		}
+		final long now = clock.getAsLong();
+		for (final String[] op : effective) {
 			final long x = Long.parseLong(op[0]);
 			final long y = Long.parseLong(op[1]);
 			final long z = Long.parseLong(op[2]);
@@ -303,22 +321,22 @@ public final class MmtrPointAuthority {
 					return Result.REJECTED;   // 整组里有物理上不存在的组合 → 整组都不申请
 				}
 				if (!physicallyGrantableTo(nodeKey(x, y, z), demand, owner, now)) {
-					releaseSet(ops, owner);
-					queueSet(ops, owner, untilMillis, priorityMillis);
+					releaseSet(effective, owner);
+					queueSet(effective, owner, untilMillis, priorityMillis);
 					return Result.QUEUED;
 				}
 			}
 			if (!perApproachGrantableTo(key(x, y, z, via), owner, now)) {
-				releaseSet(ops, owner);
-				queueSet(ops, owner, untilMillis, priorityMillis);
+				releaseSet(effective, owner);
+				queueSet(effective, owner, untilMillis, priorityMillis);
 				return Result.QUEUED;
 			}
 		}
-		for (final String[] op : ops) {
+		for (final String[] op : effective) {
 			if (request(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], owner,
 					Integer.parseInt(op[4]), untilMillis) != Result.GRANTED) {
-				releaseSet(ops, owner);
-				queueSet(ops, owner, untilMillis, priorityMillis);
+				releaseSet(effective, owner);
+				queueSet(effective, owner, untilMillis, priorityMillis);
 				return Result.QUEUED;
 			}
 		}

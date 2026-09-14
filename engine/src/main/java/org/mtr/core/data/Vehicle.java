@@ -200,6 +200,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** P3: en-route forks still ahead of this vehicle (not yet crossed); refreshed while armed so a
 	 * crossed fork is never re-requested (its hold was already released at the crossing). */
 	private final ObjectArrayList<String[]> mmtrPendingPointOps = new ObjectArrayList<>();
+
+	/**
+	 * 只读出口：车辆此刻**正在申请**的那一组道岔（节点, 进向, 腿号）。
+	 *
+	 * <p>给 {@code interlock} 诊断用 —— "进路要求什么"与"车在申请什么"是排查道岔等待的两半，
+	 * 只有两半都看得见，才不用靠猜（notes/134 的教训：界面上看不见的状态修不好）。</p>
+	 */
+	public ObjectArrayList<String[]> getMmtrPendingPointOps() {
+		return new ObjectArrayList<>(mmtrPendingPointOps);
+	}
 	/** Turnout authority request/refresh window. */
 	private static final long MMTR_POINT_REQUEST_MILLIS = 10L * MILLIS_PER_MINUTE;
 	/** Approach-locking window (m): forks are only requested once the head is within this distance -
@@ -790,45 +800,66 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * P3 (approach locking): while the auto run is armed, add the plan forks that just entered the
-	 * approach window to the pending request set (idempotent - never re-adds, crossed forks are
-	 * drained separately). Far forks are deliberately NOT requested: the leading train must get
-	 * the point first when it arrives.
+	 * P3 (approach locking): while the auto run is armed, keep the pending request set equal to
+	 * **the forks this train needs right now** — rebuilt from the plan every call, not accumulated.
+	 *
+	 * <p>Far forks are deliberately NOT requested: the leading train must get the point first when it
+	 * arrives (the approach window). The one exception is ①: while held at the signal in front of a
+	 * block whose far end is an unset turnout the request must still be out, because the train may be a
+	 * whole block short of it (up to 187 m in the dev world) and the window would never open.</p>
+	 *
+	 * <h3>为什么是"重建"而不是"只增不减"</h3>
+	 * <p>折返（牵出—推进）让同一处道岔在计划里出现两次，两程要互斥的两个位置。累积式的申请集会把
+	 * 两程**都**留在里面（第一程在窗口内时进过一次，之后即使已经越过、或者已经轮到第二程，它还在），
+	 * 而权限层按"最先要过的那一程"裁决 —— 于是一个**已经过时的**条目会把当前真正需要的那个挡住，
+	 * 车停在自己的出发信号前（notes/137 §1b：现场就是这么卡的）。每 tick 按计划重建 = 申请集永远
+	 * 只有"此刻该申请的、每处道岔一条"。</p>
 	 */
 	private void replenishForkRequests(Simulator simulator) {
 		if (mmtrMotionPlan == null || mmtrMotionWalker == null || mmtrMotionPlan.forkOps.isEmpty()) {
 			return;
 		}
 		final double distanceNow = mmtrMotionWalker.distanceM();
+		final ObjectArrayList<String[]> rebuilt = new ObjectArrayList<>();
 		final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
 		for (int j = 0; j < mmtrMotionPlan.forkOps.size(); j++) {
 			final String[] op = mmtrMotionPlan.forkOps.get(j);
 			final double forkAbsM = j < mmtrMotionPlan.forkMeters.size() ? mmtrMotionPlan.forkMeters.get(j) : Double.NaN;
 			final double remainingM = forkAbsM - distanceNow;
-			if (remainingM <= 0 || remainingM > MMTR_APPROACH_LOCK_METERS) {
-				// ①: while held at the signal before the block whose far end is an unset turnout, the
-				// request must still be out - the train may be a whole block (up to 187 m in the dev
-				// world) short of it, so the 120 m approach window would never open and the run would
-				// wait forever. Only the NEXT fork is requested this way (never the whole route).
-				if (!mmtrSectionAuthorityHold || remainingM <= 0 || pendingContainsFork(op)) {
-					continue;
-				}
-			} else if (pendingContainsFork(op)) {
-				continue;
+			/*
+			 * 退出条件是**"已越过"**，不是"距离已经走完"。
+			 *
+			 * <p>道岔的持有一致保留到**车尾出清**（notes/101 ③：车尾清岔 + 10 m 清限才释放），
+			 * 而进路的"已越过"标记也是那一刻才写的。若在这里按 {@code remainingM <= 0} 把它踢出申请集，
+			 * 就会出现一段"既没被申请、也还没算越过"的空窗：物理位置冻在别人（其实是自己上一程）按的
+			 * 那一位上，进路判 PENDING，车头正压在岔上不动 —— 实测就是这么卡住的
+			 * （车头 (-211.5,-158.5) 正贴着节点 -212,-60,-159）。</p>
+			 */
+			if (isMmtrForkCrossed(op)) {
+				continue; // 已越过（车尾出清）：crossing 时已释放，也不再申请
 			}
 			/*
-			 * **同一处道岔只申请最先要过的那一程**（notes/137，理由见 {@link #armMmtrPointRun}）：
-			 * 折返时它出现在进路里两次、两程要互斥的两个位置，两程都申请会让后一程的位占住物理位置，
-			 * 而进路判定看的是最先要过的那一程 —— 结果是车永远停在自己的出发信号前。
+			 * **同一处道岔只申请最先要过的那一程**（notes/137）：折返的两程要互斥的两个位置，
+			 * 而一处道岔只有一个位置。plan 的 forkOps 按行进次序，所以"第一个未越过的"就是最近那一程。
 			 */
 			if (!nearestPassPerNode.add(op[0] + "," + op[1] + "," + op[2])) {
 				continue;
 			}
-			mmtrPendingPointOps.add(op.clone());
+			if (remainingM <= MMTR_APPROACH_LOCK_METERS || mmtrSectionAuthorityHold) {
+				rebuilt.add(op.clone());
+			}
 			if (mmtrSectionAuthorityHold) {
-				return; // just the next fork ahead
+				break; // just the next fork ahead
 			}
 		}
+		mmtrPendingPointOps.clear();
+		mmtrPendingPointOps.addAll(rebuilt);
+	}
+
+	/** 这一程的岔是不是已经被越过（进路登记表记着越过的键，见 {@code MmtrRoute.markForkCrossed}）。 */
+	private boolean isMmtrForkCrossed(String[] op) {
+		final org.mtr.core.mmtr.route.MmtrRoute route = mmtrRoute;
+		return route != null && route.isForkCrossed(op);
 	}
 
 	private boolean pendingContainsFork(String[] op) {

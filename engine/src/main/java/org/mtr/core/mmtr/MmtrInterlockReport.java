@@ -55,15 +55,37 @@ public final class MmtrInterlockReport {
 		// Every turnout the route still needs: who holds it, whether the operator parked it.
 		if (!route.getForks().isEmpty()) {
 			out.append("\n  turnouts:");
+			final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
 			for (final String[] fork : route.getForks()) {
 				final long x = Long.parseLong(fork[0]);
 				final long y = Long.parseLong(fork[1]);
 				final long z = Long.parseLong(fork[2]);
+				final boolean crossed = route.isForkCrossed(fork);
+				/*
+				 * 「同一处道岔在一趟里走两次」时，只有**最先要过的那一程**参与判定（notes/137）——
+				 * 报告必须把这件事说出来，否则操作者会看到"两行要互斥的两个位"而以为引擎在自相矛盾。
+				 */
+				final boolean nearestPass = nearestPassPerNode.add(x + "," + y + "," + z);
+				/*
+				 * **这条腿要的是哪一位**（0/1）：进路判定与道岔位置比的正是它。不打印出来的话，
+				 * "为什么 PENDING" 只能靠人把 (进向, 腿号) 在脑子里折成位置 —— 那正是排查最慢的一步
+				 * （notes/134 的教训：看不见的状态修不好）。
+				 */
+				final int demand = simulator.mmtrPointAuthority.turnoutDemand(x, y, z, fork[3], Integer.parseInt(fork[4]));
 				out.append("\n    ").append(x).append(',').append(y).append(',').append(z)
 					.append(" via=").append(shortHex(fork[3]))
 					.append(" wantLeg=").append(fork[4])
-					.append(route.isForkCrossed(fork) ? " 已越过" : " 待过")
+					.append(demand == Integer.MIN_VALUE ? " needPos=（不存在）" : " needPos=" + demand)
+					.append(crossed ? " 已越过" : " 待过")
+					.append(crossed || nearestPass ? "" : "（同节点后一程：等前一程过了再算）")
 					.append(" | ").append(simulator.mmtrPointAuthority.state(x, y, z, fork[3]));
+			}
+			// 车辆此刻**正在申请**的那一组（原子集）：它与上面那张表就是"想要"与"拿到"的两半。
+			final ObjectArrayList<String[]> pendingPointOps = vehicle.getMmtrPendingPointOps();
+			out.append("\n  pendingRequests:").append(pendingPointOps.isEmpty() ? " 无" : "");
+			for (final String[] op : pendingPointOps) {
+				out.append("\n    ").append(op[0]).append(',').append(op[1]).append(',').append(op[2])
+					.append(" via=").append(shortHex(op[3])).append(" leg=").append(op[4]);
 			}
 		}
 

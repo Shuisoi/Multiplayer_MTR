@@ -283,6 +283,31 @@ public final class MmtrTurnoutAuthorityTests {
 	}
 
 	/**
+	 * **一组申请里同一处道岔出现两次（折返的两程）时，只认最先要过的那一程**（notes/137）。
+	 *
+	 * <p>两程要的是互斥的两个位置，而一处道岔只有一个位置：整组照办的话，后一程的位会覆盖前一程的，
+	 * 于是"手里按着 1、进路需要 0"，车永远停在自己的出发信号前（现场实测，见 notes/137 §1b）。
+	 * 申请集按行进次序给（最近的在前），所以第一个说了算。</p>
+	 */
+	@Test
+	public void aContradictoryAtomicSetKeepsTheNearestPassPosition() {
+		final Simulator simulator = forkNet("build/mmtr-t1-atomic-two-passes");
+		final MmtrTurnout turnout = turnoutOf(simulator);
+		final int stemToFar = turnout.farLeg.getOrDefault(turnout.stemRailHex, -1);
+		final int branchToStem = turnout.stemLeg.getOrDefault(turnout.branchRailHex, -1);
+
+		final ObjectArrayList<String[]> ops = new ObjectArrayList<>();
+		ops.add(new String[]{"0", "0", "0", turnout.stemRailHex, String.valueOf(stemToFar)});      // 第一程 → 位置 0
+		ops.add(new String[]{"0", "0", "0", turnout.branchRailHex, String.valueOf(branchToStem)}); // 第二程 → 位置 1
+
+		assertEquals(MmtrPointAuthority.Result.GRANTED,
+			simulator.mmtrPointAuthority.requestAtomically(ops, "v1", until(simulator), Long.MAX_VALUE), "整组给我");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrPointAuthority.physicalPosition(0, 0, 0),
+			"同一处道岔只认最先要过的那一程（修前这里会被后一程按成 1）");
+		assertEquals("v1", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0));
+	}
+
+	/**
 	 * ① + ② **两条互斥进路不可能同时 SET**，且等待方点名道岔与它需要的位置。
 	 *
 	 * <p>进路层与权限层是分开的：授权只说明"这个进向归我"，SET 还要求**道岔物理上就在我这条腿要的
