@@ -642,14 +642,25 @@ public class Simulator extends Data implements Utilities {
 			return 0;
 		}
 		mmtrPlanSignature = signature;
-		mmtrPlanDispatchers.clear();
 		if (!mmtrPlanErrors.isEmpty()) {
-			return 0;   // 输入有错就不排班（设计 §4.3：别让坏配置跑起来）
+			/*
+			 * 输入有错：**不排班**（设计 §4.3：别让坏配置跑起来），旧班也不留 ——
+			 * 否则"配置改坏了"之后旧交路还在跑，看起来像新配置没生效。
+			 */
+			mmtrPlanDispatchers.clear();
+			return 0;
 		}
 		int built = 0;
 		final long dayTime = mmtrPlanDayTime();
-		final java.util.Map<String, Long> frozen = new java.util.HashMap<>();
-		mmtrPlanDispatchers.values().forEach(dispatcher -> frozen.putAll(dispatcher.frozenUntilByConsist()));
+		/*
+		 * P5 的冻结边界：**必须在动派发器之前取快照**（notes/147）。
+		 *
+		 * 第一版是"先 clear 再遍历取 frozen"，于是那张表永远是空的 —— "在途车的当前任务不被重算改动"
+		 * 这条验收等于没生效，而代码看起来是接好的。现在改成"先取快照 → 建到局部表 rebuilt →
+		 * 最后整体换掉"，顺序不再依赖读代码时的注意力。
+		 */
+		final java.util.Map<String, Long> frozen = org.mtr.core.mmtr.plan.MmtrPlanAdjustments.frozenSnapshot(mmtrPlanDispatchers.values());
+		final java.util.HashMap<String, org.mtr.core.mmtr.plan.MmtrPlanDispatcher> rebuilt = new java.util.HashMap<>();
 		for (final org.mtr.core.mmtr.plan.MmtrLine line : mmtrPlanInputs.lines) {
 			final org.mtr.core.mmtr.plan.MmtrPattern pattern = mmtrPlanInputs.pattern(line.lineId);
 			if (pattern == null) {
@@ -672,16 +683,31 @@ public class Simulator extends Data implements Utilities {
 				diagram = org.mtr.core.mmtr.plan.MmtrPlanAdjustments.assignManually(
 					diagram, assignment[0], assignment[1], assignment[2], result.notes);
 			}
-			mmtrPlanDispatchers.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
+			rebuilt.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
 			// P6 ③：重建之后把"玩家正在开的编组"重新贴上去（接管是运行时状态，不属于计划输入）
-			mmtrPlanPlayerDriven.forEach(consistId -> mmtrPlanDispatchers.get(line.lineId).setPlayerDriven(consistId, true));
+			mmtrPlanPlayerDriven.forEach(consistId -> rebuilt.get(line.lineId).setPlayerDriven(consistId, true));
 			built++;
 			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
 			for (final String note : result.notes) {
 				System.out.println("[MMTR-PLAN] 事件改计划：" + note);
 			}
 		}
+		mmtrPlanDispatchers.clear();
+		mmtrPlanDispatchers.putAll(rebuilt);
 		return built;
+	}
+
+	/**
+	 * 网页上的"重新排班"（设计 §9 的 {@code replan}）：**不管输入变没变，强算一次**。
+	 *
+	 * <p>平时重建由签名把关（输入/事件/指派没变就不重算，省得无谓地打断在途车）；但操作者按下
+	 * "重新排班"时想要的是"就按现在这份配置再排一遍" —— 把签名清掉再走同一条路。</p>
+	 *
+	 * @return 重排了几条线路
+	 */
+	public int mmtrForceReplan() {
+		mmtrPlanSignature = "";
+		return mmtrRefreshPlanDispatchers();
 	}
 
 	/** P5：现在几点（当日毫秒，与线路密度表同一口径；锚点优先用作业单调度的）。 */
@@ -746,8 +772,30 @@ public class Simulator extends Data implements Utilities {
 		final long schedulerAnchor = mmtrJobScheduler == null ? Long.MIN_VALUE : mmtrJobScheduler.getAnchor();
 		final long anchor = schedulerAnchor != Long.MIN_VALUE ? schedulerAnchor : mmtrPlanAnchorForDay();
 		final long dayTime = Math.floorMod(now - anchor, 86_400_000L);
+		/*
+		 * 日钟基准变了要说一声（notes/147 的现场发现）。
+		 *
+		 * 锚点优先用作业单调度器的：它**晚一步**才发布锚点时（服务端刚起、作业单还没 tick），
+		 * 计划会先用自己定的锚点算 "现在"，等作业单的锚点一到，"现在"就整体平移 ——
+		 * 现场实测 00:10 → 00:02（平移了 7.5 分钟）。时刻表本身没变（"07:00 发车"还是 07:00），
+		 * 但操作者会看到"车怎么还没动、明明过点了"，所以这里必须留一句话。
+		 */
+		if (mmtrPlanLastAnchor != Long.MIN_VALUE && mmtrPlanLastAnchor != anchor) {
+			System.out.println("[MMTR-PLAN] 日钟基准变了：现在从 " + hhmmText(Math.floorMod(now - mmtrPlanLastAnchor, 86_400_000L))
+				+ " 变成 " + hhmmText(dayTime) + "（作业单调度器的锚点接管了）—— 时刻表不变，但「到点没有」跟着变");
+		}
+		mmtrPlanLastAnchor = anchor;
 		mmtrPlanDispatchers.values().forEach(dispatcher -> dispatcher.tick(dayTime, world));
 	}
+
+	/** 日志里的 {@code hh:mm:ss}（当日毫秒 → 人看的时间）。 */
+	private static String hhmmText(long dayTimeMillis) {
+		final long seconds = Math.floorDiv(dayTimeMillis, 1000);
+		return String.format("%02d:%02d:%02d", Math.floorDiv(seconds, 3600), Math.floorMod(Math.floorDiv(seconds, 60), 60), Math.floorMod(seconds, 60));
+	}
+
+	/** 上一次用的日钟基准（只在日志里用，见 {@link #mmtrTickPlanDispatchers()}）。 */
+	private long mmtrPlanLastAnchor = Long.MIN_VALUE;
 
 	/** 计划派发器自己的"天"锚点（第一次 tick 时定下，与作业单调度器同一套口径）。 */
 	private long mmtrPlanAnchor = Long.MIN_VALUE;

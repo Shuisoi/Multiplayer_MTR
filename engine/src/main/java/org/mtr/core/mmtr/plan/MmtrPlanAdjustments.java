@@ -47,6 +47,22 @@ public final class MmtrPlanAdjustments {
 	}
 
 	/**
+	 * 重建交路之前，先把"每辆车不许动到什么时候"取成一张快照。
+	 *
+	 * <p>为什么要单独一个函数：**取快照必须发生在清空派发器之前**。第一版在重建里先
+	 * {@code mmtrPlanDispatchers.clear()} 再遍历取快照，于是那张表**永远是空的** ——
+	 * "在途车的当前任务不被重算改动"（验收 ⑤）看起来接好了，实际一次都没生效
+	 * （notes/147；现场表现是"改一次密度/来一个事件，在途的车被重新派一遍"）。</p>
+	 */
+	public static java.util.Map<String, Long> frozenSnapshot(java.util.Collection<MmtrPlanDispatcher> dispatchers) {
+		final java.util.HashMap<String, Long> out = new java.util.HashMap<>();
+		for (final MmtrPlanDispatcher dispatcher : dispatchers) {
+			out.putAll(dispatcher.frozenUntilByConsist());
+		}
+		return out;
+	}
+
+	/**
 	 * **按事件重算计划**。
 	 *
 	 * @param line        线路

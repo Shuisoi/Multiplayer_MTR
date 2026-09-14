@@ -217,6 +217,7 @@ public final class SystemMapServlet extends ServletBase {
 				}
 				case "mmtr-plan-diagrams" -> {					// P4：派发器现场 —— 每条线路的周转/N/分车/已派步数（交路的产物在这里看得见）。
 					simulator.mmtrRefreshPlanDispatchers();
+					final long diagramDayTime = simulator.mmtrPlanDayTime();
 					final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();
 					simulator.mmtrPlanDispatchers.forEach((lineId, dispatcher) -> {
 						final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
@@ -249,6 +250,17 @@ public final class SystemMapServlet extends ServletBase {
 								w.addProperty("nextDueMs", next.dueMs);
 								w.addProperty("nextDescribe", next.describe());
 							}
+							/*
+							 * P6 ⑤：交路页要的是"计划 vs 实际"同一行 —— 所以这里直接带上
+							 * {@link MmtrPlanFeed#timeline}（条目窗口三态 + 那串步谁派出去了）。
+							 * 前端不再自己拼两份列表，口径就只有一处。
+							 */
+							for (final org.mtr.core.mmtr.plan.MmtrDiagram.Working candidate : dispatcher.diagram.workings) {
+								if (candidate.consistId.equals(state.consistId)) {
+									w.add("timeline", org.mtr.core.mmtr.plan.MmtrPlanFeed.timeline(candidate, state, diagramDayTime));
+									break;
+								}
+							}
 							workings.add(w);
 							reported.add(state.consistId);
 						}
@@ -273,6 +285,8 @@ public final class SystemMapServlet extends ServletBase {
 							w.addProperty("note", working.entries.isEmpty()
 								? "今天没有班（趟次已被指派给别人）"
 								: "今天没有班（只剩 " + working.entries.size() + " 条收尾条目）");
+							// 没班的编组也给一条时间轴（计划还在），前端一行只需认一个字段
+							w.add("timeline", org.mtr.core.mmtr.plan.MmtrPlanFeed.timeline(working, null, diagramDayTime));
 							workings.add(w);
 						}
 						out.add("workings", workings);
@@ -283,6 +297,70 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("configured", !simulator.getMmtrPlanInputs().isEmpty());
 					result.addProperty("problems", simulator.mmtrPlanErrors.size());
 					yield result;
+				}
+				/*
+				 * P6 ⑤（WEB 六页）要的只读数据：趟次表、现场可选项、强制重排。
+				 *
+				 * 三个都只是"把已经在内存里的东西按契约端出去"（计算全在纯函数 MmtrPlanFeed 里），
+				 * 所以网页那一侧不需要任何新算法，也不需要认识引擎内部。
+				 */
+				case "mmtr-plan-service-plan" -> {				// 趟次表（乘客视角 · 与车无关，两个方向）
+					simulator.mmtrRefreshPlanDispatchers();
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					final com.google.gson.JsonArray plans = new com.google.gson.JsonArray();
+					final org.mtr.core.mmtr.plan.MmtrPlanInputs inputs = simulator.getMmtrPlanInputs();
+					for (final org.mtr.core.mmtr.plan.MmtrLine line : inputs.lines) {
+						final org.mtr.core.mmtr.plan.MmtrPattern pattern = inputs.pattern(line.lineId);
+						if (pattern == null) {
+							continue;   // 没有密度表 = 这条线不排班（输入层已报"未覆盖运营时段"）
+						}
+						final double speedKmh = inputs.fleet.consists.isEmpty() ? 0 : inputs.fleet.consists.get(0).maxSpeedKmh;
+						plans.add(org.mtr.core.mmtr.plan.MmtrPlanFeed.servicePlan(
+							line, pattern, org.mtr.core.mmtr.plan.MmtrRailTravelTimes.of(simulator, line, speedKmh)));
+					}
+					result.add("lines", plans);
+					result.addProperty("dayTimeMs", simulator.mmtrPlanDayTime());
+					result.addProperty("configured", !inputs.isEmpty());
+					result.addProperty("problems", simulator.mmtrPlanErrors.size());
+					yield result;
+				}
+				case "mmtr-plan-world" -> {						// 现场可选项：站与站台、车辆段与股道（网页下拉框用）
+					final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.plan.MmtrPlanFeed.StationInfo> stationInfos = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+					simulator.stations.forEach(station -> stationInfos.add(new org.mtr.core.mmtr.plan.MmtrPlanFeed.StationInfo(station.getId(), station.getName())));
+					simulator.platforms.forEach(platform -> {
+						final org.mtr.core.data.AreaBase<?, ?> area = platform.area;
+						for (final org.mtr.core.mmtr.plan.MmtrPlanFeed.StationInfo info : stationInfos) {
+							if (area != null && area.getId() == info.id) {
+								info.addPlatform(platform.getId(), platform.getName(), platform.getDwellTime());
+								break;
+							}
+						}
+					});
+					// 没有站台的站也留在清单里：现场就有这种站，网页上要能看见而不是"凭空消失"
+					final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.plan.MmtrPlanFeed.DepotInfo> depotInfos = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+					simulator.depots.forEach(depot -> depotInfos.add(new org.mtr.core.mmtr.plan.MmtrPlanFeed.DepotInfo(depot.getId(), depot.getName())));
+					simulator.sidings.forEach(siding -> {
+						final org.mtr.core.data.AreaBase<?, ?> area = siding.area;
+						for (final org.mtr.core.mmtr.plan.MmtrPlanFeed.DepotInfo info : depotInfos) {
+							if (area != null && area.getId() == info.id) {
+								info.addSiding(siding.getId(), siding.getName(), simulator.countVehiclesOnSiding(siding.getId()), siding.getRailLength());
+								break;
+							}
+						}
+					});
+					final com.google.gson.JsonObject worldResult = org.mtr.core.mmtr.plan.MmtrPlanFeed.world(stationInfos, depotInfos);
+					worldResult.addProperty("dayTimeMs", simulator.mmtrPlanDayTime());
+					yield worldResult;
+				}
+				case "mmtr-plan-replan" -> {					// 强制滚动重算（网页上的"重新排班"按钮）
+					final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+					final int rebuiltLines = simulator.mmtrForceReplan();
+					out.addProperty("ok", true);
+					out.addProperty("rebuiltLines", rebuiltLines);
+					out.addProperty("configured", !simulator.getMmtrPlanInputs().isEmpty());
+					out.addProperty("problems", simulator.mmtrPlanErrors.size());
+					out.addProperty("message", rebuiltLines > 0 ? "已按当前配置重排 " + rebuiltLines + " 条线路" : "输入没有变化或没有可排的线路");
+					yield out;
 				}
 				case "mmtr-manifest-reset" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();

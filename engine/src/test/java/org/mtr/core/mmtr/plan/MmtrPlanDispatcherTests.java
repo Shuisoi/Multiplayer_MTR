@@ -425,6 +425,31 @@ public final class MmtrPlanDispatcherTests {
 
 	// ---------------------------------------------------------------- P6 ③ 接管
 
+	// ---------------------------------------------------------------- 重建时的冻结快照
+
+	/**
+	 * **重建交路之前**把"每辆车不许动到什么时候"取成快照（notes/147）。
+	 *
+	 * <p>第一版在重建里先 {@code mmtrPlanDispatchers.clear()} 再遍历取，于是那张表**永远是空的**：
+	 * "在途车的当前任务不被重算改动"（P5 验收 ⑤）看起来接好了、实际一次都没生效。
+	 * 现在取快照是独立一步（{@link MmtrPlanAdjustments#frozenSnapshot}），重建改成"建到局部表最后整体换掉"，
+	 * 顺序在结构上就不可能再写反。</p>
+	 */
+	@Test
+	public void theFreezeSnapshotCarriesTheInFlightBoundary() {
+		final MmtrPlanDispatcher d = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final FakeWorld world = new FakeWorld(9001L);
+		world.autoComplete = false;
+
+		assertTrue(MmtrPlanAdjustments.frozenSnapshot(java.util.List.of(d)).isEmpty(), "一步都没派时没有边界（要重排就重排）");
+
+		d.tick(H07, world);
+		final java.util.Map<String, Long> boundaries = d.frozenUntilByConsist();
+		assertFalse(boundaries.isEmpty(), "派出去一步之后，这辆车就有冻结边界了");
+		assertEquals(boundaries, MmtrPlanAdjustments.frozenSnapshot(java.util.List.of(d)), "快照必须原样带出边界（先取后用）");
+		assertTrue(boundaries.get("C1") >= H07, "边界是这辆车正在跑的那一段的结束时刻，不是 0");
+	}
+
 	/**
 	 * ③ **接管只换执行者**（设计 §8.2）：玩家接管后派发器一步不派、交路与任务**一个字节都不改**；
 	 * 归还后**从那一步续行**（不跳步、不从头上再来）。
