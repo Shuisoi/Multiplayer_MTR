@@ -409,12 +409,15 @@ public class Simulator extends Data implements Utilities {
 			log.warn("Failed to load MMTR plan inputs for {}: {}", dimension, e.getMessage());
 		}
 		refreshMmtrPlanErrors();
-		if (!mmtrPlanErrors.isEmpty()) {
+		if (mmtrPlanInputs.isEmpty()) {
+			// 一条都没配 = 这台服务器还没用时刻表（与"配了但有错"分开，见 MmtrPlanInputs#isEmpty）。
+			log.info("MMTR: no plan inputs configured for {} (时刻表生成器未启用)", dimension);
+		} else if (!mmtrPlanErrors.isEmpty()) {
 			log.error("MMTR plan inputs for {} have {} problem(s) - the dispatcher will not schedule until they are fixed:", dimension, mmtrPlanErrors.size());
 			for (final String error : mmtrPlanErrors) {
 				log.error("  - {}", error);
 			}
-		} else if (!mmtrPlanInputs.lines.isEmpty()) {
+		} else {
 			log.info("MMTR: {}", mmtrPlanInputs.describe());
 		}
 
@@ -520,6 +523,9 @@ public class Simulator extends Data implements Utilities {
 	 */
 	public int refreshMmtrPlanErrors() {
 		mmtrPlanErrors.clear();
+		if (mmtrPlanInputs.isEmpty()) {
+			return 0;   // 一条都没配 = 没启用，不是"配置有错"（见 MmtrPlanInputs#isEmpty）
+		}
 		mmtrPlanErrors.addAll(mmtrPlanInputs.validate());
 		return mmtrPlanErrors.size();
 	}

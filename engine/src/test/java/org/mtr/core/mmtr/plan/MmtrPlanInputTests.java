@@ -245,4 +245,17 @@ public final class MmtrPlanInputTests {
 	public void anUnknownRingDoesNotProduceAFalseAlarm() {
 		assertNull(inputs().validateCapacity("L1", 0), "ring 未知 = 1 个就够（不误报）");
 	}
+
+	/**
+	 * "一条都没配"与"配了但有错"必须分得开：前者是**没启用**（不该在启动日志里刷错误），
+	 * 后者才是问题。这条是现场验证接口时发现的（空配置回了"车底为空"）。
+	 */
+	@Test
+	public void anUnconfiguredPlanIsEmptyRatherThanBroken() {
+		assertTrue(new MmtrPlanInputs().isEmpty(), "全新实例 = 未配置");
+		final MmtrPlanInputs onlyLine = new MmtrPlanInputs();
+		onlyLine.putLine(line());
+		assertTrue(!onlyLine.isEmpty(), "只要配了一样东西，就不再是「未配置」");
+		assertTrue(!onlyLine.validate().isEmpty(), "配了一半要照报（这里缺密度表与车底）");
+	}
 }

@@ -115,6 +115,7 @@ public final class SystemMapServlet extends ServletBase {
 					}
 					result.add("errors", errors);
 					result.addProperty("valid", errors.isEmpty());
+					result.addProperty("configured", !simulator.getMmtrPlanInputs().isEmpty());
 					yield result;
 				}
 				case "mmtr-plan-line-upsert" -> {

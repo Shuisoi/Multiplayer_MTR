@@ -184,4 +184,15 @@ public final class MmtrPlanInputs implements SerializedDataBase {
 	public String describe() {
 		return "计划输入：线路 " + lines.size() + " 条 / 密度表 " + patterns.size() + " 张 / " + fleet;
 	}
+
+	/**
+	 * **一条都没配**（没有线路、没有密度表、没有编组）。
+	 *
+	 * <p>与"配了但有错"必须分开：一台还没用时刻表的服务器不该在启动日志里报一堆配置错误 ——
+	 * 那是**假警报**，会让真错误淹没在噪音里（本轮现场验证时接口在空配置下真的报了"车底为空"，
+	 * 于是加了这一条）。</p>
+	 */
+	public boolean isEmpty() {
+		return lines.isEmpty() && patterns.isEmpty() && fleet.consists.isEmpty() && fleet.spares.isEmpty();
+	}
 }
