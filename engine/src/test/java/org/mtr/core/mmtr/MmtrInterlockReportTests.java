@@ -103,10 +103,15 @@ public final class MmtrInterlockReportTests {
 		assertTrue(report.contains("aspects:"), "the aspects of the route's rails are listed: " + report);
 		assertTrue(report.contains("mirror(客户端收窄):"), "the mirrored narrowing is listed: " + report);
 		assertTrue(report.contains("->"), "the mirror shows rail -> next: " + report);
+		// T5：计划/实际对照必须在报告里。这一条用的是 mission dispatch（没有任务时刻），
+		// 所以它应当明确说"无计划 ⇒ 按到达序裁决"，而不是留白让人猜。
+		assertTrue(report.contains("计划/实际:"), "计划/实际对照出现在报告里: " + report);
+		assertTrue(report.contains("无计划"), "没有任务时刻 ⇒ 报告要说清是无计划: " + report);
 
 		final String all = MmtrInterlockReport.describeAll(sim);
 		assertTrue(all.contains("1 条进路"), "describeAll counts the live routes: " + all);
 		assertTrue(all.contains(String.valueOf(vehicle.getId())), "describeAll names the train: " + all);
+		assertTrue(all.contains("计划/实际:"), "T5 describeAll 每一行也带计划/实际对照: " + all);
 
 		assertTrue(MmtrInterlockReport.describe(sim, 404L).contains("找不到车辆"), "unknown ids are reported, not thrown");
 	}

@@ -48,6 +48,9 @@ public final class MmtrInterlockReport {
 		if (!route.isEstablished()) {
 			out.append("\n  PENDING: ").append(route.getStateReason());
 		}
+		// T5：**计划 / 实际**并排 —— 计划时刻来自任务，实际是这条进路被申请的时刻；
+		// 计划若已漂移，冲突裁决里它已经不占先（notes/128 的漂移退化），这里一并标出来。
+		out.append("\n  计划/实际: ").append(describePlan(route));
 
 		// Every turnout the route still needs: who holds it, whether the operator parked it.
 		if (!route.getForks().isEmpty()) {
@@ -107,12 +110,30 @@ public final class MmtrInterlockReport {
 				.append(" entry=").append(shortHex(route.getEntryRailHex()))
 				.append(" target=").append(shortHex(route.getTargetRailHex()))
 				.append(" rails=").append(route.getRailHexes().size())
-				.append(" forks=").append(route.getForks().size());
+				.append(" forks=").append(route.getForks().size())
+				.append(" | 计划/实际: ").append(describePlan(route));
 			if (!route.isEstablished()) {
 				out.append(" | ").append(route.getStateReason());
 			}
 		}
 		return out.toString();
+	}
+
+	/**
+	 * T5 计划/实际对照：{@code plannedMillis} 来自任务（{@code MmtrTask.earliestMs}，作业单步骤带上来），
+	 * {@code requestedMillis} 是这条进路**实际**被申请的时刻。
+	 *
+	 * <p>计划槽早于申请时刻 = **已漂移**，此时它在冲突裁决里已经不占先（notes/128）；报告里必须说清，
+	 * 否则运营台会以为"我计划在先、为什么没先走"是引擎出错。</p>
+	 */
+	private static String describePlan(MmtrRoute route) {
+		final long planned = route.getPlannedMillis();
+		final long requested = route.getRequestedMillis();
+		if (planned == Long.MAX_VALUE) {
+			return "无计划（裁决按到达序）| 实际申请 " + requested;
+		}
+		return "计划 " + planned + " | 实际申请 " + requested
+			+ (planned < requested ? "（已漂移：计划槽早于申请，裁决退回到达序）" : "（计划有效：裁决以计划为先）");
 	}
 
 	private static String shortHex(@Nullable String hex) {
