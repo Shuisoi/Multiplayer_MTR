@@ -52,6 +52,27 @@ public final class MmtrPlanDispatcherTests {
 		return new MmtrPattern("L1").addSegment(H07, H07 + 30 * MIN, 10 * MIN);
 	}
 
+	/**
+	 * **长途线路**（6 站、单程约半小时）：只有这种线路才存在"窗口还没过完、但某一步已经迟到很久"的
+	 * 情形 —— 短线（{@link #line}）的一趟只有 11 分钟，任何超过宽限期的步都必然已经出了窗口，
+	 * 于是"窗口"这条判据在短线上不可观察（见 {@link #aLateStepInsideAnOpenTripWindowIsStillDispatched}）。
+	 */
+	private static MmtrLine longLine() {
+		final MmtrLine line = new MmtrLine("L2", "2 号线（长途）");
+		line.yardSidingId = 43;
+		line.leadTimeMillis = 5 * MIN;
+		line.terminalTreatment = MmtrLine.TerminalTreatment.CHANGE_ENDS;
+		for (int i = 1; i <= 6; i++) {
+			line.addStop(2000 + i, 3000 + i, 60_000);
+		}
+		return line;
+	}
+
+	/** 发车间隔 60 分钟 ≥ 一个往返：一个编组就够（N=1）。 */
+	private static MmtrPattern longPattern() {
+		return new MmtrPattern("L2").addSegment(H07, H07 + 120 * MIN, 60 * MIN);
+	}
+
 	private static MmtrFleet fleet(int consists) {
 		final MmtrFleet fleet = new MmtrFleet();
 		for (int i = 0; i < consists; i++) {
@@ -309,6 +330,42 @@ public final class MmtrPlanDispatcherTests {
 		assertEquals(0, d.dispatchedTotal, "一步都不补跑（设计 §7「过去不可改」）");
 		assertEquals(total, d.skippedSteps, "全部计成跳过：" + d.skippedSteps + "/" + total);
 		assertTrue(world.dispatched.isEmpty(), "世界那边一次都没收到");
+	}
+
+	/**
+	 * **窗口还没过完的步，哪怕迟到超过宽限，也照派**（"迟到不补跑"的边界）。
+	 *
+	 * <p>这条是 P6 接管实测抓出来的（notes/145 §3）：第一版按"这一步的时刻晚了多久"一刀切，
+	 * 玩家把车还回来时，**同一趟的下一步**被判成"错过的班次"吃掉了 —— 车就停在那儿不动。
+	 * 判据改成"**这一趟的窗口过没过去**"：过完了才跳（上面那条），窗口还在就是活的。</p>
+	 *
+	 * <p>反证：把判据换回老语义（迟到就跳），本用例会红 —— 它跳的是 {@code skippedSteps} 不变。</p>
+	 */
+	@Test
+	public void aLateStepInsideAnOpenTripWindowIsStillDispatched() {
+		final MmtrLine line = longLine();
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, longPattern(), fleet(1), TIMES);
+		assertEquals(1, diagram.scheduledWorkings().size(), "一个编组就够（N=1）");
+		final MmtrPlanDispatcher d = new MmtrPlanDispatcher(line, diagram);
+		final FakeWorld world = new FakeWorld(9101L);
+		world.autoComplete = false;   // 派出去的活要手动收工：这样"下一步"总是可以派
+
+		// 06:55 出库、07:00 上客，各收一次工；接下来那一步在 07:04（出站后第一段 4 分钟）
+		d.tick(H07 - 5 * MIN, world);
+		world.complete(9101L);
+		d.tick(H07, world);
+		world.complete(9101L);
+		final MmtrTask next = d.states.get(0).nextTask();
+		assertNotNull(next);
+		final int dispatchedBefore = d.dispatchedTotal;
+		final int skippedBefore = d.skippedSteps;
+
+		// 一直卡到"计划时刻 + 12 分钟"（超过 10 分钟宽限），但那一趟的窗口远没结束
+		d.tick(next.dueMs + 12 * MIN, world);
+		assertFalse(d.isComplete(), "这一天还长着（窗口没结束）");
+		assertEquals(skippedBefore, d.skippedSteps, "窗口还在的步不许当成'错过的班次'吃掉：" + d);
+		assertEquals(dispatchedBefore + 1, d.dispatchedTotal, "照派（只是晚了）：" + d);
+		assertEquals(9101L, world.dispatchedTo.get(world.dispatchedTo.size() - 1), "还是这辆车");
 	}
 
 	// ---------------------------------------------------------------- 一辆车跑一整趟

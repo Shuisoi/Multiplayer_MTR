@@ -120,6 +120,45 @@ public final class MmtrPlanDispatcher {
 		return player ? playerDriven.add(consistId) : playerDriven.remove(consistId);
 	}
 
+	/**
+	 * **这一步所属的那一趟车，窗口过没过去**（"迟到不补跑"只对窗口已过的步生效）。
+	 *
+	 * <p>为什么要有这条：P4 的"迟到不补跑"（§7 过去不可改）说的是**整趟都错过了**的班次不该补跑；
+	 * 但一趟车中间那些步（到站、停站、换端）**不能跳** —— 跳了就等于这趟车不停那一站。
+	 * 这条规则是被 P6 的接管用例逼出来的：玩家 07:00 接手、07:05 还回来时，
+	 * 归还后那一步被判成"错过的班次"吃掉了（notes/145 §3），而它其实只是**同一趟的下一步**。</p>
+	 *
+	 * <p>判据：找到这一步所属的**交路条目**（按计划时刻落在哪个条目的时间窗里），
+	 * 只看**那个条目本身过没过完**（{@code dayTimeMillis > entry.endMillis}）：
+	 * 过完了 ⇒ 这一趟今天已经不成立，它的步逐步跳过（半路开机不会补跑上午的班）；
+	 * 窗口还在（或还没到）⇒ 这一步是**活的**，晚几分钟也照派。</p>
+	 *
+	 * <p>换句话说：**错过的是"这一趟的窗口"，不是"某一步的时刻"** —— 这正是第一版
+	 * （只跳"一趟的发车"、中趟的步永不跳）会把错过的整趟车照跑一遍的原因。</p>
+	 */
+	private boolean theTripWindowIsOver(WorkingState state, MmtrTask task, long dayTimeMillis) {
+		final MmtrDiagram.Working working = workingOf(state.consistId);
+		if (working == null) {
+			return true;   // 查不到交路（理论上不该）→ 退回老语义：迟到就跳过
+		}
+		MmtrDiagram.Entry containing = null;
+		for (final MmtrDiagram.Entry entry : working.entries) {
+			if (task.dueMs >= entry.startMillis && task.dueMs <= entry.endMillis) {
+				containing = entry;
+			}
+		}
+		return containing == null || dayTimeMillis > containing.endMillis;
+	}
+
+	private MmtrDiagram.@Nullable Working workingOf(String consistId) {
+		for (final MmtrDiagram.Working working : diagram.workings) {
+			if (working.consistId.equals(consistId)) {
+				return working;
+			}
+		}
+		return null;
+	}
+
 	public boolean isPlayerDriven(String consistId) {
 		return playerDriven.contains(consistId);
 	}
@@ -193,8 +232,10 @@ public final class MmtrPlanDispatcher {
 			if (dayTimeMillis < task.earliestMs) {
 				continue;   // 还没到点
 			}
-			if (dayTimeMillis - task.earliestMs > LATE_GRACE_MILLIS) {
-				// 过时了：不补跑（设计 §7「过去不可改」），跳过这一步继续看下一步
+			if (dayTimeMillis - task.earliestMs > LATE_GRACE_MILLIS && theTripWindowIsOver(state, task, dayTimeMillis)) {
+				// 过时了，而且**这一趟的窗口已经过完**：不补跑（设计 §7「过去不可改」），跳过继续看下一步。
+				// 窗口还在的步不走这条路 —— 那是"同一趟的下一步"，跳了就等于这趟车不停那一站
+				// （见 theTripWindowIsOver；玩家接管后归还就是这种情形）。
 				state.dispatchedSteps++;
 				skippedSteps++;
 				continue;
