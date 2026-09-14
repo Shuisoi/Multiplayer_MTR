@@ -411,14 +411,20 @@ public class Simulator extends Data implements Utilities {
 		refreshMmtrPlanErrors();
 		if (mmtrPlanInputs.isEmpty()) {
 			// 一条都没配 = 这台服务器还没用时刻表（与"配了但有错"分开，见 MmtrPlanInputs#isEmpty）。
-			log.info("MMTR: no plan inputs configured for {} (时刻表生成器未启用)", dimension);
+			System.out.println("[MMTR-PLAN] 未配置时刻表输入（线路/密度/车底都是空的）—— 生成器未启用");
 		} else if (!mmtrPlanErrors.isEmpty()) {
-			log.error("MMTR plan inputs for {} have {} problem(s) - the dispatcher will not schedule until they are fixed:", dimension, mmtrPlanErrors.size());
+			/*
+			 * **加载即报错**（设计 §4.3）必须看得见：引擎自己的 log.info/log.error 不进服务端控制台，
+			 * 而操作者看的就是服务端日志。所以问题逐行走 System.out（与 [MMTR-PT]/[MMTR-SIG] 同一套路），
+			 * log.error 再留一份给日志文件。
+			 */
+			System.out.println("[MMTR-PLAN] 计划输入有 " + mmtrPlanErrors.size() + " 处问题，派发器在修好之前不排班：");
 			for (final String error : mmtrPlanErrors) {
-				log.error("  - {}", error);
+				System.out.println("[MMTR-PLAN]   - " + error);
+				log.error("MMTR plan input problem for {}: {}", dimension, error);
 			}
 		} else {
-			log.info("MMTR: {}", mmtrPlanInputs.describe());
+			System.out.println("[MMTR-PLAN] " + mmtrPlanInputs.describe());
 		}
 
 		if (!mmtrJobRegistry.jobs.isEmpty()) {
