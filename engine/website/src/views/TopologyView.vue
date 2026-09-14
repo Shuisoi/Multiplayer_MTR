@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, nextTick, onMounted, ref, useTemplateRef, watch} from "vue";
+import {computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch} from "vue";
 import {NModal, useMessage} from "naive-ui";
 import MapCanvas from "@/components/MapCanvas.vue";
 import CommandConsole from "@/components/CommandConsole.vue";
@@ -24,8 +24,11 @@ import type {Camera} from "@/domain/camera";
  * 连线按用户规则画：x 或 z 任一相同 → 直线，其余 → 曲线（见 `domain/railGeometry.ts`）。
  * 信号灯的状态（红/单黄/双黄/绿）由引擎的闭塞层给出，前端只显示，不重算。</p>
  *
- * <p>不做轮询：拓扑是"世界改了才会变"的东西，默认取一次 + 手动刷新。
- * 需要自动跟随的时候应当由服务端给出一个版本号，前端比版本号再决定要不要重取。</p>
+ * <p>取数：打开页面时读一次（拓扑 + 灯 + 道岔），之后由用户手动「重新读取」。
+ * 需要"坐在屏幕前看车走、灯跟着变"的时候打开 HUD 上的**自动刷新**开关（默认关，
+ * 见下方 `AUTO_REFRESH_MILLIS`）：它只按拍重读灯与道岔这两份会变的小数据。
+ * 拓扑本身是"世界改了才会变"的东西，不跟着轮询；真要自动跟随也应当由服务端给版本号，
+ * 前端比版本号再决定要不要重取。</p>
  */
 
 const canvas = useTemplateRef<InstanceType<typeof MapCanvas>>("canvas");
@@ -77,6 +80,65 @@ const scanState = ref<"idle" | "scanning">("idle");
 /** 上一次扫描的结果（HUD 上给一句实情，而不是让用户猜"到底登记全没全"）。 */
 const lastScan = ref("");
 
+/*
+ * **自动刷新（默认关）**：用户 2026-09-14 的现场问题——"车开出去以后灯为什么还是绿的"。
+ *
+ * <p>根因不是引擎：这个页面**从来不轮询**（全站没有 setInterval / SSE / WebSocket），
+ * `load()` 只在打开页面与用户操作之后各读一次。所以页面上的 aspect 是"上次读取那一刻"的快照，
+ * 引擎早就逐 tick 更新过了 —— 实测：车头 `(-169.5,-198.5)` 已经在区间里、引擎报红，
+ * 而页面那一帧还是绿的。</p>
+ *
+ * <p>约定：**默认关**（保持既有行为不变，也不平白多打接口），开关状态记在 localStorage；
+ * 打开后每 {@link AUTO_REFRESH_MILLIS} 只重读**信号灯与道岔**这两份小数据（不重取拓扑、
+ * 不重建轨图），所以地图不会闪、相机也不会动。</p>
+ */
+const AUTO_REFRESH_MILLIS = 3000;
+const AUTO_REFRESH_STORAGE_KEY = "mmtr.topology.autoRefresh";
+const autoRefresh = ref(false);
+let autoRefreshTimer: number | null = null;
+
+/** 轻量重读：只更新"会变的那两份"（aspect / 道岔位置），失败就悄悄跳过（下一拍再试）。 */
+async function refreshLive() {
+	try {
+		const [lamps, switches] = await Promise.all([fetchSignals(), fetchPoints()]);
+		signals.value = lamps;
+		points.value = switches;
+	} catch {
+		// 一次没读到不算错误：轮询本来就会再来一次，报错弹窗只会打扰人
+	}
+}
+
+function stopAutoRefresh() {
+	if (autoRefreshTimer !== null) {
+		window.clearInterval(autoRefreshTimer);
+		autoRefreshTimer = null;
+	}
+}
+
+function startAutoRefresh() {
+	stopAutoRefresh();
+	autoRefreshTimer = window.setInterval(refreshLive, AUTO_REFRESH_MILLIS);
+	void refreshLive();
+}
+
+function setAutoRefresh(on: boolean) {
+	autoRefresh.value = on;
+	try {
+		window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, on ? "1" : "0");
+	} catch {
+		// 隐私模式下 localStorage 可能被拒：开关照样生效，只是记不住
+	}
+	if (on) {
+		startAutoRefresh();
+	} else {
+		stopAutoRefresh();
+	}
+}
+
+function toggleAutoRefresh() {
+	setAutoRefresh(!autoRefresh.value);
+}
+
 async function loadWithScan() {
 	await load();
 	scanState.value = "scanning";
@@ -98,7 +160,34 @@ async function loadWithScan() {
 	}
 }
 
-onMounted(loadWithScan);
+/**
+ * 记住上次的开关状态：默认关。
+ *
+ * <p>只读 `"1"` 才算开——localStorage 里可能是别的页面写的脏值（或用户手改过），
+ * 这里不猜语义，读不出"1"就当关。</p>
+ *
+ * <p>顺序上放在首次读取**之后**：恢复成"开"会立刻多读一拍（灯 + 道岔），
+ * 刚 `load()` 完再抓一次是白抓，等首屏数据落地再起表。</p>
+ */
+function restoreAutoRefreshPreference() {
+	let stored: string | null = null;
+	try {
+		stored = window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
+	} catch {
+		// 隐私模式下读不到：按默认关处理
+	}
+	if (stored === "1") {
+		setAutoRefresh(true);
+	}
+}
+
+onMounted(async () => {
+	await loadWithScan();
+	restoreAutoRefreshPreference();
+});
+
+// 离开这个视图必须停表：定时器不属于组件生命周期，不显式停就会在后台一直打接口
+onUnmounted(stopAutoRefresh);
 
 /**
  * 画在地图上的道岔标记：**一处物理道岔只画一个**。
@@ -511,8 +600,21 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 					· 地图上琥珀色加粗的那条轨就是它 · 点腿按钮换向
 				</span>
 			</span>
-			<button class="action" type="button" @click="canvas?.focusPoints()">看道岔</button>			<button class="action" type="button" @click="canvas?.focusSignals()">看信号灯</button>
+			<button class="action" type="button" @click="canvas?.focusPoints()">看道岔</button>
+			<button class="action" type="button" @click="canvas?.focusSignals()">看信号灯</button>
 			<button class="action" type="button" @click="loadWithScan">重新读取</button>
+			<!-- 自动刷新：默认关。开着的时候按拍重读灯与道岔，屏幕上的 aspect 才跟得上车走 -->
+			<button
+				class="action"
+				:class="{ active: autoRefresh }"
+				type="button"
+				:title="autoRefresh
+					? `每 ${AUTO_REFRESH_MILLIS / 1000} 秒重读信号灯与道岔（拓扑不重取）`
+					: '打开后屏幕上的灯与道岔会自己跟着世界更新（默认关，只重读灯与道岔）'"
+				@click="toggleAutoRefresh"
+			>
+				自动刷新 {{ autoRefresh ? "开" : "关" }}
+			</button>
 			<button class="action" type="button" @click="canvas?.fit()">重置视图</button>
 		</div>
 
@@ -679,6 +781,12 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 .action:hover {
 	color: var(--fg);
 	border-color: #4a4a4a;
+}
+
+/* 自动刷新开着：用道岔那套琥珀色，跟"这个按钮现在是生效状态"对上 */
+.action.active {
+	color: #f59e0b;
+	border-color: #f59e0b;
 }
 
 .panel {
