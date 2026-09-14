@@ -27,9 +27,37 @@ public final class MmtrPointAuthorityTests {
 		return new MmtrPointAuthority(clock::get);
 	}
 
+	/**
+	 * **等太久的车让位**这条时间策略（notes/149 现场）。
+	 *
+	 * <p>现场：一台车按着道岔的位置 1（它自己也在等别的东西、停着不动），另外两台排在这处要位置 0 ——
+	 * 三台车一起僵在咽喉里，库里六台车一台都出不去。道岔只有一个位置，解环必须有一方先退：
+	 * 车辆侧等过 {@link MmtrPointAuthority#MMTR_TURNOUT_YIELD_MILLIS} 就 {@code releaseAll} 掉自己
+	 * 在道岔层的全部持有与排队，并静默同样长的一段时间（否则两台车同时让位、同时再申请，谁也拿不到）。
+	 *
+	 * <p>红证：把 {@code shouldYieldForOthers} 的比较改反（或阈值改 0）本用例就红 —— 这条规则错了只有两种
+	 * 后果：**该让的不让**（僵局照旧）或**不该让的乱让**（前车正在过岔也被自己的车让掉，位置来回翻）。</p>
+	 */
 	@Test
-	public void lockParksPointForManualUseAndUnlockGrantsFifoHead() {
-		final AtomicLong clock = new AtomicLong(1000);
+	public void aTrainYieldsTheTurnoutOnlyAfterWaitingLongEnough() {
+		final long threshold = MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
+		final long start = 1_000_000L;
+
+		assertFalse(MmtrPointAuthority.shouldYieldForOthers(start, 0, 0), "没在等就不该让位");
+		assertFalse(MmtrPointAuthority.shouldYieldForOthers(start + threshold - 1, start, 0),
+			"还差一毫秒：正常等待（前车正在过岔）不许让位");
+		assertTrue(MmtrPointAuthority.shouldYieldForOthers(start + threshold, start, 0), "等够了就让位");
+		assertTrue(MmtrPointAuthority.shouldYieldForOthers(start + threshold * 3, start, 0), "一直等就一直该让");
+
+		// 让位后的静默窗口：窗口里即使"等够了"也不再让（否则两台车会同时让、同时抢）
+		assertFalse(MmtrPointAuthority.shouldYieldForOthers(start + threshold, start, start + threshold * 2),
+			"让位窗口里不再让位");
+		assertTrue(MmtrPointAuthority.shouldYieldForOthers(start + threshold * 2, start, start + threshold * 2),
+			"窗口一过，重新按「等够了」算（waitSince 由调用方归零，这里给的是最保守的输入）");
+	}
+
+	@Test
+	public void lockParksPointForManualUseAndUnlockGrantsFifoHead() {		final AtomicLong clock = new AtomicLong(1000);
 		final MmtrPointAuthority a = authority(clock);
 		a.lock(0, 0, 0, VIA);
 		assertTrue(a.isLocked(0, 0, 0, VIA), "point parked by the operator");

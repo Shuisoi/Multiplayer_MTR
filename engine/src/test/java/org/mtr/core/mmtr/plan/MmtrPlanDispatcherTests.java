@@ -534,6 +534,47 @@ public final class MmtrPlanDispatcherTests {
 		assertEquals(0, second.retryCount, "也不该记成重试（车跑的是我自己的活）");
 	}
 
+	/** 同一份定义、但**第一站的站台不同**（任务 id 一样 `L1/C1/001`，去的地方不同）。 */
+	private static MmtrPlanDispatcher dispatcherWithOtherFirstPlatform(long platformId) {
+		final MmtrLine line = new MmtrLine("L1", "1 号线（改了站台）");
+		line.yardSidingId = 42;
+		line.leadTimeMillis = 5 * MIN;
+		line.terminalTreatment = MmtrLine.TerminalTreatment.CHANGE_ENDS;
+		line.addStop(1001, platformId, 30_000);
+		line.addStop(1002, 2002, 45_000);
+		line.addStop(1003, 2003, 30_000);
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, shortPattern(), fleet(1), TIMES);
+		return new MmtrPlanDispatcher(line, diagram);
+	}
+
+	/**
+	 * **同一个任务 id，去的地方变了 ⇒ 不许交接**（notes/150："没在跑当前版本的任务"）。
+	 *
+	 * <p>交接只对任务 id 的话，车会继续开向新计划已经不想要的目标 —— 改站台、改折返点、
+	 * 事件把某一段挪到别的股道，都会踩这个坑。目标（类型 + id + 任务种类）变了就收回重派；
+	 * **时刻变了不算**（车已经在路上，"过去不可改"）。</p>
+	 *
+	 * <p>红证：去掉目标比对（只按 id 交接），本用例会看到"接上了、车没交回"。</p>
+	 */
+	@Test
+	public void aStepWhoseDestinationChangedIsNotAdopted() {
+		final MmtrPlanDispatcher first = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final FakeWorld world = new FakeWorld(9001L);
+		world.autoComplete = false;
+		first.tick(H07 - 5 * MIN, world);
+		assertEquals(9001L, first.states.get(0).vehicleId);
+		final String inFlight = first.states.get(0).awaitingTaskId;
+		assertFalse(inFlight.isEmpty());
+
+		// 新一代：同样的线路与编组（任务 id 相同），但第一站的**站台换了** ⇒ 目标不同
+		final MmtrPlanDispatcher second = dispatcherWithOtherFirstPlatform(9999L);
+		assertTrue(second.states.get(0).tasks.get(0).taskId.equals(inFlight), "任务 id 必须是一样的（这正是危险之处）");
+		final var orphaned = second.adoptFrom(first, world.check());
+		assertEquals(1, orphaned.size(), "目标变了 ⇒ 不能交接，要把车交回来：" + orphaned);
+		assertEquals(0, second.states.get(0).vehicleId, "不许接着开旧目标");
+		assertEquals("", second.states.get(0).awaitingTaskId);
+	}
+
 	/**
 	 * **接一台已经不存在的车 = 一台车都不动**（notes/149 第二轮现场）。
 	 *
@@ -586,6 +627,36 @@ public final class MmtrPlanDispatcherTests {
 		assertFalse(world.releaseTask(vehicle, "L1/C1/999"), "不是这一步 ⇒ 不动");
 		assertTrue(world.releaseTask(vehicle, taskId), "就是这一步 ⇒ 收回来");
 		assertTrue(world.released.contains(taskId));
+	}
+
+	// ---------------------------------------------------------------- 任务能不能被派出去
+
+	/**
+	 * **计划里的终点步骤必须真的派得出去**（notes/150）。
+	 *
+	 * <p>现场：交路的最后一步是换端，而它按设计没有目标 —— 派发路径却要求"有目标才派"，
+	 * 于是这一步永远派不出去、派发器在终点一直重试（重试数在涨），整条交路停住。
+	 * 这个用例把"计划展开出来的终点任务是可派的"钉在计划层：换端是**原地动作**，允许没有目标。</p>
+	 */
+	@Test
+	public void theTerminalChangeEndsStepCanBeHandedToATrain() {
+		final MmtrPlanDispatcher d = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final var tasks = d.states.get(0).tasks;
+
+		MmtrTask changeEnds = null;
+		for (int i = 0; i < tasks.size(); i++) {
+			if (tasks.get(i).kind() == MmtrTaskKind.CHANGE_ENDS) {
+				changeEnds = tasks.get(i);
+			}
+		}
+		assertNotNull(changeEnds, "一趟往返里应当有换端的步骤（共 " + tasks.size() + " 步）");
+		assertEquals(0, changeEnds.targetRef, "换端是原地动作，没有目标");
+		assertTrue(changeEnds.inPlace(), "换端必须被认成原地动作");
+		assertTrue(changeEnds.dispatchable(), "没有目标也要派得出去（修前这一步永远派不出去）");
+
+		// 而真正要开走的那一步仍然必须有目标
+		assertTrue(tasks.get(0).dispatchable(), "出库那一步有目标");
+		assertFalse(tasks.get(0).inPlace(), "出库不是原地动作");
 	}
 
 	/**

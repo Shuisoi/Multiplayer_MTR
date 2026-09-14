@@ -56,6 +56,27 @@ public abstract class MmtrTask {
 		return "目标对象类型应为 " + required + "，实际 " + targetKind + "（task " + taskId + "）";
 	}
 
+	/**
+	 * **这一步是"原地动作"吗**（没有要去的地方，动手就行）。
+	 *
+	 * <p>为什么需要这个区分（notes/150）：派发路径原来一律要求"有目标才派得出去"
+	 * （{@code Simulator.dispatchTask} 里 {@code targetRef == 0} 直接返回 false）—— 而
+	 * {@link ChangeEndsTask} 按设计**故意没有目标**（换端是司机走到另一端，车一动不动）。
+	 * 两条规矩撞在一起的结果是：计划里的换端那一步**永远派不出去**，派发器在终点一直重试、
+	 * 整条交路停在那里，而接口上只能看到"重试数在涨"，看不出是哪一步的问题。</p>
+	 *
+	 * <p>所以"能不能派"的判据改成"有目标**或**是原地动作"（{@link #dispatchable()}）；
+	 * 原地动作到点之后由 {@code Vehicle} 侧的**任务执行器**动手（换端 = 翻司机台方向）。</p>
+	 */
+	public boolean inPlace() {
+		return false;
+	}
+
+	/** 这一步现在有没有被派出去的条件：有目标，或者是原地动作（不需要目标）。 */
+	public boolean dispatchable() {
+		return targetRef != 0 || inPlace();
+	}
+
 	public abstract MmtrTaskKind kind();
 
 	/** Human/timetable one-liner, e.g. "开往 5 站台(到 07:05)". */

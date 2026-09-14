@@ -612,6 +612,34 @@ public final class MmtrPointAuthority {
 		return locks.contains(key(x, y, z, viaRailHex));
 	}
 
+	/**
+	 * **等道岔等多久就主动让位**（notes/149 现场）。
+	 *
+	 * <p>为什么需要一条时间策略：道岔的持有关系**跨 tick 存活**，而释放只发生在越岔/换路的时候 ——
+	 * 一台自己也不动的车会一直按着某个位置，另一台要互斥位置的车永远等不到，几台车一起僵在咽喉里
+	 * （现场：一台按着 (-170,-60,-186) 的位置 1，另外两台排在这处要位置 0，车场里六台车一台都出不去）。
+	 * 道岔只有一个位置，解环必须有一方先退。</p>
+	 *
+	 * <p>退多久：{@value #MMTR_TURNOUT_YIELD_MILLIS} 毫秒。短了会把"前车正在过岔"这种正常等待
+	 * 误判成僵局（让位反而添乱），长了操作者会觉得"它就是不动"。让位之后还要**静默同样长的一段时间**，
+	 * 否则两台车会同时让位、同时再申请，谁也拿不到。</p>
+	 */
+	public static final long MMTR_TURNOUT_YIELD_MILLIS = 20_000L;
+
+	/**
+	 * 该不该让位：等够了、且不在上一次让位的静默窗口里。
+	 *
+	 * @param now              现在（毫秒）
+	 * @param waitSinceMillis  从什么时候开始等（0 = 没在等）
+	 * @param yieldUntilMillis 让位静默窗口到什么时候（0 = 不在窗口里）
+	 */
+	public static boolean shouldYieldForOthers(long now, long waitSinceMillis, long yieldUntilMillis) {
+		if (waitSinceMillis == 0 || now < yieldUntilMillis) {
+			return false;
+		}
+		return now - waitSinceMillis >= MMTR_TURNOUT_YIELD_MILLIS;
+	}
+
 	/** Operator releases the park: the longest-waiting auto request takes the point. */
 	public void unlock(long x, long y, long z, String viaRailHex) {
 		final String k = key(x, y, z, viaRailHex);
@@ -794,6 +822,7 @@ public final class MmtrPointAuthority {
 		physicalHolders.put(nk, new Physical(owner, position, holder.untilMillis));
 		return true;
 	}
+
 
 	/** Whether this node carries a physical turnout (false when the layer is unwired). */
 	public boolean hasTurnout(long x, long y, long z) {

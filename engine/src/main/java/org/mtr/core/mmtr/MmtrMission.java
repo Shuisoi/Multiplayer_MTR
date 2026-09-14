@@ -55,6 +55,28 @@ public final class MmtrMission {
 		this.task = task;
 	}
 
+	/**
+	 * **原地动作的目的轨**（notes/150）。
+	 *
+	 * <p>换端这类任务按设计没有目标对象（车一动不动），可任务生命周期又需要"有没有到位"这件事 ——
+	 * 于是派车时把**车此刻所在的那根轨**记下来当目的轨：车已经在目标轨上 ⇒ 立刻"到位"，
+	 * 生命周期照常（已派→到点→完成），真正动手的是车辆侧的原地动作执行器。</p>
+	 */
+	private String inPlaceTargetRailHex = "";
+
+	public void setInPlaceTargetRailHex(String railHex) {
+		inPlaceTargetRailHex = railHex == null ? "" : railHex;
+	}
+
+	/** 这是一次**原地动作**（没有目的地：目的轨就是车现在所在的那根轨）。 */
+	public boolean isInPlace() {
+		return task != null && task.inPlace();
+	}
+
+	public String getInPlaceTargetRailHex() {
+		return inPlaceTargetRailHex;
+	}
+
 	@Nullable
 	public MmtrTask getTask() {
 		return task;

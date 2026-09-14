@@ -250,6 +250,16 @@ public final class MmtrPlanDispatcher {
 				next.awaitingTaskId = "";
 				next.dispatchedSteps = 0;
 				next.vehicleId = 0;
+			} else if (!sameTarget(old, next.tasks.get(index), old.awaitingTaskId)) {
+				/*
+				 * **同一个任务 id，去的地方变了**（notes/150）：交接只看 id 的话，车会继续开向
+				 * 新计划已经不想要的目标 —— 这正是"没在跑当前版本的任务"。目标变了就收回重派，
+				 * 时刻变了不算（车已经在路上，"过去不可改"）。
+				 */
+				orphaned.add(old.vehicleId);
+				next.awaitingTaskId = "";
+				next.dispatchedSteps = 0;
+				next.vehicleId = 0;
 			} else {
 				// 接上：那一步已经派出去并且还没跑完 ⇒ 已派步数至少到它这里
 				next.dispatchedSteps = Math.max(next.dispatchedSteps, index + 1);
@@ -276,6 +286,18 @@ public final class MmtrPlanDispatcher {
 			}
 		}
 		return -1;
+	}
+
+	/** 上一代在等的那一步与新一代同名的那一步，**去的地方一样吗**（目标类型 + 目标 id）。 */
+	private static boolean sameTarget(WorkingState old, MmtrTask nextTask, String taskId) {
+		for (int i = 0; i < old.tasks.size(); i++) {
+			final MmtrTask oldTask = old.tasks.get(i);
+			if (oldTask.taskId.equals(taskId)) {
+				return oldTask.targetRef == nextTask.targetRef && oldTask.targetKind.equals(nextTask.targetKind)
+					&& oldTask.kind() == nextTask.kind();
+			}
+		}
+		return false;
 	}
 
 	/**

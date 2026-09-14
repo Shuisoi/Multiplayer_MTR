@@ -90,6 +90,28 @@ public final class MmtrTaskTests {
 		assertEquals(DUE, task.dueMs, "the timetable still carries the planned moment");
 	}
 
+	/**
+	 * **没有目标 ≠ 派不出去**（notes/150）。
+	 *
+	 * <p>现场：计划里的换端步骤在终点**永远派不出去** —— 派发路径要求 {@code targetRef != 0}，
+	 * 而换端按设计没有目标。派发器只会一直重试（重试数在涨），整条交路停在终点，界面上看不出是哪一步。
+	 * 判据因此改成"有目标 **或** 是原地动作"。</p>
+	 *
+	 * <p>红证：把 {@link MmtrTask#dispatchable()} 改回 {@code targetRef != 0}，本用例第一段就红。</p>
+	 */
+	@Test
+	public void anInPlaceTaskIsDispatchableWithoutATarget() {
+		final ChangeEndsTask changeEnds = new ChangeEndsTask("c1", DUE);
+		assertTrue(changeEnds.inPlace(), "换端是原地动作");
+		assertTrue(changeEnds.dispatchable(), "原地动作没有目标也派得出去");
+
+		// 反过来：真有目标要走、却偏偏没给目标的任务，不许放出去（否则车会"开到 0 号目标"）
+		final DriveToPlatformTask noTarget = new DriveToPlatformTask("d1", 0, DUE);
+		assertFalse(noTarget.inPlace());
+		assertFalse(noTarget.dispatchable(), "要开走却没有目标 ⇒ 不能派");
+		assertTrue(new DriveToPlatformTask("d2", 1234, DUE).dispatchable(), "有目标的照常派");
+	}
+
 	@Test
 	public void everyConcreteTaskDescribesItself() {
 		for (final MmtrTask task : new MmtrTask[]{

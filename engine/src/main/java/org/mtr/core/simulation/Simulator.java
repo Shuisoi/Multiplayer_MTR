@@ -992,17 +992,26 @@ public class Simulator extends Data implements Utilities {
 				return false;
 			}
 			final long targetId = task.targetRef;
-			if (targetId == 0) {
+			if (!task.dispatchable()) {
+				// 没有目标、又不是原地动作 ⇒ 派不出去（原地动作如"换端"没有目标，见 MmtrTask#inPlace）
 				return false;
 			}
 			final boolean targetIsPlatform = task.targetKind.equals(org.mtr.core.mmtr.task.MmtrTask.TARGET_PLATFORM)
 				|| task.kind() == org.mtr.core.mmtr.task.MmtrTaskKind.DRIVE_TO_PLATFORM
 				|| task.kind() == org.mtr.core.mmtr.task.MmtrTaskKind.STATION_SERVICE;
+			/*
+			 * 原地动作（换端）：没有要去的地方，目的轨就是**车此刻所在的那根轨** ——
+			 * 于是任务生命周期照常走（已到位 → 到点 → 完成），而"动手"由车辆侧的执行器做。
+			 */
+			final String targetRailHex = task.targetRef == 0
+				? (vehicle.getMmtrMotionWalker() == null ? "" : vehicle.getMmtrMotionWalker().railHex())
+				: "";
 			final org.mtr.core.mmtr.MmtrMission.Kind kind = targetIsPlatform
 				? org.mtr.core.mmtr.MmtrMission.Kind.PASSENGER : org.mtr.core.mmtr.MmtrMission.Kind.MANEUVER;
 			final org.mtr.core.mmtr.MmtrMission mission = new org.mtr.core.mmtr.MmtrMission(
 				vehicleId, kind, vehicle.getMmtrMission() == null ? 0 : vehicle.getMmtrMission().getTargetSidingId(), targetId, getCurrentMillis());
 			mission.attachTask(task);
+			mission.setInPlaceTargetRailHex(targetRailHex);
 			if (!vehicle.setMmtrMission(mission)) {
 				return false;
 			}

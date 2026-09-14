@@ -21,6 +21,17 @@ public final class ChangeEndsTask extends MmtrTask {
 		return "";
 	}
 
+	/**
+	 * 换端是**原地动作**（notes/150）：没有目标对象，但**派得出去**（判据 {@link MmtrTask#dispatchable()}）。
+	 *
+	 * <p>执行在车辆侧：到点停稳 → 翻司机台方向（{@code Vehicle.changeEndsMmtrMotion}）。
+	 * 修前没有这条：计划里的换端步骤既派不出去、也没人执行，交路一到终点就停住。</p>
+	 */
+	@Override
+	public boolean inPlace() {
+		return true;
+	}
+
 	@Override
 	public MmtrTaskKind kind() {
 		return MmtrTaskKind.CHANGE_ENDS;

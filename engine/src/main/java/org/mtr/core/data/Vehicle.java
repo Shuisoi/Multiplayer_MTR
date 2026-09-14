@@ -308,6 +308,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private static final double MMTR_SECTION_ARC_EPS_M = 0.05;
 	private static long mmtrLastTurnoutWaitLogMillis;
+	/** 本车从什么时候开始等道岔（0 = 没在等）；等太久就按 {@code MmtrPointAuthority#shouldYieldForOthers} 让位。 */
+	private long mmtrTurnoutWaitSinceMillis;
+	/** 让位窗口到什么时候：窗口里连申请都不发，确保对方能拿到位置。 */
+	private long mmtrTurnoutYieldUntilMillis;
+	/** 当前任务的动作**做过了没有**（换端这类原地动作一次任务只做一次）。 */
+	private boolean mmtrTaskActionDone;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -394,6 +400,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * assigning over an existing active mission fails (callers should cancel first).
 	 */
 	public boolean setMmtrMission(@Nullable MmtrMission mission) {
+		// 换了任务就重新开始记"动作做过了没有"（notes/150）
+		mmtrTaskActionDone = false;
 		if (mission == null) {
 			mmtrMission = null;
 			return true;
@@ -509,6 +517,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			&& !(mission.getExecutor() == MmtrMission.Executor.PLAYER && mmtrPlayerRoutePublished)) {
 			mmtrMotionSelfArmMission(simulator, mission);
 		}
+		/*
+		 * **已经上电、却长时间不动的车也要让位**（notes/149 第二轮现场）。
+		 *
+		 * 第一版把让位只放在"自臂失败"那条路上 —— 于是真正按着道岔的那台车（它自臂成功了、`motionAuto=true`，
+		 * 卡在后面的信号/道岔上不动）**从来不进那个分支**，只有别的车在让，僵局照旧。
+		 * 现在的判据是"停着不动 + 手里还按着道岔"：停着的车本来就不在用那处道岔，放掉它、让要用的车先过。
+		 */
+		if (motionMission && data instanceof final Simulator stuckSimulator) {
+			mmtrYieldTurnoutsWhenStuck(stuckSimulator);
+		}
+		/*
+		 * **任务语义的执行者**（notes/150）。
+		 *
+		 * 任务不只是一张"开到某个目标"的指令：换端（CHANGE_ENDS）是**原地动作**，没有目的地，
+		 * 得有人在车停稳之后把司机台翻到另一端。修前没有人做这件事 —— 任务被造出来、被挂到车上、
+		 * 被日志打出来，就是没人执行它的动作（`task.kind()` 在计划包之外只被用来判"是不是站台目标"）。
+		 */
+		mmtrRunInPlaceTaskAction(mission);
 		switch (mission.getState()) {
 			case ASSIGNED:
 				// The consist started moving (left the depot / began its run) => dispatched.
@@ -589,6 +615,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 */
 	private void mmtrMotionSelfArmMission(Simulator simulator, MmtrMission mission) {
 		final long targetSidingId = mission.getTargetSidingId();
+		/*
+		 * **原地动作**（换端等）：没有要去的地方 —— 车就在它的目的轨上。
+		 *
+		 * 于是这里不规划、不申请道岔，只把任务生命周期推进到"到点"；真正动手的是
+		 * {@link #mmtrRunInPlaceTaskAction}（在 tick 里、到点停稳之后执行一次）。
+		 * 修前这条路直接 fail（"motion missions need an explicit target"），
+		 * 而计划里的换端步骤本来就没有目标 ⇒ 交路一到终点就停住（notes/150）。
+		 */
+		if (mission.isInPlace()) {
+			if (mission.getState() == MmtrMission.State.ASSIGNED) {
+				mission.dispatch();
+			}
+			if (mission.getState() == MmtrMission.State.DISPATCHED && speed <= 1e-9) {
+				mission.atTarget();
+				mmtrMissionTargetArrivedMillis = data.getCurrentMillis();
+			}
+			return;
+		}
 		if (targetSidingId == 0) {
 			mission.fail("motion missions need an explicit target platform/siding id");
 			return;
@@ -650,6 +694,30 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// / the other train's release); nothing auto-elects around a busy point. Report the wait
 			// at most every few seconds - several waiting trains would otherwise log every tick.
 			final long now = System.currentTimeMillis();
+			/*
+			 * **等太久就让位**（notes/149 现场）：道岔的持有关系跨 tick 存活，而释放只发生在越岔/换路时 ——
+			 * 一台自己也不动的车会一直按着某个位置，另一台要互斥位置的车永远等不到，几台车一起僵在咽喉里
+			 * （现场：库里六台车一台都出不去）。道岔只有一个位置，要解环必须有一方先退：本车等过
+			 * 由 {@code MmtrPointAuthority#shouldYieldForOthers} 判定就把自己在道岔层的全部痕迹放掉，并**静默一小会儿**
+			 * 让对方先把位置拿走、把路走完；之后本车重新规划、重新申请。
+			 */
+			if (mmtrTurnoutWaitSinceMillis == 0) {
+				mmtrTurnoutWaitSinceMillis = now;
+			}
+			if (org.mtr.core.mmtr.point.MmtrPointAuthority.shouldYieldForOthers(now, mmtrTurnoutWaitSinceMillis, mmtrTurnoutYieldUntilMillis)) {
+				// "退得干净"这一层权限层早就有（releaseAll：逐进向持有 + 两处排队 + 物理位置一起放，放了立刻递补）；
+				// 缺的是**什么时候退**这条策略 —— 就是这里这一句。
+				simulator.mmtrPointAuthority.releaseAll(mmtrPointOwner);
+				releaseMmtrPointRequests();
+				mmtrTurnoutYieldUntilMillis = now + org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
+				mmtrTurnoutWaitSinceMillis = 0;
+				System.out.println("[MMTR-PT] 让位：车 " + getId() + " 等道岔超过 " + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
+					+ " 秒，放掉自己在道岔层的持有与排队，让别的车先走（" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000) + " 秒后再申请）");
+				return;
+			}
+			if (now < mmtrTurnoutYieldUntilMillis) {
+				return;   // 让位窗口里：连申请都不发，确保对方能拿到位置
+			}
 			if (now - mmtrLastTurnoutWaitLogMillis >= MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS) {
 				mmtrLastTurnoutWaitLogMillis = now;
 				// Name the blocking point (operator park / other holder / queue): a wait that never ends
@@ -659,6 +727,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			return;
 		}
+		mmtrTurnoutWaitSinceMillis = 0;
+		mmtrTurnoutYieldUntilMillis = 0;
 		if (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT) {
 			setMmtrMotionAuto(true);
 			setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
@@ -672,6 +742,85 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// 否则每 tick 都会重规划一遍（幂等，但日志会刷屏）。
 			mmtrPlayerRoutePublished = true;
 		}
+	}
+
+	/**
+	 * 停着不动的车：手里还按着道岔就**让位**（notes/149 第二轮现场）。
+	 *
+	 * <p>它停着 = 它现在不用那处道岔；而道岔只有一个位置，按着不放就会把要过岔的车堵死。
+	 * 让它退出来、静默一会儿（同 {@link org.mtr.core.mmtr.point.MmtrPointAuthority#MMTR_TURNOUT_YIELD_MILLIS}），
+	 * 自己的进路也随之作废、下一 tick 重新规划（位置已经不是它的了，旧计划不能再用）。</p>
+	 *
+	 * <p>与"自臂失败时的让位"共用同一套计时与阈值：判据统一为"等/停了够久 + 不在让位窗口里"。</p>
+	 */
+	/**
+	 * **原地动作**的执行者：到点停稳之后，按任务类型动手（目前只有换端）。
+	 *
+	 * <p>为什么要有它（notes/150）：计划层会造出 {@code CHANGE_ENDS}（换端）这样的步骤，
+	 * 但**全引擎没有任何地方按任务类型执行动作** —— 换端只是被造出来、挂着、打日志。
+	 * 结果就是"车到了终点就停在那里"，下一趟（要往回开）永远不成立。
+	 * 这里的口径与作业单那条路一致（{@code MmtrJobScheduler.completeChangeEndsStep}）：
+	 * **只在停稳时**换端，调的是同一个 {@link #changeEndsMmtrMotion()}。</p>
+	 *
+	 * <p>一次任务只动手一次（{@code mmtrTaskActionDone} 闩），换端本身会把进路/停车目标清掉
+	 * 并让任务重新自臂 —— 不清闩的话车会在同一站反复换端。</p>
+	 */
+	private void mmtrRunInPlaceTaskAction(MmtrMission mission) {
+		if (isClientside || mission == null || mission.isTerminal() || mmtrTaskActionDone) {
+			return;
+		}
+		final org.mtr.core.mmtr.task.MmtrTask task = mission.getTask();
+		if (task == null || !task.inPlace() || mission.getState() != MmtrMission.State.AT_TARGET) {
+			return;
+		}
+		if (speed > 1e-9) {
+			return;   // 还没停稳（换端本来就只能在停稳时做）
+		}
+		switch (task.kind()) {
+			case CHANGE_ENDS -> {
+				if (changeEndsMmtrMotion()) {
+					mmtrTaskActionDone = true;
+					System.out.println("[MMTR-PLAN] 执行任务动作：换端 → 车 " + getId()
+						+ "（" + task.taskId + "，现在 "
+						+ (getMmtrConsistWalker() == null ? "?" : getMmtrConsistWalker().cabs().activeCab()) + " 端在前）");
+				} else {
+					// 现在做不了（不是 B 系编组 / 走行子系统没接）：留给下一 tick 再试，别静默
+					System.out.println("[MMTR-PLAN] 换端做不了（车 " + getId() + "）：需要 B 系编组与走行子系统");
+					mmtrTaskActionDone = true;   // 同一任务只报一次，避免刷屏
+				}
+			}
+			default -> mmtrTaskActionDone = true;   // 其余类型目前没有额外动作
+		}
+	}
+
+	private void mmtrYieldTurnoutsWhenStuck(Simulator simulator) {
+		final long now = System.currentTimeMillis();
+		if (isMoving()) {
+			mmtrTurnoutWaitSinceMillis = 0;   // 动着就是在用，别让
+			return;
+		}
+		final boolean holdsSomething = !simulator.mmtrPointAuthority.physicalHoldNodesOf(mmtrPointOwner).isEmpty()
+			|| !mmtrPendingPointOps.isEmpty();
+		if (!holdsSomething) {
+			mmtrTurnoutWaitSinceMillis = 0;
+			return;
+		}
+		if (mmtrTurnoutWaitSinceMillis == 0) {
+			mmtrTurnoutWaitSinceMillis = now;
+			return;
+		}
+		if (!org.mtr.core.mmtr.point.MmtrPointAuthority.shouldYieldForOthers(now, mmtrTurnoutWaitSinceMillis, mmtrTurnoutYieldUntilMillis)) {
+			return;
+		}
+		simulator.mmtrPointAuthority.releaseAll(mmtrPointOwner);
+		releaseMmtrPointRequests();
+		// 位置不在了，旧进路也不能再算数：让任务下一 tick 重新规划（自臂会重新排一次）
+		mmtrMotionAuto = false;
+		mmtrMotionStopTargetM = -1;
+		mmtrTurnoutYieldUntilMillis = now + org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
+		mmtrTurnoutWaitSinceMillis = 0;
+		System.out.println("[MMTR-PT] 让位（停着不动）：车 " + getId() + " 放掉自己在道岔层的持有与排队，" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
+			+ " 秒后重新规划并申请");
 	}
 
 	/**
