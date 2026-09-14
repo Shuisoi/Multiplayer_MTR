@@ -3,6 +3,9 @@
 build/
 **/build/
 out/
+# 散落的编译产物：手工 javac 会在仓库根按包名生成 org\...\*.class
+# （2026-09-13 现场留过一份 mmtr\org\mtr\core\mmtr\signal\MmtrDirectionalBlockService.class）
+*.class
 # IDE
 .idea/
 *.iml
@@ -26,10 +29,16 @@ mmtr-engine-run/classes/
 # synced modern engine jar (source lives in engine/; recreate via scripts/sync-engine.ps1)
 game/libs/Transport-Simulation-Core-0.0.1.jar
 
-# engine website build artifacts (Angular toolchain output)
+# 前端构建产物（Vite + Vue；Angular 是 game/website 那一套，与本行无关）
 engine/website/.angular/
 engine/website/dist/
 engine/website/node_modules/
+
+# 验证脚本的截图/快照属于证据，不落仓库：脚本已改写 logs\<yyyy-MM>\（见 tools/reload-map.ps1、
+# tools/diag-web-aspect.ps1）。这里再兜一层，防止将来手跑又落回仓库根。
+/map-refresh.png
+/web-signals.png
+/signals-current.txt
 
 # 说明：apps/creator-studio 是独立 Gradle build，它的 .gradle/ build/ run/ 已被上面的全局规则忽略。
 # 工作区级的 env/ vendor/ assets/ artifacts/ logs/ instances/ sandbox/ 都在仓库之外，本文件不涉及。
