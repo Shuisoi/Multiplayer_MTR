@@ -14,10 +14,15 @@ defineProps<{
 	signals: readonly Signal[];
 	camera: Camera;
 	hoveredKey: string;
+	/** 正在改绑定的那盏灯（点选绑定）：它会被强调出来。 */
+	selectedKey: string;
 }>();
 
 const emit = defineEmits<{
 	(e: "hover", key: string): void;
+	(e: "pick", signal: Signal): void;
+	(e: "copy", signal: Signal): void;
+	(e: "why", signal: Signal): void;
 }>();
 </script>
 
@@ -28,6 +33,10 @@ const emit = defineEmits<{
 		:signal="signal"
 		:screen="worldToScreen(camera, signal.planeX, signal.planeY)"
 		:hovered="hoveredKey === signal.key"
+		:selected="selectedKey === signal.key"
 		@hover="emit('hover', $event)"
+		@pick="emit('pick', signal)"
+		@copy="emit('copy', signal)"
+		@why="emit('why', signal)"
 	/>
 </template>

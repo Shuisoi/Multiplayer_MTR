@@ -66,6 +66,18 @@ public final class MmtrCoupleControl implements SerializedDataBase {
 
 	/** Couples {@code tailVehicleId} onto {@code headVehicleId} (C4: the real surgery). */
 	public void couple(Simulator simulator) {
+		coupleResult(simulator);
+	}
+
+	/**
+	 * 连挂并把**结果**交给调用方（C4 实做）。
+	 *
+	 * <p>为什么要有返回结果：{@link #couple(Simulator)} 只能把结果写进命令日志，
+	 * 调用方（例如中控指令 {@code train couple}）拿到的是 void —— 那它就只能猜，
+	 * 而"猜成功"正是最坏的回复：连挂被拒时它也会说"已连挂"。这里把
+	 * {@link org.mtr.core.data.MmtrCoupleSurgery.Result} 原样交给调用方，让它能照实回话。</p>
+	 */
+	public org.mtr.core.data.MmtrCoupleSurgery.Result coupleResult(Simulator simulator) {
 		final org.mtr.core.data.MmtrCoupleSurgery.Result result = org.mtr.core.data.MmtrCoupleSurgery.couple(simulator, headVehicleId, tailVehicleId);
 		if (result.ok()) {
 			simulator.mmtrCommandResult("[MMTR-COUP] 连挂完成: " + headVehicleId + " + " + tailVehicleId + " -> " + result.vehicle().getId()
@@ -74,10 +86,16 @@ public final class MmtrCoupleControl implements SerializedDataBase {
 			simulator.mmtrCommandResult("[MMTR-COUP] 连挂被拒: " + result.reason());
 			System.out.println("[MMTR-COUP] denied: " + result.reason());
 		}
+		return result;
 	}
 
 	/** Uncoupled {@code headVehicleId} after {@code cutAfterCarIndex} (C4b: the real cut at a seam). */
 	public void uncouple(Simulator simulator) {
+		uncoupleResult(simulator);
+	}
+
+	/** 解挂并把结果交给调用方（理由同 {@link #coupleResult(Simulator)}）。 */
+	public org.mtr.core.data.MmtrCoupleSurgery.Result uncoupleResult(Simulator simulator) {
 		final org.mtr.core.data.MmtrCoupleSurgery.Result result = org.mtr.core.data.MmtrCoupleSurgery.uncouple(simulator, headVehicleId, cutAfterCarIndex);
 		if (result.ok()) {
 			simulator.mmtrCommandResult("[MMTR-COUP] 解挂完成: " + headVehicleId + " 在接缝 " + cutAfterCarIndex + " 切分 → 前段 " + result.vehicle().getId()
@@ -86,5 +104,6 @@ public final class MmtrCoupleControl implements SerializedDataBase {
 			simulator.mmtrCommandResult("[MMTR-COUP] 解挂被拒: " + result.reason());
 			System.out.println("[MMTR-COUP] uncouple denied: " + result.reason());
 		}
+		return result;
 	}
 }

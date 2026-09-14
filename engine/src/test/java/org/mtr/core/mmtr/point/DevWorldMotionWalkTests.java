@@ -38,8 +38,16 @@ public final class DevWorldMotionWalkTests {
 		assertNotNull(sw, "expected a turnout at the -96 yard node");
 
 		final Position node = new Position(NX, NY, NZ);
-		final Rail via = findRailByHex(sim, sw.viaRailHex);
-		assertNotNull(via, "via rail should exist in the graph");
+		/*
+		 * **从根部进路开进去**（用户 2026-09-13 的物理模型）：一处道岔只有两个位置 —— 0 = 正线贯通、
+		 * 1 = 岔股开放，从"被切断的那一侧"开进另一条进路是背向穿过尖轨，一律禁止。
+		 * 所以"车能开上岔股"这件事，起点必须选在**根部**那条轨上；夹具原来取的是 discover 随手给的
+		 * 任一进向，可能正好是被切断的那一侧。
+		 */
+		final MmtrTurnout turnout = sim.mmtrTurnout(NX, NY, NZ);
+		assertNotNull(turnout, "expected a physical turnout at the -96 yard node");
+		final Rail via = findRailByHex(sim, turnout.stemRailHex);
+		assertNotNull(via, "stem rail should exist in the graph");
 		final Position start = otherEnd(sim, node, via);
 		assertNotNull(start, "via rail must have a far endpoint to start from");
 		assertTrue(!start.equals(node), "start endpoint must differ from the -96 node");
@@ -55,20 +63,20 @@ public final class DevWorldMotionWalkTests {
 		// Set branch 0: crosses onto the straight real rail.
 		final BranchStore b0 = new BranchStore();
 		b0.set(NX, NY, NZ, via.getHexId(), 0);
-		final MmtrMotionDriver d0 = MmtrMotionDriver.start(sim, via, start, b0, sw.branch0Hex);
+		final MmtrMotionDriver d0 = MmtrMotionDriver.start(sim, via, start, b0, turnout.farRailHex);
 		final boolean rest0 = d0.driveToRest(1000, 0.004, 200);
 		assertEquals(true, rest0);
 		assertEquals(true, d0.atTarget());
-		assertEquals(sw.branch0Hex, d0.walker.railHex(), "搬0走直 - consist must cross onto branch0 (straight) real rail");
+		assertEquals(turnout.farRailHex, d0.walker.railHex(), "搬0走直 - consist must cross onto branch0 (straight) real rail");
 
 		// Set branch 1: crosses onto the diverging real rail.
 		final BranchStore b1 = new BranchStore();
 		b1.set(NX, NY, NZ, via.getHexId(), 1);
-		final MmtrMotionDriver d1 = MmtrMotionDriver.start(sim, via, start, b1, sw.branch1Hex);
+		final MmtrMotionDriver d1 = MmtrMotionDriver.start(sim, via, start, b1, turnout.branchRailHex);
 		final boolean rest1 = d1.driveToRest(1000, 0.004, 200);
 		assertEquals(true, rest1);
 		assertEquals(true, d1.atTarget());
-		assertEquals(sw.branch1Hex, d1.walker.railHex(), "搬1走岔 - consist must cross onto branch1 (diverging) real rail");
+		assertEquals(turnout.branchRailHex, d1.walker.railHex(), "搬1走岔 - consist must cross onto branch1 (diverging) real rail");
 	}
 
 	@Test
@@ -80,12 +88,15 @@ public final class DevWorldMotionWalkTests {
 		for (final MmtrSwitch s : all) { if (s.nodeX == NX && s.nodeY == NY && s.nodeZ == NZ) { sw = s; break; } }
 		org.junit.jupiter.api.Assumptions.assumeTrue(sw != null, "no turnout at -96");
 		final Position node = new Position(NX, NY, NZ);
-		final Rail via = findRailByHex(sim, sw.viaRailHex);
+		// 起点选**根部**那条轨：只有从根部开进去，"扳到岔股"才是合法动作（见上面的说明）。
+		final MmtrTurnout turnout = sim.mmtrTurnout(NX, NY, NZ);
+		org.junit.jupiter.api.Assumptions.assumeTrue(turnout != null, "no physical turnout at -96");
+		final Rail via = findRailByHex(sim, turnout.stemRailHex);
 		final Position startPos = otherEnd(sim, node, via);
 		org.junit.jupiter.api.Assumptions.assumeTrue(startPos != null, "via rail has far end");
 		final BranchStore b1 = new BranchStore();
 		b1.set(NX, NY, NZ, via.getHexId(), 1);
-		final MmtrMotionDriver d = MmtrMotionDriver.start(sim, via, startPos, b1, sw.branch1Hex);
+		final MmtrMotionDriver d = MmtrMotionDriver.start(sim, via, startPos, b1, turnout.branchRailHex);
 		d.driveToRest(1000, 0.004, 200);
 		assertTrue(d.atTarget(), "consist should have driven onto branch1");
 
@@ -119,12 +130,15 @@ public final class DevWorldMotionWalkTests {
 		for (final MmtrSwitch s : all) { if (s.nodeX == NX && s.nodeY == NY && s.nodeZ == NZ) { sw = s; break; } }
 		org.junit.jupiter.api.Assumptions.assumeTrue(sw != null, "no turnout at -96");
 		final Position node = new Position(NX, NY, NZ);
-		final Rail via = findRailByHex(sim, sw.viaRailHex);
+		// 起点选**根部**那条轨：只有从根部开进去，"扳到岔股"才是合法动作（见上面的说明）。
+		final MmtrTurnout turnout = sim.mmtrTurnout(NX, NY, NZ);
+		org.junit.jupiter.api.Assumptions.assumeTrue(turnout != null, "no physical turnout at -96");
+		final Rail via = findRailByHex(sim, turnout.stemRailHex);
 		final Position startPos = otherEnd(sim, node, via);
 		org.junit.jupiter.api.Assumptions.assumeTrue(startPos != null, "via rail has far end");
 		final BranchStore b1 = new BranchStore();
 		b1.set(NX, NY, NZ, via.getHexId(), 1);
-		final MmtrMotionDriver d = MmtrMotionDriver.start(sim, via, startPos, b1, sw.branch1Hex);
+		final MmtrMotionDriver d = MmtrMotionDriver.start(sim, via, startPos, b1, turnout.branchRailHex);
 		d.driveToRest(1000, 0.004, 200);
 		assertTrue(d.atTarget(), "should have boarded branch1");
 
@@ -132,7 +146,7 @@ public final class DevWorldMotionWalkTests {
 		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.PathData> legs = d.walker.buildLegs();
 		assertTrue(legs.size() >= 2, "legs must cover via-rail + branch1, got " + legs.size());
 		final org.mtr.core.data.PathData last = legs.get(legs.size() - 1);
-		final double expected = via.railMath.getLength() + findRailByHex(sim, sw.branch1Hex).railMath.getLength();
+		final double expected = via.railMath.getLength() + findRailByHex(sim, turnout.branchRailHex).railMath.getLength();
 		assertEquals(expected, last.getEndDistance(), 1e-3, "final leg end distance spans via + elected branch1 rails");
 		assertTrue(last.getEndDistance() > legs.get(0).getEndDistance(), "legs must be cumulative/monotonic");
 	}

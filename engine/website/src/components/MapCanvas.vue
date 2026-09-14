@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import {computed, nextTick, provide, ref, useTemplateRef, watch} from "vue";
-import {useCameraView} from "@/composables/useCameraView";
+import {computed, nextTick, onBeforeUnmount, onMounted, provide, ref, useTemplateRef, watch} from "vue";import {useCameraView} from "@/composables/useCameraView";
 import {boundsOf} from "@/domain/camera";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import type {Rail} from "@/domain/Rail";
 import type {Signal} from "@/domain/Signal";
+import type {Point} from "@/domain/Point";
 import {CAMERA} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
 import SignalLayer from "./SignalLayer.vue";
+import PointLayer from "./PointLayer.vue";
 
 /*
  * 地图画布：视口 + 摄像机 + 内容层。
@@ -35,6 +36,20 @@ const props = defineProps<{
 	rails: readonly Rail[];
 	/** 要显示的信号灯。 */
 	signals: readonly Signal[];
+	/**
+	 * 要显示的道岔。
+	 *
+	 * <p>道岔是**唯一需要人管**的东西（灯的颜色由闭塞层自动给出，道岔的开通位要有人定），
+	 * 所以这一层默认就画得显眼、并且可点开换向，而不是等用户去找。</p>
+	 */
+	points: readonly Point[];
+	/**
+	 * 轨 hex → 两端坐标：道岔卡片要写"这一位接的是哪条轨"。
+	 *
+	 * <p>用户是按**坐标**认轨的（"(-67,-103) 到 (-67,-167) 是正线"），不是按 hex。
+	 * 只给 hex 前 12 位等于没说清它是哪一根。</p>
+	 */
+	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
 }>();
 
 const host = useTemplateRef<HTMLElement>("host");
@@ -55,7 +70,7 @@ const content = computed(() => boundsOf([
 	...props.rails.flatMap(rail => [
 		{x: rail.planeX1, y: rail.planeY1},
 		{x: rail.planeX2, y: rail.planeY2},
-		...rail.path.map(point => ({x: point.x, y: -point.z})),
+		...rail.path.map(point => ({x: point.x, y: point.z})),
 	]),
 ]));
 
@@ -66,10 +81,21 @@ provide(CAMERA, camera);
 const hoveredKey = ref("");
 /** 悬停中的信号灯 key（信息卡）。与节点的分开：两者的 key 空间不同（灯是方块键，节点是节点键）。 */
 const hoveredSignalKey = ref("");
+/** 悬停中的道岔 key（信息卡）。 */
+const hoveredPointKey = ref("");
 /** 打开了操作菜单的节点 key。 */
 const menuKey = ref("");
 /** 选中的节点 key（菜单动作后保持高亮）。 */
 const selectedKey = ref("");
+/**
+ * 正在改绑定的那盏灯的 **key**（点选绑定）。
+ *
+ * <p>存 key 而不是存 Signal 对象：重取数据之后 `signals` 里是**新对象**，还攥着旧对象的话，
+ * 高亮用的 `boundRails` 永远是绑定前那一份 —— 于是"绑定成功了，页面却还画着旧状态"
+ * （实测：引擎已经守 2 条，页面上仍只画 1 条实线，HUD 也还写着 1）。存 key 再实时查，就不会有这份陈旧。</p>
+ */
+const selectedSignalKey = ref("");
+const selectedSignal = computed(() => props.signals.find(item => item.key === selectedSignalKey.value) ?? null);
 
 const emit = defineEmits<{
 	/** 节点操作菜单被点了某一项。 */
@@ -85,6 +111,32 @@ const emit = defineEmits<{
 	(e: "camera", payload: {camera: Camera; zoom: number}): void;
 	/** 实际画出来的直线/曲线条数（由轨道层统计，HUD 直接显示，不再自己按规则重算）。 */
 	(e: "shapes", summary: {straight: number; curve: number}): void;
+	/**
+	 * 点中了某条轨（只有在选中某盏灯、那条轨又是它的候选时才会发生）。
+	 *
+	 * <p>这里只上报"点了哪条"，不决定"点了算绑还是算解绑"——那是绑定的语义，属于视图
+	 * （它知道这盏灯现在守哪几根，也知道要怎么改）。</p>
+	 */
+	(e: "pickRail", payload: {signal: Signal; railHex: string; bound: boolean}): void;
+	/** 选中/取消选中一盏灯（视图据此在 HUD 上给提示）。 */
+	(e: "selectSignal", signal: Signal | null): void;
+	/**
+	 * 灯卡片上的两个动作：复制坐标 / 把 `signal why x y z` 送进指令栏。
+	 *
+	 * <p>地图这一层不做这两件事：复制要说实话（可能被浏览器拒绝）、送指令要动指令栏，
+	 * 两者都属于**视图**（{@code TopologyView}）—— 这里只把"用户点了哪盏灯的哪个动作"报上去。</p>
+	 */
+	(e: "signalCopy", signal: Signal): void;
+	(e: "signalWhy", signal: Signal): void;
+	/**
+	 * 要把某个道岔扳到第 {@code leg} 条腿。
+	 *
+	 * <p>这里只上报"扳哪个道岔、扳到哪一位"，不自己改状态：道岔的开通位由引擎持有并持久化
+	 * （`mmtrSetPoint` 会写 `mmtr-points.json`），界面改完必须重取一次数据才显示得对。</p>
+	 */
+	(e: "setPointLeg", payload: {point: Point; leg: number}): void;
+	/** 选中/取消选中一个道岔（视图据此在 HUD 上给提示）。 */
+	(e: "selectPoint", point: Point | null): void;
 }>();
 
 /*
@@ -112,13 +164,92 @@ function onAction(payload: {node: Node; action: string}) {
 	emit("action", payload);
 }
 
-/** 点空白处：关菜单、取消选中。 */
+/** 点空白处：关菜单、取消选中（也退出改绑定）。 */
 function onBackgroundDown(event: PointerEvent) {
 	if (event.target === host.value) {
 		menuKey.value = "";
 		selectedKey.value = "";
+		expandedPointKey.value = "";
+		clearSelectedSignal();
 	}
 }
+
+/** 打开着腿按钮面板的道岔 key。 */
+const expandedPointKey = ref("");
+/**
+ * 选中的道岔 key。
+ *
+ * <p>与 `expandedPointKey` 分开：展开是"面板开着"，选中是"我正看着这个道岔" ——
+ * 后者会让它**当前开通那条腿的轨**在地图上点亮（见下面的 `connectedRailHex`）。
+ * 两者通常同时发生（点开就选中），但取消选中时不该把面板一起关掉。</p>
+ */
+const selectedPointKey = ref("");
+
+/**
+ * 选中道岔**当前开通**那条腿的轨（hex），交给轨道层点亮。
+ *
+ * <p>派生而不是存一份：重取数据后会拿到新的 `Point` 对象，存对象就会像早先那盏灯一样
+ * "绑定成功了页面还显示旧的"。存 key、每次从当前数据里查，就不会有这份陈旧。</p>
+ */
+const connectedRailHex = computed(() => {
+	const point = props.points.find(item => item.key === selectedPointKey.value) ?? null;
+	return point?.activeLegObject?.railHex ?? "";
+});
+
+/** 点道岔：展开/收起腿按钮，并把它设为选中（取消时不清选中，避免地图上亮线一闪一闪）。 */
+function onTogglePoint(point: Point) {
+	const wasExpanded = expandedPointKey.value === point.key;
+	expandedPointKey.value = wasExpanded ? "" : point.key;
+	selectedPointKey.value = wasExpanded ? "" : point.key;
+	selectedKey.value = "";
+	menuKey.value = "";
+	clearSelectedSignal();
+	emit("selectPoint", wasExpanded ? null : point);
+}
+
+/** 点某条腿：上报给视图去下指令（这里不改任何状态，改状态要等引擎确认后重取数据）。 */
+function onPickPointLeg(payload: {point: Point; leg: number}) {
+	emit("setPointLeg", payload);
+}
+
+/**
+ * 点了一盏灯：进入/退出"改绑定"。
+ *
+ * <p>再点同一盏 = 退出（和节点菜单同一个手感：同一个东西点两次就是关掉）。
+ * 进入时清掉节点选中，免得两套高亮同时亮着、看不出现在在改什么。</p>
+ */
+function onPickSignal(signal: Signal) {
+	if (selectedSignalKey.value === signal.key) {
+		clearSelectedSignal();
+		return;
+	}
+	selectedSignalKey.value = signal.key;
+	selectedKey.value = "";
+	menuKey.value = "";
+	emit("selectSignal", signal);
+}
+
+function clearSelectedSignal() {
+	selectedSignalKey.value = "";
+	emit("selectSignal", null);
+}
+
+function onPickRail(payload: {hex: string; bound: boolean}) {
+	const signal = selectedSignal.value;
+	if (signal !== null) {
+		emit("pickRail", {signal, railHex: payload.hex, bound: payload.bound});
+	}
+}
+
+/** Esc = 退出改绑定（与"点空白处"同效）。 */
+function onKeydown(event: KeyboardEvent) {
+	if (event.key === "Escape") {
+		clearSelectedSignal();
+	}
+}
+
+onMounted(() => window.addEventListener("keydown", onKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 defineExpose({
 	/** 视图命令，供 HUD 与节点菜单用。 */
@@ -139,22 +270,42 @@ defineExpose({
 		}
 		view.fitRegion(boundsOf(points), paddingPx);
 	},
+	/** 聚焦到道岔那一块区域（理由同 `focusSignals`：道岔是操作入口，得先看得见才点得到）。 */
+	focusPoints(paddingPx = 60) {
+		const points = props.points.map(point => ({x: point.planeX, y: point.planeY}));
+		if (points.length === 0) {
+			return;
+		}
+		view.fitRegion(boundsOf(points), paddingPx);
+	},
 });
 
 /*
- * 节点集合或轨集合变化时重新取景。
+ * **只有几何真的变了才重新取景**（节点集合 / 轨集合）。
  *
- * <p>用 watch 而不是指望 `setContent()`：数据是从接口拿的，会晚于挂载到达，
- * 而且用户可能已经拖过视图（那样 `touched` 会挡住自动取景）。数据变了就是"新数据"，
- * 这时候重新取景是唯一合理的行为——否则新节点落在视野外，看起来像"没数据"。</p>
+ * <p>用 watch 而不是指望 `setContent()`：数据是从接口拿的，会晚于挂载到达。但**不能**"数据一变就取景" ——
+ * 面板上的操作（扳道岔、看灯、扫描登记）都会走 `load()` 重取一遍数据，几何其实一模一样，
+ * 于是每扳一次道岔地图就回中一次（用户报的现象）。</p>
+ *
+ * <p>所以这里比一份**几何签名**（条数 + 排好序的首/末项）：签名没变 ⇒ 这是"状态刷新"，
+ * 视图一动不动（用户的平移缩放必须留着）；签名变了 ⇒ 世界改画了，重新取景并清掉"用户动过视图"的标记
+ * （新几何可能落在视野外，看起来像"没数据"）。</p>
  *
  * <p>空列表要跳过：那时候包围盒是退化的 1×1，取景会把比例算到极大（实测 ~15 px/单位，
  * 之后真实数据的倍率读数就成了 0.02×）。</p>
  */
+let framedGeometry = "";
 watch([() => props.nodes, () => props.rails], async () => {
 	if (props.nodes.length === 0 && props.rails.length === 0) {
 		return;
 	}
+	const nodeKeys = props.nodes.map(node => node.key).sort();
+	const railHexes = props.rails.map(rail => rail.hex).sort();
+	const geometry = `${nodeKeys.length}|${nodeKeys[0] ?? ""}|${nodeKeys[nodeKeys.length - 1] ?? ""}|${railHexes.length}|${railHexes[0] ?? ""}|${railHexes[railHexes.length - 1] ?? ""}`;
+	if (geometry === framedGeometry) {
+		return;
+	}
+	framedGeometry = geometry;
 	await nextTick();
 	view.resetTouched();
 	view.fit();
@@ -181,7 +332,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 	<div
 		ref="host"
 		class="map"
-		:class="{dragging: view.dragging.value}"
+		:class="{dragging: view.dragging.value, picking: selectedSignal !== null}"
 		@pointerdown="view.onPointerDown"
 		@pointerdown.capture="onBackgroundDown"
 		@pointermove="view.onPointerMove"
@@ -197,14 +348,20 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			SVG 的用户单位默认就是 CSS 像素，所以这里可以直接写屏幕坐标，1 单位 = 1px。
 			一旦给了 viewBox 就引入又一次缩放映射（以及 preserveAspectRatio 的第二套对账），
 			这正是旧版三次翻车的来源，所以这里连机会都不留。
+			`pickable` 只在"选中了某盏灯、正在改绑定"时为真：那时候选轨要能点，
+			所以这一层临时接管指针事件（`.hit` 只让描边本身可命中，空白处仍然穿透给画布拖动）。
 		-->
-		<svg class="rails">
+		<svg class="rails" :class="{pickable: selectedSignal !== null}">
 			<RailLayer
 				:rails="rails"
 				:camera="camera"
 				:hover-key="hoveredKey"
 				:select-key="selectedKey"
+				:bound-rails="selectedSignal?.boundRails"
+				:candidate-rails="selectedSignal?.candidateRails"
+				:connected-rail="connectedRailHex"
 				@shapes="emit('shapes', $event)"
+				@pick-rail="onPickRail"
 			/>
 		</svg>
 
@@ -223,13 +380,39 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			/>
 		</div>
 
-		<!-- 信号灯层：在节点层**之后**渲染，所以压在节点上面（否则节点的 24px 交互靶会吃掉灯的悬停）。 -->
+		<!--
+			道岔层：**在信号灯层之下**。
+			道岔菱形按 34px 偏移挂在节点右下角（见 PointMarker 的说明），这个距离本身就够到邻节点，
+			所以相邻节点的菱形难免会压到别人家的灯点上。让灯层在上面 = "灯永远点得到"，
+			而道岔在自己没被压住的地方照旧可点（实测点灯被压住的那一处，正是这个原因）。
+			顺序上先渲染道岔、再渲染灯，就得到这个优先级。
+		-->
+		<div class="points">
+			<PointLayer
+				:points="points"
+				:camera="camera"
+				:rail-ends="railEnds"
+				:hovered-key="hoveredPointKey"
+				:expanded-key="expandedPointKey"
+				:selected-key="selectedPointKey"
+				:picking="selectedSignal !== null"
+				@hover="hoveredPointKey = $event"
+				@toggle="onTogglePoint"
+				@pick-leg="onPickPointLeg"
+			/>
+		</div>
+
+		<!-- 信号灯层：在道岔层**之后**渲染，所以压在道岔上面（见上）。 -->
 		<div class="signals">
 			<SignalLayer
 				:signals="signals"
 				:camera="camera"
 				:hovered-key="hoveredSignalKey"
+				:selected-key="selectedSignal?.key ?? ''"
 				@hover="hoveredSignalKey = $event"
+				@pick="onPickSignal"
+				@copy="emit('signalCopy', $event)"
+				@why="emit('signalWhy', $event)"
 			/>
 		</div>
 
@@ -270,14 +453,27 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 	inset: 0;
 	width: 100%;
 	height: 100%;
-	/* 轨道层不参与命中测试：节点的交互不该被线抢走，空白处的拖动也要能穿透到画布。 */
+	/* 轨道层默认不参与命中测试：节点的交互不该被线抢走，空白处的拖动也要能穿透到画布。 */
 	pointer-events: none;
+}
+
+/*
+ * 改绑定期间，轨道层要让**候选轨**能点。这里只打开 SVG 根节点的事件，
+ * 真正可命中的是 `.hit`（透明宽描边，`pointer-events: stroke`）—— 空白处的 pointer-events
+ * 仍是 none，所以拖动与"点空白取消"照旧穿透到画布。
+ */
+.rails.pickable {
+	pointer-events: auto;
 }
 
 /*
  * 节点层：整体 `pointer-events: none`，只让节点自己接收事件。
  * 这样"点空白处拖动/关菜单"不会被这一层挡住——上一版把交互靶塞进 foreignObject 时，
  * 整层都是命中区，空白处点不下去。
+ *
+ * 改绑定期间（`.pickable`）例外：那时候要点的是**轨**，而节点圆点/交互靶正好压在轨上
+ * （信号机就立在轨道旁、道岔节点又恰是轨的交点），于是"点轨"会点到节点上去（实测：
+ * 点已绑定的实线中点，命中的是节点，事件根本没到轨道层）。所以这时候整层让开。
  */
 .nodes {
 	position: absolute;
@@ -289,6 +485,27 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 .signals {
 	position: absolute;
 	inset: 0;
+	pointer-events: none;
+}
+
+/* 道岔层：同上。它在最上面，所以道岔的点击优先级最高。 */
+.points {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+/*
+ * 这些层里的**子元素**默认是 `pointer-events: auto`（灯、节点、道岔各自开），
+ * 所以让整层退出命中必须点名子元素，否则它们照旧吃事件。
+ *
+ * <p>道岔层也在这里让开：改绑定期间用户要点的是**灯和轨**，而道岔菱形又挂在节点上、
+ * 世界图里 44 个道岔总有几个正好压在灯点上（实测压住了改绑定的第一次点灯）。
+ * 让道岔在这一步暂时退场，比让用户"多绕 34px 去点灯"合理。</p>
+ */
+.map.picking .nodes > *,
+.map.picking .signals > *,
+.map.picking .points > * {
 	pointer-events: none;
 }
 </style>

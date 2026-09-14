@@ -56,12 +56,25 @@ public final class MmtrRouteMirror {
 			// S4: every lamp's v2 display. The engine owns the 闭塞区间 v2 walk, so it ships its conclusion
 			// per lamp; the renderer (which works per rail block) looks its own lamp key up.
 			final Object2ObjectOpenHashMap<String, String> lampAspects = simulator.mmtrDirectionalBlocks.lampAspectNames(simulator.mmtrOccupancyTrees(), restrictedNodes::contains);
-			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + splitRails.toString() + "|" + restrictedNodes.toString() + "|" + lampAspects.toString();
+			/*
+			 * 守轨（绑定工具的叠加层用）：每盏灯守哪几根轨，由**引擎**算。
+			 *
+			 * <p>客户端自己按几何推一遍必然与引擎分叉 —— 而"灯到底守哪根轨"正是拿绑定工具时要看的东西，
+			 * 看错就等于白看。所以照 S4 的老规矩：引擎算结论，客户端只显示。</p>
+			 */
+			final Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails = new Object2ObjectOpenHashMap<>();
+			simulator.mmtrSignals.signals.forEach((key, entry) -> {
+				final ObjectArrayList<String> rails = simulator.mmtrDirectionalBlocks.protectedRailsOf(entry);
+				if (!rails.isEmpty()) {
+					lampRails.put(key, rails);
+				}
+			});
+			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + splitRails.toString() + "|" + restrictedNodes.toString() + "|" + lampAspects.toString() + "|" + lampRails.toString();
 			if (signature.equals(LAST_SIGNATURE.get(worldId))) {
 				continue;
 			}
 			LAST_SIGNATURE.put(worldId, signature);
-			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, lampAspects);
+			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, lampAspects, lampRails);
 			final org.mtr.mapping.holder.ServerWorld mappedWorld = new org.mtr.mapping.holder.ServerWorld(serverWorld);
 			MinecraftServerHelper.iteratePlayers(mappedWorld, serverPlayerEntity -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketMmtrRoutes(content)));
 		}

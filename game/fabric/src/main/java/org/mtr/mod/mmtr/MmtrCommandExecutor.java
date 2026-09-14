@@ -39,6 +39,19 @@ public final class MmtrCommandExecutor {
 			if (simulator == null) {
 				continue;
 			}
+			/*
+			 * 服务端运维（一键重启 / 停机）：引擎只会挂一个"该停机了"的信号，真正的停机必须在这里做 ——
+			 * 只有游戏端能走**优雅停机**（存档、断开连接、通知客户端）。用 stop(false) 而不是 System.exit，
+			 * 差别就是"存档完整落盘"还是"进程被杀"。
+			 *
+			 * 重启由启动器接力：引擎在请求重启时写了 mmtr-restart.request，dev-server.ps1 看到它就会再拉一次。
+			 */
+			if (simulator.mmtrShutdownDue()) {
+				System.out.println("[MMTR-SRV] 收到停机请求，优雅关闭服务端（重启标记如存在则由启动器接力拉起）");
+				simulator.mmtrCommandResult("[server] 正在优雅停机…");
+				minecraftServer.stop(false);
+				return;
+			}
 			final String command = simulator.mmtrPollCommand();
 			if (command != null && !command.isEmpty()) {
 				execute(simulator, serverWorld, command);
@@ -52,7 +65,19 @@ public final class MmtrCommandExecutor {
 			return;
 		}
 		// B7.6 crew commands: changeends <vehicleId> | cab <vehicleId> <A|B|out> | doors <vehicleId> [open|close|toggle]
-		final String[] parts = command.trim().split("\\s+");
+		String[] parts = command.trim().split("\\s+");
+		/*
+		 * 名词打头的写法（中控指令系统的 `train doors …`）：先把名词摘掉，下面就一路按动词打头处理。
+		 *
+		 * 为什么在游戏端翻译而不是让引擎别加名词：游戏内控制台/旧脚本敲的一直是 `doors <id> open`，
+		 * 改掉它就等于把两个入口的语法同时换一遍；翻译只有三行，却让两种写法都能用。
+		 * engine 侧的 `train …` 也是这么转的，两处保持一致。
+		 */
+		if (parts.length >= 2 && parts[0].equals("train")) {
+			final String[] shifted = new String[parts.length - 1];
+			System.arraycopy(parts, 1, shifted, 0, shifted.length);
+			parts = shifted;
+		}
 		// A2/A3/S5 interlocking report: what the engine thinks this train's route and signals are.
 		if (parts.length >= 1 && parts[0].equals("interlock")) {
 			executeInterlock(simulator, parts);
@@ -112,7 +137,8 @@ public final class MmtrCommandExecutor {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | lamps-v2 | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | lamps-v2 | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])"
+			+ "（这些也都能用名词打头的写法从网页指令栏发：train doors <id> open / train couple <a> <b> / …）");
 	}
 
 	/**
@@ -317,14 +343,31 @@ public final class MmtrCommandExecutor {
 	/**
 	 * Scan currently loaded chunks for placed MTR signal light block entities and register them
 	 * as AUTO entries (upsert). Entries already BOUND to a rail stay untouched.
+	 *
+	 * <h3>为什么还要**删**（用户实测："有几个信号灯我已经敲掉了，地图不正确"）</h3>
+	 * <p>原来这里是**只加不删**的：灯被敲掉之后登记表里那一条还在，于是地图上永远画着一盏
+	 * 已经不存在的灯。扫描是唯一能看到"世界里到底还有没有这盏灯"的地方（只有游戏端能枚举已加载
+	 * 区块），所以删除也只能在这里做。</p>
+	 *
+	 * <h3>删除的安全边界（不然会误删）</h3>
+	 * <p>只能删**所在区块已加载、但区块里没有它**的条目。玩家走远之后区块会卸载，那时"找不到"
+	 * 只说明没加载，不代表灯没了 —— 按"没找到就删"会把远处的灯全部清掉，那是灾难性的。</p>
 	 */
 	private static void scanSignals(Simulator simulator, ServerWorld serverWorld) {
 		int found = 0;
 		int added = 0;
 		int skippedBound = 0;
+		int removed = 0;
+		int removedBound = 0;
 		final World world = new World(serverWorld);
+		// 本次扫描覆盖到的区块（按区块坐标），以及在这些区块里真正看到的灯格
+		final java.util.Set<Long> scannedChunks = new java.util.HashSet<>();
+		final java.util.Set<String> seen = new java.util.HashSet<>();
 		for (final WorldChunk chunk : MmtrChunkTracker.loadedChunks(serverWorld)) {
-			for (final BlockEntity blockEntity : chunk.getBlockEntities().values()) {
+			scannedChunks.add(chunkKey(chunk.getPos().x, chunk.getPos().z));
+			// 先把这一块的方块实体抄一份再遍历：下面会在遍历中改登记表，而直接迭代原集合时序上更脆
+			final java.util.List<BlockEntity> blockEntities = new java.util.ArrayList<>(chunk.getBlockEntities().values());
+			for (final BlockEntity blockEntity : blockEntities) {
 				final BlockPos pos = blockEntity.getPos();
 				final BlockState blockState = world.getBlockState(new org.mtr.mapping.holder.BlockPos(pos.getX(), pos.getY(), pos.getZ()));
 				final Object block = blockState.getBlock().data;
@@ -332,6 +375,10 @@ public final class MmtrCommandExecutor {
 					continue;
 				}
 				found++;
+				// 一盏灯方块两格高，扫描会把两格都记下 —— 两格都算"看到过"，
+				// 否则删除那一步会把另一格误判成"灯没了"。
+				seen.add(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(pos.getX(), pos.getY(), pos.getZ()));
+				seen.add(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(pos.getX(), pos.getY() - 1, pos.getZ()));
 				final SignalEntry existing = simulator.mmtrSignals.get(pos.getX(), pos.getY(), pos.getZ());
 				if (existing != null && "BOUND".equals(existing.mode)) {
 					skippedBound++;
@@ -342,6 +389,101 @@ public final class MmtrCommandExecutor {
 				}
 			}
 		}
-		simulator.mmtrCommandResult("[signals] 扫描完成: 找到 " + found + " 个信号灯, 新增 " + added + " 个 AUTO 条目, 跳过 BOUND " + skippedBound + " 个");
+		// 清掉"区块已加载、却不在世界里"的登记：这正是被玩家敲掉的灯
+		final java.util.List<SignalEntry> stale = new java.util.ArrayList<>();
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			if (seen.contains(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(entry.x, entry.y, entry.z))) {
+				continue;
+			}
+			if (!scannedChunks.contains(chunkKey(entry.x >> 4, entry.z >> 4))) {
+				continue; // 区块没加载：判断不了，留着
+			}
+			stale.add(entry);
+		}
+		for (final SignalEntry entry : stale) {
+			final boolean bound = "BOUND".equals(entry.mode);
+			if (simulator.mmtrSignalRemove(entry.x, entry.y, entry.z)) {
+				removed++;
+				if (bound) {
+					removedBound++;
+				}
+			}
+		}
+		simulator.mmtrCommandResult("[signals] 扫描完成: 找到 " + found + " 个信号灯, 新增 " + added
+			+ " 个 AUTO 条目, 跳过 BOUND " + skippedBound + " 个, 清理已拆掉的 " + removed + " 个"
+			+ (removedBound > 0 ? "（其中 " + removedBound + " 个是人工绑定：世界里的灯没了，绑定一并移除）" : "")
+			+ "; 节点朝向 " + scanNodeAngles(simulator, serverWorld));
+	}
+
+	/**
+	 * 把每个 MTR 节点的**游戏内朝向角**读出来上报给引擎。
+	 *
+	 * <h3>为什么要走经纬度遍历，而不是像灯那样走方块实体</h3>
+	 * <p>信号灯是方块实体，上一段的循环能枚举到；**节点不是方块实体** —— 它是个可穿过的模型方块，
+	 * 世界里根本没有对应的 {@code BlockEntity}。所以第一版把节点判定写在方块实体循环里，结果是
+	 * 一个都没采到（实测：拓扑里 137 个节点，带 angle 的 0 个）。</p>
+	 *
+	 * <h3>为什么只在"节点所在的那一格"读</h3>
+	 * <p>引擎的 {@code positionsToRail} 里已经有全部节点坐标（轨连到哪，节点就在哪），所以不需要
+	 * 满世界扫：只去这些坐标查一次方块状态即可。每个区块只扫一遍，且只扫区块里**真的登记过节点**
+	 * 的那些格，避免 16×16×384 的全量遍历拖住服务端 tick。</p>
+	 *
+	 * <h3>这个值拿来干什么</h3>
+	 * <p>引擎的拓扑原本只有节点坐标，"一盏灯守哪条腿"只能靠灯自己的朝向去猜；实测世界里同一个节点上
+	 * 两盏朝向相对的灯守的是**相反方向**，用灯的朝向推不出来。原版渲染
+	 * {@code RenderSignalBase.getAspectState} 用的正是 {@code BlockNode.getAngle(state)}（偏移 90°），
+	 * 现在把它原样带给引擎。</p>
+	 */
+	private static String scanNodeAngles(Simulator simulator, ServerWorld serverWorld) {
+		// 区块 → 该区块里登记过的节点坐标（局部坐标），只查这些格
+		final java.util.HashMap<Long, java.util.List<int[]>> nodesByChunk = new java.util.HashMap<>();
+		simulator.positionsToRail.keySet().forEach(node -> {
+			final int x = (int) node.getX();
+			final int y = (int) node.getY();
+			final int z = (int) node.getZ();
+			nodesByChunk.computeIfAbsent(chunkKey(x >> 4, z >> 4), k -> new java.util.ArrayList<>()).add(new int[]{x, y, z});
+		});
+		final World world = new World(serverWorld);
+		int seen = 0;
+		int updated = 0;
+		int missing = 0;
+		for (final java.util.Map.Entry<Long, java.util.List<int[]>> group : nodesByChunk.entrySet()) {
+			final int chunkX = (int) (group.getKey() >> 32);
+			final int chunkZ = (int) (long) group.getKey();
+			if (!world.isChunkLoaded(chunkX, chunkZ)) {
+				continue; // 没加载就读不到，留着上一次的值
+			}
+			for (final int[] pos : group.getValue()) {
+				final BlockState blockState = world.getBlockState(new org.mtr.mapping.holder.BlockPos(pos[0], pos[1], pos[2]));
+				// 节点方块上下各一格都可能，两格都试；两格都不是节点就说明这个坐标上没节点
+				float angle = Float.NaN;
+				if (blockState.getBlock().data instanceof org.mtr.mod.block.BlockNode) {
+					angle = org.mtr.mod.block.BlockNode.getAngle(blockState);
+				} else {
+					for (final int dy : new int[]{-1, 1}) {
+						final BlockState other = world.getBlockState(new org.mtr.mapping.holder.BlockPos(pos[0], pos[1] + dy, pos[2]));
+						if (other.getBlock().data instanceof org.mtr.mod.block.BlockNode) {
+							angle = org.mtr.mod.block.BlockNode.getAngle(other);
+							break;
+						}
+					}
+				}
+				if (Float.isNaN(angle)) {
+					missing++;
+					continue;
+				}
+				seen++;
+				if (simulator.mmtrNodeAngleUpsert(pos[0], pos[1], pos[2], angle)) {
+					updated++;
+				}
+			}
+		}
+		return "已读 " + seen + " 个（新/变更 " + updated + " 个，坐标上没找到节点 " + missing
+			+ " 个，引擎共 " + simulator.mmtrNodeAngles.size() + " 个有朝向）";
+	}
+
+	/** 区块坐标 → 可比较的键（世界坐标每次 {@code >>4} 得到区块坐标）。 */
+	private static long chunkKey(int chunkX, int chunkZ) {
+		return ((long) chunkX << 32) ^ (chunkZ & 0xffffffffL);
 	}
 }

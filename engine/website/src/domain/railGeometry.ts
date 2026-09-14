@@ -407,8 +407,8 @@ export function railBounds(rails: readonly {
 	let maxX = -Infinity;
 	let maxY = -Infinity;
 	const visit = (x: number, z: number) => {
-		// 平面图用 (x, -z)，与世界 z 越大越靠上的约定一致。
-		const planeY = -z;
+		// 平面图用 (x, z) 直映，与 Node/Rail/Signal 的 plane* 同一约定（见 Node.planeZ 的说明）
+		const planeY = z;
 		if (x < minX) {
 			minX = x;
 		}

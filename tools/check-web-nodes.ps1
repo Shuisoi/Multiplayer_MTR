@@ -160,6 +160,79 @@ try {
 	Start-Sleep -Milliseconds 400
 	$menu = Eval "document.querySelector('.menu') ? [...document.querySelectorAll('.menu-item')].map(b => b.textContent).join(' / ') : '（无）'"
 	CheckTrue "左键点开操作菜单" ($menu -notlike "*（无）*") $menu
+	CheckTrue "菜单里有『复制坐标』" ($menu -like "*复制坐标*") $menu
+
+	# --- 复制坐标：不是"点了就算"，而是把**剪贴板读回来**核对内容 ---
+	# 这条功能原来的实现是 `void navigator.clipboard?.writeText(...)`：不 await、不看结果、没有兜底，
+	# 失败时是静默的（实测无头浏览器里 writeText 直接 NotAllowedError）。
+	# 所以这里先给页面**授予剪贴板权限**，让 writeText 这条路真的能走通，
+	# 然后核对"复制出来的文本 == 被点那个节点自己的坐标"。
+	try {
+		Cdp "Browser.grantPermissions" @{ permissions = @("clipboardReadWrite", "clipboardSanitizedWrite"); origin = "http://127.0.0.1:8888" } | Out-Null
+	} catch {
+		Write-Output "（Browser.grantPermissions 不可用：$($_.Exception.Message)）"
+	}
+	$clickedCopy = Eval @'
+(() => {
+  const item = [...document.querySelectorAll('.menu-item')].find(b => (b.textContent || '').includes('复制坐标'));
+  if (!item) return 'no-item';
+  const node = item.closest('.node');
+  const dot = node ? node.querySelector('.dot') : null;
+  const r = dot ? dot.getBoundingClientRect() : null;
+  // 记下这个节点在屏幕上的位置：复制会被点掉菜单，而后面『居中到这里』那一步需要菜单开着，
+  // 所以收尾要**在同一个节点上重新打开**（用别的方式重开就会测到另一个节点）。
+  const out = {ok: true, key: node ? node.dataset.key : '', screen: r ? {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2)} : null};
+  item.click();
+  return JSON.stringify(out);
+})()
+'@ | ConvertFrom-Json
+	Start-Sleep -Milliseconds 500
+	# 页面自报这次复制的结果（成功/失败、走的哪条路、失败原因）——界面拿它决定说什么，
+	# 也就等于给了脚本一个"界面到底说了什么"的凭据。
+	$copyResult = Eval "JSON.stringify(window.__mmtrLastCopy || null)" | ConvertFrom-Json
+	CheckTrue "『复制坐标』被点后真的走了复制逻辑" ($null -ne $copyResult) "window.__mmtrLastCopy = $(Eval "JSON.stringify(window.__mmtrLastCopy || null)")"
+	# 复制的文本必须**正好是引擎里某个节点的坐标**（不能是随手拼的字符串、不能带多余空格）。
+	# 用引擎的坐标表来核，而不是从 DOM 里抠：菜单打开时那个节点并没有显示坐标的地方。
+	$engineNodeCoords = @((Invoke-RestMethod "http://127.0.0.1:8888/mtr/api/map/mmtr-topology" -TimeoutSec 25).data.nodes |
+		ForEach-Object { "$($_.x), $($_.y), $($_.z)" })
+	if ($null -ne $copyResult) {
+		CheckTrue "复制出来的是引擎里真实存在的节点坐标" ($engineNodeCoords -contains $copyResult.text) `
+			"复制内容「$($copyResult.text)」；引擎里 $(if ($engineNodeCoords -contains $copyResult.text) { '有' } else { '**没有**' }) 这个节点（共 $($engineNodeCoords.Count) 个）"
+	}
+	# 真读剪贴板核对。
+	#
+	# <p>实测约束：无头浏览器**没有系统剪贴板**，`writeText` 报成功而 `readText` 读回空 ——
+	# 授予 `clipboardReadWrite` 也一样。所以这里不用 `readText` 的返回值做断言（那会把环境限制
+	# 写成页面缺陷），而是核对**页面自报的写入结果**：`__mmtrLastCopy` 里带着
+	# `ok`（API 是否接受）、`via`（走的哪条路）、`text`（写进去的内容）。
+	# 这三样合起来足以说明"这条功能真的接上了"，而上面的"文本必须存在于引擎的节点表里"
+	# 则保证了复制内容不是随手拼的字符串。</p>
+	Write-Output "（无头浏览器读不回剪贴板内容，写入结果以下面的 __mmtrLastCopy 为准：ok/via/text 三项齐全即算接通）"
+	if ($null -ne $copyResult) {
+		CheckTrue "页面自报的复制结果是完整的一次成功写入" `
+			($copyResult.ok -eq $true -and $copyResult.text -eq "" -eq $false -and $copyResult.via -ne "") `
+			"ok=$($copyResult.ok) via=$($copyResult.via) text=「$($copyResult.text)」error=「$($copyResult.error)」"
+	}
+
+	# 收尾：在**同一个节点**上重新打开菜单。
+	# 复制那一下会被点掉菜单，而后面『居中到这里』那一步需要菜单开着、且要在同一个节点上
+	# （换成别的节点就会去测另一个交互）。直接对该节点的圆点派发 pointerdown/pointerup，
+	# 不走屏幕坐标：这一页节点很密，挑坐标很容易点到邻居（实测踩过两次）。
+	$reopened = Eval @"
+(() => {
+  const node = [...document.querySelectorAll('.node')].find(n => n.dataset.key === '$($clickedCopy.key)');
+  if (!node) return 'no-node';
+  const dot = node.querySelector('.dot');
+  const r = dot.getBoundingClientRect();
+  const o = {bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerId: 9, button: 0};
+  dot.dispatchEvent(new PointerEvent('pointerdown', o));
+  dot.dispatchEvent(new PointerEvent('pointerup', o));
+  return 'ok';
+})()
+"@
+	Start-Sleep -Milliseconds 400
+	$menuAfter = Eval "document.querySelector('.menu') ? [...document.querySelectorAll('.menu-item')].map(b => b.textContent).join(' / ') : '（无）'"
+	CheckTrue "复制之后能在同一节点上重新打开菜单" ($reopened -eq "ok" -and $menuAfter -notlike "*（无）*") "重开结果 $reopened；菜单：$menuAfter"
 
 	# --- 居中到这里 ---
 	# 判据用"被点中的那个节点"（.node.active），不是固定 index：

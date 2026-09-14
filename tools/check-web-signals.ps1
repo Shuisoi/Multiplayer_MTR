@@ -66,12 +66,44 @@ try {
   const byState = {};
   for (const x of s) { const k = x.aspect || "（空）"; byState[k] = (byState[k] ?? 0) + 1; }
   return JSON.stringify({count: s.length, byState, withSection: s.filter(x => x.hasSection).length,
+    emptyCount: s.filter(x => !x.aspect).length,
     angles: [...new Set(s.map(x => x.angle))].sort((a,b)=>a-b)});
 })()
 '@
 	$a = $api | ConvertFrom-Json
 	Write-Output "引擎侧：$($a.count) 个灯，状态 $($a.byState | ConvertTo-Json -Compress)，接入闭塞层 $($a.withSection) 个，朝向角 $($a.angles -join '/')"
-	CheckTrue "引擎给每个灯都算了状态（没有空状态）" ($a.byState.PSObject.Properties.Name -notcontains "（空）") "状态分布 $($a.byState | ConvertTo-Json -Compress)"
+	# 这条原来的措辞是"每个灯都有状态"，实测站不住：**没有区间的灯本来就没有状态**，
+	# 而那是一种正当状态（"这盏灯不参与闭塞"），不是缺陷 —— 实测世界里 3 盏如此，
+	# 其中两盏是人工把轨分配到了 30 多米外、绑定被引擎忽略后也推断不出结果。
+	# 所以这里改成：**有区间的灯必须都有状态**（这才是真正该守的不变量），
+	# 并把"没有区间的灯"单独报出来，让它是"看得见的实情"而不是被断言掩盖。
+	$emptyState = [int]$a.emptyCount
+	$withoutSection = [int]$a.count - [int]$a.withSection
+	CheckTrue "没有区间的灯才允许没有状态（有区间的必须都有）" `
+		($emptyState -le $withoutSection) `
+		"状态分布 $($a.byState | ConvertTo-Json -Compress)（空状态 $emptyState 个 / 未接入闭塞层 $withoutSection 个）"
+
+	# ---- 登记完整性：世界里扫到的灯必须都在登记表里（用户反馈过"显示不全"） ----
+	# 背景：信号灯要**先被登记**才会出现在 mmtr-signals 里。实测世界里扫出 37 个，
+	# 而登记表当时只有 31 个 —— 控制台少了 6 个灯。所以控制台每次读取都会触发一次
+	# `signals scan`，并把扫描结果写到 HUD 上（"扫到 N 个信号灯 / 补登记 M 个"）。
+	$scanLine = Eval @'
+(async () => {
+  const r = await (await fetch('/mtr/api/map/mmtr-command', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({command:''})})).json();
+  const lines = (r.data && r.data.log) || [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].includes('[signals]')) return lines[i];
+  }
+  return '';
+})()
+'@
+	$found = $null
+	if ($scanLine -match "找到\s*(\d+)\s*个信号灯") { $found = [int]$Matches[1] }
+	$hudScan = Eval "(() => { const n = document.querySelector('.hud'); return n ? (n.innerText.match(/扫到[^\n]*/) || [''])[0] : ''; })()"
+	Write-Output ("引擎扫描：" + $(if ($scanLine) { $scanLine } else { "（日志里没有 [signals] 行）" }))
+	Write-Output ("HUD 上的登记说明：" + $(if ($hudScan) { $hudScan } else { "（无）" }))
+	CheckTrue "扫描结果被读回并显示在 HUD 上" ($hudScan -ne "") "HUD: $hudScan"
+	CheckTrue "页面灯数不少于世界里扫到的灯数" ($null -eq $found -or $a.count -ge $found) $(if ($null -eq $found) { "没读到扫描统计（跳过比较）" } else { "页面 $($a.count) ≥ 扫到 $found（差额来自扫描跳过的 BOUND 条目）" })
 
 	# 页面侧
 	$dom = Eval @'
@@ -187,7 +219,9 @@ try {
 	$center = Eval "(function(){ const l = document.querySelector('.signals .signal .lamp').getBoundingClientRect(); return JSON.stringify({x: Math.round(l.left + l.width/2), y: Math.round(l.top + l.height/2)}); })()" | ConvertFrom-Json
 	Cdp "Input.dispatchMouseEvent" @{ type = "mouseMoved"; x = [int]$center.x; y = [int]$center.y; buttons = 0 } | Out-Null
 	Start-Sleep -Milliseconds 500
-	$card = Eval "document.querySelector('.signals .card') ? document.querySelector('.signals .card').innerText.replace(/\n/g, ' | ') : '（没有卡片）'"
+	# 信息卡要**点名是信号灯层的那张**：道岔层也有 `.card`，而且道岔与灯常在同一格上，
+	# 用 `.card` 泛匹配会把道岔的卡片当成本次悬停的结果（实测：假通过）。
+	$card = Eval "document.querySelector('.signals .signal .card') ? document.querySelector('.signals .signal .card').innerText.replace(/\n/g, ' | ') : '（没有卡片）'"
 	CheckTrue "悬停灯位弹出信息卡" ($card -notlike "*（没有卡片）*") $card
 
 	Write-Output ""

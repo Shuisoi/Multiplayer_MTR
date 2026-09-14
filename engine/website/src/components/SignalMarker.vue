@@ -17,10 +17,17 @@ const props = defineProps<{
 	/** 视口内屏幕坐标（CSS 像素，信号灯中心）。 */
 	screen: {x: number; y: number};
 	hovered: boolean;
+	/** 正在改这盏灯的绑定（点选绑定）：加一圈强调环。 */
+	selected?: boolean;
 }>();
 
 const emit = defineEmits<{
 	(e: "hover", key: string): void;
+	(e: "pick", key: string): void;
+	/** 复制这盏灯的坐标（指令格式 `x y z`）。 */
+	(e: "copy", signal: Signal): void;
+	/** 把 `signal why x y z` 送进网页指令栏（不依赖剪贴板）。 */
+	(e: "why", signal: Signal): void;
 }>();
 
 /** 状态 → 颜色。与 C# 端那套一致：红/黄/绿用高饱和，未接入用灰。 */
@@ -42,20 +49,26 @@ const stateColor = computed(() => {
 /** 信息卡里的说明行。 */
 const facts = computed(() => [
 	{label: "状态", value: props.signal.stateText},
-	{label: "朝向", value: `${props.signal.directionText}　（角 ${props.signal.angle}°）`},
+	{label: "管辖方向", value: `${props.signal.directionText}　（角 ${props.signal.angle}°；灯面在它的反面）`},
 	{label: "灯位", value: props.signal.aspectsText},
-	{label: "模式", value: props.signal.mode === "BOUND" ? `绑定（${props.signal.target.slice(0, 12)}…）` : "自动（按位置推断）"},
+	{label: "守轨", value: props.signal.bindingText},
 	{label: "开区间", value: props.signal.hasSection ? "是" : "未接入闭塞层"},
+	{label: "操作", value: props.selected ? "点轨道上的高亮线 = 绑定/解绑，Esc 取消" : "点这盏灯 = 改绑定"},
 ]);
+
+/** 信息卡里列出的守轨（只显示 hex 前 10 位，完整值在 title 里）。 */
+const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: hex.slice(0, 10)})));
 </script>
 
 <template>
 	<div
 		class="signal"
-		:class="{hovered}"
+		:class="{hovered, selected}"
+		:data-key="signal.key"
 		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
+		@pointerdown.stop="emit('pick', signal.key)"
 	>
 		<!--
 			方向：一个 `^` 形状的折角符号，按朝向角旋转（基准朝上 = 北）。
@@ -82,7 +95,18 @@ const facts = computed(() => [
 
 		<div v-if="hovered" class="card">
 			<div class="card-head">
-				<span class="coords value">{{ signal.coords }}</span>
+				<!--
+					坐标本身就是"复制"按钮：把它送进剪贴板是这个界面里最常做的一件事
+					（粘进指令栏、粘进 issue、粘进游戏），所以别让人再去瞄一个 11px 的小按钮。
+					点了复制的是**指令格式** `x y z`（见 domain/coords.ts），显示仍给人读的那版。
+					pointerdown/click 都要 stop：否则会被灯本身的"点这盏灯 = 改绑定"吃掉。
+				-->
+				<span
+					class="coords value copyable"
+					title="点一下复制指令坐标（x y z）"
+					@pointerdown.stop
+					@click.stop="emit('copy', signal)"
+				>{{ signal.coords }}</span>
 				<span class="state" :style="{color: stateColor}">{{ signal.stateText }}</span>
 			</div>
 			<dl class="facts">
@@ -91,6 +115,18 @@ const facts = computed(() => [
 					<dd>{{ fact.value }}</dd>
 				</template>
 			</dl>
+			<ul v-if="guarded.length > 0" class="guarded">
+				<li v-for="item in guarded" :key="item.hex" :title="item.hex">{{ item.short }}…</li>
+			</ul>
+			<!--
+				坐标的两个出口：复制（指令格式 x y z）与**送进指令栏**。
+				第二个不碰剪贴板 —— 剪贴板会被浏览器拒绝（NotAllowedError），那时"复制"只能弹个窗让你手抄。
+				按钮上的 pointerdown 要 stop，否则会触发灯本身的"点这盏灯 = 改绑定"。
+			-->
+			<div class="card-actions" @pointerdown.stop @click.stop>
+				<button type="button" class="mini" @click="emit('copy', signal)">复制坐标</button>
+				<button type="button" class="mini" @click="emit('why', signal)">查为什么是这个色</button>
+			</div>
 		</div>
 	</div>
 </template>
@@ -144,6 +180,25 @@ const facts = computed(() => [
 	box-shadow: 0 0 0 1.5px #000000, 0 0 0 3.5px rgba(255, 255, 255, 0.35);
 }
 
+/* 正在改绑定的灯：加一圈强调色环（比悬停更醒目，且不会因为指针离开而消失） */
+.signal.selected .lamp {
+	box-shadow: 0 0 0 1.5px #000000, 0 0 0 3.5px var(--accent), 0 0 12px var(--accent);
+}
+
+.signal {
+	cursor: pointer;
+}
+
+/* 守轨列表：等宽小字，一行一条 */
+.guarded {	margin: 6px 0 0;
+	padding: 6px 0 0;
+	border-top: 1px solid var(--hairline);
+	list-style: none;
+	font-family: var(--font-value);
+	font-size: 11px;
+	color: var(--accent);
+}
+
 /*
  * 信息卡：C# 端的"假玻璃"深色卡片。定位在灯的右下方，避免盖住箭头。
  */
@@ -180,6 +235,16 @@ const facts = computed(() => [
 	color: var(--fg);
 }
 
+/* 坐标本身可点 = 复制（见模板里的说明）；悬停给一条下划线，让人知道这里能点 */
+.copyable {
+	cursor: copy;
+}
+
+.copyable:hover {
+	color: var(--accent);
+	text-decoration: underline dotted;
+}
+
 .state {
 	flex: none;
 	font-size: 11px;
@@ -204,5 +269,30 @@ const facts = computed(() => [
 
 .value {
 	font-family: var(--font-value);
+}
+
+/* 卡片底部的两个动作（复制坐标 / 送进指令栏）：小按钮，鼠标移上去才显眼 */
+.card-actions {
+	display: flex;
+	gap: 6px;
+	margin-top: 7px;
+	padding-top: 7px;
+	border-top: 1px solid var(--hairline);
+}
+
+.mini {
+	flex: 1;
+	padding: 3px 6px;
+	font-size: 11px;
+	color: var(--fg-secondary);
+	background: var(--panel-raised, rgba(255, 255, 255, 0.04));
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.mini:hover {
+	color: var(--fg);
+	border-color: var(--accent);
 }
 </style>

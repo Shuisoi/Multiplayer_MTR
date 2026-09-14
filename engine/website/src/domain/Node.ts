@@ -64,13 +64,19 @@ export class Node {
 		return `${this.x}, ${this.y}, ${this.z}`;
 	}
 
-	/** 极简平面图坐标：`(x, -z)`，与 C# 端画布同一约定（世界 z 越大越靠上）。 */
+	/**
+	 * 平面图坐标 = 世界 {@code (x, z)} 直映（不翻转）。
+	 *
+	 * <p>原先是 {@code (x, -z)}（"北在上"的制图习惯）。但看这张图的人是拿它对着游戏里的俯视图看的，
+	 * 而游戏俯视里 z 增大就是往下 —— {@code -z} 会让整张图**上下反着**（用户原话："好像地图是反的"）。
+	 * 直映之后与游戏一致：x 向右、z 向下。</p>
+	 */
 	get planeX(): number {
 		return this.x;
 	}
 
 	get planeZ(): number {
-		return -this.z;
+		return this.z;
 	}
 
 	get kind(): NodeKind {

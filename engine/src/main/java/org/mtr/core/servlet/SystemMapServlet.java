@@ -235,11 +235,36 @@ public final class SystemMapServlet extends ServletBase {
 				case "mmtr-command" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					final String command = jsonReader.getString("command", "");
-					if (!command.isEmpty()) {
+					if (command.isEmpty()) {
+						// 空命令 = 只读日志（控制台轮询游戏端命令结果时用）
+						result.addProperty("ok", false);
+						result.addProperty("error", "command is required");
+					} else if (command.startsWith("signals scan")) {
+						// 这条依赖"枚举已加载区块"，只有游戏端能做 → 交给游戏端命令通道
 						simulator.mmtrPushCommand(command);
 						result.addProperty("ok", true);
+						result.addProperty("queued", true);
 					} else {
-						result.addProperty("ok", false);
+						/*
+						 * 中控指令（名词打头）：引擎侧直接执行。
+						 *
+						 * 引擎本来就持有车辆段、股道、信号、道岔的全部权威状态，所以绝大多数操作
+						 * 不需要绕到游戏端，也不需要重启 —— 回复里直接带上受影响的对象 id 与实情，
+						 * 调用方可以立刻核对，而不是收到一句"OK 已入队"。
+						 */
+						final org.mtr.core.mmtr.command.MmtrCommandDispatcher.Result executed = simulator.mmtrExecuteCommand(command);
+						result.addProperty("ok", executed.ok);
+						result.addProperty("namespace", executed.namespace);
+						result.addProperty("verb", executed.verb);
+						final com.google.gson.JsonArray affected = new com.google.gson.JsonArray();
+						executed.affected.forEach(affected::add);
+						result.add("affected", affected);
+						final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();
+						executed.lines.forEach(lines::add);
+						result.add("lines", lines);
+						// 同时写进命令日志：网页指令栏与游戏端共用同一份历史
+						simulator.mmtrCommandResult((executed.ok ? "[ok] " : "[失败] ") + command);
+						executed.lines.forEach(line -> simulator.mmtrCommandResult("    " + line));
 					}
 					final com.google.gson.JsonArray log = new com.google.gson.JsonArray();
 					simulator.mmtrCommandLog.forEach(log::add);
@@ -769,11 +794,30 @@ public final class SystemMapServlet extends ServletBase {
 			o.addProperty("z", p.nodeZ);
 			o.addProperty("via", p.viaRailHex);
 			o.addProperty("form", p.form.name());
+			/*
+			 * 物理道岔：一处道岔一个位置、两条互斥进路 —— 位置与"哪条进路禁止通行"都直接给出来，
+			 * 操作台才能不猜。用户 2026-09-13 的规格：位置 0 = 正线贯通（岔股禁行），
+			 * 位置 1 = 岔股开放（正线被断开的那一侧禁行）。
+			 */
+			final org.mtr.core.mmtr.point.MmtrTurnout turnout = simulator.mmtrTurnout(p.nodeX, p.nodeY, p.nodeZ);
+			final int turnoutPosition = turnout == null ? -1 : simulator.mmtrTurnoutPosition(p.nodeX, p.nodeY, p.nodeZ);
+			final String prohibitedRailHex = turnout == null ? "" : turnout.prohibitedRailHex(turnoutPosition);
+			if (turnout != null) {
+				o.addProperty("position", turnoutPosition);
+				o.addProperty("prohibited", prohibitedRailHex);
+				o.addProperty("stem", turnout.stemRailHex);
+				// 三条轨都给出来：网页要能**独立于当前位置**说出"扳到 0 是接哪条、扳到 1 是接哪条"，
+				// 只给"当前禁行的那一条"的话，位置一变操作台就得靠猜另一条是哪根。
+				o.addProperty("far", turnout.farRailHex);
+				o.addProperty("branch", turnout.branchRailHex);
+			}
 			final com.google.gson.JsonArray legs = new com.google.gson.JsonArray();
 			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : p.legs) {
 				final com.google.gson.JsonObject legJson = new com.google.gson.JsonObject();
 				legJson.addProperty("hex", leg.railHex);
 				legJson.addProperty("kind", leg.kind.name());
+				// 这条腿当前是不是禁止通行（道岔没开通它）：网页/操作台据此画红叉或灰掉
+				legJson.addProperty("prohibited", turnout != null && leg.railHex.equals(prohibitedRailHex));
 				legs.add(legJson);
 			}
 			o.add("legs", legs);
@@ -836,6 +880,24 @@ public final class SystemMapServlet extends ServletBase {
 			// Whether a lamp opens a section at all. A lamp the blockage layer does not know protects
 			// nothing, and the console shows that as "未接入" rather than painting it as if it were green.
 			out.addProperty("hasSection", simulator.mmtrDirectionalBlocks.sectionOfSignal(key) != null);
+			/*
+			 * 点选绑定用：这盏灯**现在守哪几根轨**（boundRails）与**可以点哪几根**（candidateRails）。
+			 *
+			 * 两份名单都由引擎算：网页只负责高亮、以及把点击回传成 signal bind --rail，不自己算几何 ——
+			 * "高亮的就是能绑的、显示的就是在守的"必须由同一份数据保证，否则界面与引擎各说各话
+			 * （实测已经吃过一次：三处各算一遍、三处错得一样，反而更难查）。
+			 */
+			final com.google.gson.JsonArray boundRails = new com.google.gson.JsonArray();
+			if (!entry.rails.isEmpty()) {
+				entry.rails.forEach(boundRails::add);
+			} else {
+				simulator.mmtrDirectionalBlocks.protectedRailsOf(entry).forEach(boundRails::add);
+			}
+			out.add("boundRails", boundRails);
+			out.addProperty("boundExplicit", !entry.rails.isEmpty());
+			final com.google.gson.JsonArray candidateRails = new com.google.gson.JsonArray();
+			simulator.mmtrDirectionalBlocks.candidateRailsOf(entry).forEach(candidateRails::add);
+			out.add("candidateRails", candidateRails);
 			signals.add(out);
 		});
 		final com.google.gson.JsonObject root = new com.google.gson.JsonObject();
@@ -897,6 +959,18 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("z", node.getZ());
 			out.addProperty("degree", neighbourMap.size());
 			out.addProperty("block", nodeOwners.getOrDefault(node.getX() + "," + node.getY() + "," + node.getZ(), ""));
+			/*
+			 * 节点的**游戏内朝向角**（度）。只有游戏端扫描上报过才有这个字段。
+			 *
+			 * <p>引擎的拓扑原本只有坐标，于是"一盏灯守哪条腿"只能靠灯自己的朝向来猜；实测世界里
+			 * 同一个节点上两盏朝向相对的灯守的是相反方向，猜不出来。原版渲染
+			 * `RenderSignalBase.getAspectState` 用的是 `BlockNode.getAngle(state) + 90` 这个朝向，
+			 * 现在把它原样带给引擎和网页。</p>
+			 */
+			final Float nodeAngle = simulator.mmtrNodeAngle(node.getX(), node.getY(), node.getZ());
+			if (nodeAngle != null) {
+				out.addProperty("angle", nodeAngle);
+			}
 			final com.google.gson.JsonArray neighbours = new com.google.gson.JsonArray();
 			neighbourMap.forEach((pos, rail) -> {
 				final com.google.gson.JsonObject n = new com.google.gson.JsonObject();
@@ -928,7 +1002,15 @@ public final class SystemMapServlet extends ServletBase {
 				return;
 			}
 			final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
-			o.addProperty("hex", hex);
+			/*
+			 * hex 用**规范形式**（两个端点表示里取字典序小的那个）。
+			 *
+			 * <p>同一条实体轨有两个互为逆序的 hex（取决于这条 Rail 怎么被声明），而网页点选绑定要把
+			 * 这个 hex 原样发回来。如果对外发的是"声明顺序"的写法、引擎内部按别的写法存，
+			 * 页面点的轨和引擎绑的轨就成了两个字符串 —— 绑定会静默失败（实测踩过：
+			 * 接口回 ok、绑定列表却没变）。对外统一成规范形式，两边永远对得上。</p>
+			 */
+			o.addProperty("hex", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(hex));
 			o.addProperty("x1", ends[0].getX());
 			o.addProperty("y1", ends[0].getY());
 			o.addProperty("z1", ends[0].getZ());

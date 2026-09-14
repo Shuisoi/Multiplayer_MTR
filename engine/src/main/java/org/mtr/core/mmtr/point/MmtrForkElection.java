@@ -61,6 +61,42 @@ public final class MmtrForkElection {
 		if (legs.isEmpty()) {
 			return null;
 		}
+
+		/*
+		 * **物理道岔的禁行闸门**（用户 2026-09-13 的规格）：一处道岔只有一个位置，两条进路互斥。
+		 *
+		 * <p>位置 0 = 正线贯通（岔股**禁止通行**）；位置 1 = 岔股开放（正线被断开的那一侧**禁止通行**）。
+		 * 做法是**过滤**而不是取代：下面的取值顺序（人工位 → 进路授权 → 任务目标 → 唯一续行）保持不变，
+		 * 但轮到"没开通的那一侧"时一律不放行 —— 返回 null，车停在岔前。原来缺的正是这道闸门：
+		 * 它允许从岔股开往正线远端这种**物理上不存在的组合**（列车会在尖轨处脱轨）。</p>
+		 *
+		 * <p>非单开道岔（度 4 交叉、三岔口）没有物理道岔模型，闸门不生效，仍走老顺序。</p>
+		 */
+		MmtrTurnout turnout = null;
+		int turnoutPosition = 0;
+		if (data instanceof final Simulator turnoutSimulator) {
+			turnout = turnoutSimulator.mmtrTurnout(node.getX(), node.getY(), node.getZ());
+			if (turnout != null) {
+				// 位置：调用方用的那个 store 是唯一真源（生产里就是模拟器那一份；测试会注入自己的）。
+				// 但"授权/进路要的那条腿"会先把道岔扳过去（联锁扳动道岔），所以先同步一次。
+				if (branches == null || branches == turnoutSimulator.mmtrPointBranches) {
+					turnoutSimulator.mmtrSyncTurnoutPositionToGrant(turnout);
+					turnoutPosition = turnoutSimulator.mmtrTurnoutPosition(node.getX(), node.getY(), node.getZ());
+				} else {
+					// 注入的 store：先把行视图折成位置（写行 = 扳道岔），再叠上**这次调用给的**授权持有的腿
+					// （注意是调用方给的那份授权表，不是模拟器自己那份 —— 测试会把两者分开装）
+					turnoutPosition = turnout.positionFromRows(branches, node.getX(), node.getY(), node.getZ());
+					final int grantedPosition = turnoutPositionFromGrant(pointAuthority, pointAuthorityOwner, turnout, node);
+					if (grantedPosition != Integer.MIN_VALUE) {
+						turnoutPosition = grantedPosition;
+					}
+				}
+				if (turnout.continuationFrom(viaRail.getHexId(), turnoutPosition) == null) {
+					return null;
+				}
+			}
+		}
+
 		Rail chosen = null;
 		final long px = node.getX();
 		final long py = node.getY();
@@ -91,7 +127,40 @@ public final class MmtrForkElection {
 		if (chosen == null && legs.size() == 1) {
 			chosen = findRailByHex(forwardRails, legs.get(0).railHex);
 		}
+		if (chosen != null && turnout != null) {
+			// 闸门：选出来的这条轨必须是道岔当前**开通**的那一侧；否则一律不放行
+			final String allowed = turnout.continuationFrom(viaHex, turnoutPosition);
+			if (allowed == null || !allowed.equals(chosen.getHexId())) {
+				return null;
+			}
+		}
 		return chosen;
+	}
+
+	/**
+	 * **这次调用给的**授权表里，有没有哪条腿指明了道岔位置。
+	 *
+	 * <p>用调用方给的授权表（而不是模拟器自己那份）：测试会把走行、授权、道岔行视图分开装，
+	 * 生产里它们恰好是同一份。{@code owner} 非空时只认它持有的授权；为空时按任意持有者读。</p>
+	 */
+	private static int turnoutPositionFromGrant(@Nullable MmtrPointAuthority authority, @Nullable String owner, MmtrTurnout turnout, Position node) {
+		if (authority == null) {
+			return Integer.MIN_VALUE;
+		}
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			if (owner != null && !authority.isGrantedTo(node.getX(), node.getY(), node.getZ(), via, owner)) {
+				continue;
+			}
+			final int granted = authority.grantedLeg(node.getX(), node.getY(), node.getZ(), via);
+			if (granted < 0) {
+				continue;
+			}
+			final int position = turnout.positionForLeg(via, granted);
+			if (position != Integer.MIN_VALUE) {
+				return position;
+			}
+		}
+		return Integer.MIN_VALUE;
 	}
 
 	/** Whether the node has any continuation other than {@code viaRail} at all (used to tell a halt from an end of line). */

@@ -52,14 +52,23 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 	}
 
 	/**
-	 * S4: the same payload plus every lamp's <strong>v2 display</strong>, flattened as
-	 * {@code [lampKey, aspectName] * n} where the key is the lamp's {@code x,y,z} registry key.
+	 * S4: the same payload plus every lamp's <strong>v2 display</strong> and its <strong>守轨</strong>,
+	 * flattened as {@code [lampKey, aspectName] * n} and {@code [lampKey, railHex] * n}.
 	 *
 	 * <p>The engine hands the client its own conclusion (闭塞区间 v2 computes the aspect per LAMP - what one
 	 * lamp protects, walked lamp to lamp - while the client renderer works per rail block, so it looks its
 	 * own key up). That way the two sides cannot disagree, and the client needs no copy of the section walk.</p>
+	 *
+	 * <p><b>守轨（{@code lampRails}）是给"绑定工具"的叠加层用的</b>：拿着绑定工具时要在世界里画出
+	 * "这盏灯守哪几根轨"。这份关系由**引擎**算（它才持有节点、朝向、人工绑定、区间那一整套），
+	 * 客户端只显示 —— 客户端自己按几何推一遍必然与引擎分叉，而"灯到底守哪根轨"正是要看的那个东西。</p>
 	 */
 	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects) {
+		return contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, lampAspects, new Object2ObjectOpenHashMap<>());
+	}
+
+	/** As above, carrying each lamp's guarded rails ({@code [lampKey, railHex] * n}). */
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects, Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
 		nextRails.forEach((from, tos) -> tos.forEach(to -> {
@@ -87,6 +96,12 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 			lamps.add(aspect);
 		});
 		json.add("lamps", lamps);
+		final JsonArray lampRailsFlat = new JsonArray();
+		lampRails.forEach((key, railHexes) -> railHexes.forEach(railHex -> {
+			lampRailsFlat.add(key);
+			lampRailsFlat.add(railHex);
+		}));
+		json.add("lampRails", lampRailsFlat);
 		return json.toString();
 	}
 
@@ -122,8 +137,15 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		for (int i = 0; i + 1 < lampEntries.size(); i += 2) {
 			lampAspects.put(lampEntries.get(i), lampEntries.get(i + 1));
 		}
-		MmtrClientRoutes.update(next, pending, sections, restrictedNodes, lampAspects);
-		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s)");
+		// 守轨（绑定工具叠加层用）: [lampKey, railHex] pairs.
+		final ObjectArrayList<String> lampRailEntries = new ObjectArrayList<>();
+		jsonReader.iterateStringArray("lampRails", lampRailEntries::clear, lampRailEntries::add);
+		final Map<String, java.util.List<String>> lampRails = new HashMap<>();
+		for (int i = 0; i + 1 < lampRailEntries.size(); i += 2) {
+			lampRails.computeIfAbsent(lampRailEntries.get(i), key -> new java.util.ArrayList<>()).add(lampRailEntries.get(i + 1));
+		}
+		MmtrClientRoutes.update(next, pending, sections, restrictedNodes, lampAspects, lampRails);
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s), " + lampRails.size() + " lamp binding(s)");
 	}
 
 	@Override

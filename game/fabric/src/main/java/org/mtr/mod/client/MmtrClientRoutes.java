@@ -39,6 +39,13 @@ public final class MmtrClientRoutes {
 	private static volatile Set<String> restrictedNodes = Collections.emptySet();
 	/** S4: lamp {@code x,y,z} key -&gt; the aspect the ENGINE's v2 model gives that lamp. */
 	private static volatile Map<String, String> lampAspects = Collections.emptyMap();
+	/**
+	 * 绑定工具用：lamp {@code x,y,z} 键 → 这盏灯**守的轨**（一灯多腿时多条）。
+	 *
+	 * <p>由引擎算、随 {@code PacketMmtrRoutes} 发过来。客户端自己按几何推一遍必然与引擎分叉，
+	 * 而"这盏灯到底守哪根轨"正是绑定工具要给人看的东西。</p>
+	 */
+	private static volatile Map<String, List<String>> lampRails = Collections.emptyMap();
 
 	private MmtrClientRoutes() {
 	}
@@ -59,6 +66,15 @@ public final class MmtrClientRoutes {
 	 * the client renderer looks its own block position up.
 	 */
 	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted, Map<String, String> lampAspectMap) {
+		update(next, pending, sectionMap, restricted, lampAspectMap, Collections.emptyMap());
+	}
+
+	/**
+	 * As above, plus every lamp's **守轨**（一灯多腿时多条），供绑定工具的叠加层显示。
+	 *
+	 * <p>这份关系由引擎算（它持有节点、朝向、人工绑定与区间那一整套），客户端只显示。</p>
+	 */
+	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted, Map<String, String> lampAspectMap, Map<String, List<String>> lampRailMap) {
 		final Map<String, List<String>> copy = new HashMap<>();
 		next.forEach((railHex, nexts) -> copy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(nexts))));
 		nextRails = Collections.unmodifiableMap(copy);
@@ -68,6 +84,9 @@ public final class MmtrClientRoutes {
 		sections = Collections.unmodifiableMap(sectionCopy);
 		restrictedNodes = Collections.unmodifiableSet(new HashSet<>(restricted));
 		lampAspects = Collections.unmodifiableMap(new HashMap<>(lampAspectMap));
+		final Map<String, List<String>> lampRailsCopy = new HashMap<>();
+		lampRailMap.forEach((key, railHexes) -> lampRailsCopy.put(key, Collections.unmodifiableList(new java.util.ArrayList<>(railHexes))));
+		lampRails = Collections.unmodifiableMap(lampRailsCopy);
 	}
 
 	public static void clear() {
@@ -76,6 +95,26 @@ public final class MmtrClientRoutes {
 		sections = Collections.emptyMap();
 		restrictedNodes = Collections.emptySet();
 		lampAspects = Collections.emptyMap();
+		lampRails = Collections.emptyMap();
+	}
+
+	/**
+	 * 这盏灯守的轨（一灯多腿时多条）；引擎没给（或这盏灯没接入闭塞层）时返回空表。
+	 *
+	 * <p>绑定工具的叠加层用它把"点中的那盏灯守哪几根轨"画到世界里。</p>
+	 */
+	public static List<String> lampRails(int x, int y, int z) {
+		return lampRails.getOrDefault(x + "," + y + "," + z, Collections.emptyList());
+	}
+
+	/** 这个位置上的轨 hex 是不是这盏灯守的（叠加层判定用）。 */
+	public static boolean lampGuards(int x, int y, int z, @Nullable String railHex) {
+		return railHex != null && lampRails(x, y, z).contains(railHex);
+	}
+
+	/** 有多少盏灯带着守轨信息（诊断用）。 */
+	public static int lampBindingCount() {
+		return lampRails.size();
 	}
 
 	/**

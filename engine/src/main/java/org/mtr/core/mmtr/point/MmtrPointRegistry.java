@@ -28,10 +28,29 @@ public final class MmtrPointRegistry {
 	public static final class BranchStore {
 		public final Map<String, Integer> branches = new HashMap<>();
 
-		/** Stores the raw operator index (0..legs-1 under the direction-aware ordering, legacy 0/1
-		 * on two-leg forks); never auto, and never masked to 1 so multi-leg junctions can express
-		 * every ordered leg. Negative inputs are refused (treated as unset by {@link #contains}). */
+		/**
+		 * **节点级道岔位置**（一处物理道岔只有一个位置，0 = 正线贯通 / 1 = 岔股开放）。
+		 *
+		 * <h3>为什么必须有这一层</h3>
+		 * <p>{@link #branches} 是**方向视图**（键 = 节点 + 进向轨），它回答的是"从这条进向看该走第几条腿"。
+		 * 但一处物理道岔只有一个可动件：正线贯通与岔股开放**互斥**（同时开放会让列车在尖轨处脱轨，用户
+		 * 2026-09-13 原话）。实测世界里三行视图各自被自动补成 0，其中"从岔股进来"那一行的 0 却表示
+		 * "岔股通往正线远端" —— 与"0 = 正线贯通"直接矛盾。所以位置存在这里（按节点），
+		 * {@code branches} 只是它的**派生视图**，由 {@code Simulator} 统一写。</p>
+		 */
+		public final Map<String, Integer> nodePositions = new HashMap<>();
+
+		/** 存原始的操作员腿号（0..legs-1，两腿岔口就是 0/1）；负数是"取消设置"。 */
 		public void set(long x, long y, long z, String viaRailHex, int branch) {
+			if (branch < 0) {
+				branches.remove(key(x, y, z, viaRailHex));
+			} else {
+				branches.put(key(x, y, z, viaRailHex), branch);
+			}
+		}
+
+		/** 由节点位置派生出来的行（不参与"有没有人工设置"的判断，见 {@link #contains}）。 */
+		void putDerived(long x, long y, long z, String viaRailHex, int branch) {
 			if (branch < 0) {
 				branches.remove(key(x, y, z, viaRailHex));
 			} else {
@@ -46,6 +65,21 @@ public final class MmtrPointRegistry {
 
 		public int get(long x, long y, long z, String viaRailHex) {
 			return branches.getOrDefault(key(x, y, z, viaRailHex), 0);
+		}
+
+		// ---------------------------------------------------------------- 节点级位置
+
+		public boolean containsNode(long x, long y, long z) {
+			return nodePositions.containsKey(x + "," + y + "," + z);
+		}
+
+		public void setNode(long x, long y, long z, int position) {
+			nodePositions.put(x + "," + y + "," + z, position);
+		}
+
+		/** 节点位置；没设过按 0（正线贯通 = 安全侧）。 */
+		public int nodePosition(long x, long y, long z) {
+			return nodePositions.getOrDefault(x + "," + y + "," + z, 0);
 		}
 
 		private static String key(long x, long y, long z, String viaRailHex) {
@@ -109,6 +143,14 @@ public final class MmtrPointRegistry {
 		try {
 			if (Files.exists(path)) {
 				final JsonElement root = JsonParser.parseString(new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
+				// 节点级位置（一处道岔一个位置）：新格式才有这一节；老存档没有就留空，由 Simulator
+				// 从行视图反推（见 refreshMmtrTurnouts），这样"人工扳到 1"不会因为升级而丢失。
+				if (root.isJsonObject() && root.getAsJsonObject().has("positions") && root.getAsJsonObject().get("positions").isJsonArray()) {
+					for (final JsonElement el : root.getAsJsonObject().getAsJsonArray("positions")) {
+						final JsonObject o = el.getAsJsonObject();
+						store.setNode(o.get("x").getAsLong(), o.get("y").getAsLong(), o.get("z").getAsLong(), o.get("position").getAsInt());
+					}
+				}
 				if (root.isJsonObject() && root.getAsJsonObject().has("switches") && root.getAsJsonObject().get("switches").isJsonArray()) {
 					for (JsonElement el : root.getAsJsonObject().getAsJsonArray("switches")) {
 						final JsonObject s = el.getAsJsonObject();
@@ -124,6 +166,11 @@ public final class MmtrPointRegistry {
 	}
 
 	public static void saveBranches(Path path, Map<String, Integer> branches) {
+		saveBranches(path, branches, Map.of());
+	}
+
+	/** 落盘：行视图 + **节点级位置**（位置是权威、行视图是派生；两者都写便于人工核对与排错）。 */
+	public static void saveBranches(Path path, Map<String, Integer> branches, Map<String, Integer> nodePositions) {
 		try {
 			if (path.getParent() != null) {
 				Files.createDirectories(path.getParent());
@@ -146,7 +193,21 @@ public final class MmtrPointRegistry {
 				o.addProperty("branch", e.getValue());
 				arr.add(o);
 			}
+			final JsonArray positions = new JsonArray();
+			for (Map.Entry<String, Integer> e : nodePositions.entrySet()) {
+				final String[] c = e.getKey().split(",");
+				if (c.length != 3) {
+					continue;
+				}
+				final JsonObject o = new JsonObject();
+				o.addProperty("x", Long.parseLong(c[0]));
+				o.addProperty("y", Long.parseLong(c[1]));
+				o.addProperty("z", Long.parseLong(c[2]));
+				o.addProperty("position", e.getValue());
+				positions.add(o);
+			}
 			final JsonObject root = new JsonObject();
+			root.add("positions", positions);
 			root.add("switches", arr);
 			Files.write(path, root.toString().getBytes(StandardCharsets.UTF_8));
 		} catch (Exception ex) {

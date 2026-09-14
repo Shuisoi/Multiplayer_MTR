@@ -67,8 +67,10 @@ interface MenuItem {
 const menuItems = computed<MenuItem[]>(() => [
 	{key: "center", label: "居中到这里"},
 	{key: "block", label: "查看所属区间"},
+	{key: "console", label: "坐标送进指令栏"},
 	{key: "divider1", label: "", divider: true},
-	{key: "copy", label: "复制坐标"},
+	{key: "copy", label: "复制坐标（指令用 x y z）"},
+	{key: "copyReadable", label: "复制坐标（x, y, z）"},
 	{key: "neighbors", label: "复制相邻轨"},
 	...(props.node.isFork
 		? [{key: "divider2", label: "", divider: true}, {key: "fork", label: "查看道岔（进向与腿）"}]
@@ -139,6 +141,7 @@ watch(() => props.menuOpen, open => {
 	<div
 		class="node"
 		:class="{active, fork: node.isFork}"
+		:data-key="node.key"
 		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
 		@pointerenter="emit('hover', node.key)"
 		@pointerleave="emit('hover', '')"
@@ -172,8 +175,15 @@ watch(() => props.menuOpen, open => {
 			<div class="tip">左键：操作菜单</div>
 		</div>
 
-		<!-- 操作菜单：自绘。定位在圆点右下方，不与信息卡重叠。 -->
-		<div v-if="menuOpen" class="menu">
+		<!--
+			操作菜单：自绘。定位在圆点右下方，不与信息卡重叠。
+
+			**必须吃掉 pointerdown/pointerup**：菜单是 `.node` 的子元素，而 `.node` 上有
+			"按下-抬起位移 ≤4px 就算点了一下 → 切换菜单"的判定。不拦的话，按在菜单项上会先冒泡到 `.node`
+			触发 toggleMenu，菜单**当场关掉**、按钮从 DOM 里消失，真正的 `click` 于是落空 ——
+			现象就是"点『复制坐标』什么都没发生"（实测 2026-09-13 用户报的正是这个）。
+		-->
+		<div v-if="menuOpen" class="menu" @pointerdown.stop @pointerup.stop @pointercancel.stop>
 			<template v-for="item in menuItems" :key="item.key">
 				<div v-if="item.divider" class="menu-divider"/>
 				<button v-else class="menu-item" type="button" @click.stop="pick(item.key)">{{ item.label }}</button>

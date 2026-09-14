@@ -108,6 +108,19 @@ public final class Depot extends DepotSchema implements Utilities {
 	}
 
 	/**
+	 * 把一条股道**收编**到这个车辆段下（`siding.area = this`）。
+	 *
+	 * <p>为什么需要这个方法：股道归属车辆段平时由 {@code Data.mapAreasAndSavedRails} 按**几何**判定
+	 * （股道中点落在车辆段范围内），而 `data.sync()` 会顺手清空所有车辆 —— 运行中的服务端不能用它来
+	 * 给一条**临时**股道接线。这里直接建立归属，供"在任意轨上落车"那种工具路径使用
+	 * （见 {@code Simulator.mmtrSpawnOnRail}）。</p>
+	 */
+	public void adoptSiding(Siding siding) {
+		siding.area = this;
+		savedRails.add(siding);
+	}
+
+	/**
 	 * Initialise the depot: write path caches, initialise all sidings, and generate the
 	 * platform directions and departure timetable.
 	 */

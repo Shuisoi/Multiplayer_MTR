@@ -81,8 +81,7 @@ public class RenderRails implements IGui {
 
 		// Ghost rails (when holding brush)
 		final ObjectArraySet<Rail> hoverRails = new ObjectArraySet<>();
-		if (clientPlayerEntity.isHolding(Items.BRUSH.get())) {
-			final ObjectObjectImmutablePair<Rail, BlockPos> railAndBlockPos = MinecraftClientData.getInstance().getFacingRailAndBlockPos(false);
+		if (clientPlayerEntity.isHolding(Items.BRUSH.get())) {			final ObjectObjectImmutablePair<Rail, BlockPos> railAndBlockPos = MinecraftClientData.getInstance().getFacingRailAndBlockPos(false);
 			if (railAndBlockPos != null) {
 				final Rail rail = railAndBlockPos.left();
 				final BlockPos blockPos = railAndBlockPos.right();
@@ -201,6 +200,9 @@ public class RenderRails implements IGui {
 					}
 				}
 			}
+
+			// 信号绑定工具（铲子=绑节点、木斧=分轨）：把"这盏灯守哪几根轨"画进世界里（见 MmtrSignalBindingOverlay）
+			MmtrSignalBindingOverlay.render(clientPlayerEntity);
 		}
 
 		if (!OptimizedRenderer.renderingShadows()) {
@@ -215,6 +217,15 @@ public class RenderRails implements IGui {
 	public static boolean isHoldingRailRelated(ClientPlayerEntity clientPlayerEntity) {
 		return PlayerHelper.isHolding(new PlayerEntity(clientPlayerEntity.data),
 				item -> item.data instanceof ItemNodeModifierBase || item.data instanceof ItemBrush ||
+						/*
+						 * 两把绑定工具都算"轨道相关"：拿起来要像拿铁轨工具一样看到实体的叠加层
+						 * （每根轨按它的信号色画出来 + 单向箭头 + 轨上的信号灯）。
+						 * 没有它，绑定就是盲操作 —— 看不见自己点的到底是哪根轨。
+						 *
+						 * 铲子（signal_binder）= 把灯绑到**节点**上；木斧（rail_binder）= 把灯分到**具体某条轨**上。
+						 */
+						item.data instanceof org.mtr.mod.item.ItemMmtrSignalBinder ||
+						item.data instanceof org.mtr.mod.item.ItemMmtrRailBindingTool ||
 						Block.getBlockFromItem(item).data instanceof BlockSignalLightBase ||
 						Block.getBlockFromItem(item).data instanceof BlockNode ||
 						Block.getBlockFromItem(item).data instanceof BlockSignalSemaphoreBase ||

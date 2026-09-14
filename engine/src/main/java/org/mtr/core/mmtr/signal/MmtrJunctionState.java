@@ -46,12 +46,35 @@ public final class MmtrJunctionState {
 	 * @param trees the occupancy trees to test the clearance zone against (null = skip that test)
 	 */
 	public static boolean isUncleared(Simulator simulator, Position node, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return !reason(simulator, node, trees).isEmpty();
+	}
+
+	/**
+	 * **为什么这个岔口清不掉**（空串 = 清得掉）。诊断用：
+	 * 一盏灯为什么是红的，必须能用一条指令读出来，而不是让人去猜规则。
+	 */
+	public static String reason(Simulator simulator, Position node, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
 		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
 		if (neighbours == null || neighbours.size() < 3) {
-			return false;
+			return "";
 		}
-		if (trees != null && clearanceZoneFouled(node, neighbours, trees)) {
-			return true;
+		if (trees != null) {
+			final Rail fouled = foulingRail(node, neighbours, trees);
+			if (fouled != null) {
+				return "岔区净空被占：轨 " + shortHex(fouled.getHexId()) + " 靠这个节点的 " + Vehicle.MMTR_JUNCTION_CLEARANCE_M + " m 内有车足迹";
+			}
+		}
+		/*
+		 * **单开道岔不是"没人决定的岔口"**（用户 2026-09-13 决策 (b)：一处道岔只有一个位置、只有 0 或 1，
+		 * 默认 0，不存在"未知态"）。下面那条"没人决定"的规则对它是**假警报**：位置 0 时岔股那一侧禁止通行，
+		 * 它的行写 -1 甚至根本不写。道岔位置本身就是决定，所以这条规则只留给没有物理道岔模型的老岔口
+		 * （网页上那种按进向各设 0/1 的）。
+		 *
+		 * <p>注意 3 度节点上岔股进向只会看到 **1 条**前方轨（两根正线互为反向，只有一根朝前），所以这条
+		 * 早退在现有几何下是防御性的；真正会把灯钉在红色的是上面那条"岔区净空被占"。</p>
+		 */
+		if (simulator.mmtrTurnout(node.getX(), node.getY(), node.getZ()) != null) {
+			return "";
 		}
 		// A fork nobody has decided: an approach whose ordered legs need a CHOICE (>= 2 legs) has neither
 		// an operator branch row nor an authority holder. A degree-3 node whose approaches all have a
@@ -72,9 +95,13 @@ public final class MmtrJunctionState {
 			if (simulator.mmtrPointAuthority.holder(node.getX(), node.getY(), node.getZ(), viaHex) != null) {
 				continue; // an authority grant decides it
 			}
-			return true;
+			return "岔口没人决定：进向 " + shortHex(viaHex) + " 有 " + legs.size() + " 条腿，既没有人工位也没有授权";
 		}
-		return false;
+		return "";
+	}
+
+	private static String shortHex(String hex) {
+		return hex == null || hex.length() <= 8 ? String.valueOf(hex) : hex.substring(0, 8) + "…";
 	}
 
 	/** Every uncleared junction node, keyed {@code x,y,z} (what the client mirror needs). */
@@ -88,8 +115,8 @@ public final class MmtrJunctionState {
 		return out;
 	}
 
-	/** Whether any vehicle's footprint lies inside the clearance zone of {@code node}. */
-	private static boolean clearanceZoneFouled(Position node, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+	/** 守不住净空的是哪根轨（没有 = 净空干净）；诊断要能点名到轨。 */
+	private static Rail foulingRail(Position node, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
 		for (final Rail rail : neighbours.values()) {
 			final double length = rail.railMath.getLength();
 			if (length <= 0) {
@@ -106,10 +133,36 @@ public final class MmtrJunctionState {
 			}
 			final Position[] ordered = rail.mmtrOrderedPositions();
 			for (int i = 0; i < trees.size(); i++) {
-				final VehiclePosition vehiclePosition = org.mtr.core.data.Data.tryGet(trees.get(i), ordered[0], ordered[1]);
-				if (vehiclePosition != null && vehiclePosition.getClosestOverlap(from, to, false, 0) >= 0) {
-					return true;
+				final VehiclePosition vehiclePosition = MmtrDirectionalBlockService.footprintOn(trees.get(i), ordered);
+				if (vehiclePosition != null && foulsZone(vehiclePosition, from, to)) {
+					return rail;
 				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 车是否真的"占住"了净空区 {@code [from, to]}，而不是仅仅压到边界。
+	 *
+	 * <p>为什么不能只判 {@code getClosestOverlap >= 0}（原来是这么写的）：那是"有任何重叠"，
+	 * 而车是实体 —— 停在股道尽头、尾巴刚探过节点的车会压到净空区的边，于是岔口被判"清不掉"，
+	 * 正线上那盏灯因此显示**红**，而它本该显示**单黄**（车其实停在下一段里）。
+	 * 这与区间占用是同一个毛病，所以用同一条量纲：重叠要占到**车长的一半**（净空区更短时以区间为准），
+	 * 再减掉一点整数格误差的松弛。</p>
+	 */
+	private static boolean foulsZone(VehiclePosition vehiclePosition, double from, double to) {
+		for (final double[] segment : vehiclePosition.segmentsExcluding(0)) {
+			final double footFrom = Math.min(segment[0], segment[1]);
+			final double footTo = Math.max(segment[0], segment[1]);
+			final double overlap = Math.min(to, footTo) - Math.max(from, footFrom);
+			if (overlap <= 0) {
+				continue;
+			}
+			final double footLength = footTo - footFrom;
+			final double required = Math.max(0.5, 0.5 * Math.min(footLength, Math.max(to - from, footLength)) - 1.0);
+			if (overlap >= required) {
+				return true;
 			}
 		}
 		return false;

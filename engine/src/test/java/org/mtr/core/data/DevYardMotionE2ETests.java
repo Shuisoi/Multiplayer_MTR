@@ -9,6 +9,7 @@ import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.point.MmtrPointRegistry;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 import org.mtr.core.mmtr.point.MmtrSwitch;
+import org.mtr.core.mmtr.point.MmtrTurnout;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.operation.MmtrDriveControl;
 import org.mtr.core.simulation.Simulator;
@@ -18,6 +19,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -25,11 +28,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * L3 slice 3 (end to end, real dev world): a vehicle spawned by the yard motion seam
  * ({@link Siding#spawnMmtrMotionVehicle}) on a REAL depot siding — parked, nothing baked — is driven
  * by a driver with the existing cab control out of the yard, across the real depot throat to the -96
- * turnout, halts there awaiting authority, and after a LIVE branch flip (through the simulator's
- * authoritative BranchStore, the same store mmtr-point-op mutates) crosses onto the elected real rail.
+ * turnout, halts there (its approach is not the one the point is set for — 用户 2026-09-13 决策 (a)：
+ * 背向禁止通行、车停在岔前等道岔扳过来), and after a LIVE flip (through the simulator's authoritative
+ * BranchStore, the same store mmtr-point-op mutates) crosses onto the elected real rail.
  * The test first discovers the yard siding whose rail graph connects to the -96 fork and pre-sets the
- * en-route turnouts so the run is deterministic; the -96 fork itself stays unset so the live flip is
- * what lets the vehicle through.
+ * en-route turnouts so the run is deterministic; the -96 point itself is left at its default 0 (决策 (b)：
+ * 一处道岔只有一个位置、默认 0，没有"未知态") so the live flip is what lets the vehicle through.
  */
 public final class DevYardMotionE2ETests {
 
@@ -259,11 +263,11 @@ public final class DevYardMotionE2ETests {
 			chosen.siding.simulateVehicles(1000, null);
 			arrived = vehicle.getMmtrMotionWalker().haltedAtAuthority() && viaHex.equals(vehicle.getMmtrMotionWalker().railHex());
 		}
-		assertTrue(arrived, "yard-departed vehicle must reach the unset -96 fork and wait (rail=" + vehicle.getMmtrMotionWalker().railHex() + " progress=" + Math.round(vehicle.getRailProgress()) + ")");
+		assertTrue(arrived, "yard-departed vehicle must reach the -96 fork its approach is not open for and wait (rail=" + vehicle.getMmtrMotionWalker().railHex() + " progress=" + Math.round(vehicle.getRailProgress()) + ")");
 		assertTrue(vehicle.getRailProgress() > chosen.route.distanceM - 40, "progress must cover the planned route, got " + Math.round(vehicle.getRailProgress()) + " vs " + Math.round(chosen.route.distanceM));
 
-		// LIVE flip to operator 0 (straight): the same vehicle crosses the fork onto the straightest
-		// real rail from this approach.
+		// LIVE flip: 决策 (a)「车停在岔前，等道岔扳过来」——人工把这一侧的进路扳通，同一列车才通过，
+		// 而且是走在**道岔开通的那条轨**（从这一进向看最直的那根）上。
 		store.set(NX, NY, NZ, viaHex, 0);
 		boolean crossed = false;
 		for (int i = 0; i < 500 && !crossed; i++) {
@@ -271,6 +275,15 @@ public final class DevYardMotionE2ETests {
 			crossed = straightestFromYard.getHexId().equals(vehicle.getMmtrMotionWalker().railHex());
 		}
 		assertTrue(crossed, "yard-departed vehicle must cross the -96 fork onto the straightest real rail after the live flip (rail=" + vehicle.getMmtrMotionWalker().railHex() + ")");
+		final MmtrTurnout turnout = sim.mmtrTurnout(NX, NY, NZ);
+		if (turnout != null) {
+			// 一处道岔只有一个位置：刚才那次扳动必须真的把道岔扳到了能开通这一侧的位置
+			final int position = sim.mmtrTurnoutPosition(NX, NY, NZ);
+			assertEquals(straightestFromYard.getHexId(), turnout.continuationFrom(viaHex, position),
+				"the flipped point must be open for this approach (position " + position + ")");
+			final int otherPosition = position == MmtrTurnout.REVERSE ? MmtrTurnout.NORMAL : MmtrTurnout.REVERSE;
+			assertNotEquals(turnout.prohibitedRailHex(position), turnout.prohibitedRailHex(otherPosition), "the two positions prohibit different rails");
+		}
 		assertTrue(vehicle.getIsOnRoute(), "crossed vehicle is on route");
 
 		// Cleanup: remove the departed vehicle so reruns start from an idle yard.

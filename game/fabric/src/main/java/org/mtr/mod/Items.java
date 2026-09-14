@@ -25,6 +25,14 @@ public final class Items {
 		CREATIVE_DRIVER_KEY = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "creative_driver_key"), itemSettings -> new Item(new ItemCreativeDriverKey(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
 		BOAT_NODE = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "boat_node"), itemSettings -> new Item(new PlaceableOnWaterItemExtension(Blocks.BOAT_NODE.get(), itemSettings)), CreativeModeTabs.CORE);
 		SIGNAL_BINDER = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "signal_binder"), itemSettings -> new Item(new ItemMmtrSignalBinder(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
+		/*
+		 * 轨道分配工具（木斧）：把一盏信号灯分配到某一条轨上。
+		 *
+		 * 与 signal_binder（铲子）分工：铲子只管"把灯登记到**节点**上"（守哪根轨由引擎按站位与朝向推断，
+		 * 即原版口径）；本工具只管"这盏灯守**哪条轨**"（显式指定，方向由几何定）。
+		 * 分开的理由：原版那套"朝向 + 90° 扇区"在密集站场里说不准，需要一把能把话说死的工具。
+		 */
+		RAIL_BINDER = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "rail_binder"), itemSettings -> new Item(new ItemMmtrRailBindingTool(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
 
 		// Doors
 		APG_DOOR = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "apg_door"), itemSettings -> new Item(new ItemPSDAPGBase(ItemPSDAPGBase.EnumPSDAPGItem.PSD_APG_DOOR, ItemPSDAPGBase.EnumPSDAPGType.APG, itemSettings)), CreativeModeTabs.RAILWAY_FACILITIES);
@@ -196,6 +204,8 @@ public final class Items {
 	public static final ItemRegistryObject RAIL_CONNECTOR_SIDING;
 	public static final ItemRegistryObject RAIL_CONNECTOR_TURN_BACK;
 	public static final ItemRegistryObject RAIL_REMOVER;
+	/** 轨道分配工具（木斧）：把信号灯分配到具体某条轨。 */
+	public static final ItemRegistryObject RAIL_BINDER;
 	public static final ItemRegistryObject RAILWAY_DASHBOARD;
 	public static final ItemRegistryObject SIGNAL_BINDER;
 	public static final ItemRegistryObject SIGNAL_CONNECTOR_BLACK;

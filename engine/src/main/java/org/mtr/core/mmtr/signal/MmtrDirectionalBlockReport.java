@@ -24,7 +24,9 @@ public final class MmtrDirectionalBlockReport {
 	/** The world summary plus one line per section. */
 	public static String describeAll(Simulator simulator) {
 		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
-		final ObjectArrayList<MmtrDirectionalBlockService.Section> sections = new ObjectArrayList<>(service.allSections().values());
+		// 一灯多腿时值是"多条区间"，这里摊平：报表要的是"世界上有多少段区间"，不是"多少盏灯"
+		final ObjectArrayList<MmtrDirectionalBlockService.Section> sections = new ObjectArrayList<>();
+		service.allSections().values().forEach(sections::addAll);
 		sections.sort((a, b) -> a.id.compareTo(b.id));
 
 		final StringBuilder out = new StringBuilder("[blocks-v2] 有向区间 ").append(sections.size())

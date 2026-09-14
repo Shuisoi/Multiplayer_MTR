@@ -61,13 +61,18 @@ export class Rail {
 		this.speedLimitKmh2 = raw.speedLimitKmh2 ?? 0;
 	}
 
-	/** 平面图坐标（沿用 `(x, -z)` 约定，与世界 z 越大越靠上一致）。 */
+	/**
+	 * 平面图坐标 = 世界 {@code (x, z)} 直映（见 `Node.planeZ` 的说明）。
+	 *
+	 * <p>同一份映射必须各处一致：节点、轨的两端、轨的采样点、信号灯位 —— 少改一处，
+	 * 那一样东西就会**上下颠倒**地画到图上（比全反更难发现）。所以这里连注释都指向同一处说明。</p>
+	 */
 	get planeX1(): number {
 		return this.x1;
 	}
 
 	get planeY1(): number {
-		return -this.z1;
+		return this.z1;
 	}
 
 	get planeX2(): number {
@@ -75,7 +80,7 @@ export class Rail {
 	}
 
 	get planeY2(): number {
-		return -this.z2;
+		return this.z2;
 	}
 
 	/** 是否"同一轴"：x 或 z 任一相同 → 画直线，否则画曲线。 */

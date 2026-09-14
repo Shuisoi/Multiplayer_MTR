@@ -289,6 +289,20 @@ public class Simulator extends Data implements Utilities {
 
 		// MMTR: rolling-stock manifest (车辆生成表): read at restart, applied after the vehicle reset.
 		mmtrManifestPath = savePath.resolve("mmtr-rolling-stock.json");
+		/*
+		 * 开机把两个运维标记清掉：它们是**上一轮**的意图，这一轮刚刚开始，没有任何人要求重启或停机。
+		 *
+		 * 必须清掉而不是"留着也没事"：留着的重启标记会让启动器在这一轮结束后以为"又要重启"，
+		 * 于是一轮接一轮地转下去；留着的停机标记会让它在这一轮结束后直接退出。
+		 * 两处都清理是刻意的冗余（启动器也清一次）——因为"标记残留"的代价是服务端莫名重启或莫名不启动，
+		 * 而这两种症状都极难从现象反推原因。
+		 */
+		mmtrClearRestartMarker();
+		try {
+			java.nio.file.Files.deleteIfExists(mmtrStopMarker());
+		} catch (Exception e) {
+			log.warn("Failed to clear MMTR stop marker for {}: {}", dimension, e.getMessage());
+		}
 		try {
 			if (java.nio.file.Files.exists(mmtrManifestPath)) {
 				mmtrRollingStock = org.mtr.core.mmtr.manifest.MmtrRollingStockManifest.fromFile(mmtrManifestPath);
@@ -570,16 +584,42 @@ public class Simulator extends Data implements Utilities {
 				continue;
 			}
 			currentForks.add(point.nodeX + "," + point.nodeY + "," + point.nodeZ + "|" + point.viaRailHex);
+			// **单开道岔不进这里**：它由 refreshMmtrTurnouts 按"节点级位置"统一写三行派生视图
+			// （一处道岔一个位置，绝不能一行一行各补 0 —— 那正是三行互相矛盾的来源）。
+			if (mmtrTurnout(point.nodeX, point.nodeY, point.nodeZ) != null) {
+				continue;
+			}
 			if (!mmtrPointBranches.contains(point.nodeX, point.nodeY, point.nodeZ, point.viaRailHex)) {
 				mmtrPointBranches.set(point.nodeX, point.nodeY, point.nodeZ, point.viaRailHex, 0);
 				changed = true;
 			}
 		}
+		// 道岔节点的行由位置派生，也要算作"活的"，否则会被下面的修剪误删
+		changed |= refreshMmtrTurnoutRowsForPrune(currentForks);
 		// Prune stale operator rows (forks that disappeared with a rail change), then persist once.
 		changed |= mmtrPointBranches.branches.keySet().removeIf(key -> !currentForks.contains(key));
-		if (changed && mmtrPointsPath != null) {
-			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
+		if (changed) {
+			persistMmtrPointBranches();
 		}
+	}
+
+	/**
+	 * 把道岔节点派生的三行登记进"活的行"集合，并返回是否有行发生变化。
+	 *
+	 * <p>没有这一步，道岔的行会被上面的修剪当成"消失的岔口"删掉，下一次走行就会以为这一侧没有续行。</p>
+	 */
+	private boolean refreshMmtrTurnoutRowsForPrune(java.util.Set<String> currentForks) {
+		boolean changed = false;
+		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrAllTurnouts()) {
+			changed |= normalizeTurnoutRows(turnout);
+			final int position = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+			for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+				if (turnout.continuationFrom(via, position) != null) {
+					currentForks.add(turnout.nodeX + "," + turnout.nodeY + "," + turnout.nodeZ + "|" + via);
+				}
+			}
+		}
+		return changed;
 	}
 
 	private String mmtrSignalColorsSignature = "";
@@ -653,7 +693,11 @@ public class Simulator extends Data implements Utilities {
 		}
 	}
 
-	private String mmtrRailSetSignature() {
+	/**
+	 * 轨图签名（只有轨）。{@code refreshMmtrTurnouts} 用它 —— 道岔是从**轨图**认出来的，
+	 * 认完才可能有位置，所以这条签名里绝不能出现道岔（否则就是自己调自己）。
+	 */
+	private String mmtrRailGraphSignature() {
 		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|');
 		final ObjectArrayList<String> hexes = new ObjectArrayList<>();
 		for (final org.mtr.core.data.Rail rail : rails) {
@@ -661,6 +705,17 @@ public class Simulator extends Data implements Utilities {
 		}
 		hexes.sort(null);
 		hexes.forEach(hex -> sig.append(hex).append(','));
+		return sig.toString();
+	}
+
+	private String mmtrRailSetSignature() {
+		final StringBuilder sig = new StringBuilder(mmtrRailGraphSignature());
+		// 道岔位置也进签名：区间"走到哪里为止、哪一段撞在禁行侧"取决于它（信号显示视图因此要失效重建）。
+		// 注意这不等于"灯守哪几条轨随位置变" —— 那是被用户否掉的规则，见 notes/115 §7。
+		refreshMmtrTurnouts();
+		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
+			sig.append('|').append(turnout.key()).append(':').append(mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ));
+		}
 		return sig.toString();
 	}
 
@@ -673,22 +728,258 @@ public class Simulator extends Data implements Utilities {
 		return points;
 	}
 
+	// ---------------------------------------------------------------- 物理道岔（一处一个位置）
+
+	private final java.util.HashMap<String, org.mtr.core.mmtr.point.MmtrTurnout> mmtrTurnouts = new java.util.HashMap<>();
+	private String mmtrTurnoutSignature = "";
+
+	/**
+	 * 某节点上的**物理道岔**（一处道岔一个位置，两个互斥进路）；不是单开道岔时返回 null。
+	 *
+	 * <p>缓存按"轨集合签名"失效：世界改画了会自动重认。</p>
+	 */
+	public org.mtr.core.mmtr.point.MmtrTurnout mmtrTurnout(long x, long y, long z) {
+		refreshMmtrTurnouts();
+		return mmtrTurnouts.get(x + "," + y + "," + z);
+	}
+
+	public ObjectArrayList<org.mtr.core.mmtr.point.MmtrTurnout> mmtrAllTurnouts() {
+		refreshMmtrTurnouts();
+		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrTurnout> out = new ObjectArrayList<>(mmtrTurnouts.values());
+		out.sort((a, b) -> a.key().compareTo(b.key()));
+		return out;
+	}
+
+	/** 道岔位置（0 = 正线贯通 / 1 = 岔股开放）。 */
+	public int mmtrTurnoutPosition(long x, long y, long z) {
+		refreshMmtrTurnouts();
+		final org.mtr.core.mmtr.point.MmtrTurnout turnout = mmtrTurnouts.get(x + "," + y + "," + z);
+		if (turnout == null) {
+			return mmtrPointBranches.nodePosition(x, y, z);
+		}
+		/*
+		 * **行视图折进位置**（最后写入者为准）：老调用方（网页某一行的腿号、旧测试、手工改 mmtr-points.json）
+		 * 直接写"某进向的第几条腿"时，这里把能翻译成进路的那个腿采纳为节点位置。
+		 *
+		 * <p>这样"一个位置 + 三行派生"不会因为写入路径不同而分裂：无论从哪一头写，最终都落到同一个位置。</p>
+		 */
+		final int current = mmtrPointBranches.nodePosition(x, y, z);
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			if (!mmtrPointBranches.contains(x, y, z, via)) {
+				continue;
+			}
+			final int position = mmtrTurnoutPositionForLeg(x, y, z, via, mmtrPointBranches.get(x, y, z, via));
+			if (position != Integer.MIN_VALUE && position != current) {
+				mmtrPointBranches.setNode(x, y, z, position);
+				normalizeTurnoutRows(turnout);
+				persistMmtrPointBranches();
+				return position;
+			}
+		}
+		return current;
+	}
+
+	/**
+	 * 联锁扳动道岔（单处、立即）：这个道岔上若有授权持有的腿，就把位置扳到它。
+	 *
+	 * <p>走行在岔前直接调用，所以进路一旦批下来，道岔在**同一步**就位（不必等一个 tick）。</p>
+	 */
+	public void mmtrSyncTurnoutPositionToGrant(org.mtr.core.mmtr.point.MmtrTurnout turnout) {
+		final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			final int granted = mmtrPointAuthority.grantedLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via);
+			if (granted < 0) {
+				continue;
+			}
+			final int position = mmtrTurnoutPositionForLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via, granted);
+			if (position != Integer.MIN_VALUE && position != current) {
+				mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, position);
+				normalizeTurnoutRows(turnout);
+				persistMmtrPointBranches();
+				return;
+			}
+		}
+	}
+
+	private void refreshMmtrTurnouts() {
+		// 只用**轨图**签名：道岔本身是从轨图认出来的，把位置算进来就成了自己调自己（无限递归）。
+		final String signature = mmtrRailGraphSignature();
+		if (signature.equals(mmtrTurnoutSignature)) {
+			return;
+		}
+		mmtrTurnoutSignature = signature;
+		mmtrTurnouts.clear();
+		positionsToRail.forEach((node, neighbours) -> {
+			final org.mtr.core.mmtr.point.MmtrTurnout turnout = org.mtr.core.mmtr.point.MmtrTurnout.resolve(node, neighbours);
+			if (turnout != null) {
+				mmtrTurnouts.put(turnout.key(), turnout);
+			}
+		});
+		boolean changed = false;
+		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
+			if (!mmtrPointBranches.containsNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ)) {
+				// 老存档没有节点级位置：从行视图反推（有人把任一进向扳到岔股 → 位置 1），
+				// 这样升级不会把既有的人工设置抹掉；没有任何行则默认 0（正线贯通 = 安全侧）。
+				mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, inferPositionFromRows(turnout));
+				changed = true;
+			}
+			changed |= normalizeTurnoutRows(turnout);
+		}
+		if (changed) {
+			persistMmtrPointBranches();
+		}
+	}
+
+	/** 从行视图反推节点位置：任何进向上"选的是岔股"即位置 1。 */
+	private int inferPositionFromRows(org.mtr.core.mmtr.point.MmtrTurnout turnout) {
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			final Integer branchLeg = turnout.branchLeg.get(via);
+			if (branchLeg != null && mmtrPointBranches.contains(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via)
+				&& mmtrPointBranches.get(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via) == branchLeg) {
+				return org.mtr.core.mmtr.point.MmtrTurnout.REVERSE;
+			}
+		}
+		return org.mtr.core.mmtr.point.MmtrTurnout.NORMAL;
+	}
+
+	/**
+	 * 把节点位置翻译回"每个进向一行"的腿号，并顺手把**禁止通行**那一行写成 -1。
+	 *
+	 * <p>这是"一个位置、三行派生"的唯一写入口：位置是权威，行视图只为了让既有调用方
+	 * （{@code MmtrForkElection}、诊断、网页）看到一致的事实。返回值 = 是否有变化。</p>
+	 */
+	private boolean normalizeTurnoutRows(org.mtr.core.mmtr.point.MmtrTurnout turnout) {
+		final int position = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+		boolean changed = false;
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			final String allowed = turnout.continuationFrom(via, position);
+			final int leg = allowed == null ? -1 : legIndexForRail(turnout, via, allowed);
+			if (leg >= 0) {
+				if (!mmtrPointBranches.contains(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via)
+					|| mmtrPointBranches.get(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via) != leg) {
+					mmtrPointBranches.set(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via, leg);
+					changed = true;
+				}
+			} else if (mmtrPointBranches.contains(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via)) {
+				// 禁止通行：行也要消失，否则"这一侧有续行"会骗到走行与显示层
+				mmtrPointBranches.set(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via, -1);
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
+	private static int legIndexForRail(org.mtr.core.mmtr.point.MmtrTurnout turnout, String viaRailHex, String railHex) {
+		if (railHex.equals(turnout.stemRailHex)) {
+			return turnout.stemLeg.getOrDefault(viaRailHex, -1);
+		}
+		if (railHex.equals(turnout.farRailHex)) {
+			return turnout.farLeg.getOrDefault(viaRailHex, -1);
+		}
+		if (railHex.equals(turnout.branchRailHex)) {
+			return turnout.branchLeg.getOrDefault(viaRailHex, -1);
+		}
+		return -1;
+	}
+
+	/**
+	 * 设定道岔：入参是"某个进向上的第几条腿"（既有调用方：网页、指令、任务），
+	 * 内部**翻译成节点位置**（一处道岔只有两个位置），并把三行派生视图一起刷新。
+	 *
+	 * @return 是否受理；{@code false} = 物理上不存在这个组合（例如"岔股 → 正线远端"这种交叉）
+	 */
+	public boolean mmtrSetTurnoutPosition(long x, long y, long z, int position) {
+		refreshMmtrTurnouts();
+		final org.mtr.core.mmtr.point.MmtrTurnout turnout = mmtrTurnouts.get(x + "," + y + "," + z);
+		if (turnout == null) {
+			return false;
+		}
+		mmtrPointBranches.setNode(x, y, z, position == org.mtr.core.mmtr.point.MmtrTurnout.REVERSE
+			? org.mtr.core.mmtr.point.MmtrTurnout.REVERSE : org.mtr.core.mmtr.point.MmtrTurnout.NORMAL);
+		normalizeTurnoutRows(turnout);
+		persistMmtrPointBranches();
+		System.out.println("[MMTR-PT] turnout " + turnout.key() + " -> 位置 " + mmtrPointBranches.nodePosition(x, y, z)
+			+ "（正线贯通 vs 岔股开放；禁行 = " + turnout.prohibitedRailHex(mmtrPointBranches.nodePosition(x, y, z)).substring(0, 8) + "…）");
+		return true;
+	}
+
+	/**
+	 * **联锁扳动道岔**：某条进路/调车授权持有这个道岔时，道岔位置跟着授权的腿走。
+	 *
+	 * <p>这是"道岔 × 信号"真正接起来的那一环：进路要岔股 → 道岔扳到 1（正线那一侧随之禁止通行）；
+	 * 授权释放后位置留在原地（人工位/默认位，人工随时可以再扳）。每 tick 一次，只在真的变了才落盘。</p>
+	 */
+	public void mmtrSyncTurnoutPositionsToGrants() {
+		refreshMmtrTurnouts();
+		if (mmtrTurnouts.isEmpty()) {
+			return;
+		}
+		boolean changed = false;
+		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
+			final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+			for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+				final int granted = mmtrPointAuthority.grantedLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via);
+				if (granted < 0) {
+					continue;
+				}
+				final int position = mmtrTurnoutPositionForLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via, granted);
+				if (position != Integer.MIN_VALUE && position != current) {
+					mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, position);
+					normalizeTurnoutRows(turnout);
+					changed = true;
+				}
+			}
+		}
+		if (changed) {
+			persistMmtrPointBranches();
+		}
+	}
+
+	/** 把 (进向, 腿号) 翻译成节点位置；物理上不存在的组合返回 {@link Integer#MIN_VALUE}。 */
+	public int mmtrTurnoutPositionForLeg(long x, long y, long z, String viaRailHex, int leg) {
+		refreshMmtrTurnouts();
+		final org.mtr.core.mmtr.point.MmtrTurnout turnout = mmtrTurnouts.get(x + "," + y + "," + z);
+		if (turnout == null) {
+			return Integer.MIN_VALUE;
+		}
+		// 只认物理事实（{@link MmtrTurnout#positionForLeg}）：**"从岔股回根部"就是"把岔股扳通"**。
+		// 从前这里对它返回"当前位置"，于是车尾在岔股上的车请求开出时扳不动道岔、被禁行闸门挡在岔前，
+		// 永远等不到（S5 队列测试实测）。
+		return turnout.positionForLeg(viaRailHex, leg);
+	}
+
 	/** Set an operator turnout branch index (0..legs-1 in the ordered-leg model, legacy 0/1 on
 	 * two-leg forks) and persist it. A negative branch removes the operator setting (halt at that
 	 * fork, never auto). */
 	public boolean mmtrSetPoint(long x, long y, long z, String viaRailHex, int branch) {
-		mmtrPointBranches.set(x, y, z, viaRailHex, branch);
-		if (mmtrPointsPath != null) {
-			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
+		refreshMmtrTurnouts();
+		if (mmtrTurnouts.containsKey(x + "," + y + "," + z)) {
+			// 单开道岔：入参是"某进向上的第几条腿"，翻译成**节点位置**（一处道岔只有两个位置）。
+			if (branch < 0) {
+				return mmtrSetTurnoutPosition(x, y, z, org.mtr.core.mmtr.point.MmtrTurnout.NORMAL);
+			}
+			final int position = mmtrTurnoutPositionForLeg(x, y, z, viaRailHex, branch);
+			if (position == Integer.MIN_VALUE) {
+				System.out.println("[MMTR-PT] 拒绝 " + x + "," + y + "," + z + " 从 " + shortHex(viaRailHex)
+					+ " 的第 " + branch + " 条腿：这两条进路互斥，物理上不存在（会把列车带上尖轨）");
+				return false;
+			}
+			return mmtrSetTurnoutPosition(x, y, z, position);
 		}
+		mmtrPointBranches.set(x, y, z, viaRailHex, branch);
+		persistMmtrPointBranches();
 		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + (branch < 0 ? "unset" : String.valueOf(branch)));
 		return true;
+	}
+
+	private static String shortHex(String hex) {
+		return hex.length() <= 8 ? hex : hex.substring(0, 8) + "…";
 	}
 
 	/** Persist the operator branch store to mmtr-points.json (batch clear before a mission arm). */
 	public void persistMmtrPointBranches() {
 		if (mmtrPointsPath != null) {
-			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches);
+			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches, mmtrPointBranches.nodePositions);
 		}
 	}
 
@@ -723,6 +1014,72 @@ public class Simulator extends Data implements Utilities {
 	 * "set" = register the light (AUTO unless target given -> BOUND), "remove" = delete.
 	 * @return whether the registry changed
 	 */
+	/**
+	 * 显式改一盏灯的守轨列表（点选绑定），并落盘。
+	 *
+	 * <p>与 {@link #mmtrSignalOp} 分开：那个接口是"登记/改朝向/绑单根轨"，这里是"它守哪几根轨"，
+	 * 两者写入的字段不同，混在一个 op 字符串里只会让语义越来越绕。</p>
+	 *
+	 * @param rails 完整的目标列表（整体替换）；空列表 = 清掉人工绑定，回到按几何推断
+	 * @return 是否找到并改了这盏灯
+	 */
+	public boolean mmtrSignalBindRails(int x, int y, int z, java.util.List<String> rails) {
+		final boolean changed = mmtrSignals.setBoundRails(x, y, z, rails);
+		if (changed && mmtrSignalsPath != null) {
+			org.mtr.core.mmtr.signal.MmtrSignalRegistry.save(mmtrSignalsPath, mmtrSignals.signals);
+		}
+		return changed;
+	}
+
+	/**
+	 * 删掉一条信号灯登记并落盘（世界扫描发现"那一格已经没有灯了"时用）。
+	 *
+	 * <p>与 {@link #mmtrSignalOp} 的 remove 区别：那个是走指令通道的通用删除，这个专门给**扫描**
+	 * 用，语义是"世界扫描确认它不在了"。分出来是因为调用方只有游戏端扫描一处，
+	 * 而且它要的是"删了没有"这个布尔值来写扫描报告。</p>
+	 */
+	public boolean mmtrSignalRemove(int x, int y, int z) {
+		final boolean changed = mmtrSignals.remove(x, y, z);
+		if (changed && mmtrSignalsPath != null) {
+			org.mtr.core.mmtr.signal.MmtrSignalRegistry.save(mmtrSignalsPath, mmtrSignals.signals);
+		}
+		return changed;
+	}
+
+	/**
+	 * 节点的**朝向角**（游戏端扫描上报）：{@code BlockNode.getAngle(state)}，也就是 MTR 在放置节点时
+	 * 由玩家朝向决定的那个值（{@code FACING} / {@code IS_22_5} / {@code IS_45} 三个方块属性）。
+	 *
+	 * <h3>为什么引擎需要它</h3>
+	 * <p>引擎的拓扑里节点只有**坐标**（{@code positionsToRail} 的键），没有朝向。而"一盏灯守哪条腿"
+	 * 在实测世界里**不能只用灯自己的朝向推出来**：同一个节点上、朝向相对的两盏灯，一盏守北、一盏守南，
+	 * 六盏实测灯里四盏"与朝向同向"、两盏"与朝向反向" —— 缺的那个变量就是节点朝向
+	 * （原版 MTR 的 {@code RenderSignalBase.getAspectState} 用的正是它）。</p>
+	 *
+	 * <p>键是节点坐标（{@code x,y,z}）；值为角度（度）。</p>
+	 */
+	public final java.util.HashMap<String, Float> mmtrNodeAngles = new java.util.HashMap<>();
+
+	/**
+	 * 记下一个节点的朝向角（游戏端扫描上行）。
+	 *
+	 * @return 是否是新值或值变了（调用方据此决定要不要落盘/重算）
+	 */
+	public boolean mmtrNodeAngleUpsert(long x, long y, long z, float angle) {
+		final String key = x + "," + y + "," + z;
+		final Float previous = mmtrNodeAngles.get(key);
+		if (previous != null && Math.abs(previous - angle) < 1e-3) {
+			return false;
+		}
+		mmtrNodeAngles.put(key, angle);
+		return true;
+	}
+
+	/** 某个节点的朝向角；没上报过则返回 null。 */
+	public @org.jspecify.annotations.Nullable Float mmtrNodeAngle(long x, long y, long z) {
+		return mmtrNodeAngles.get(x + "," + y + "," + z);
+	}
+
 	public boolean mmtrSignalOp(int x, int y, int z, float angle, int aspects, String op, String target) {
 		final boolean changed;
 		if ("remove".equalsIgnoreCase(op)) {
@@ -937,6 +1294,309 @@ public class Simulator extends Data implements Utilities {
 	public void instantDeployDepotsByName(Simulator simulator, String filter) {
 		instantDeployDepots(NameColorDataBase.getDataByName(simulator.depots, filter));
 	}
+
+	/**
+	 * 中控指令用：在**一条股道**上立刻生成一列车（{@code vehicle spawn} 的落点）。
+	 *
+	 * <p>走的是引擎自己已有的即时路径：{@link #instantDeployDepots} 就是把 depot 快进一整天来立刻生成车辆，
+	 * 这里对单条股道做同一件事（按 1 秒切片推进 {@code Siding.simulateVehicles}）。所以命令返回时车已经
+	 * 在世界上，调用方可以直接拿车辆 id 去核对 —— 不必等下一个 tick，也不需要重启。
+	 *
+	 * <p>顺序上先写编组模板与标记（{@code mmtrManualSpawn} 且 {@code mmtrSessionSpawned=false} 才会触发一次生成），
+	 * 再推进；生成成功后 {@code Siding} 自己会把 session 标记置上，所以重复调用不会叠出第二列车。</p>
+	 *
+	 * @param siding 目标股道
+	 * @param cars   编组（每个元素一辆车卡）
+	 * @return 生成出来的车辆；股道上有在途车辆、放不下、或走不出站场时返回 null
+	 */
+	public org.mtr.core.data.Vehicle mmtrSpawnOnSiding(org.mtr.core.data.Siding siding, it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.VehicleCar> cars) {
+		if (siding == null || cars == null || cars.isEmpty()) {
+			return null;
+		}
+		if (org.mtr.core.data.Siding.getTotalVehicleLength(cars) > siding.getRailLength() + 1e-6) {
+			return null;
+		}
+		siding.setVehicleCars(cars);
+		siding.mmtrManualSpawn = true;
+		siding.mmtrSessionSpawned = false;
+		// 与 instantDeployDepots 同一手法：按 1 秒切片推进，直到股道走完它自己的生成周期
+		for (int i = 0; i < MILLIS_PER_DAY; i += MILLIS_PER_SECOND) {
+			siding.simulateVehicles(MILLIS_PER_SECOND, null);
+		}
+		// 取这条股道上"在场"的那辆车作为结果。
+		// 取这条股道上"在场"的那辆车作为结果。
+		// 引擎里没有全局车辆集合：车辆挂在**股道**上，所以枚举方式是 `sidings.forEach(s -> s.iterateVehicles(…))`
+		// （`mmtrFindVehicle` 也是这么找的）。归属用 `vehicleExtraData.getSidingId()` 判断，
+		// 因为 `Vehicle.siding` 是 private，而 sidingId 是公开且稳定的关联。
+		final org.mtr.core.data.Vehicle[] found = {null};
+		siding.iterateVehicles(vehicle -> {
+			if (vehicle.vehicleExtraData.getSidingId() == siding.getId()) {
+				found[0] = vehicle;
+			}
+		});
+		return found[0];
+	}
+
+	/**
+	 * 中控指令用：把一列车**直接放在指定的轨上**（{@code vehicle spawn --rail=<轨hex>} 的落点）。
+	 *
+	 * <h3>为什么需要"临时股道"</h3>
+	 * <p>引擎里车辆挂在**股道**上：{@code Siding.simulateVehicles} 第一句就是"没有车辆段 ⇒ 清空返回"，
+	 * 而车辆段归属是 {@code Data.mapAreasAndSavedRails} 按几何算出来的。所以"在任意一根轨上落车"只能
+	 * 给那根轨**临时建一条股道**（一个临时车辆段 + 与轨等长的股道），从而复用引擎自己那条即刻生成路径。</p>
+	 *
+	 * <p>它是**工具产物**，不是世界里的东西：游戏端不知道这个车辆段，所以这列车只存在于引擎
+	 * （网页地图、闭塞计算、占用树都看得到；游戏里看不到）。要一辆游戏里也存在的车，只能在游戏里放。</p>
+	 *
+	 * @param rail  目标轨（必须在轨图里）
+	 * @param cars  编组
+	 * @return 生成出来的车辆；轨太短放不下、或走不出站场时返回 null
+	 */
+	public org.mtr.core.data.@Nullable Vehicle mmtrSpawnOnRail(org.mtr.core.data.Rail rail, it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.VehicleCar> cars) {
+		if (rail == null || cars == null || cars.isEmpty()) {
+			return null;
+		}
+		final double railLength = rail.railMath.getLength();
+		if (org.mtr.core.data.Siding.getTotalVehicleLength(cars) > railLength + 1e-6) {
+			return null;
+		}
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.Position> ends = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+		final org.mtr.core.data.Position[] ordered = rail.mmtrOrderedPositions();
+		ends.add(ordered[0]);
+		ends.add(ordered[1]);
+
+		final org.mtr.core.data.Depot depot = new org.mtr.core.data.Depot(org.mtr.core.data.TransportMode.TRAIN, this);
+		depot.setName("临时落车");
+		// 范围要比包围盒大一点：将来真的 sync 一次时，这条股道的中点仍落在车辆段内，归属不会掉
+		final long minX = Math.min(ordered[0].getX(), ordered[1].getX()) - 4;
+		final long maxX = Math.max(ordered[0].getX(), ordered[1].getX()) + 4;
+		final long minZ = Math.min(ordered[0].getZ(), ordered[1].getZ()) - 4;
+		final long maxZ = Math.max(ordered[0].getZ(), ordered[1].getZ()) + 4;
+		depot.setCorners(new org.mtr.core.data.Position(minX, ordered[0].getY() - 4, minZ), new org.mtr.core.data.Position(maxX, ordered[0].getY() + 4, maxZ));
+
+		final org.mtr.core.data.Siding siding = new org.mtr.core.data.Siding(ends.get(0), ends.get(1), railLength, org.mtr.core.data.TransportMode.TRAIN, this);
+		depot.adoptSiding(siding);
+		depots.add(depot);
+		sidings.add(siding);
+		siding.tick(); // 解析它自己的站场轨（defaultPathData），没有它 simulateVehicles 不会生成
+		final org.mtr.core.data.Vehicle vehicle = mmtrSpawnOnSiding(siding, cars);
+		if (vehicle == null) {
+			// 放不下 / 走不出站场：把临时设施撤掉，别留一个空壳在世界里
+			sidings.remove(siding);
+			depots.remove(depot);
+		}
+		return vehicle;
+	}
+
+	/** 中控指令用：某条股道上当前有几辆车（{@code query depots} 显示用）。 */
+	public int countVehiclesOnSiding(long sidingId) {
+		final int[] count = {0};
+		sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
+			if (vehicle.vehicleExtraData.getSidingId() == sidingId) {
+				count[0]++;
+			}
+		}));
+		return count[0];
+	}
+
+	/** 中控指令用：某条股道上那辆车的编组（车上实际挂了几节什么车），没有车时返回空表。 */
+	public java.util.List<String> mmtrCarsOnSiding(long sidingId) {
+		final java.util.ArrayList<String> out = new java.util.ArrayList<>();
+		sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
+			if (vehicle.vehicleExtraData.getSidingId() == sidingId) {
+				for (final org.mtr.core.data.VehicleCar car : vehicle.vehicleExtraData.immutableVehicleCars) {
+					out.add(car.getVehicleId());
+				}
+			}
+		}));
+		return out;
+	}
+
+	/** 中控指令入口：执行一条名词打头的指令，返回可核对的结果。 */
+	public org.mtr.core.mmtr.command.MmtrCommandDispatcher.Result mmtrExecuteCommand(String command) {
+		return org.mtr.core.mmtr.command.MmtrCommandDispatcher.execute(this, command);
+	}
+
+	/**
+	 * 中控指令用：从磁盘重读列车表（{@code manifest reload}）。
+	 *
+	 * <p>存在的理由很实际：列车表原先只在启动时读一次，所以"改了文件"必须重启才生效。
+	 * 有了这个方法，改文件之后一条指令就能生效。</p>
+	 */
+	public boolean mmtrReloadRollingStockManifest() {
+		try {
+			if (mmtrManifestPath == null || !java.nio.file.Files.exists(mmtrManifestPath)) {
+				return false;
+			}
+			final org.mtr.core.mmtr.manifest.MmtrRollingStockManifest reloaded = org.mtr.core.mmtr.manifest.MmtrRollingStockManifest.fromFile(mmtrManifestPath);
+			mmtrRollingStock = reloaded;
+			System.out.println("[MMTR-MFST] manifest reloaded on demand (" + reloaded.depots.size() + " depot(s), " + reloaded.sidingEntryCount() + " siding(s))");
+			return true;
+		} catch (Exception e) {
+			System.out.println("[MMTR-MFST] manifest reload failed: " + e.getMessage());
+			return false;
+		}
+	}
+
+	/**
+	 * 中控指令用：把一条股道写进列车表（热改 + 立刻生成 + 落盘）。
+	 *
+	 * <p>三条动作缺一不可，否则会出现"配了但车没出来"或"重启后又没了"这类问题：
+	 * 先写内存里的表（当前进程立刻可用），再按它生成（拿到车辆 id 可核对），最后落盘（下次启动还在）。</p>
+	 *
+	 * @param carIds 编组里的车型；为空时沿用该股道已有的模板
+	 * @return 生成是否成功
+	 */
+	public boolean mmtrManifestAddSiding(long depotId, long sidingId, java.util.List<String> carIds) {
+		final org.mtr.core.data.Siding siding = org.mtr.core.mmtr.command.MmtrCommandLookup.findSiding(this, sidingId);
+		if (siding == null) {
+			return false;
+		}
+		final java.util.List<String> cars = new java.util.ArrayList<>();
+		if (carIds == null || carIds.isEmpty()) {
+			for (final org.mtr.core.data.VehicleCar car : siding.getVehicleCars()) {
+				cars.add(car.getVehicleId());
+			}
+		} else {
+			cars.addAll(carIds);
+		}
+		if (cars.isEmpty()) {
+			return false;
+		}
+		final String depotName = siding.area == null ? "" : siding.area.getName();
+		mmtrRollingStock.putSiding(depotId, depotName, sidingId, siding.getName(), cars, 16);
+		persistMmtrRollingStockManifest();
+		// 立刻生成：把同一条指令交给统一执行器，于是"热改"与"启动播种"行为必然一致
+		final org.mtr.core.mmtr.command.MmtrCommandDispatcher.Result spawnResult = mmtrExecuteCommand(
+			"vehicle spawn " + String.join(" ", cars) + " --depot=" + depotId + " --siding=" + sidingId);
+		return spawnResult.ok;
+	}
+
+	/** 中控指令用：从列车表删条目并落盘。 */
+	public boolean mmtrManifestRemove(long depotId, long sidingId) {
+		final boolean removed = mmtrRollingStock.remove(depotId, sidingId);
+		if (removed) {
+			persistMmtrRollingStockManifest();
+		}
+		return removed;
+	}
+
+	/** 把当前列车表写回磁盘（热改之后调用，保证下次启动仍是这份配置）。 */
+	public void persistMmtrRollingStockManifest() {
+		if (mmtrManifestPath == null) {
+			return;
+		}
+		try {
+			mmtrRollingStock.save(mmtrManifestPath);
+		} catch (Exception e) {
+			System.out.println("[MMTR-MFST] manifest save failed: " + e.getMessage());
+		}
+	}
+
+	// ---------------------------------------------------------------- 服务端运维（一键重启）
+
+	/**
+	 * 重启标记文件的位置（与 {@code scripts/dev-server.ps1} 约定的一致）。
+	 *
+	 * <p>放在 {@code game/fabric/run/}（启动器的工作目录）：启动器只认这个位置，所以这里必须算准。
+	 * 不能靠"往上数几级"——存档路径是 {@code <run>/world/mtr/minecraft/<dimension>/mmtr-rolling-stock.json}，
+	 * 层级一旦变（维度名、存档布局）就会算错。这里改成**按目录名找**：从存档路径往上走，
+	 * 第一个名为 {@code run} 的目录就是它。</p>
+	 */
+	private java.nio.file.Path mmtrRestartMarker() {
+		java.nio.file.Path current = mmtrManifestPath == null ? null : mmtrManifestPath.toAbsolutePath().getParent();
+		while (current != null) {
+			final java.nio.file.Path name = current.getFileName();
+			if (name != null && name.toString().equals("run")) {
+				return current.resolve("mmtr-restart.request");
+			}
+			current = current.getParent();
+		}
+		// 找不到 run 目录（例如测试环境用临时路径）：退回到进程工作目录
+		return java.nio.file.Paths.get("mmtr-restart.request").toAbsolutePath();
+	}
+
+	/** 重启标记的路径（给指令回复显示用）。 */
+	public String mmtrRestartMarkerPath() {
+		return mmtrRestartMarker().toAbsolutePath().toString();
+	}
+
+	/** 请求重启：写标记文件 + 请求优雅停机；启动器看到标记会再拉起来。 */
+	public void mmtrRequestRestart(int delaySeconds) {
+		try {
+			final java.nio.file.Path marker = mmtrRestartMarker();
+			if (marker.getParent() != null) {
+				java.nio.file.Files.createDirectories(marker.getParent());
+			}
+			java.nio.file.Files.writeString(marker, "restart requested at " + java.time.Instant.now() + System.lineSeparator()
+				+ "服务端会在退出后由启动器（scripts/dev-server.ps1）重新拉起。" + System.lineSeparator());
+			System.out.println("[MMTR-SRV] restart marker written: " + marker.toAbsolutePath());
+		} catch (Exception e) {
+			System.out.println("[MMTR-SRV] failed to write restart marker: " + e.getMessage());
+		}
+		mmtrRequestShutdown(Math.max(1, delaySeconds));
+	}
+
+	/** 请求优雅停机（不写重启标记）。 */
+	public void mmtrRequestShutdown(int delaySeconds) {
+		mmtrShutdownAtMillis = getCurrentMillis() + Math.max(1, delaySeconds) * 1000L;
+		System.out.println("[MMTR-SRV] shutdown requested, will stop in " + delaySeconds + "s");
+	}
+
+	/** 清掉可能残留的重启标记（"只停机"时必须做，否则启动器会误判成重启）。 */
+	public void mmtrClearRestartMarker() {
+		try {
+			java.nio.file.Files.deleteIfExists(mmtrRestartMarker());
+		} catch (Exception e) {
+			System.out.println("[MMTR-SRV] failed to clear restart marker: " + e.getMessage());
+		}
+	}
+
+	/**
+	 * 停机标记文件（与 {@code scripts/dev-server.ps1} 约定）——"是你要我停的"。
+	 *
+	 * <h3>为什么停机也需要一个标记</h3>
+	 * <p>启动器在一轮结束后要判断"该不该再拉一次"。原来只看两件事：有没有重启标记、
+	 * 8888 有没有应答。可是 {@code server stop} 之后这两件事都指向"没起来"——8888 当然不应答，
+	 * 也没有重启标记——于是启动器把**用户主动停机**当成了"构建失败"去重试，白起了一轮。
+	 * 实测就是这么被触发的（日志里"第 1 轮结束：8888 应答=False → 第 1 次重试"）。</p>
+	 *
+	 * <p>所以意图要在两边都说清楚：重启写重启标记，停机写停机标记。文件是两边都能读、
+	 * 也看得见的东西，比"猜日志"可靠。</p>
+	 */
+	private java.nio.file.Path mmtrStopMarker() {
+		return mmtrRestartMarker().resolveSibling("mmtr-stop.request");
+	}
+
+	/** 请求停机：写停机标记 + 请求优雅停机；启动器看到它就知道不要再拉起来，也不会当成失败去重试。 */
+	public void mmtrRequestStopWithMarker(int delaySeconds) {
+		try {
+			final java.nio.file.Path marker = mmtrStopMarker();
+			if (marker.getParent() != null) {
+				java.nio.file.Files.createDirectories(marker.getParent());
+			}
+			java.nio.file.Files.writeString(marker, "stop requested at " + java.time.Instant.now() + System.lineSeparator()
+				+ "这是**主动停机**：启动器不要再拉起来，也不要当成启动失败去重试。" + System.lineSeparator());
+			System.out.println("[MMTR-SRV] stop marker written: " + marker.toAbsolutePath());
+		} catch (Exception e) {
+			System.out.println("[MMTR-SRV] failed to write stop marker: " + e.getMessage());
+		}
+		mmtrRequestShutdown(Math.max(1, delaySeconds));
+	}
+
+	/**
+	 * 是否已经到"该停机"的时刻（游戏端每 tick 调用）。
+	 *
+	 * <p>放在这里而不是直接 {@code System.exit}：停机必须是**优雅**的 —— 存档、断开连接、
+	 * 通知客户端都走服务端自己的流程，所以由游戏端拿到这个信号后调用 {@code MinecraftServer.stop(false)}。
+	 */
+	public boolean mmtrShutdownDue() {
+		return mmtrShutdownAtMillis > 0 && getCurrentMillis() >= mmtrShutdownAtMillis;
+	}
+
+	/** 停机时刻（0 = 没有停机请求）。 */
+	private long mmtrShutdownAtMillis;
+
 
 	/**
 	 * MMTR deterministic stepping: advance the simulation by exactly millisElapsed simulation
@@ -1191,6 +1851,7 @@ public class Simulator extends Data implements Utilities {
 			org.mtr.core.mmtr.MmtrAutoCoupler.tick(this);
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			mmtrEnsurePointDefaults();
+			mmtrSyncTurnoutPositionsToGrants();
 			mmtrEnsureSignalColors();
 			mmtrRefreshSignalAspectView();
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
@@ -1335,3 +1996,4 @@ public class Simulator extends Data implements Utilities {
 	) {
 	}
 }
+

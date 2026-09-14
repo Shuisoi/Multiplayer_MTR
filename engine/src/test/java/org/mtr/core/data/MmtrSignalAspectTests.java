@@ -15,6 +15,7 @@ import java.nio.file.Paths;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -226,13 +227,17 @@ public final class MmtrSignalAspectTests {
 
 	/**
 	 * ④ 显示层: the signal now agrees with the motion rules (①/②/③). A block whose far end is a junction
-	 * that cannot be cleared - nobody has decided the points, or another consist still fouls the junction's
-	 * clearance zone - shows DANGER instead of green, and clears as soon as the junction is decided /
-	 * clear again. A vehicle standing far away on the same rail does NOT restrict the junction (the
-	 * clearance zone is only the first 10 m of each leg).
+	 * that cannot be cleared - another consist still fouls the junction's clearance zone, or (for a
+	 * junction with NO physical-turnout model) nobody has decided the points - shows DANGER instead of
+	 * green. A vehicle standing far away on the same rail does NOT restrict the junction (the clearance
+	 * zone is only the first 10 m of each leg).
+	 *
+	 * <p>用户 2026-09-13 决策 (b) 之后，"没人决定"对**单开道岔**不再成立：一处道岔只有一个位置、只有
+	 * 0 或 1、默认 0 —— 没有"未知态"可言（旧行为见 notes/115）。所以下面 (1) 是一次 45° 单开道岔
+	 * （已定 → 绿），(1b) 是一个**没有物理道岔模型**的 120° 三岔口（三角线：没人决定 ⇒ 仍旧危险）。</p>
 	 */
 	@Test
-	public void anUndecidedForkAndAFouledJunctionRestrictTheSignal() {
+	public void aTurnoutPositionDecidesTheJunctionAndAnUndecidedWyeStillHoldsDanger() {
 		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-aspect-junction"), false);
 		final Position a = new Position(-20, 0, 0);
 		final Position n = new Position(0, 0, 0);
@@ -246,16 +251,33 @@ public final class MmtrSignalAspectTests {
 		sim.sync();
 		sim.mmtrEnsureSignalColors();
 
-		// (1) Nobody has decided the points at N: no route through the junction can be set -> danger.
-		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
-			"an undecided fork holds the signal protecting the approach rail at danger");
-
-		// The operator presets a branch on every approach (what the real server's default does): the
-		// junction is decided.
-		sim.positionsToRail.get(n).forEach((otherEnd, rail) ->
-			sim.mmtrPointBranches.set(n.getX(), n.getY(), n.getZ(), rail.getHexId(), 0));
+		// (1) 45° 单开道岔 = 一处物理道岔，位置默认 0（正线贯通）= **已决定** → 不压红。
+		assertNotNull(sim.mmtrTurnout(n.getX(), n.getY(), n.getZ()), "the 45° fork must be recognised as one physical turnout");
+		assertEquals(0, sim.mmtrTurnoutPosition(n.getX(), n.getY(), n.getZ()), "决策 (b)：一处道岔只有一个位置，默认 0");
 		assertEquals(MmtrSignalAspect.Aspect.GREEN, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
-			"a decided junction clears the signal when the line is otherwise clear");
+			"道岔位置已定（默认 0）→ 不能因为「这个岔口没人决定」而压红");
+
+		// (1b) 120° 三岔口（三角线）：几何上不是单开道岔（没有互为最直续行的直股对），仍旧走老规则 ——
+		// 没有任何人工位/授权 ⇒ 危险。
+		final Simulator wye = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-aspect-junction-wye"), false);
+		final Position c = new Position(0, 0, 0);
+		final Rail wyeEntry = through(new Position(-20, 0, 0), c);
+		final Rail armUp = Rail.newRail(c, Angle.fromAngle(60), new Position(17, 0, 30), Angle.fromAngle(240), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		final Rail armDown = Rail.newRail(c, Angle.fromAngle(300), new Position(17, 0, -30), Angle.fromAngle(120), Rail.Shape.QUADRATIC, 0, NO_STYLES,
+			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		wye.rails.add(wyeEntry);
+		wye.rails.add(armUp);
+		wye.rails.add(armDown);
+		wye.sync();
+		wye.mmtrEnsureSignalColors();
+		assertNull(wye.mmtrTurnout(c.getX(), c.getY(), c.getZ()), "a 120° wye is NOT a single turnout");
+		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(wye, wye.mmtrRoutes).aspectOf(wyeEntry.getHexId()),
+			"没人决定的三岔口仍旧把守着进路的信号压红");
+		wye.positionsToRail.get(c).forEach((otherEnd, rail) ->
+			wye.mmtrPointBranches.set(c.getX(), c.getY(), c.getZ(), rail.getHexId(), 0));
+		assertEquals(MmtrSignalAspect.Aspect.GREEN, new MmtrSignalAspect(wye, wye.mmtrRoutes).aspectOf(wyeEntry.getHexId()),
+			"人工位把它定下来 → 线路空闲即绿");
 
 		// (2) A consist still fouling the junction's clearance zone: the zone is the first 10 m of every
 		// leg, so an occupancy at arc 3..5 of the straight leg blocks the junction.

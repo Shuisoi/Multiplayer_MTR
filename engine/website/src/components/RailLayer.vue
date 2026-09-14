@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, watch} from "vue";
+import {computed, ref, watch} from "vue";
 import {worldToScreen, type Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
 import {linePath, railCurvePath, type PlanePoint} from "@/domain/railGeometry";
@@ -28,7 +28,51 @@ const props = defineProps<{
 	hoverKey: string;
 	/** 选中节点的 key；与它相连的轨画强调色。 */
 	selectKey: string;
+	/** 正在改绑定的那盏灯守的轨（hex）：画成"已绑定"色。 */
+	boundRails?: readonly string[];
+	/** 那盏灯**可以点**的候选轨（hex）：画成"可绑定"色，并且可点。 */
+	candidateRails?: readonly string[];
+	/**
+	 * 选中的道岔**当前开通**那条腿的轨（hex）：画成"联通"色。
+	 *
+	 * <p>存在的理由：道岔的卡片上写着"开通 leg 0（直通）"，但"直通"在世界图里到底是哪条轨，
+	 * 光看数字看不出来 —— 尤其复式交叉、多条腿走向相近时。把那条轨直接点亮，才谈得上"看懂"。</p>
+	 */
+	connectedRail?: string;
 }>();
+
+/** 轨道层对外的事件：点中某条轨（只有在有候选时才会发生），以及画出来的线型统计。 */
+const emit = defineEmits<{
+	(e: "pick-rail", payload: {hex: string; bound: boolean}): void;
+	/** 实际画出来的直线 / 曲线条数，上报给 HUD。 */
+	(e: "shapes", summary: {straight: number; curve: number}): void;
+}>();
+
+/** 悬停中的轨（hex）：候选轨上加一点反馈，让人知道"这条能点"。 */
+const hoveredRail = ref("");
+
+/** 这一层现在能不能点轨（有候选才有意义）。 */
+const pickable = computed(() => props.candidateRails !== undefined && props.candidateRails.length > 0);
+
+/**
+ * 点选绑定：把"点中的轨"与"它当时画成什么状态"一起上报。
+ *
+ * <p><b>为什么把状态一起带上</b>：上层要判断这次点击是"绑"还是"解绑"，而它手里那份
+ * `boundRails` 可能比画面旧一点（刚点完、数据刚重取的那一瞬间）—— 实测就因此把"解绑"
+ * 下成了"再绑一次"（点了同一条轨，越点越多）。而**画面上这条线是实线（已守）还是虚线（候选）**
+ * 是用户看到的事实，也是这一刻最可靠的依据：看到实线的人期待解绑，看到虚线的人期待绑上。</p>
+ *
+ * <p>顺手把最近几次点击（含路径 `d`）记到 {@code window.__mmtrPickedRails}：页面上的线看不出 hex，
+ * 检查脚本靠它在绑定前后认出同一条线。</p>
+ */
+function onRailPick(hex: string, bound: boolean) {
+	if (pickable.value && (props.candidateRails?.includes(hex) || props.boundRails?.includes(hex))) {
+		const w = window as unknown as {__mmtrPickedRails?: {hex: string; d: string; bound: boolean}[]};
+		const path = (document.querySelector(`.rails .rail[data-hex="${hex}"]`) as SVGPathElement | null)?.getAttribute("d") ?? "";
+		w.__mmtrPickedRails = [...(w.__mmtrPickedRails ?? []), {hex, d: path, bound}].slice(-20);
+		emit("pick-rail", {hex, bound});
+	}
+}
 
 /** 限速 → 颜色（速度越高越亮）。高限速干线在暗底上自然浮起来。 */
 function speedColor(speed: number): string {
@@ -107,7 +151,7 @@ const drawn = computed(() => {
 		isCurve: boolean;
 		color: string;
 		width: number;
-		highlight: "none" | "hover" | "select";
+		highlight: "none" | "hover" | "select" | "bound" | "candidate" | "connected";
 	}[] = [];
 
 	for (const rail of props.rails) {
@@ -128,7 +172,7 @@ const drawn = computed(() => {
 			: railCurvePath(
 				from,
 				to,
-				rail.path.map(point => ({x: point.x, y: -point.z})),
+				rail.path.map(point => ({x: point.x, y: point.z})),
 				project,
 				// 节点键直接用引擎的 `x,y,z`（不能从平面坐标反推，那样会丢掉 y 与符号）
 				node => straightDirections.value.get(node) ?? null,
@@ -142,10 +186,20 @@ const drawn = computed(() => {
 		 * 高亮：与悬停/选中的节点相连的轨。轨的端点就是节点坐标，所以直接比 endpoint key——
 		 * 不需要额外的邻接索引，134 条轨这个规模比字符串很快。
 		 */
-		let highlight: "none" | "hover" | "select" = "none";
+		let highlight: "none" | "hover" | "select" | "bound" | "candidate" | "connected" = "none";
 		const startKey = endpointKey(rail, 1);
 		const endKey = endpointKey(rail, 2);
-		if (props.selectKey !== "" && (startKey === props.selectKey || endKey === props.selectKey)) {
+		if (props.connectedRail !== undefined && props.connectedRail !== "" && rail.hex === props.connectedRail) {
+			// 选中道岔当前开通的那条轨：最高优先级。它是此刻用户唯一在问的问题
+			// （"这个道岔现在把哪条轨接通了"），别的强调都可以让位。
+			highlight = "connected";
+		} else if (props.boundRails?.includes(rail.hex)) {
+			// 这盏灯现在守的轨：最高优先级（它就是我们要看清楚的结论）
+			highlight = "bound";
+		} else if (props.candidateRails?.includes(rail.hex)) {
+			// 可以点的候选轨
+			highlight = "candidate";
+		} else if (props.selectKey !== "" && (startKey === props.selectKey || endKey === props.selectKey)) {
 			highlight = "select";
 		} else if (props.hoverKey !== "" && (startKey === props.hoverKey || endKey === props.hoverKey)) {
 			highlight = "hover";
@@ -171,10 +225,6 @@ const drawn = computed(() => {
 });
 
 /** 实际画出来的直线 / 曲线条数，上报给 HUD。 */
-const emit = defineEmits<{
-	(e: "shapes", summary: {straight: number; curve: number}): void;
-}>();
-
 watch(drawn, items => {
 	let straight = 0;
 	let curve = 0;
@@ -200,10 +250,28 @@ watch(drawn, items => {
 			v-for="item in drawn"
 			:key="item.hex"
 			class="rail"
-			:class="item.highlight"
+			:class="[item.highlight, {pickable: pickable && (item.highlight === 'candidate' || item.highlight === 'bound')}]"
+			:data-hex="item.hex"
 			:d="item.d"
 			:stroke="item.highlight === 'none' ? item.color : undefined"
 			:stroke-width="item.highlight === 'none' ? item.width : item.width + 0.6"
+			@pointerenter="hoveredRail = item.hex"
+			@pointerleave="hoveredRail = ''"
+			@pointerdown.stop="onRailPick(item.hex, item.highlight === 'bound')"
+		/>
+		<!--
+			可点区域：候选轨**与已绑定的轨**上都叠一条透明但**很宽**的线，把细轨变成好点的目标
+			（实测 1.6px 的线很难点中）。已绑定的轨也要能点 —— "再点一次解绑"这条路必须有命中区，
+			否则解绑只能靠清空全部绑定。画在所有轨之后，所以它压在上面负责命中，可见样式不受影响。
+		-->
+		<path
+			v-for="item in drawn.filter(entry => pickable && (entry.highlight === 'candidate' || entry.highlight === 'bound'))"
+			:key="`${item.hex}-hit`"
+			class="hit"
+			:d="item.d"
+			@pointerenter="hoveredRail = item.hex"
+			@pointerleave="hoveredRail = ''"
+			@pointerdown.stop="onRailPick(item.hex, item.highlight === 'bound')"
 		/>
 	</g>
 </template>
@@ -234,5 +302,54 @@ watch(drawn, items => {
 /* 与选中节点相连的轨：强调色 */
 .rail.select {
 	stroke: var(--accent);
+}
+
+/*
+ * 正在改绑定的那盏灯**已经守**的轨：绿色实线（与灯状态用的绿同一个色，读起来就是"这条归它管"）。
+ */
+.rail.bound {
+	stroke: #22c55e;
+	stroke-width: 3.2;
+}
+
+/*
+ * 可以点的候选轨：虚线 + 强调色。虚线是刻意的——它表达"还没定，等你点"，
+ * 而定下来之后变成 bound 的实线，一眼能区分"能点"和"已经在守"。
+ */
+.rail.candidate {
+	stroke: var(--accent);
+	stroke-width: 2.4;
+	stroke-dasharray: 6 4;
+}
+
+/*
+ * 选中道岔**当前开通**的那条腿：琥珀实线 + 加宽 + 发光。
+ *
+ * <p>用道岔自己的琥珀色（与菱形同色）而不是别的强调色：读起来就是"这条轨归那个道岔管"。
+ * 发光（drop-shadow）是为了在密集站场里也能一眼找到 —— 世界图里几十条轨挤在一起，
+ * 只靠颜色深浅分不出来。</p>
+ */
+.rail.connected {
+	stroke: #f59e0b;
+	stroke-width: 4;
+	filter: drop-shadow(0 0 5px rgba(245, 158, 11, 0.85));
+}
+
+.rail.pickable {
+	cursor: pointer;
+}
+
+/* 命中区：完全透明，只负责把细线变成好点的目标 */
+.hit {
+	fill: none;
+	stroke: transparent;
+	stroke-width: 12;
+	/*
+	 * 用 `all` 而不是 `stroke`：`stroke` 要求指针**正好落在描边覆盖的像素上**，
+	 * 而命中区是透明的宽描边 —— 一像素的取整误差就会让点击落到空白（实测点不下去，
+	 * elementFromPoint 命中了、事件却没到）。透明线没有可见的填充部分，所以 `all` 是等价的。
+	 */
+	pointer-events: all;
+	cursor: pointer;
 }
 </style>
