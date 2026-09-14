@@ -4,6 +4,7 @@ import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
 import org.mtr.core.mmtr.MmtrRunPlanner;
+import org.mtr.core.mmtr.route.MmtrRoute;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.simulation.Simulator;
 
@@ -87,6 +88,18 @@ public final class MmtrMovementAuthority {
 	 *                  notes/112 §4 实测过这个坑）
 	 */
 	public static MmtrMovementAuthority forVehicle(Simulator simulator, @Nullable MmtrMotionPosition walker, long vehicleId) {
+		return forVehicle(simulator, walker, vehicleId, null);
+	}
+
+	/**
+	 * As above, with the train's own 进路: while that route is **not set** the departure signal in front of
+	 * the train is red, whatever the lamps over the next rail happen to show.
+	 *
+	 * <p>这是 T3 的 ②：进路没设好（含被 T1 的物理道岔挡）⇒ 车停在**进路入口的保护信号前**，
+	 * 而不是先开进咽喉再在道岔前等。修前这种车会一路开到岔前 —— 堵住咽喉、还看不出为什么。</p>
+	 */
+	public static MmtrMovementAuthority forVehicle(Simulator simulator, @Nullable MmtrMotionPosition walker, long vehicleId,
+			@Nullable MmtrRoute route) {
 		if (walker == null) {
 			return none(MmtrSignalAspect.Aspect.GREEN, "车没有走行位置");
 		}
@@ -94,7 +107,12 @@ public final class MmtrMovementAuthority {
 		final String railHex = nextRail == null ? walker.railHex() : nextRail.getHexId();
 		final Position entryNode = nextRail == null ? walker.enteredFromPosition() : walker.aheadNode();
 		// 到"即将通过的那架信号"的距离：与 AWS 触发读的是同一个量，两处不会各说各话。
-		return forApproach(simulator, railHex, entryNode, vehicleId, Math.max(0, MmtrRunPlanner.remainingToAheadNodeM(walker)));
+		final double toSignalM = Math.max(0, MmtrRunPlanner.remainingToAheadNodeM(walker));
+		if (route != null && !route.isEstablished()) {
+			return new MmtrMovementAuthority(MmtrSignalAspect.Aspect.RED, railHex == null ? "" : railHex, toSignalM, 0, false,
+				"进路未设好，停在出发信号前：" + route.getStateReason());
+		}
+		return forApproach(simulator, railHex, entryNode, vehicleId, toSignalM);
 	}
 
 	/**
@@ -110,7 +128,23 @@ public final class MmtrMovementAuthority {
 		if (signalRailHex == null || signalRailHex.isEmpty()) {
 			return none(MmtrSignalAspect.Aspect.GREEN, "轨位置解不出来");
 		}
-		return of(simulator.mmtrSignalAspectView().aspectFrom(signalRailHex, entryNode, vehicleId), signalRailHex, toSignalM);
+		final MmtrSignalAspect.Aspect aspect = simulator.mmtrSignalAspectView().aspectFrom(signalRailHex, entryNode, vehicleId);
+		/*
+		 * T3：**v1 逐轨回退链的红灯不能作为停车依据**。
+		 *
+		 * v1 读的是"预留信号色"通道，那个通道**认不出这团影子是不是问话的这列车自己**
+		 * （notes/112 §4 就是它：车把自己的车头影子读成"前方占用"，一给油就告警）。AWS 那边
+		 * 只是响一声，可以忍；把它接成停车规则就会**让列车被自己的影子永久扣住** ——
+		 * 实测：本规则一接上，五条既有用例的列车再也到不了目的地。
+		 *
+		 * v2（灯到灯有向区间）带 excludeVehicleId，能排除自身；所以停车只认 v2 的结论。
+		 * 没有 v2 区块的轨段：本条**不作声**，交给原有规则 (2)(3)(4) 照旧扣车（行为与修前一致）。
+		 */
+		if (aspect == MmtrSignalAspect.Aspect.RED && !simulator.mmtrDirectionalBlocks.hasSection(signalRailHex)) {
+			return new MmtrMovementAuthority(aspect, "", NO_TARGET_M, Double.MAX_VALUE, false,
+				"红灯（来自 v1 逐轨链，不作为停车依据：它认不出这是不是本车自己的影子）");
+		}
+		return of(aspect, signalRailHex, toSignalM);
 	}
 
 	/**

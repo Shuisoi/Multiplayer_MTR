@@ -29,6 +29,7 @@ import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.mmtr.signal.MmtrBlockService;
+import org.mtr.core.mmtr.signal.MmtrMovementAuthority;
 import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.path.SidingPathFinder;
 import org.mtr.core.serializer.ReaderBase;
@@ -149,9 +150,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * never come within the 120 m request window of the turnout it is waiting for.
 	 */
 	private boolean mmtrSectionAuthorityHold = false;
+	/** T3: 车被**行车许可**扣住（红灯 / 自己的进路没设好）—— 与"区间出口是未设道岔"是两种不同的等待。 */
+	private boolean mmtrSignalAuthorityHold = false;
+	private String mmtrSignalAuthorityReason = "";
 
 	/** Short reason for the block-stop log line (the operator reads these in the server log). */
 	private String mmtrBlockStopReason() {
+		if (mmtrSignalAuthorityHold) {
+			return mmtrSignalAuthorityReason;
+		}
 		return mmtrSectionAuthorityHold ? "block ahead ends at an unset turnout" : "block ahead occupied";
 	}
 	/**
@@ -3180,7 +3187,39 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (junctionStopM != null) {
 			stop = Math.min(stop, junctionStopM);
 		}
+		// (5) T3 —— **行车许可**（红灯 / 自己的进路没设好）：这是"信号第一次真正控车"。
+		//
+		// 前四条规则都是**占用与几何**：同轨遮挡、下一区间被占、区间出口是选不出腿的道岔、岔区清限。
+		// 灯色此前不进任何停车规则（全仓库唯一"影响行车"的消费者是 AWS 告警），所以红灯只是一块显示屏。
+		// 这一条把 MmtrMovementAuthority 的目标接进同一条 min 链：目标速度 0 ⇒ 停在目标前 ε。
+		//
+		// 与 (2) 的分工：(2) 管**占用类**红灯（下一区间被占），本条补的是**非占用类** ——
+		// 进路 PENDING（含被物理道岔挡；T1 之后这个状态才可信）与联锁造成的红灯。
+		mmtrSignalAuthorityHold = false;
+		mmtrSignalAuthorityReason = "";
+		final org.mtr.core.mmtr.signal.MmtrMovementAuthority movementAuthority = mmtrMovementAuthority();
+		if (movementAuthority != null && movementAuthority.mustStop() && mmtrMotionWalker != null) {
+			// 许可的距离是"从当前位置起算"的；min 链要的是走行空间的绝对里程 —— 与 (3)(4) 同一套换算。
+			final double targetM = mmtrMotionWalker.distanceM() + movementAuthority.targetDistanceM - MMTR_BLOCK_NODE_EPS_M;
+			if (targetM < stop) {
+				stop = Math.max(0, targetM);
+				mmtrSignalAuthorityHold = true;
+				mmtrSignalAuthorityReason = movementAuthority.reason;
+			}
+		}
 		return stop;
+	}
+
+	/**
+	 * T3: this train's 行车许可 right now, or null when it has no live motion position.
+	 *
+	 * <p>放成一个方法，是为了让 feed / 诊断 / 停车规则读**同一份**结论 —— notes/114 的教训是
+	 * 同一个问题在两处各算一遍，迟早各说各话。</p>
+	 */
+	public @Nullable MmtrMovementAuthority mmtrMovementAuthority() {
+		return data instanceof final Simulator simulator
+			? org.mtr.core.mmtr.signal.MmtrMovementAuthority.forVehicle(simulator, mmtrMotionWalker, getId(), getMmtrRoute())
+			: null;
 	}
 
 	/**

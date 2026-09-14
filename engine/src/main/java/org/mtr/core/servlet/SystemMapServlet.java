@@ -459,7 +459,7 @@ public final class SystemMapServlet extends ServletBase {
 				final org.mtr.core.mmtr.segment.MmtrMotionPosition authorityWalker = vehicle.getMmtrMotionWalker();
 				if (authorityWalker != null) {
 					train.add("authority", mmtrAuthorityJson(
-						org.mtr.core.mmtr.signal.MmtrMovementAuthority.forVehicle(simulator, authorityWalker, vehicle.getId())));
+						org.mtr.core.mmtr.signal.MmtrMovementAuthority.forVehicle(simulator, authorityWalker, vehicle.getId(), route)));
 				}
 				final MmtrMission mission = vehicle.getMmtrMission();
 				if (mission != null) {
