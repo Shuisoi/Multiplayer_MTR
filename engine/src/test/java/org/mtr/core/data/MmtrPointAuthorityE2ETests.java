@@ -7,6 +7,7 @@ import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.point.MmtrPointAuthority;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
+import org.mtr.core.mmtr.point.MmtrTurnout;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.operation.MmtrMissionControl;
 import org.mtr.core.serializer.JsonReader;
@@ -263,5 +264,77 @@ public final class MmtrPointAuthorityE2ETests {
 		w2.advance(13);
 		assertEquals(n.rX.getHexId(), w2.railHex(), "second train crossed onto the same leg after the first released");
 		assertFalse(w2.haltedAtAuthority());
+	}
+
+	/**
+	 * 锁是"永久生效直到解锁"（用户 2026-09-14）—— 那就意味着**锁定与解锁都必须落盘**。
+	 *
+	 * <p>实测踩到的坑：{@code mmtrPointUnlock} 早先只改内存、不落盘，于是"解锁"只在当前进程里成立，
+	 * 重启后锁原样回来 —— 现场表现是"网页上锁闭显示 0，重启又全回来了"。这条测试把两个方向都钉死：
+	 * 锁要能重启后还在，解锁也要能重启后不回来。</p>
+	 *
+	 * <p>顺带钉住"一处道岔三条进向"这件事：解一条进向不算解开这处道岔（
+	 * {@link MmtrPointAuthority#isTurnoutLocked} 是"任一进向锁着即算锁着"）。</p>
+	 */
+	@Test
+	public void aLockSurvivesARestartAndAnUnlockSurvivesItToo() {
+		final String savePath = "build/mmtr-point-lock-persist";
+		final Net n = new Net(savePath);
+		final long x = n.yardMouth.getX();
+		final long y = n.yardMouth.getY();
+		final long z = n.yardMouth.getZ();
+		final MmtrPointAuthority authority = n.sim.mmtrPointAuthority;
+
+		// 人工搬岔 = 设位置 + 锁三条进向 + 落盘
+		assertTrue(n.sim.mmtrSetPoint(x, y, z, n.yardRail.getHexId(), 1), "operator throws the mouth fork to rY");
+		final MmtrTurnout turnout = n.sim.mmtrTurnout(x, y, z);
+		assertNotNull(turnout, "这个岔口现在是真道岔（有物理模型）");
+		assertTrue(authority.isTurnoutLocked(x, y, z, turnout), "人工搬岔把一处道岔锁上（三条进向一起锁）");
+
+		// "重启" = 同一存档目录再起一个 Simulator（构造时就 loadLocks）
+		final Net restarted = new Net(savePath);
+		assertTrue(restarted.sim.mmtrPointAuthority.isTurnoutLocked(x, y, z, restarted.sim.mmtrTurnout(x, y, z)),
+			"锁是持久的：重启后仍然锁着（不许静默解锁）");
+
+		// 解一条进向**不算**解开这处道岔：一处道岔只有一个位置，三条进向任一锁着就不许自动扳
+		final int lockedBefore = authority.locksSnapshot().size();
+		n.sim.mmtrPointUnlock(x, y, z, n.yardRail.getHexId());
+		assertEquals(lockedBefore - 1, authority.locksSnapshot().size(), "只解掉了这一条进向的锁");
+		assertTrue(authority.isTurnoutLocked(x, y, z, turnout), "只解一条进向还不算解开这处道岔");
+
+		// 全解锁（含界面上没有对应进向行的那些键），并且**要落盘**
+		assertEquals(lockedBefore - 1, n.sim.mmtrUnlockAllPoints(), "剩下两条进向的锁被一次清掉");
+		assertTrue(authority.locksSnapshot().isEmpty(), "清完之后引擎手里一把锁都不剩");
+
+		final Net restartedAgain = new Net(savePath);
+		assertFalse(restartedAgain.sim.mmtrPointAuthority.isTurnoutLocked(x, y, z, restartedAgain.sim.mmtrTurnout(x, y, z)),
+			"解锁也持久：重启后不再锁着（否则用户看到的\"解锁\"是假的）");
+
+		// 收尾：位置回正线，别把人工位留给下一跑
+		n.sim.mmtrSetTurnoutPosition(x, y, z, MmtrTurnout.NORMAL);
+	}
+
+	/**
+	 * {@code point unlock --all} 要能清掉**界面表达不出来**的锁键，而且清完要落盘。
+	 *
+	 * <p>人工搬岔一次锁三条进向，而网页/指令是按"进向行"表达的 —— 那些没有对应行的键
+	 * （旧世界遗留、或道岔改画之后行没了）在界面上永远点不到。只按界面逐行解就会留下死角，
+	 * 重启后它们又回来了（现场存档里确实躺着这种键：网页显示 0 处锁闭，文件里 20 条）。</p>
+	 */
+	@Test
+	public void unlockAllAlsoClearsLocksThatNoApproachRowCouldShow() {
+		final String savePath = "build/mmtr-point-unlock-all";
+		final Net n = new Net(savePath);
+
+		// 一个界面上不可能点到的键：坐标上根本没有这个进向（没有行指向它）
+		n.sim.mmtrPointLock(0, 0, 0, "no-such-approach-rail");
+		final Net restarted = new Net(savePath);
+		assertEquals(1, restarted.sim.mmtrPointAuthority.locksSnapshot().size(),
+			"这条锁落盘了：重启后还在，而它在界面上没有任何一行可点（逐行解永远解不到它）");
+		assertEquals(1, restarted.sim.mmtrUnlockAllPoints(), "全解锁把这种看不见的键也算进来");
+		assertTrue(restarted.sim.mmtrPointAuthority.locksSnapshot().isEmpty(), "清完之后引擎手里一把锁都不剩");
+
+		final Net restartedAgain = new Net(savePath);
+		assertTrue(restartedAgain.sim.mmtrPointAuthority.locksSnapshot().isEmpty(), "全解锁也落盘了：重启后依然是空的");
 	}
 }

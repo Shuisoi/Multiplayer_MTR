@@ -13,6 +13,11 @@ import java.util.Map;
  * <p>引擎里的道岔能力（{@code mmtrSetPoint} / {@code mmtrPointLock} / {@code mmtrPointUnlock} /
  * {@code mmtrPointRelease}）此前只从 {@code mmtr-point-op} 那组专用接口暴露，
  * 这里收进统一指令，并把"这条道岔现在在哪一位、谁持有"一并回给调用方。</p>
+ *
+ * <p><b>锁与"看不见的进向"</b>：人工搬岔（{@code set}）会把一处道岔的**三条进向一起锁上**，
+ * 而界面只表达得出"有按钮的那几条"。所以除了逐进向 {@code lock}/{@code unlock}，
+ * 这里还给 {@code point locks}（问引擎到底锁了哪些）与 {@code point unlock --all}
+ * （按引擎自己持有的键全清）—— 只按界面逐行解会留下死角，重启后那些锁会原样回来（用户 2026-09-14 现场）。</p>
  */
 final class MmtrPointCommands {
 
@@ -26,6 +31,8 @@ final class MmtrPointCommands {
 			case "lock":
 			case "unlock":
 				return lock(simulator, verb, positional, options);
+			case "locks":
+				return locks(simulator);
 			case "release":
 				return release(simulator, positional, options);
 			case "list":
@@ -33,7 +40,7 @@ final class MmtrPointCommands {
 			case "why":
 				return why(simulator, positional);
 			default:
-				return MmtrCommandDispatcher.usage("point 支持 set / lock / unlock / release / list / why");
+				return MmtrCommandDispatcher.usage("point 支持 set / lock / unlock（unlock --all 全解）/ locks / release / list / why");
 		}
 	}
 
@@ -155,12 +162,20 @@ final class MmtrPointCommands {
 			+ "物理上不存在这个组合 —— 该节点 " + where;
 	}
 
-	/** {@code point lock|unlock <x> <y> <z> --via=<轨hex>} */
+	/** {@code point lock|unlock <x> <y> <z> --via=<轨hex>} ｜ {@code point unlock --all} */
 	private static MmtrCommandDispatcher.Result lock(Simulator simulator, String verb, java.util.List<String> positional, Map<String, String> options) {
+		// 全解锁：人工搬岔一次锁的是三条进向，而界面只表达得出"有按钮的那些"，
+		// 逐行解永远有死角（现场表现：网页上锁闭 0，重启后锁全回来）。所以给一条按引擎自己持有的键来解的入口。
+		if (verb.equals("unlock") && options.containsKey("all")) {
+			final int cleared = simulator.mmtrUnlockAllPoints();
+			final MmtrCommandDispatcher.Result all = new MmtrCommandDispatcher.Result(true, "point", "unlock");
+			all.line("已解锁全部人工锁：清掉 " + cleared + " 把（含界面上没有对应进向的那些）");
+			return all;
+		}
 		final Position node = coordinates(positional);
 		final String via = options.get("via");
 		if (node == null || via == null || via.isEmpty()) {
-			return MmtrCommandDispatcher.usage("point " + verb + " 需要 <x> <y> <z> --via=<轨hex>");
+			return MmtrCommandDispatcher.usage("point " + verb + " 需要 <x> <y> <z> --via=<轨hex>，或 point unlock --all");
 		}
 		if (verb.equals("lock")) {
 			simulator.mmtrPointLock(node.getX(), node.getY(), node.getZ(), via);
@@ -170,6 +185,31 @@ final class MmtrPointCommands {
 		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "point", verb);
 		result.add(key(node, via));
 		result.line((verb.equals("lock") ? "已锁闭" : "已解锁") + "：节点 " + node.getX() + "," + node.getY() + "," + node.getZ() + " / 轨 " + shortHex(via));
+		return result;
+	}
+
+	/**
+	 * {@code point locks}：**列出引擎手里的人工锁**（按节点归堆）。
+	 *
+	 * <p>存在的理由：网页上看到的「锁闭」是**逐进向行**的，一行道岔有三条进向、人工搬岔把三条全锁上，
+	 * 界面上只显示得出有按钮的那几条。要判断"到底还有没有锁、锁在哪"，只能问引擎自己。
+	 * 这也是"解不干净→重启又回来"那个现场问题的排查入口。</p>
+	 */
+	private static MmtrCommandDispatcher.Result locks(Simulator simulator) {
+		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "point", "locks");
+		final java.util.List<String> keys = new java.util.ArrayList<>(simulator.mmtrPointAuthority.locksSnapshot());
+		java.util.Collections.sort(keys);
+		result.line("人工锁 " + keys.size() + " 把（锁着的道岔不许自动扳，自动进路排队等 point unlock）");
+		for (final String k : keys) {
+			final int bar = k.indexOf('|');
+			final String node = bar < 0 ? k : k.substring(0, bar);
+			final String via = bar < 0 ? "" : k.substring(bar + 1);
+			result.add(node + "|" + via);
+			result.line("  " + node + "  via " + shortHex(via));
+		}
+		if (keys.isEmpty()) {
+			result.line("  （没有锁：自动进路可以自由扳岔）");
+		}
 		return result;
 	}
 

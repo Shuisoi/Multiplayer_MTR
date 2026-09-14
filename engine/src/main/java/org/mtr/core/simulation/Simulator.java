@@ -1307,17 +1307,44 @@ public class Simulator extends Data implements Utilities {
 		System.out.println("[MMTR-PT] rel " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex);
 	}
 
-	/** Operator parks a point for manual use: auto requests queue until mmtrPointUnlock. */
+	/**
+	 * Operator parks a point for manual use: auto requests queue until mmtrPointUnlock.
+	 *
+	 * <p>落盘是必须的：{@link #mmtrUnlockAllPoints()} / {@code point unlock} 之所以"解了又回来"，
+	 * 就是因为锁只在内存里动了、存档里没动 —— 见 {@link #mmtrUnlockAllPoints()} 的说明。</p>
+	 */
 	public void mmtrPointLock(long x, long y, long z, String viaRailHex) {
 		final String via = mmtrResolveRailHex(x, y, z, viaRailHex);
 		mmtrPointAuthority.lock(x, y, z, via);
+		persistMmtrPointBranches();
 		System.out.println("[MMTR-PT] lock " + x + "," + y + "," + z + " via " + via);
 	}
 
+	/**
+	 * 解锁**一处进向**，并**落盘**。
+	 *
+	 * <p>用户 2026-09-14 的选择是"人工搬岔同时把道岔锁住（**永久生效直到解锁**）"。既然锁是永久的，
+	 * 解锁就必须同样永久 —— 只改内存的话，重启后锁会原样回来，用户看到的"解锁"是假的
+	 * （现场实测：网页显示 0 处锁闭，而存档里还留着 20 条锁，下一次落盘就会把它们写回去）。</p>
+	 */
 	public void mmtrPointUnlock(long x, long y, long z, String viaRailHex) {
 		final String via = mmtrResolveRailHex(x, y, z, viaRailHex);
 		mmtrPointAuthority.unlock(x, y, z, via);
+		persistMmtrPointBranches();
 		System.out.println("[MMTR-PT] unlock " + x + "," + y + "," + z + " via " + via);
+	}
+
+	/**
+	 * 解锁**全部**人工锁（含界面上没有对应按钮的那些进向），返回清掉几把，并**落盘**。
+	 *
+	 * <p>为什么要这个入口：人工搬岔一次锁的是三条进向，而网页/指令是按"进向行"表达的，
+	 * 所以"逐个解锁"永远会有解不到的死角；现场表现就是"网页上锁闭是 0，重启后锁全回来了"。</p>
+	 */
+	public int mmtrUnlockAllPoints() {
+		final int cleared = mmtrPointAuthority.clearLocks();
+		persistMmtrPointBranches();
+		System.out.println("[MMTR-PT] unlock all：清掉 " + cleared + " 把人工锁");
+		return cleared;
 	}
 
 	/**

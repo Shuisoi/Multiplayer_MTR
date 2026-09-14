@@ -35,7 +35,7 @@ import java.util.List;
  *   signal remove &lt;x&gt; &lt;y&gt; &lt;z&gt;
  *   signal bind &lt;x&gt; &lt;y&gt; &lt;z&gt; --rail=&lt;轨hex&gt;[,…]     （点选绑定：这盏灯守哪几根轨，一灯可多轨）
  *   manifest list | manifest add … | manifest remove … | manifest reload
- *   point set|lock|unlock|release …
+ *   point set|lock|unlock|locks|release …
  *   query &lt;topology|signals|trains|points|sections|depots&gt;
  *   world scan-signals          （转交游戏端：只有它能枚举已加载区块）
  * </pre>
@@ -173,6 +173,8 @@ public final class MmtrCommandDispatcher {
 		result.line("  signal why <x> <y> <z>");
 		result.line("  manifest list | manifest reload | manifest add <depotId> <sidingId> [车型...] | manifest remove <depotId> [sidingId]");
 		result.line("  point set <x> <y> <z> --via=<轨hex> --branch=n | point lock|unlock|release <x> <y> <z> --via=<轨hex>");
+		result.line("  point unlock --all                                               ← 解开全部人工锁（含界面上没有按钮的进向）");
+		result.line("  point locks                                                      ← 引擎现在锁着哪些（逐进向列出）");
 		result.line("  point why <x> <y> <z>                                             ← 这个节点为什么（没）被认成一处道岔");
 		result.line("  point list");
 		result.line("  query <topology|signals|trains|points|sections|depots>");

@@ -438,6 +438,27 @@ public final class MmtrPointAuthority {
 	}
 
 	/**
+	 * 清掉**全部**人工锁，返回清掉几把（用户 2026-09-14 现场需要：Web 上「锁闭」数字归零）。
+	 *
+	 * <p>为什么要"全部"而不是"逐个解"：{@code mmtr-points} 是按**进向行**给的，而一行道岔
+	 * 派生出来的三行里，只有能被网页画出来的那些进向才看得见 —— 人工搬岔一次锁的是**三条进向**，
+	 * 另外两条在界面上根本没有对应的按钮可点。逐行解 = 只解了一半，剩下的一半重启后原样回来
+	 * （实测：网页显示 0 处锁闭，存档里还躺着 20 条）。所以这里按"引擎自己持有的键"清，
+	 * 不经过界面能表达的范围。</p>
+	 *
+	 * <p>每清一把都走 {@link #promote}：排队的自动申请该立刻接手，不能等到下一个 tick
+	 * （与单把 {@link #unlock} 行为一致）。</p>
+	 */
+	public int clearLocks() {
+		final java.util.List<String> all = new java.util.ArrayList<>(locks);
+		for (final String k : all) {
+			locks.remove(k);
+			promote(k, clock.getAsLong());
+		}
+		return all.size();
+	}
+
+	/**
 	 * **一处道岔是不是被人工锁着**：任一进向有锁即算。
 	 *
 	 * <p>用户 2026-09-14 的选择："人工搬岔同时把道岔锁住（永久生效直到解锁）"。一处道岔只有一个位置，
