@@ -27,17 +27,30 @@ public final class MmtrPointAuthority {
 		public final String owner;
 		public int leg;
 		public long untilMillis;
+		/**
+		 * T1b 裁决链第一档：**计划时刻优先**（越小越优先）。{@link Long#MAX_VALUE} = 没有计划，
+		 * 完全按到达序 —— 所以"没有任务时刻"的运行与修前逐位一致。
+		 */
+		public long priorityMillis = Long.MAX_VALUE;
+		/** T1b 裁决链最后一档：入队时刻，用来算等待时长（**防饿死**）。重复申请不刷新它。 */
+		public long enqueuedAtMillis;
 
 		Req(String owner, int leg, long untilMillis) {
+			this(owner, leg, untilMillis, Long.MAX_VALUE);
+		}
+
+		Req(String owner, int leg, long untilMillis, long priorityMillis) {
 			this.owner = owner;
 			this.leg = leg;
 			this.untilMillis = untilMillis;
+			this.priorityMillis = priorityMillis;
 		}
 	}
 
 	private static final class Holder extends Req {
 		Holder(Req req) {
-			super(req.owner, req.leg, req.untilMillis);
+			super(req.owner, req.leg, req.untilMillis, req.priorityMillis);
+			this.enqueuedAtMillis = req.enqueuedAtMillis;
 		}
 	}
 
@@ -66,6 +79,9 @@ public final class MmtrPointAuthority {
 
 	/** {@link #physicalPosition} answer when nobody currently defines this turnout's position. */
 	public static final int NO_PHYSICAL_HOLDER = Integer.MIN_VALUE;
+
+	/** T1b 防饿死：排队等待超过这个时长就提到上一档（不再排在任何新来者后面）。 */
+	public static final long MMTR_STARVATION_MILLIS = 5L * 60 * 1000;
 
 	/** T1: one turnout, one position - who has currently pinned it where. */
 	private static final class Physical {
@@ -220,6 +236,15 @@ public final class MmtrPointAuthority {
 	 * unreachable - it exists so the invariant holds even if that reasoning is ever broken.</p>
 	 */
 	public Result requestAtomically(@Nullable ObjectArrayList<String[]> ops, String owner, long untilMillis) {
+		return requestAtomically(ops, owner, untilMillis, Long.MAX_VALUE);
+	}
+
+	/**
+	 * As above, with an explicit 计划时刻 priority ({@code priorityMillis}, smaller = earlier).
+	 * {@link Long#MAX_VALUE} means "no plan": the wait is then ordered purely by arrival, which is the
+	 * pre-T1b behaviour. T5 (timetable pre-planning) is what will actually fill this in.
+	 */
+	public Result requestAtomically(@Nullable ObjectArrayList<String[]> ops, String owner, long untilMillis, long priorityMillis) {
 		if (ops == null || ops.isEmpty()) {
 			return Result.GRANTED;
 		}
@@ -237,13 +262,13 @@ public final class MmtrPointAuthority {
 				}
 				if (!physicallyGrantableTo(nodeKey(x, y, z), demand, owner, now)) {
 					releaseSet(ops, owner);
-					queueSet(ops, owner, untilMillis);
+					queueSet(ops, owner, untilMillis, priorityMillis);
 					return Result.QUEUED;
 				}
 			}
 			if (!perApproachGrantableTo(key(x, y, z, via), owner, now)) {
 				releaseSet(ops, owner);
-				queueSet(ops, owner, untilMillis);
+				queueSet(ops, owner, untilMillis, priorityMillis);
 				return Result.QUEUED;
 			}
 		}
@@ -251,7 +276,7 @@ public final class MmtrPointAuthority {
 			if (request(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], owner,
 					Integer.parseInt(op[4]), untilMillis) != Result.GRANTED) {
 				releaseSet(ops, owner);
-				queueSet(ops, owner, untilMillis);
+				queueSet(ops, owner, untilMillis, priorityMillis);
 				return Result.QUEUED;
 			}
 		}
@@ -294,14 +319,14 @@ public final class MmtrPointAuthority {
 	}
 
 	/** 原子组等待时：在**整组每一处**排队（保住 FIFO 位置），幂等刷新窗口。 */
-	private void queueSet(ObjectArrayList<String[]> ops, String owner, long untilMillis) {
+	private void queueSet(ObjectArrayList<String[]> ops, String owner, long untilMillis, long priorityMillis) {
 		for (final String[] op : ops) {
 			final long x = Long.parseLong(op[0]);
 			final long y = Long.parseLong(op[1]);
 			final long z = Long.parseLong(op[2]);
 			final String via = op[3];
 			final int leg = Integer.parseInt(op[4]);
-			enqueueIdempotent(key(x, y, z, via), owner, leg, untilMillis);
+			enqueueIdempotent(key(x, y, z, via), owner, leg, untilMillis, priorityMillis);
 			final MmtrTurnout turnout = turnoutAt(x, y, z);
 			if (turnout != null) {
 				final int demand = turnout.positionForLeg(via, leg);
@@ -312,14 +337,16 @@ public final class MmtrPointAuthority {
 		}
 	}
 
-	private void enqueueIdempotent(String k, String owner, int leg, long untilMillis) {
+	private void enqueueIdempotent(String k, String owner, int leg, long untilMillis, long priorityMillis) {
 		final Req existing = findQueued(k, owner);
 		if (existing != null) {
 			existing.leg = leg;
 			existing.untilMillis = untilMillis;
+			existing.priorityMillis = Math.min(existing.priorityMillis, priorityMillis);
+			// enqueuedAtMillis 保持不变：等待时长要累计，否则每 tick 的重复申请会让防饿死永不触发。
 			return;
 		}
-		enqueue(k, new Req(owner, leg, untilMillis));
+		enqueue(k, new Req(owner, leg, untilMillis, priorityMillis));
 	}
 
 	/**
@@ -623,6 +650,7 @@ public final class MmtrPointAuthority {
 	}
 
 	private void enqueue(String k, Req in) {
+		in.enqueuedAtMillis = clock.getAsLong();   // T1b: 防饿死按这个算等待时长；重复申请**不**刷新它
 		queued.computeIfAbsent(k, x -> new ArrayDeque<>()).addLast(in);
 		queuedHead.put(k, queued.get(k).peekFirst());
 	}
@@ -648,20 +676,54 @@ public final class MmtrPointAuthority {
 		if (locks.contains(k)) {
 			return; // operator park holds the point; queue waits for unlock
 		}
-		ArrayDeque<Req> q = queued.get(k);
-		while (q != null && !q.isEmpty()) {
-			final Req head = q.peekFirst();
-			if (head.untilMillis <= now) {
-				q.pollFirst(); // stale queued request expired
-				continue;
+		final ArrayDeque<Req> q = queued.get(k);
+		if (q != null) {
+			q.removeIf(r -> r.untilMillis <= now);   // 窗口过期的排队项一律丢掉
+			final Req best = pickNext(q, now);
+			if (best != null) {
+				q.remove(best);
+				holders.put(k, new Holder(best));
 			}
-			holders.put(k, new Holder(head));
-			q.pollFirst();
-			break;
 		}
 		queuedHead.put(k, q == null || q.isEmpty() ? null : q.peekFirst());
 		if (q != null && q.isEmpty()) {
 			queued.remove(k);
 		}
+	}
+
+	/**
+	 * T1b 裁决链：**计划时刻优先 > 到达序 > 防饿死**。
+	 *
+	 * <p>没有计划时刻（{@link Long#MAX_VALUE}）且没人等待超过 {@link #MMTR_STARVATION_MILLIS} 时，
+	 * 比较键退化成"入队时刻" —— 也就是**与修前完全一样的 FIFO**。这是基线没有被这一片震动的原因。</p>
+	 *
+	 * <p>等待超时的排队项被提到上一档：它不再排在任何新来者后面，只在同为"饿着"的项之间按等待时长
+	 * 排序（优先级在这一档里不再参与，否则一个高优先级的老等者会把它后面的饿者一直压住）。
+	 * 没有这一档，咽喉繁忙时先到的那一列车可能永远轮不到 —— 而用户裁定"玩家只有司机、没有调度员"，
+	 * 所以**不能**靠人来解这个套。</p>
+	 */
+	private @Nullable Req pickNext(@Nullable ArrayDeque<Req> q, long now) {
+		if (q == null || q.isEmpty()) {
+			return null;
+		}
+		Req best = null;
+		boolean bestStarved = false;
+		for (final Req r : q) {
+			final boolean starved = now - r.enqueuedAtMillis >= MMTR_STARVATION_MILLIS;
+			if (best == null || starved && !bestStarved || starved == bestStarved && better(r, best, starved)) {
+				best = r;
+				bestStarved = starved;
+			}
+		}
+		return best;
+	}
+
+	private static boolean better(Req a, Req b, boolean starved) {
+		if (starved) {
+			return a.enqueuedAtMillis < b.enqueuedAtMillis;
+		}
+		return a.priorityMillis != b.priorityMillis
+			? a.priorityMillis < b.priorityMillis
+			: a.enqueuedAtMillis < b.enqueuedAtMillis;
 	}
 }

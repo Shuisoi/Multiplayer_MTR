@@ -218,4 +218,78 @@ public final class MmtrPointAuthorityTests {
 		final boolean holdsQ = a.isGrantedTo(10, 0, 0, q, "v2");
 		assertEquals(holdsP, holdsQ, "重试之后整组要么全有、要么全无（p=" + holdsP + " q=" + holdsQ + "）");
 	}
+
+	/**
+	 * T1b 裁决链：**没有计划时刻时必须是纯 FIFO**。
+	 *
+	 * <p>这一条是"基线不动"的守卫：排序机制换了（从"取队首"变成"选最优"），但只要没人有计划时刻、
+	 * 也没人等超时，比较键就退化成入队时刻 —— 与修前逐位一致。</p>
+	 */
+	@Test
+	public void withoutAPlanTheQueueStaysPureFifo() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final String p = "FFFF0000";
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.request(0, 0, 0, p, "holder", 0, 600000));
+
+		final ObjectArrayList<String[]> ops = new ObjectArrayList<>();
+		ops.add(new String[]{"0", "0", "0", p, "0"});
+		clock.set(2000);
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "first", 600000));
+		clock.set(3000);
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "second", 600000));
+		clock.set(4000);
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "third", 600000));
+
+		a.passed(0, 0, 0, p, "holder");
+		assertEquals("first", a.holder(0, 0, 0, p), "先到的先走");
+		a.passed(0, 0, 0, p, "first");
+		assertEquals("second", a.holder(0, 0, 0, p), "仍然按到达序");
+	}
+
+	/**
+	 * T1b 裁决链第一档：**计划时刻优先** —— 晚到但计划更早的列车先走。
+	 * （T5 的时刻表预排就是靠这一档把"谁先进咽喉"按计划定下来。）
+	 */
+	@Test
+	public void anEarlierPlannedTrainIsServedFirstEvenThoughItAskedLater() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final String p = "FFFF0000";
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.request(0, 0, 0, p, "holder", 0, 600000));
+
+		final ObjectArrayList<String[]> ops = new ObjectArrayList<>();
+		ops.add(new String[]{"0", "0", "0", p, "0"});
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "vNoPlan", 600000), "无计划：按到达序排队");
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "vPlanned", 600000, 500L), "有计划且更早，但排在后边");
+
+		a.passed(0, 0, 0, p, "holder");
+		assertEquals("vPlanned", a.holder(0, 0, 0, p), "计划时刻更早的列车先得到道岔");
+	}
+
+	/**
+	 * T1b 裁决链最后一档：**防饿死**。
+	 *
+	 * <p>用户裁定"玩家只有司机、没有调度员"，所以不能靠人来解开一个永远轮不到的等待。
+	 * 等过 {@link MmtrPointAuthority#MMTR_STARVATION_MILLIS} 的列车提到上一档，
+	 * 越过新来的高优先级列车。</p>
+	 */
+	@Test
+	public void aStarvedWaiterOvertakesANewerHigherPriorityTrain() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final String p = "FFFF0000";
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.request(0, 0, 0, p, "holder", 0, 9_000_000));
+
+		final ObjectArrayList<String[]> ops = new ObjectArrayList<>();
+		ops.add(new String[]{"0", "0", "0", p, "0"});
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "vOld", 9_000_000), "vOld 排队");
+
+		// 它已经等过了防饿死阈值，这时来了一列计划更早的新车
+		clock.set(1000 + MmtrPointAuthority.MMTR_STARVATION_MILLIS + 1);
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(ops, "vNew", 9_000_000, 1L), "vNew 计划更早但刚来");
+
+		a.passed(0, 0, 0, p, "holder");
+		assertEquals("vOld", a.holder(0, 0, 0, p), "等久了的列车越过新来的高优先级列车 —— 不会被饿死");
+	}
 }
