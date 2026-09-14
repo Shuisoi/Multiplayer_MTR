@@ -114,6 +114,21 @@ public class Simulator extends Data implements Utilities {
 	 * 优先于自动排班（§3），并且是**运行时**的（不落盘：它是对"今天这份交路"的人工覆盖，重启即回到自动排班）。
 	 */
 	public final java.util.ArrayList<String[]> mmtrPlanManualAssignments = new java.util.ArrayList<>();
+	/**
+	 * P6 ③：**玩家正在开的编组**（接管）。派发器对这些车一步都不派。
+	 *
+	 * <p>与手工指派一样是**运行时**状态（不落盘、不进签名）：它描述的是"现在谁在开"，
+	 * 而不是"计划是什么"。重建派发器之后要重新贴上去（见 {@link #mmtrRefreshPlanDispatchers}）。</p>
+	 */
+	public final java.util.HashSet<String> mmtrPlanPlayerDriven = new java.util.HashSet<>();
+
+	/** P6 ③ 接管 / 归还：立即生效，并且对之后重建的派发器同样生效。 */
+	public boolean setMmtrPlanPlayerDriven(String consistId, boolean player) {
+		final boolean changed = player ? mmtrPlanPlayerDriven.add(consistId) : mmtrPlanPlayerDriven.remove(consistId);
+		mmtrPlanDispatchers.values().forEach(dispatcher -> dispatcher.setPlayerDriven(consistId, player));
+		System.out.println("[MMTR-PLAN] " + (player ? "玩家接管" : "归还给 AI") + "：编组 " + consistId);
+		return changed;
+	}
 
 	/** 登记一条手工指派（同 from+fromTrip 覆盖）。 */
 	public void assignMmtrPlanManually(String fromConsistId, String fromTripId, String toConsistId) {
@@ -658,6 +673,8 @@ public class Simulator extends Data implements Utilities {
 					diagram, assignment[0], assignment[1], assignment[2], result.notes);
 			}
 			mmtrPlanDispatchers.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
+			// P6 ③：重建之后把"玩家正在开的编组"重新贴上去（接管是运行时状态，不属于计划输入）
+			mmtrPlanPlayerDriven.forEach(consistId -> mmtrPlanDispatchers.get(line.lineId).setPlayerDriven(consistId, true));
 			built++;
 			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
 			for (final String note : result.notes) {

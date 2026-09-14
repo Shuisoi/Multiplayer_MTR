@@ -180,6 +180,24 @@ public final class SystemMapServlet extends ServletBase {
 					out.addProperty("removed", removed);
 					yield out;
 				}
+				case "mmtr-plan-takeover" -> {
+					// P6 ③：AI ↔ 玩家接管（只换执行者：交路与任务不变；玩家开着的车派发器不派）。
+					final String consistId = jsonReader.getString("consistId", "");
+					final boolean player = jsonReader.getBoolean("player", true);
+					final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+					if (consistId.isEmpty()) {
+						out.addProperty("ok", false);
+						out.addProperty("message", "需要 consistId");
+					} else {
+						final boolean changed = simulator.setMmtrPlanPlayerDriven(consistId, player);
+						out.addProperty("ok", true);
+						out.addProperty("changed", changed);
+						out.addProperty("player", player);
+						out.addProperty("message", (player ? "玩家接管 " : "归还给 AI ") + consistId
+							+ (changed ? "" : "（状态本来就是这样，无变化）"));
+					}
+					yield out;
+				}
 				case "mmtr-plan-assign" -> {
 					// P6 ④：手工指派（优先于自动排班）。fromTripId 空 = 从该车第一趟起。
 					final String from = jsonReader.getString("fromConsistId", "");
