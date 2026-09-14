@@ -180,6 +180,23 @@ public final class SystemMapServlet extends ServletBase {
 					out.addProperty("removed", removed);
 					yield out;
 				}
+				case "mmtr-plan-assign" -> {
+					// P6 ④：手工指派（优先于自动排班）。fromTripId 空 = 从该车第一趟起。
+					final String from = jsonReader.getString("fromConsistId", "");
+					final String fromTrip = jsonReader.getString("fromTripId", "");
+					final String to = jsonReader.getString("toConsistId", "");
+					final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+					if (from.isEmpty() || to.isEmpty()) {
+						out.addProperty("ok", false);
+						out.addProperty("message", "需要 fromConsistId 与 toConsistId");
+					} else {
+						simulator.assignMmtrPlanManually(from, fromTrip, to);
+						simulator.mmtrRefreshPlanDispatchers();
+						out.addProperty("ok", true);
+						out.addProperty("message", "已指派：" + from + (fromTrip.isEmpty() ? " 全部" : " 自 " + fromTrip) + " → " + to);
+					}
+					yield out;
+				}
 				case "mmtr-plan-diagrams" -> {					// P4：派发器现场 —— 每条线路的周转/N/分车/已派步数（交路的产物在这里看得见）。
 					simulator.mmtrRefreshPlanDispatchers();
 					final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();

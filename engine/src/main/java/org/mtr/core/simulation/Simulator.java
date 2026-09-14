@@ -110,6 +110,19 @@ public class Simulator extends Data implements Utilities {
 	 */
 	public final org.mtr.core.mmtr.plan.MmtrEventRegistry mmtrPlanEvents = new org.mtr.core.mmtr.plan.MmtrEventRegistry();
 	/**
+	 * P6 ④：**手工指派**（{@code assign}）—— {@code [fromConsistId, fromTripId（空=从第一趟起）, toConsistId]}。
+	 * 优先于自动排班（§3），并且是**运行时**的（不落盘：它是对"今天这份交路"的人工覆盖，重启即回到自动排班）。
+	 */
+	public final java.util.ArrayList<String[]> mmtrPlanManualAssignments = new java.util.ArrayList<>();
+
+	/** 登记一条手工指派（同 from+fromTrip 覆盖）。 */
+	public void assignMmtrPlanManually(String fromConsistId, String fromTripId, String toConsistId) {
+		mmtrPlanManualAssignments.removeIf(existing -> existing[0].equals(fromConsistId)
+			&& (existing[1] == null ? "" : existing[1]).equals(fromTripId == null ? "" : fromTripId));
+		mmtrPlanManualAssignments.add(new String[]{fromConsistId, fromTripId == null ? "" : fromTripId, toConsistId});
+		mmtrPlanSignature = "";   // 变了 → 下次 tick 重算
+	}
+	/**
 	 * Rolling-stock manifest (车辆生成表): declares which consist each depot siding must carry after
 	 * the explicit vehicle reset on every server restart. AI diagram steps are disabled by default;
 	 * the manifest + per-vehicle operations own the traffic.
@@ -635,7 +648,15 @@ public class Simulator extends Data implements Utilities {
 			 */
 			final org.mtr.core.mmtr.plan.MmtrPlanAdjustments.Result result = org.mtr.core.mmtr.plan.MmtrPlanAdjustments.recompute(
 				line, pattern, mmtrPlanInputs.fleet, times, mmtrPlanEvents.all(), dayTime, frozen);
-			final org.mtr.core.mmtr.plan.MmtrDiagram diagram = result.diagram;
+			org.mtr.core.mmtr.plan.MmtrDiagram diagram = result.diagram;
+			/*
+			 * P6 ④：**手工指派优先于自动排班** —— 它排在事件重算之后，所以"人说了算"是最后一层；
+			 * 每搬一条都带说明（看得见），失败也留一句（不静默）。
+			 */
+			for (final String[] assignment : mmtrPlanManualAssignments) {
+				diagram = org.mtr.core.mmtr.plan.MmtrPlanAdjustments.assignManually(
+					diagram, assignment[0], assignment[1], assignment[2], result.notes);
+			}
 			mmtrPlanDispatchers.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
 			built++;
 			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
@@ -669,6 +690,10 @@ public class Simulator extends Data implements Utilities {
 		}
 		sig.append(mmtrPlanInputs.fleet.consists.size()).append('+').append(mmtrPlanInputs.fleet.spares.size());
 		sig.append('#').append(rails.size());
+		// P6：手工指派也要进签名（否则"指派了却没生效"）
+		for (final String[] assignment : mmtrPlanManualAssignments) {
+			sig.append('!').append(assignment[0]).append('>').append(assignment[1]).append('>').append(assignment[2]);
+		}
 		// P5：事件也要进签名 —— 否则"加了事件"不会触发重算（那是"计划看着没动"的经典原因）
 		for (final org.mtr.core.mmtr.plan.MmtrEvent event : mmtrPlanEvents.all()) {
 			sig.append('@').append(event.eventId).append(':').append(event.kind()).append(':')
