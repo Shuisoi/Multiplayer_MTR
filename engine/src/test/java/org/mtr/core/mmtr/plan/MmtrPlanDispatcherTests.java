@@ -365,4 +365,40 @@ public final class MmtrPlanDispatcherTests {
 		}
 		assertTrue(world.dispatchedTo.contains(9001L) && world.dispatchedTo.contains(9002L), "两辆车都在跑");
 	}
+
+	// ---------------------------------------------------------------- P6 ③ 接管
+
+	/**
+	 * ③ **接管只换执行者**（设计 §8.2）：玩家接管后派发器一步不派、交路与任务**一个字节都不改**；
+	 * 归还后**从那一步续行**（不跳步、不从头上再来）。
+	 */
+	@Test
+	public void aPlayerTakeoverOnlyChangesWhoRunsIt() {
+		final MmtrPlanDispatcher d = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final FakeWorld world = new FakeWorld(9001L);
+		d.tick(H07, world);
+		final int dispatchedBefore = d.dispatchedTotal;
+		final int stepsBefore = d.states.get(0).tasks.size();
+		final var tasksBefore = new java.util.ArrayList<String>();
+		d.states.get(0).tasks.forEach(task -> tasksBefore.add(task.taskId + "@" + task.dueMs));
+		assertTrue(dispatchedBefore >= 1);
+
+		// AI → 玩家
+		assertTrue(d.setPlayerDriven("C1", true), "接管成功");
+		for (int i = 0; i < 2; i++) {
+			d.tick(H07 + (i + 1) * MIN, world);
+		}
+		assertEquals(dispatchedBefore, d.dispatchedTotal, "玩家开着的时候派发器一步都不派");
+		assertEquals(0, d.retryCount, "也不算重试（不是'车被占'，是人在开）");
+		assertEquals(stepsBefore, d.states.get(0).tasks.size(), "任务数不变");
+		final var tasksAfter = new java.util.ArrayList<String>();
+		d.states.get(0).tasks.forEach(task -> tasksAfter.add(task.taskId + "@" + task.dueMs));
+		assertEquals(tasksBefore, tasksAfter, "交路与任务逐条不变（接管只换执行者）");
+
+		// 玩家 → AI：从那一步续行
+		assertTrue(d.setPlayerDriven("C1", false), "归还成功");
+		d.tick(H07 + 5 * MIN, world);   // 07:05：下一步（07:04 到第二站）已在迟到宽限内
+		assertEquals(dispatchedBefore + 1, d.dispatchedTotal, "归还后接着派下一步（不跳步）");
+		assertFalse(d.isPlayerDriven("C1"));
+	}
 }

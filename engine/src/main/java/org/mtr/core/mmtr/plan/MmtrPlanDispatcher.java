@@ -105,6 +105,25 @@ public final class MmtrPlanDispatcher {
 	/** 迟到多久算"过时"（不补跑）。10 分钟：够吸收一次卡顿/重连，又不至于补跑半天。 */
 	public static final long LATE_GRACE_MILLIS = 10L * 60 * 1000;
 
+	/**
+	 * P6 ③ **接管**（设计 §8.2）：玩家正在开的那些车，派发器**一步都不派**。
+	 *
+	 * <p>原则是"**任务是作业，执行者可换**"：接管只换执行者 —— 交路与任务原样不动
+	 * （{@link WorkingState#tasks} 一个字节都不改），改变的只是"谁在跑"。
+	 * 玩家把车还回来（{@code setPlayerDriven(..., false)}）时，派发器**从那一步续行**：
+	 * 手上下一步还是原来那一步（`dispatchedSteps` 没动过），所以不会跳步、也不会从头再来。</p>
+	 */
+	private final java.util.HashSet<String> playerDriven = new java.util.HashSet<>();
+
+	/** 玩家接管 / 归还（返回是否真的变了）。 */
+	public boolean setPlayerDriven(String consistId, boolean player) {
+		return player ? playerDriven.add(consistId) : playerDriven.remove(consistId);
+	}
+
+	public boolean isPlayerDriven(String consistId) {
+		return playerDriven.contains(consistId);
+	}
+
 	public MmtrPlanDispatcher(MmtrLine line, MmtrDiagram diagram) {
 		this.lineId = line.lineId;
 		this.yardSidingId = line.yardSidingId;
@@ -129,6 +148,9 @@ public final class MmtrPlanDispatcher {
 		for (final WorkingState state : states) {
 			if (state.isComplete()) {
 				continue;
+			}
+			if (playerDriven.contains(state.consistId)) {
+				continue;   // 玩家在开：派发器不插手（接管只换执行者，交路与任务不变）
 			}
 			if (state.vehicleId == 0) {
 				state.vehicleId = acquire(world, state);
