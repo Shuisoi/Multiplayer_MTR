@@ -688,6 +688,56 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertTrue(simulator.mmtrSetTurnoutPosition(50, 0, 0, org.mtr.core.mmtr.point.MmtrTurnout.NORMAL), "扳回位置 0");
 	}
 
+	/**
+	 * **浅渡线：灯守着岔股那一条腿，但不因为它撞墙而变红**（用户 2026-09-14 现场报的）。
+	 *
+	 * <p>实测现场：{@code -170,-60,-253} 旁朝北的灯 {@code -168,-60,-253} 本该是绿（位置 0 =
+	 * 正线贯通、直通那条空闲），却是红的。原因：区间在 {@code -170,-60,-289} 拐上了那条 9.5° 斜线
+	 * （位置 0 时它**禁止通行**），走到斜线另一端又撞上 {@code -176,-60,-253} 的禁行侧，
+	 * 整段被判成"没有进路" ⇒ 红。这个副作用是"浅岔口被认出来"之后才出现的：那两个节点以前没有
+	 * 物理模型，也就没有禁行侧这道墙。</p>
+	 *
+	 * <p>修法保留用户 2026-09-10 的"一盏灯守整个咽喉"（岔股上可能停着扳岔之前就进来的车，
+	 * 那条腿照样要守住），但区分"这次运行**走得到**的腿"与"走不到的腿"：后者的墙**不许**把整段
+	 * 判成没有进路。本用例把这三点钉住：岔股仍在区间里、区间没被判断路、灯是绿。</p>
+	 */
+	@Test
+	public void theBranchOfAShallowCrossoverIsGuardedWithoutTurningTheLampRed() {
+		final Position a = new Position(0, 0, 0);
+		final Position b = new Position(-6, 0, 36);
+		final Rail farA = rail(a, new Position(0, 0, 36));
+		final Rail stemA = rail(a, new Position(0, 0, -17));
+		final Rail diagonal = rail(a, b);
+		final Rail farB = rail(b, new Position(-6, 0, 67));
+		final Rail stemB = rail(b, new Position(-6, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-shallow-crossover", farA, stemA, diagonal, farB, stemB);
+		assertNotNull(simulator.mmtrTurnout(a.getX(), a.getY(), a.getZ()), "渡线的一端必须是一处道岔");
+		assertNotNull(simulator.mmtrTurnout(b.getX(), b.getY(), b.getZ()), "另一端也是");
+
+		// 灯立在直通轨上、朝着岔口，管的是"顺着这条正线开进岔口"这段
+		final String lamp = addLamp(simulator, farA, 5.0, (float) ((headingAngle(farA, a) + 180) % 360));
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(lamp);
+		assertNotNull(section);
+
+		assertTrue(protectedRailHexes(service, lamp).contains(diagonal.getHexId()),
+			"岔股那条腿仍在区间里（一盏灯守整个咽喉：那条轨上可能停着扳岔之前就进来的车）");
+		assertFalse(section.blockedAtArrival,
+			"但它是**这次运行走不到**的那条腿：它撞墙不许把整段判成没有进路");
+		assertEquals("GREEN", service.lampAspectNames(null, key -> false).get(lamp),
+			"位置 0 = 正线贯通、直通那条空闲 ⇒ 绿（这正是现场那盏灯该有的显示）");
+
+		// 反过来：位置 1 时灯自己那条轨被切断 ⇒ 这条进路真的走不出去 ⇒ 红（用户 2026-09-13 的规格）
+		assertTrue(simulator.mmtrSetTurnoutPosition(a.getX(), a.getY(), a.getZ(), org.mtr.core.mmtr.point.MmtrTurnout.REVERSE), "扳到位置 1");
+		final MmtrDirectionalBlockService flipped = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.Section flippedSection = flipped.sectionOfSignal(lamp);
+		assertNotNull(flippedSection);
+		assertTrue(flippedSection.blockedAtArrival, "位置 1 时灯自己那条轨禁止通行 ⇒ 区间撞在禁行侧");
+		assertEquals("RED", flipped.lampAspectNames(null, key -> false).get(lamp), "这条进路走不出去 ⇒ 红");
+
+		assertTrue(simulator.mmtrSetTurnoutPosition(a.getX(), a.getY(), a.getZ(), org.mtr.core.mmtr.point.MmtrTurnout.NORMAL), "扳回位置 0");
+	}
+
 	/** 这盏灯当前保护的轨（去重后的 hex 列表）。 */
 	private static ObjectArrayList<String> protectedRailHexes(MmtrDirectionalBlockService service, String lamp) {
 		final ObjectArrayList<String> out = new ObjectArrayList<>();

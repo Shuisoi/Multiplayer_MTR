@@ -3214,6 +3214,18 @@ public final class MmtrDirectionalBlockService {
 	 * world's exit lamps then protected one of six parallel stabling roads (notes/107 §4).</p>
 	 */
 	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount, ObjectOpenHashSet<String> pathRails) {
+		walk(section, cameFromHex, node, headingX, headingZ, railCount, pathRails, true);
+	}
+
+	/**
+	 * As above, with {@code reachableRoute} telling whether the branch being walked is one the movement
+	 * could actually take (see the turnout gate below).
+	 *
+	 * <p>{@code false} = 这是"要守住、但这次运行走不到"的那条腿（模型道岔当前位置切掉的那一侧）。
+	 * 它沿途撞到禁行侧**不许**把整段判成"没有进路"，否则一盏看着直通正线的灯会永远红
+	 * （用户 2026-09-14 现场报的就是这个）。</p>
+	 */
+	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount, ObjectOpenHashSet<String> pathRails, boolean reachableRoute) {
 		if (node == null) {
 			section.endsAtDeadEnd = true;
 			section.endReason = "轨的远端找不到节点（拓扑缺端点）";
@@ -3225,14 +3237,24 @@ public final class MmtrDirectionalBlockService {
 		 * <p>车沿着这一段的轨走到这个节点时，如果这条轨正是道岔当前位置切掉的那一侧，那这条进路
 		 * 根本走不出去 —— 车只能停在岔前等道岔扳过来（决策 a）。所以：链在这里断，
 		 * 并且这一段整体按**红**显示（"没有进路"就是危险，不是"前方有车"的黄）。</p>
+		 *
+		 * <p>但只对**这次运行走得到**的分支成立：模型道岔切掉的那条腿这次根本走不到，它撞墙是意料之中，
+		 * 不能把整盏灯判红（见上面的说明）。</p>
 		 */
 		final org.mtr.core.mmtr.point.MmtrTurnout turnoutAtNode = simulator.mmtrTurnout(node.getX(), node.getY(), node.getZ());
 		if (turnoutAtNode != null && cameFromHex != null && cameFromHex.equals(turnoutAtNode.prohibitedRailHex(simulator.mmtrTurnoutPosition(node.getX(), node.getY(), node.getZ())))) {
-			section.endsAtDeadEnd = true;
-			section.blockedAtArrival = true;
-			section.endReason = "撞在道岔 " + MmtrJunctionState.nodeKey(node) + " 的**禁行侧**（道岔位置 "
-				+ simulator.mmtrTurnoutPosition(node.getX(), node.getY(), node.getZ())
-				+ "：这条轨禁止通行）→ 这条进路走不出去，按红显示";
+			if (reachableRoute) {
+				section.endsAtDeadEnd = true;
+				section.blockedAtArrival = true;
+				section.endReason = "撞在道岔 " + MmtrJunctionState.nodeKey(node) + " 的**禁行侧**（道岔位置 "
+					+ simulator.mmtrTurnoutPosition(node.getX(), node.getY(), node.getZ())
+					+ "：这条轨禁止通行）→ 这条进路走不出去，按红显示";
+			} else {
+				section.endsAtDeadEnd = true;
+				if (section.endReason == null || section.endReason.isEmpty()) {
+					section.endReason = "岔股那一侧在道岔 " + MmtrJunctionState.nodeKey(node) + " 被切断（本进路走不到那条腿，不判断路）";
+				}
+			}
 			return;
 		}
 		// 走行停在这里 = 本段结束在这个节点；区间链接按它来连（不看出口灯的名字，见 rebuild）
@@ -3257,9 +3279,24 @@ public final class MmtrDirectionalBlockService {
 		}
 
 		boolean anyLegHandled = false;
+		/*
+		 * **模型道岔：哪些腿是这次运行真正走得到的。**
+		 *
+		 * <p>下面"每条腿都走"是给**没有模型**的老式咽喉用的（一盏灯守整个咽喉，用户 2026-09-10 的裁定）——
+		 * 有模型时那几条腿仍然都要**守住**（岔股上可能停着扳岔之前就进来的车），但**只有模型开通的那一条
+		 * 是这次运行走得出去的**。</p>
+		 *
+		 * <p>这个区分是用户 2026-09-14 现场报的：{@code -170,-60,-253} 旁朝北的灯本该绿（位置 0 =
+		 * 正线贯通、直通那条空闲），却因为区间在 {@code -170,-60,-289} 拐上了那条 9.5° 斜线、
+		 * 又在斜线另一端撞上 {@code -176,-60,-253} 的禁行侧，整段被判成"没有进路" ⇒ 红。
+		 * 那条斜线在位置 0 是**禁止通行**的：这次运行根本走不到那里，它撞墙不该把整盏灯判红。</p>
+		 */
+		final String allowedNextHex = turnoutAtNode == null ? null
+			: turnoutAtNode.continuationFrom(cameFromHex, simulator.mmtrTurnoutPosition(node.getX(), node.getY(), node.getZ()));
 		for (final Leg leg : legs) {
 			final Rail next = leg.rail;
 			final String nextHex = next.getHexId();
+			final boolean reachableLeg = allowedNextHex == null || nextHex.equals(allowedNextHex);
 			// Cycle guard: a rail this branch has already walked cannot be entered twice (a diamond - the
 			// same rail reachable two ways - is fine, because each branch carries its own path set).
 			if (pathRails.contains(nextHex)) {
@@ -3321,7 +3358,7 @@ public final class MmtrDirectionalBlockService {
 			anyLegHandled = true;
 			final ObjectOpenHashSet<String> branchPath = new ObjectOpenHashSet<>(pathRails);
 			branchPath.add(nextHex);
-			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath);
+			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath, reachableRoute && reachableLeg);
 		}
 		if (!anyLegHandled) {
 			section.endsAtDeadEnd = true;
