@@ -701,6 +701,37 @@ public final class SystemMapServlet extends ServletBase {
 				 *   - AWS 点式警告（未确认）：只在**手动**驾驶时才会响 —— 所以"H 提示"本身就是"这车在手动"的证据。
 				 * 把这三条吐出来，"按 H 有没有用"这种问题就能用数据回答，而不是靠猜。
 				 */
+				/*
+				 * notes/152：**"车为什么不动"要能一路读到闭塞层**。
+				 *
+				 * 现场症状是"进路 SET、道岔都拿到、车速 0、授权 RED：停在这架信号前"。
+				 * 这里把该车**下一根轨所属区间**与**占用者**摆出来（分"算不算自己"两问），
+				 * 于是三种成因一眼可分：前面真有车 / 停着的邻车压进运行区间 / 问话的车自己的影子。
+				 */
+				final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+				if (walker != null) {
+					final org.mtr.core.data.Rail nextRail = walker.peekNextRail();
+					final String nextRailHex = nextRail == null ? walker.railHex() : nextRail.getHexId();
+					train.addProperty("currentRail", String.valueOf(walker.railHex()));
+					if (nextRailHex != null) {
+						final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section> sections =
+							simulator.mmtrDirectionalBlocks.sectionsOfRail(nextRailHex);
+						if (!sections.isEmpty()) {
+							final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section section = sections.get(0);
+							train.addProperty("nextSection", section.id);
+							// 排除本车之后还占着吗 —— 这一问才是"前方真有车/邻车"的证据
+							train.addProperty("nextSectionOccupiedByOthers",
+								simulator.mmtrDirectionalBlocks.isOccupied(section, null, vehicle.getId()));
+							train.addProperty("nextSectionOccupiedAtAll",
+								simulator.mmtrDirectionalBlocks.isOccupied(section, null, 0));
+							final com.google.gson.JsonArray occupants = new com.google.gson.JsonArray();
+							for (final long occupant : simulator.mmtrDirectionalBlocks.occupantsOf(section, null, 0)) {
+								occupants.add(String.valueOf(occupant));
+							}
+							train.add("nextSectionOccupants", occupants);
+						}
+					}
+				}
 				train.addProperty("manualOverride", vehicle.isMmtrManualOverride());
 				train.addProperty("motionAuto", vehicle.isMmtrMotionAuto());
 				train.addProperty("stoppedAtTarget", vehicle.isMmtrMotionStoppedAtTarget());

@@ -603,7 +603,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// By vehicle id (refresh is a no-op when the train has no route), so a surgery-rebuilt object
 		// still maintains the route its predecessor published.
 		if (data instanceof final Simulator routeSimulator) {
-			routeSimulator.mmtrRoutes.refresh(getId(), routeSimulator.mmtrPointAuthority);
+			routeSimulator.mmtrRoutes.refresh(getId(), routeSimulator.mmtrPointAuthority, mmtrPendingPointOps);
 		}
 	}
 
@@ -895,7 +895,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		publishedRoute.setPlannedMillis(mmtrPlannedMillis());
 		mmtrRoute = simulator.mmtrRoutes.request(publishedRoute);
 		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS, mmtrPlannedMillis());
-		simulator.mmtrRoutes.refresh(getId(), authority);
+		simulator.mmtrRoutes.refresh(getId(), authority, mmtrPendingPointOps);
 		return allForksGranted;
 	}
 

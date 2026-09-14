@@ -104,11 +104,21 @@ public final class MmtrPointAuthority {
 		final String owner;
 		final int position;
 		long untilMillis;
+		/**
+		 * **谁更该先走**：请求方当前任务的**计划时刻**（越小越早，{@link Long#MAX_VALUE} = 没有计划）。
+		 *
+		 * <p>为什么物理层也要它（notes/151，用户裁定）：六台车去同一个车站、计划到达 00:05 / 00:07 / …
+		 * 时，**通行优先权属于 00:05 那台**。逐进向的队列早就是这个口径（{@code Req.priorityMillis}），
+		 * 但"道岔位置归持有者"这一层没有 —— 晚班车一旦按上位置，早班车只能干等，
+		 * 于是几台车在咽喉里互相按着位置、轮流让位又抢回（现场实测的 ping-pong）。</p>
+		 */
+		final long priorityMillis;
 
-		Physical(String owner, int position, long untilMillis) {
+		Physical(String owner, int position, long untilMillis, long priorityMillis) {
 			this.owner = owner;
 			this.position = position;
 			this.untilMillis = untilMillis;
+			this.priorityMillis = priorityMillis;
 		}
 	}
 
@@ -124,13 +134,17 @@ public final class MmtrPointAuthority {
 		int leg;
 		int position;
 		long untilMillis;
+		/** 计划时刻（越小越早）：物理队列也按它排序，见 {@link #pickNextPhysical}。 */
+		long priorityMillis;
+		long enqueuedAtMillis;
 
-		PhysicalReq(String owner, String viaRailHex, int leg, int position, long untilMillis) {
+		PhysicalReq(String owner, String viaRailHex, int leg, int position, long untilMillis, long priorityMillis) {
 			this.owner = owner;
 			this.viaRailHex = viaRailHex;
 			this.leg = leg;
 			this.position = position;
 			this.untilMillis = untilMillis;
+			this.priorityMillis = priorityMillis;
 		}
 	}
 
@@ -207,6 +221,16 @@ public final class MmtrPointAuthority {
 	 * starts) and the demand waits on the turnout instead.</p>
 	 */
 	public Result request(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis) {
+		return request(x, y, z, viaRailHex, owner, leg, untilMillis, Long.MAX_VALUE);
+	}
+
+	/**
+	 * 带**计划时刻优先权**的申请（notes/151）。
+	 *
+	 * @param priorityMillis 这一步的计划时刻（越小越早）。物理位置与逐进向两条队列都按它定序；
+	 *                       {@link Long#MAX_VALUE} = 没有计划（旧调用方的行为不变：先到先得）
+	 */
+	public Result request(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis, long priorityMillis) {
 		final MmtrTurnout turnout = turnoutAt(x, y, z);
 		if (turnout == null) {
 			return requestPerApproach(x, y, z, viaRailHex, owner, leg, untilMillis);
@@ -239,10 +263,10 @@ public final class MmtrPointAuthority {
 				holders.remove(k);
 				dropOwnerRequests(k, owner);
 				promote(k, now);
-				enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis);
+				enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis, priorityMillis);
 				return Result.QUEUED;
 			}
-			physicalHolders.put(nk, new Physical(owner, demand, untilMillis));
+			physicalHolders.put(nk, new Physical(owner, demand, untilMillis, priorityMillis));
 			dropPhysicalQueued(nk, owner);
 			return Result.GRANTED;
 		}
@@ -251,11 +275,26 @@ public final class MmtrPointAuthority {
 			// 共用轨段/对向，那由闭塞与 T1b 的敌对进路表负责，不归道岔这一层）。
 			return Result.GRANTED;
 		}
+		/*
+		 * **早班车可以收回晚班车按着的位置**（notes/151，用户裁定的通行优先权）。
+		 *
+		 * 六台车去同一个车站、计划到达 00:05 / 00:07 / … 时，位置该给 00:05 那台：
+		 *   - 只有**计划更早**（priority 更小）才谈得上收回 —— 否则就是位置来回翻（ping-pong 的来源）；
+		 *   - 而且要过**净空闸**：晚班车压在岔区里就不许从它脚下改位（那是把道岔抽走）；
+		 *   - 收回之后晚班车排队等（它的进向行还在，位置不在它手里），等它自己再申请时会按优先权排队。
+		 */
+		if (priorityMillis < holder.priorityMillis && positionChangeBlockedReason(x, y, z, demand, owner) == null) {
+			System.out.println("[MMTR-PT] 优先权：把道岔 " + nk + " 的位置从 " + holder.owner + "（计划 " + holder.priorityMillis
+				+ "）交给更早的 " + owner + "（计划 " + priorityMillis + "）");
+			physicalHolders.put(nk, new Physical(owner, demand, untilMillis, priorityMillis));
+			dropPhysicalQueued(nk, owner);
+			return Result.GRANTED;
+		}
 		// 互斥：收回刚发出的逐进向授权，改为在**道岔上**排队。
 		holders.remove(k);
 		dropOwnerRequests(k, owner);
 		promote(k, now);
-		enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis);
+		enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis, priorityMillis);
 		return Result.QUEUED;
 	}
 
@@ -339,7 +378,7 @@ public final class MmtrPointAuthority {
 		}
 		for (final String[] op : effective) {
 			if (request(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], owner,
-					Integer.parseInt(op[4]), untilMillis) != Result.GRANTED) {
+					Integer.parseInt(op[4]), untilMillis, priorityMillis) != Result.GRANTED) {
 				lastWaitReason.put(owner, describeRefusal(op, "最后一步授予被拒", turnoutAt(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2])), -1, now));
 				releaseSet(effective, owner);
 				queueSet(effective, owner, untilMillis, priorityMillis);
@@ -444,7 +483,7 @@ public final class MmtrPointAuthority {
 			if (turnout != null) {
 				final int demand = turnout.positionForLeg(via, leg);
 				if (demand != Integer.MIN_VALUE) {
-					enqueuePhysical(nodeKey(x, y, z), owner, via, leg, demand, untilMillis);
+					enqueuePhysical(nodeKey(x, y, z), owner, via, leg, demand, untilMillis, priorityMillis);
 				}
 			}
 		}
@@ -819,7 +858,7 @@ public final class MmtrPointAuthority {
 		if (holder == null || !holder.owner.equals(owner) || holder.position == position) {
 			return false;
 		}
-		physicalHolders.put(nk, new Physical(owner, position, holder.untilMillis));
+		physicalHolders.put(nk, new Physical(owner, position, holder.untilMillis, holder.priorityMillis));
 		return true;
 	}
 
@@ -880,13 +919,13 @@ public final class MmtrPointAuthority {
 			return;
 		}
 		while (!q.isEmpty()) {
-			final PhysicalReq head = q.peekFirst();
-			if (head.untilMillis <= now) {
-				q.pollFirst();
-				continue;
+			q.removeIf(r -> r.untilMillis <= now);   // 窗口过期的排队项一律丢掉
+			final PhysicalReq head = pickNextPhysical(q, now);
+			if (head == null) {
+				break;
 			}
-			q.pollFirst();
-			physicalHolders.put(nk, new Physical(head.owner, head.position, head.untilMillis));
+			q.remove(head);
+			physicalHolders.put(nk, new Physical(head.owner, head.position, head.untilMillis, head.priorityMillis));
 			final String k = keyOfNode(nk, head.viaRailHex);
 			final Holder existing = holders.get(k);
 			if (existing == null || existing.owner.equals(head.owner)) {
@@ -900,7 +939,7 @@ public final class MmtrPointAuthority {
 		}
 	}
 
-	private void enqueuePhysical(String nk, String owner, String viaRailHex, int leg, int position, long untilMillis) {
+	private void enqueuePhysical(String nk, String owner, String viaRailHex, int leg, int position, long untilMillis, long priorityMillis) {
 		final ArrayDeque<PhysicalReq> q = physicalQueued.computeIfAbsent(nk, key -> new ArrayDeque<>());
 		for (final PhysicalReq r : q) {
 			if (r.owner.equals(owner)) {
@@ -908,10 +947,18 @@ public final class MmtrPointAuthority {
 				r.leg = leg;
 				r.position = position;
 				r.untilMillis = untilMillis;
+				if (priorityMillis < r.priorityMillis) {
+					// 计划时刻只会越刷新越准（任务换了就重来）：取更早的那个，别把优先权刷丢
+					final PhysicalReq updated = new PhysicalReq(owner, viaRailHex, leg, position, untilMillis, priorityMillis);
+					q.remove(r);
+					q.addLast(updated);
+				}
 				return;
 			}
 		}
-		q.addLast(new PhysicalReq(owner, viaRailHex, leg, position, untilMillis));
+		final PhysicalReq created = new PhysicalReq(owner, viaRailHex, leg, position, untilMillis, priorityMillis);
+		created.enqueuedAtMillis = clock.getAsLong();   // 与逐进向一样：等待时长按引擎时钟算，重复申请不刷新
+		q.addLast(created);
 	}
 
 	private void dropPhysicalQueued(String nk, String owner) {
@@ -922,6 +969,36 @@ public final class MmtrPointAuthority {
 				physicalQueued.remove(nk);
 			}
 		}
+	}
+
+	/**
+	 * 物理队列挑头：**先看计划时刻**（越小越早），一样早再看谁先排的；等太久的（{@link #MMTR_STARVATION_MILLIS}）
+	 * 提到上一档按等待时长排 —— 与逐进向的 {@link #pickNext} **同一条口径**。
+	 *
+	 * <p>为什么物理队列也必须按计划时刻（notes/151）：六台车去同一个车站、计划到达 00:05 / 00:07 / …，
+	 * 位置该给 00:05 那台。物理队列原来按到达先后（{@code pollFirst}），于是"谁先抢到谁先走"，
+	 * 与时刻表无关 —— 现场就是几台车在咽喉里轮流按位置、轮流让位。</p>
+	 */
+	private @Nullable PhysicalReq pickNextPhysical(@Nullable ArrayDeque<PhysicalReq> q, long now) {
+		if (q == null || q.isEmpty()) {
+			return null;
+		}
+		PhysicalReq best = null;
+		boolean bestStarved = false;
+		for (final PhysicalReq r : q) {
+			final boolean starved = now - r.enqueuedAtMillis >= MMTR_STARVATION_MILLIS;
+			if (best == null
+				|| starved && !bestStarved
+				|| starved == bestStarved && (starved
+					? r.enqueuedAtMillis < best.enqueuedAtMillis
+					: r.priorityMillis != best.priorityMillis
+						? r.priorityMillis < best.priorityMillis
+						: r.enqueuedAtMillis < best.enqueuedAtMillis)) {
+				best = r;
+				bestStarved = starved;
+			}
+		}
+		return best;
 	}
 
 	private void enqueue(String k, Req in) {

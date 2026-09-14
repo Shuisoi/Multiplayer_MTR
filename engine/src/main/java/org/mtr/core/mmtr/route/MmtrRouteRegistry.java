@@ -68,6 +68,29 @@ public final class MmtrRouteRegistry {
 	 * the crossing, so naming it would send the operator looking at a point the train has already left.</p>
 	 */
 	public void refresh(long vehicleId, MmtrPointAuthority authority) {
+		refresh(vehicleId, authority, null);
+	}
+
+	/**
+	 * 带**本车当前申请集**的刷新（notes/151）。
+	 *
+	 * @param pendingOps 车辆此刻在申请的（进路里**接近锁闭窗口内**的）那一组 {@code [x,y,z,via,leg]}；
+	 *                   {@code null} = 不限制（旧行为：整条进路的每一处道岔都要持有）
+	 *
+	 * <p><b>为什么必须按申请集判</b>（现场实测的根因）：申请侧是**接近锁闭**——只收眼前
+	 * {@code MMTR_APPROACH_LOCK_METERS}（120 m）内的道岔，远端道岔等车开近了再申请（后车因此不会抢
+	 * 前车还没用到的道岔）。而 SET 判定原来要求**整条进路**的道岔全都持有 ⇒ 只要进路里有一处道岔
+	 * 在 120 m 之外，这条进路**永远 SET 不了**：车停在出发信号前（授权 RED、"进路未设好"），
+	 * 而车不动，窗口就永远推不到那处道岔 —— 先有鸡还是先有蛋。
+	 *
+	 * <p>现场读数（notes/151）：进路 10 段轨 / 5 处道岔，其中 4 处（z=-137/-161/-186/-199）已持有，
+	 * 第 5 处（z=-289）根本不在申请集里；于是 4/5 永远不齐。按申请集判之后，眼前这几处齐了就放行，
+	 * 车一开近，下一处自然进窗口、被申请、被验。</p>
+	 *
+	 * <p><b>安全前提</b>（沿用既有设计）：窗口（120 m）要长过"车在当前限速下的制动距离"，
+	 * 否则车可能冲到还没验的道岔跟前。这一条由闭塞/信号层（S1）兜底，但值得单独复核。</p>
+	 */
+	public void refresh(long vehicleId, MmtrPointAuthority authority, @Nullable ObjectArrayList<String[]> pendingOps) {
 		final MmtrRoute route = byVehicle.get(vehicleId);
 		if (route == null) {
 			return;
@@ -104,6 +127,12 @@ public final class MmtrRouteRegistry {
 		 * 成为"第一个未越过的"，接手判定。单车单趟（每个节点一处道岔）逐位不变。</p>
 		 */
 		final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
+		final java.util.HashSet<String> requested = new java.util.HashSet<>();
+		if (pendingOps != null) {
+			for (final String[] op : pendingOps) {
+				requested.add(op[0] + "," + op[1] + "," + op[2] + "|" + op[3]);
+			}
+		}
 		for (final String[] fork : route.getForks()) {
 			if (route.isForkCrossed(fork)) {
 				continue;
@@ -111,7 +140,15 @@ public final class MmtrRouteRegistry {
 			if (!nearestPassPerNode.add(fork[0] + "," + fork[1] + "," + fork[2])) {
 				continue;
 			}
+			if (pendingOps != null && !requested.contains(fork[0] + "," + fork[1] + "," + fork[2] + "|" + fork[3])) {
+				continue;   // 还没进接近锁闭窗口：等车开近了再申请、再验（这正是接近锁闭的本意）
+			}
 			outstanding.add(fork);
+		}
+		if (outstanding.isEmpty()) {
+			// 眼前这一段没有待验的道岔（都在窗口外，或者已经全部验过）⇒ 放行；下一处进窗口时再验。
+			route.applyState(true, "no turnout inside the approach window");
+			return;
 		}
 		boolean allGranted = true;
 		String blockedReason = "";

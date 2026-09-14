@@ -151,6 +151,45 @@ public final class MmtrTurnoutAuthorityTests {
 		assertTrue(simulator.mmtrPointAuthority.physicalQueueSnapshot(0, 0, 0).isEmpty(), "也没有进队列");
 	}
 
+	/**
+	 * **通行优先权：计划更早的那台车可以收回晚班车按着的位置**（notes/151，用户裁定）。
+	 *
+	 * <p>现场：六台车去同一个车站，计划到达 00:05 / 00:07 / …。晚班车先把道岔按在自己要的那一位上，
+	 * 早班车就只能干等 —— 而"道岔位置归持有者"这条不许别人改 ⇒ 几台车在咽喉里轮流按位置、
+	 * 轮流让位（现场实测的 ping-pong），谁也没走出去。</p>
+	 *
+	 * <p>口径：位置只给**计划更早**的（priority 更小）；晚班车在物理队列里等。
+	 * 红证：去掉 {@code priorityMillis < holder.priorityMillis} 这个条件，第一段就红。</p>
+	 */
+	@Test
+	public void theEarlierPlanTakesTheTurnoutFromTheLaterOne() {
+		final Simulator simulator = forkNet("build/mmtr-t1-priority");
+		final MmtrTurnout turnout = turnoutOf(simulator);
+		final int branchToStem = turnout.stemLeg.getOrDefault(turnout.branchRailHex, -1);
+		final int stemToFar = turnout.farLeg.getOrDefault(turnout.stemRailHex, -1);
+		final long late = 7 * 60_000L;    // 计划 00:07
+		final long early = 5 * 60_000L;   // 计划 00:05
+
+		// 晚班车先到，把道岔按在位置 1（岔股开放）
+		assertEquals(MmtrPointAuthority.Result.GRANTED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.branchRailHex, "vLate", branchToStem, until(simulator), late));
+		assertEquals(MmtrTurnout.REVERSE, simulator.mmtrTurnoutPosition(0, 0, 0));
+		assertEquals("vLate", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0));
+
+		// 早班车要位置 0：位置从晚班车手里收回来
+		assertEquals(MmtrPointAuthority.Result.GRANTED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.stemRailHex, "vEarly", stemToFar, until(simulator), early), "早班车优先");
+		assertEquals("vEarly", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0), "位置交给早班车");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(0, 0, 0), "道岔扳到早班车要的位置");
+		assertTrue(simulator.mmtrPointAuthority.isGrantedTo(0, 0, 0, turnout.stemRailHex, "vEarly"));
+
+		// 反过来：晚班车再来要位置 1 ⇒ 只排队，不许把位置抢回去
+		assertEquals(MmtrPointAuthority.Result.QUEUED, simulator.mmtrPointAuthority.request(
+			0, 0, 0, turnout.branchRailHex, "vLate", branchToStem, until(simulator), late), "晚班车排队");
+		assertEquals("vEarly", simulator.mmtrPointAuthority.physicalHolder(0, 0, 0), "位置仍在早班车手里");
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(0, 0, 0), "位置没被翻回去");
+	}
+
 	/** 终态释放：让出位置并推进队列（车被删掉/任务终止时不能把道岔永久按在自己的位置上）。 */
 	@Test
 	public void releaseAllGivesUpThePositionAndAdvancesTheQueue() {

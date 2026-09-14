@@ -50,6 +50,29 @@ public final class MmtrJunctionState {
 	}
 
 	/**
+	 * 同上，但**把某一列车自己的足迹从"净空被占"里排除**（notes/152）。
+	 *
+	 * <p>只排除**足迹**这一条理由；"岔口没人决定"这类与足迹无关的理由照旧保留 ——
+	 * 前者是"车自己的车体压着岔区"（问话的车不该因此扣住自己），后者是道岔本身没定，
+	 * 跟谁站在那里毫无关系（收窄这一步是被 4 条既有用例逼出来的：把后者一起排掉，红灯就不红了）。</p>
+	 *
+	 * @param excludeVehicleId 不把它的足迹算作占用（0 = 全都算，与 {@link #reason} 等价）
+	 */
+	public static String reasonExcept(Simulator simulator, Position node, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
+		if (neighbours == null || neighbours.size() < 3) {
+			return "";
+		}
+		if (trees != null) {
+			final Rail fouled = foulingRail(node, neighbours, trees, excludeVehicleId);
+			if (fouled != null) {
+				return "岔区净空被占：轨 " + shortHex(fouled.getHexId()) + " 靠这个节点的 " + Vehicle.MMTR_JUNCTION_CLEARANCE_M + " m 内有车足迹";
+			}
+		}
+		return restOfReason(simulator, node, neighbours);
+	}
+
+	/**
 	 * **为什么这个岔口清不掉**（空串 = 清得掉）。诊断用：
 	 * 一盏灯为什么是红的，必须能用一条指令读出来，而不是让人去猜规则。
 	 */
@@ -64,6 +87,11 @@ public final class MmtrJunctionState {
 				return "岔区净空被占：轨 " + shortHex(fouled.getHexId()) + " 靠这个节点的 " + Vehicle.MMTR_JUNCTION_CLEARANCE_M + " m 内有车足迹";
 			}
 		}
+		return restOfReason(simulator, node, neighbours);
+	}
+
+	/** 除"净空被占"之外的那些理由（与足迹无关）：岔口没人决定等。 */
+	private static String restOfReason(Simulator simulator, Position node, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours) {
 		/*
 		 * **单开道岔不是"没人决定的岔口"**（用户 2026-09-13 决策 (b)：一处道岔只有一个位置、只有 0 或 1，
 		 * 默认 0，不存在"未知态"）。下面那条"没人决定"的规则对它是**假警报**：位置 0 时岔股那一侧禁止通行，
@@ -139,9 +167,23 @@ public final class MmtrJunctionState {
 
 	/** Every uncleared junction node, keyed {@code x,y,z} (what the client mirror needs). */
 	public static ObjectOpenHashSet<String> unclearedNodeKeys(Simulator simulator, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		return unclearedNodeKeys(simulator, trees, 0);
+	}
+
+	/**
+	 * 同上，但**把某一列车的足迹排除在外**（notes/152）。
+	 *
+	 * <p>为什么信号层必须能这么问：问话的车**自己的车体**压在岔区里时，那个岔区会被算成"净空守不住"，
+	 * 于是它前方的信号按"受限节点"判成红 —— <b>车被自己的车体扣在出发信号前</b>。现场读数：
+	 * 进路 SET、道岔全部拿到、车速 0，下一区间的"别人占=False、占用者=[它自己]"。
+	 * 与"占用"那一层（{@code isOccupied(..., excludeVehicleId)}）是同一条道理，这里补上同一把豁免。</p>
+	 *
+	 * @param excludeVehicleId 不把它的足迹算作占用（0 = 全都算）
+	 */
+	public static ObjectOpenHashSet<String> unclearedNodeKeys(Simulator simulator, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
 		final ObjectOpenHashSet<String> out = new ObjectOpenHashSet<>();
 		simulator.positionsToRail.forEach((node, neighbours) -> {
-			if (neighbours.size() >= 3 && isUncleared(simulator, node, trees)) {
+			if (neighbours.size() >= 3 && !reasonExcept(simulator, node, trees, excludeVehicleId).isEmpty()) {
 				out.add(nodeKey(node));
 			}
 		});

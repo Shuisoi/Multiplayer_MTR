@@ -601,8 +601,50 @@ public final class MmtrDirectionalBlockService {
 		return false;
 	}
 
-	/** 最近一次 {@code isOccupied} 的逐步账（诊断用）。 */
-	private static final ThreadLocal<String> OCC_TRACE = ThreadLocal.withInitial(() -> "");
+	/**
+	 * **谁压在这个区间里**（notes/152）：逐段看足迹，返回覆盖"够算占用"的车辆 id。
+	 *
+	 * <p>为什么需要这条只读出口：现场"车停在出发信号前"的排查里，最关键的一句话是"这个区间被谁占着"
+	 * —— 原来只有 {@code occupied=true/false} 这一个布尔量，于是操作者分不清是
+	 * **前面真有车**、**停着的邻车车体压进运行区间**、还是**问话的车自己**（自己的影子）。
+	 * 三者的修法完全不同，看不见就只能猜。</p>
+	 *
+	 * @param excludeVehicleId 不把它算进去（0 = 全都算）
+	 */
+	public ObjectArrayList<Long> occupantsOf(Section section, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
+		final ObjectArrayList<Long> out = new ObjectArrayList<>();
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
+			trees == null ? simulator.mmtrOccupancyTrees() : trees;
+		if (occupancyTrees == null || occupancyTrees.isEmpty()) {
+			return out;
+		}
+		for (final RailSpan span : section.spans) {
+			if (!span.reachable) {
+				continue;
+			}
+			final Rail rail = railByHex.get(span.railHex);
+			if (rail == null || span.lengthM() <= 1e-9) {
+				continue;
+			}
+			final Position[] ordered = rail.mmtrOrderedPositions();
+			if (ordered == null || ordered.length < 2) {
+				continue;
+			}
+			for (int i = 0; i < occupancyTrees.size(); i++) {
+				final VehiclePosition vehiclePosition = footprintOn(occupancyTrees.get(i), ordered);
+				if (vehiclePosition != null && overlapsEnough(vehiclePosition, span, excludeVehicleId)) {
+					for (final long id : vehiclePosition.footprintIds()) {
+						if (id != excludeVehicleId && !out.contains(id)) {
+							out.add(id);
+						}
+					}
+				}
+			}
+		}
+		return out;
+	}
+
+	/** 最近一次 {@code isOccupied} 的逐步账（诊断用）。 */	private static final ThreadLocal<String> OCC_TRACE = ThreadLocal.withInitial(() -> "");
 	private static final ThreadLocal<String> LAST_OCC_TRACE = ThreadLocal.withInitial(() -> "");
 
 	/** 供 {@code signal why} / 测试取诊断串。 */

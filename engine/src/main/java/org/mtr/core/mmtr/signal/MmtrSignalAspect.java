@@ -72,6 +72,8 @@ public final class MmtrSignalAspect {
 	/** Cached restricted-junction keys for {@link #restrictedNodeKeys()} (S4: the v2 walk asks per step). */
 	private @Nullable ObjectOpenHashSet<String> restrictedNodeCache;
 	private int restrictedNodeSignature = -1;
+	/** 这份缓存是**按哪台车**排除足迹算出来的（0 = 不排除任何车）。见 {@link #restrictedNodeKeysExcluding(long)}。 */
+	private long restrictedNodeCacheVehicleId;
 
 	public MmtrSignalAspect(Simulator simulator, MmtrRouteRegistry routes) {
 		this(simulator, routes, null);
@@ -187,7 +189,15 @@ public final class MmtrSignalAspect {
 	private int chainDepth(String hex, Position entryPos, long excludeVehicleId) {
 		final MmtrDirectionalBlockService directional = simulator.mmtrDirectionalBlocks;
 		if (directional.hasSection(hex)) {
-			final int directionalDepth = directional.chainDepth(hex, entryPos, occupancyTrees, this::junctionRestrictedKey, MAX_DEPTH, excludeVehicleId);
+			/*
+			 * notes/152：走链时"受限节点"这一档也要**排除本车自己的足迹** —— 否则车自己的车体压在
+			 * 岔区里，这一档就把前方那架信号判成红，**车被自己扣在出发信号前**（现场读数：进路 SET、
+			 * 道岔全部拿到、车速 0，下一区间"别人占=False、占用者=[它自己]"）。
+			 */
+			final java.util.function.Predicate<String> restricted = excludeVehicleId == 0
+				? this::junctionRestrictedKey
+				: restrictedNodeKeysExcluding(excludeVehicleId)::contains;
+			final int directionalDepth = directional.chainDepth(hex, entryPos, occupancyTrees, restricted, MAX_DEPTH, excludeVehicleId);
 			if (directionalDepth > 0) {
 				return directionalDepth;
 			}
@@ -195,12 +205,31 @@ public final class MmtrSignalAspect {
 			// reserved-colour channel (a legacy/manual block, or a caller that reserved a colour without
 			// writing a footprint) would otherwise read as GREEN here, so the v1 walk still gets to speak -
 			// and being the more restrictive of the two is the safe direction for a signal.
-			return v1ChainDepth(hex, entryPos);
+			//
+			// notes/152：但 v1 那条路**也要能排除本车**（见 v1ChainDepth）—— 否则"自己压着岔区"
+			// 这条会在 v2 已经判清之后把信号重新涂红，车还是被自己扣住（现场：车头停在道岔节点上不动）。
+			return v1ChainDepth(hex, entryPos, excludeVehicleId);
 		}
-		return v1ChainDepth(hex, entryPos);
+		return v1ChainDepth(hex, entryPos, excludeVehicleId);
 	}
 
 	private int v1ChainDepth(String hex, Position entryPos) {
+		return v1ChainDepth(hex, entryPos, 0);
+	}
+
+	/**
+	 * v1 逐轨回退链（{@code excludeVehicleId} 见 notes/152）。
+	 *
+	 * <p><b>两处口径</b>：</p>
+	 * <ul>
+	 *   <li><b>岔区受限节点</b>：由足迹算出来（{@link MmtrJunctionState#unclearedNodeKeys}），
+	 *       所以**能排除本车** —— 车自己的车体压在岔区里，不该把自己的信号判红；</li>
+	 *   <li><b>预留信号色</b>（{@link #sectionBlocked}）：那个通道只有"颜色"，**天生认不出是谁**，
+	 *       所以它只在**没有 v2 区间**的轨段上说话（有 v2 时占用那一层已由 v2 带排除地判过了，
+	 *       让颜色再判一次就等于把"自己的影子"重新放回来）。</li>
+	 * </ul>
+	 */
+	private int v1ChainDepth(String hex, Position entryPos, long excludeVehicleId) {
 		final List<Object[]> level = new ObjectArrayList<>();
 		level.add(new Object[]{entryPos, hex, entryArcOf(hex, entryPos)});
 		for (int depth = 1; depth <= MAX_DEPTH; depth++) {
@@ -211,8 +240,8 @@ public final class MmtrSignalAspect {
 				final String stepHex = (String) entry[1];
 				final Position stepNode = (Position) entry[0];
 				if (sectionBlocked(stepHex, (Double) entry[2])
-					|| junctionRestricted(stepNode)
-					|| junctionRestricted(farEndOf(stepHex, stepNode))) {
+					|| junctionRestrictedFor(stepNode, excludeVehicleId)
+					|| junctionRestrictedFor(farEndOf(stepHex, stepNode), excludeVehicleId)) {
 					return depth;
 				}
 			}
@@ -257,6 +286,19 @@ public final class MmtrSignalAspect {
 	}
 
 	/**
+	 * 这个节点算不算"受限"（净空守不住 / 道岔未定），**可以排除某一列车自己的足迹**（notes/152）。
+	 *
+	 * <p>{@code excludeVehicleId == 0} 时走原来那份全局缓存（行为逐位不变）。</p>
+	 */
+	private boolean junctionRestrictedFor(@Nullable Position node, long excludeVehicleId) {
+		if (node == null) {
+			return false;
+		}
+		final String key = MmtrJunctionState.nodeKey(node);
+		return excludeVehicleId == 0 ? junctionRestrictedKey(key) : restrictedNodeKeysExcluding(excludeVehicleId).contains(key);
+	}
+
+	/**
 	 * The restricted junction keys for this view's occupancy trees, cached: computing them walks every
 	 * node's clearance zone, and the v2 chain asks per step.
 	 */
@@ -264,9 +306,33 @@ public final class MmtrSignalAspect {
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees =
 			occupancyTrees == null ? simulator.mmtrOccupancyTrees() : occupancyTrees;
 		final int signature = trees == null ? 0 : trees.hashCode();
-		if (restrictedNodeCache == null || restrictedNodeSignature != signature) {
+		if (restrictedNodeCache == null || restrictedNodeSignature != signature || restrictedNodeCacheVehicleId != 0) {
 			restrictedNodeCache = MmtrJunctionState.unclearedNodeKeys(simulator, trees);
 			restrictedNodeSignature = signature;
+			restrictedNodeCacheVehicleId = 0;
+		}
+		return restrictedNodeCache;
+	}
+
+	/**
+	 * 受限节点集合，但**把某一列车自己的足迹排除在外**（notes/152）。
+	 *
+	 * <p>为什么必须有这一份：问话的车**自己的车体**压在岔区里时，那个岔区被算成"净空守不住"，
+	 * 于是它前方那架信号按"受限节点"判红 —— <b>车被自己的车体扣在出发信号前</b>。现场读数：
+	 * 进路 SET、道岔全部拿到、车速 0，下一区间"别人占=False、占用者=[它自己]"。
+	 * 占用那一层早有豁免（{@code isOccupied(..., excludeVehicleId)}），受限节点这一层原来没有 ——
+	 * 两处口径不一致就是这条缺陷的根。</p>
+	 *
+	 * <p>缓存按 {@code (树签名, 车 id)} 认：同一 tick 里同一台车反复走链只算一次。</p>
+	 */
+	private ObjectOpenHashSet<String> restrictedNodeKeysExcluding(long vehicleId) {
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees =
+			occupancyTrees == null ? simulator.mmtrOccupancyTrees() : occupancyTrees;
+		final int signature = trees == null ? 0 : trees.hashCode();
+		if (restrictedNodeCache == null || restrictedNodeSignature != signature || restrictedNodeCacheVehicleId != vehicleId) {
+			restrictedNodeCache = MmtrJunctionState.unclearedNodeKeys(simulator, trees, vehicleId);
+			restrictedNodeSignature = signature;
+			restrictedNodeCacheVehicleId = vehicleId;
 		}
 		return restrictedNodeCache;
 	}

@@ -659,6 +659,38 @@ public final class MmtrPlanDispatcherTests {
 		assertFalse(tasks.get(0).inPlace(), "出库不是原地动作");
 	}
 
+	// ---------------------------------------------------------------- 出库排队（咽喉一次只放一台）
+
+	/**
+	 * **两台车不许同时出库**（notes/152 现场）。
+	 *
+	 * <p>车场咽喉只有一组道岔，而每台车的停车位都落在**别人要过的那处道岔的净空区**里（净空闸
+	 * "不许把道岔从车下抽走"是对的）。现场就是两台车各自排在对方后面、`phys=-`、谁也不动。
+	 * 计划层的规矩：两次"出库那一步"之间隔开 {@link MmtrPlanDispatcher#YARD_DEPARTURE_GAP_MILLIS}。</p>
+	 *
+	 * <p>红证：去掉那条间隔判断，第二台车会在同一 tick 里跟着出库（本用例立刻红）。</p>
+	 */
+	@Test
+	public void twoWorkingsDoNotLeaveTheYardAtOnce() {
+		final MmtrLine line = line(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, shortPattern(), fleet(2), TIMES);
+		final MmtrPlanDispatcher d = new MmtrPlanDispatcher(line, diagram);
+		final FakeWorld world = new FakeWorld(9001L, 9002L);
+
+		// 到点（06:55 出库）：同一 tick 只放一台，第二台排队
+		d.tick(H07 - 5 * MIN, world);
+		assertEquals(1, world.dispatched.size(), "同一时刻只放一台出库：" + world.dispatched);
+		assertEquals(1, d.dispatchedTotal);
+
+		// 判据本身（红证：去掉间隔判断这条就红）
+		final long gap = MmtrPlanDispatcher.YARD_DEPARTURE_GAP_MILLIS;
+		final long first = H07 - 5 * MIN;
+		assertTrue(MmtrPlanDispatcher.yardDepartureAllowed(first, 0), "还没派过 ⇒ 允许出库");
+		assertFalse(MmtrPlanDispatcher.yardDepartureAllowed(first + gap - 1, first), "间隔没到 ⇒ 不许第二台跟着出");
+		assertTrue(MmtrPlanDispatcher.yardDepartureAllowed(first + gap, first), "间隔到了 ⇒ 放行");
+		assertTrue(MmtrPlanDispatcher.yardDepartureAllowed(first + 30 * MIN, first), "过了很久 ⇒ 当然放行");
+	}
+
 	/**
 	 * ③ **接管只换执行者**（设计 §8.2）：玩家接管后派发器一步不派、交路与任务**一个字节都不改**；
 	 * 归还后**从那一步续行**（不跳步、不从头上再来）。

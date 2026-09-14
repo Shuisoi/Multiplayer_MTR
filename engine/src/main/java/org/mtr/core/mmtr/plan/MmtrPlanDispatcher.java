@@ -116,6 +116,38 @@ public final class MmtrPlanDispatcher {
 	public static final long LATE_GRACE_MILLIS = 10L * 60 * 1000;
 
 	/**
+	 * **两次出库之间至少隔多久**（notes/152，现场逼出来的）。
+	 *
+	 * <p>为什么必须有这条：车场咽喉只有一组道岔，而每台车的停车位都落在**别人要过的那处道岔的净空区**
+	 * 里（引擎的净空闸"不许把道岔从车下抽走"是完全正确的）。于是两台车同时出库时互相把对方锁死 ——
+	 * 现场读数：两台车各自排在对方的后面、`phys=-`（谁都没按位置）、净空闸报"10 m 内有车足迹"，谁也不动。</p>
+	 *
+	 * <p>计划层的口径：**发车间隔 3 分钟 ≠ 出库能 3 分钟一台**。出库那一步原来一律"发车前 5 分钟"
+	 * 派出去，于是咽喉里必然同时有两台。这条按"前一台出清咽喉要多久"把它们隔开 ——
+	 * 与联锁层的通行优先权（计划早的先走）互补：一条排次序，一条隔时间。</p>
+	 */
+	public static final long YARD_DEPARTURE_GAP_MILLIS = 4L * 60 * 1000;
+
+	/** 上一次派出"某个编组的出库那一步"的当日时刻（0 = 还没派过）。 */
+	private long lastYardDepartureMillis;
+
+	/**
+	 * 现在能不能放**下一个编组出库**：上一次出库之后至少隔 {@link #YARD_DEPARTURE_GAP_MILLIS}。
+	 *
+	 * <p>抽成纯函数是为了能被钉住（红证）：这条规矩的两个后果都很直白 —— 太短则两台车挤在咽喉里
+	 * 互相锁在净空区（现场实测），太长则车底周转不过来（发车间隔已经定了，出库拖久了接不上下一趟）。</p>
+	 *
+	 * @param dayTimeMillis            现在（当日毫秒）
+	 * @param lastYardDepartureMillis  上一次出库的当日时刻（0 = 还没派过 ⇒ 允许）
+	 */
+	public static boolean yardDepartureAllowed(long dayTimeMillis, long lastYardDepartureMillis) {
+		if (lastYardDepartureMillis <= 0) {
+			return true;
+		}
+		return dayTimeMillis - lastYardDepartureMillis >= YARD_DEPARTURE_GAP_MILLIS;
+	}
+
+	/**
 	 * P6 ③ **接管**（设计 §8.2）：玩家正在开的那些车，派发器**一步都不派**。
 	 *
 	 * <p>原则是"**任务是作业，执行者可换**"：接管只换执行者 —— 交路与任务原样不动
@@ -360,6 +392,14 @@ public final class MmtrPlanDispatcher {
 			if (dayTimeMillis < task.earliestMs) {
 				continue;   // 还没到点
 			}
+			/*
+			 * **出库要排队**（notes/152）：车场咽喉只有一组道岔，两台车同时出库会互相锁在净空区里
+			 * （各自的停车位落在对方要过的道岔的净空区内）。所以两次"出库那一步"之间隔开
+			 * {@link #YARD_DEPARTURE_GAP_MILLIS}，让前一台先出清咽喉。
+			 */
+			if (state.dispatchedSteps == 0 && !yardDepartureAllowed(dayTimeMillis, lastYardDepartureMillis)) {
+				continue;   // 上一台才刚出库：等咽喉清出来再放这一台
+			}
 			if (dayTimeMillis - task.earliestMs > LATE_GRACE_MILLIS && theTripWindowIsOver(state, task, dayTimeMillis)) {
 				// 过时了，而且**这一趟的窗口已经过完**：不补跑（设计 §7「过去不可改」），跳过继续看下一步。
 				// 窗口还在的步不走这条路 —— 那是"同一趟的下一步"，跳了就等于这趟车不停那一站
@@ -374,6 +414,9 @@ public final class MmtrPlanDispatcher {
 				state.awaitingTaskId = task.taskId;
 				dispatchedTotal++;
 				dispatched++;
+				if (state.dispatchedSteps == 1) {
+					lastYardDepartureMillis = dayTimeMillis;   // 记下"这一台刚出库"，下一台要隔开
+				}
 			} else {
 				retryCount++;
 			}
