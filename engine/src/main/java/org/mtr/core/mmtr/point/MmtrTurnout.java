@@ -200,10 +200,16 @@ public final class MmtrTurnout {
 	public static String describeResolution(Position node, @Nullable Object2ObjectOpenHashMap<Position, Rail> neighbours) {
 		final StringBuilder out = new StringBuilder();
 		final MmtrTurnout turnout = analyse(node, neighbours, out);
+		// 轨的"名字"用**远端坐标**：hex 对负坐标全是 FFFFFFFFFFFFFF…（实测：一条指令读出来三个一模一样的
+		// 名字，等于没写）。操作者一直是按坐标说话的，诊断就该按坐标说。
+		final Object2ObjectOpenHashMap<String, Position> labels = new Object2ObjectOpenHashMap<>();
+		if (neighbours != null) {
+			neighbours.forEach((farEnd, rail) -> labels.put(rail.getHexId(), farEnd));
+		}
 		final String verdict = turnout == null
 			? "结论：**不是**一处可建模的单开道岔（网页会退化成 legacy 卡片，物理互斥不生效）\n"
-			: "结论：认成 1 处单开道岔 —— 根部 " + shortHex(turnout.stemRailHex) + " / 正线远端 " + shortHex(turnout.farRailHex)
-				+ " / 岔股 " + shortHex(turnout.branchRailHex) + "（位置 0 = 根部↔正线远端，位置 1 = 根部↔岔股）\n";
+			: "结论：认成 1 处单开道岔 —— 根部 " + label(labels, turnout.stemRailHex) + " / 正线远端 " + label(labels, turnout.farRailHex)
+				+ " / 岔股 " + label(labels, turnout.branchRailHex) + "（位置 0 = 根部↔正线远端，位置 1 = 根部↔岔股）\n";
 		return verdict + out;
 	}
 
@@ -249,14 +255,14 @@ public final class MmtrTurnout {
 					.append(num(length == 0 ? 0 : dx / length)).append(",").append(num(length == 0 ? 0 : dz / length)).append(")\n");
 			}
 			for (final String hex : rails) {
-				out.append("  进向 ").append(shortHex(hex)).append(" 能续行到：");
+				out.append("  进向 ").append(label(farByRail, hex)).append(" 能续行到：");
 				final ObjectArrayList<MmtrPointLeg> legs = legsByApproach.get(hex);
 				if (legs == null || legs.isEmpty()) {
 					out.append("（一根都没有 —— 别的轨都在它身后被排除）\n");
 					continue;
 				}
 				for (final MmtrPointLeg leg : legs) {
-					out.append(leg.kind).append(" ").append(shortHex(leg.railHex)).append("(cos ").append(num(leg.cos)).append(") ");
+					out.append(leg.kind).append(' ').append(label(farByRail, leg.railHex)).append("(cos ").append(num(leg.cos)).append(") ");
 				}
 				out.append('\n');
 			}
@@ -273,7 +279,7 @@ public final class MmtrTurnout {
 				final double backward = legCos(legsByApproach.get(rails.get(j)), rails.get(i));
 				final double score = Math.min(forward, backward);
 				if (out != null) {
-					out.append("  候选直股对 (").append(shortHex(rails.get(i))).append(", ").append(shortHex(rails.get(j))).append(")：互直度 ")
+					out.append("  候选直股对 (").append(label(farByRail, rails.get(i))).append(", ").append(label(farByRail, rails.get(j))).append(")：互直度 ")
 						.append(Double.isNaN(score) ? "—（互相看不见，不成对）" : num(score)).append('\n');
 				}
 				if (!Double.isNaN(score) && score > bestScore + 1.0e-9) {
@@ -320,17 +326,17 @@ public final class MmtrTurnout {
 			}
 		}
 		if (stemHex == null) {
-			note(out, "岔股 " + shortHex(branchHex) + " 从两个正线进向都看不见"
+			note(out, "岔股 " + label(farByRail, branchHex) + " 从两个正线进向都看不见"
 				+ (Double.isNaN(seenCos) ? "（都被当成长度近乎相反的回头轨排除）" : "（cos 最大只有 " + num(seenCos) + " ≤ " + num(MIN_STEM_COS) + "）")
 				+ "：直角三岔口，现实里是两组道岔背靠背，没有「根部」可言");
 			return null;
 		}
 		final String farHex = stemHex.equals(throughA) ? throughB : throughA;
 		if (out != null) {
-			out.append("  直股对 = (").append(shortHex(throughA)).append(", ").append(shortHex(throughB)).append(")，互直度 ").append(num(bestScore))
+			out.append("  直股对 = (").append(label(farByRail, throughA)).append(", ").append(label(farByRail, throughB)).append(")，互直度 ").append(num(bestScore))
 				.append("（最直，所以是正线）\n");
-			out.append("  岔股 = ").append(shortHex(branchHex)).append("；根部 = ").append(shortHex(stemHex))
-				.append("（它看岔股 cos ").append(num(stemCos)).append(" > 0 = 迎着开过去看得到岔股分出去），正线远端 = ").append(shortHex(farHex)).append('\n');
+			out.append("  岔股 = ").append(label(farByRail, branchHex)).append("；根部 = ").append(label(farByRail, stemHex))
+				.append("（它看岔股 cos ").append(num(stemCos)).append(" > 0 = 迎着开过去看得到岔股分出去），正线远端 = ").append(label(farByRail, farHex)).append('\n');
 		}
 
 		final MmtrTurnout turnout = new MmtrTurnout(node.getX(), node.getY(), node.getZ(), stemHex, farHex, branchHex);
@@ -365,6 +371,20 @@ public final class MmtrTurnout {
 
 	private static String shortHex(@Nullable String hex) {
 		return hex == null || hex.length() <= 12 ? String.valueOf(hex) : hex.substring(0, 12) + "…";
+	}
+
+	/**
+	 * 一根轨在诊断里的"名字"：**它在这个节点上的远端坐标**。
+	 *
+	 * <p>为什么不用 hex：负坐标的 hex 全是 {@code FFFFFFFFFFFFFF…}，实测一条 {@code point why} 打出来
+	 * 三个一模一样的名字，等于没写。操作者一直是按坐标说话的，诊断就按坐标说。</p>
+	 */
+	private static String label(@Nullable Object2ObjectOpenHashMap<String, Position> farByRail, @Nullable String hex) {
+		if (hex == null) {
+			return "（无）";
+		}
+		final Position far = farByRail == null ? null : farByRail.get(hex);
+		return far == null ? shortHex(hex) : "(" + far.getX() + "," + far.getZ() + ")";
 	}
 
 	/** 把"这个进向上三条轨各自是第几条腿"记下来（节点级位置 &lt;-&gt; 每行腿号的翻译表）。 */
