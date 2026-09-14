@@ -216,6 +216,7 @@ public final class SystemMapServlet extends ServletBase {
 							out.addProperty("capacityProblem", dispatcher.diagram.capacityProblem);
 						}
 						final com.google.gson.JsonArray workings = new com.google.gson.JsonArray();
+						final java.util.HashSet<String> reported = new java.util.HashSet<>();
 						for (final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.WorkingState state : dispatcher.snapshot()) {
 							final com.google.gson.JsonObject w = new com.google.gson.JsonObject();
 							w.addProperty("consistId", state.consistId);
@@ -230,6 +231,30 @@ public final class SystemMapServlet extends ServletBase {
 								w.addProperty("nextDueMs", next.dueMs);
 								w.addProperty("nextDescribe", next.describe());
 							}
+							workings.add(w);
+							reported.add(state.consistId);
+						}
+						/*
+						 * notes/144 §3 ①：**今天没班的编组也要出现在名单里**。
+						 *
+						 * 手工指派把某个编组的趟次全搬走之后，它就不再有"出库"那条（P3 的 scheduledWorkings
+						 * 按"有没有出库"筛），于是运营台上**整辆车像是消失了** —— 操作者会以为配置丢了。
+						 * 这里把"有交路记录但今天没班"的编组补一行，写明原因，而不是让它凭空不见。
+						 */
+						for (final org.mtr.core.mmtr.plan.MmtrDiagram.Working working : dispatcher.diagram.workings) {
+							if (reported.contains(working.consistId)) {
+								continue;
+							}
+							final com.google.gson.JsonObject w = new com.google.gson.JsonObject();
+							w.addProperty("consistId", working.consistId);
+							w.addProperty("vehicleId", "0");
+							w.addProperty("steps", 0);
+							w.addProperty("dispatchedSteps", 0);
+							w.addProperty("awaitingTaskId", "");
+							w.addProperty("idle", true);
+							w.addProperty("note", working.entries.isEmpty()
+								? "今天没有班（趟次已被指派给别人）"
+								: "今天没有班（只剩 " + working.entries.size() + " 条收尾条目）");
 							workings.add(w);
 						}
 						out.add("workings", workings);
