@@ -87,6 +87,25 @@ public final class MmtrServicePlan {
 			return terminalDoneMillis - departureMillis;
 		}
 
+		/**
+		 * **整体平移**这趟车（延误"保车"策略用，§8.1）：车次与站序不变，所有时刻 +{@code shiftMillis}。
+		 *
+		 * <p>时刻表是"计划"，平移是"计划让位于现实" —— 所以它是**新建一趟**而不是改原对象：
+		 * 未被动过的那些趟（过去/冻结期内的）在对账时仍然是同一个对象，一眼能看出"谁被改了"。</p>
+		 */
+		public Trip shiftedBy(long shiftMillis) {
+			if (shiftMillis == 0) {
+				return this;
+			}
+			final ObjectArrayList<StopTime> shiftedStops = new ObjectArrayList<>();
+			for (final StopTime stop : stopTimes) {
+				shiftedStops.add(new StopTime(stop.stopIndex, stop.stationId, stop.platformId,
+					stop.arrivalMillis + shiftMillis, stop.departureMillis + shiftMillis));
+			}
+			return new Trip(tripId, sequence, direction, departureMillis + shiftMillis, terminalTreatment,
+				shiftedStops, terminalDoneMillis + shiftMillis);
+		}
+
 		@Override
 		public String toString() {
 			return tripId + " " + MmtrPattern.hhmm(departureMillis) + " 发（" + MmtrPattern.hhmm(terminalDoneMillis)

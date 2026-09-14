@@ -136,8 +136,51 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("deleted", ok);
 					yield result;
 				}
-				case "mmtr-plan-diagrams" -> {
-					// P4：派发器现场 —— 每条线路的周转/N/分车/已派步数（交路的产物在这里看得见）。
+				case "mmtr-plan-events" -> {
+					// P5：运行时事件（生效中 + 即将生效 + 全部）—— 前台展示的契约就是"类型/目标/起止/理由/剩余"。
+					final long dayTime = simulator.mmtrPlanDayTime();
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.addProperty("dayTimeMs", dayTime);
+					final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();
+					for (final String line : simulator.mmtrPlanEvents.describeForFeed(dayTime)) {
+						lines.add(line);
+					}
+					result.add("feed", lines);
+					final com.google.gson.JsonArray all = new com.google.gson.JsonArray();
+					for (final org.mtr.core.mmtr.plan.MmtrEvent event : simulator.mmtrPlanEvents.all()) {
+						final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+						out.addProperty("eventId", event.eventId);
+						out.addProperty("kind", event.kind().name());
+						out.addProperty("kindName", event.kindName());
+						out.addProperty("targetKind", event.targetKind.name());
+						out.addProperty("targetName", event.targetName());
+						out.addProperty("startMillis", event.startMillis);
+						out.addProperty("endMillis", event.endMillis);
+						out.addProperty("state", event.stateAt(dayTime).name());
+						out.addProperty("remaining", event.remainingText(dayTime));
+						out.addProperty("reason", event.reason);
+						out.addProperty("describe", event.describe(dayTime));
+						all.add(out);
+					}
+					result.add("events", all);
+					yield result;
+				}
+				case "mmtr-plan-event-upsert" -> {
+					simulator.mmtrPlanEvents.put(readPlanEvent(jsonReader));
+					simulator.persistMmtrPlanInputs();
+					yield planResult(simulator);
+				}
+				case "mmtr-plan-event-delete" -> {
+					final String eventId = jsonReader.getString("eventId", "");
+					final boolean removed = jsonReader.getBoolean("end", false)
+						? simulator.mmtrPlanEvents.end(eventId, simulator.mmtrPlanDayTime())
+						: simulator.mmtrPlanEvents.remove(eventId);
+					simulator.persistMmtrPlanInputs();
+					final com.google.gson.JsonObject out = planResult(simulator);
+					out.addProperty("removed", removed);
+					yield out;
+				}
+				case "mmtr-plan-diagrams" -> {					// P4：派发器现场 —— 每条线路的周转/N/分车/已派步数（交路的产物在这里看得见）。
 					simulator.mmtrRefreshPlanDispatchers();
 					final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();
 					simulator.mmtrPlanDispatchers.forEach((lineId, dispatcher) -> {
@@ -1340,6 +1383,33 @@ public final class SystemMapServlet extends ServletBase {
 		result.addProperty("problems", errors.size());
 		result.add("errors", errors);
 		return result;
+	}
+
+	/**
+	 * P5：把接口上的一个事件读成 {@link org.mtr.core.mmtr.plan.MmtrEvent}（四类细分按 {@code kind} 分派）。
+	 */
+	private static org.mtr.core.mmtr.plan.MmtrEvent readPlanEvent(org.mtr.core.serializer.JsonReader reader) {
+		final String eventId = reader.getString("eventId", "");
+		final String kind = reader.getString("kind", "PEAK_SURGE").toUpperCase(java.util.Locale.ENGLISH);
+		final long startMillis = reader.getLong("startMillis", 0);
+		final long endMillis = reader.has("endMillis") ? reader.getLong("endMillis", -1) : -1;
+		final org.mtr.core.mmtr.plan.MmtrEvent event = switch (kind) {
+			case "PEAK_SURGE" -> new org.mtr.core.mmtr.plan.MmtrEvent.PeakSurge(eventId,
+				reader.getLong("stationId", 0), startMillis, endMillis, reader.getLong("headwayMillis", 5L * 60 * 1000));
+			case "DELAY" -> new org.mtr.core.mmtr.plan.MmtrEvent.Delay(eventId,
+				reader.getString("consistId", ""), startMillis, reader.getLong("delayMillis", 5L * 60 * 1000))
+				.withStrategy(reader.getInt("strategy", org.mtr.core.mmtr.plan.MmtrEvent.Delay.STRATEGY_KEEP_TIMETABLE));
+			case "FAULT" -> new org.mtr.core.mmtr.plan.MmtrEvent.Fault(eventId,
+				reader.getString("consistId", ""), startMillis, reader.getBoolean("vehicleDown", true));
+			case "SPEED_RESTRICTION" -> new org.mtr.core.mmtr.plan.MmtrEvent.SpeedRestriction(eventId,
+				reader.getString("railHex", ""), startMillis, endMillis, reader.getDouble("speedKmh", 40));
+			default -> null;
+		};
+		if (event != null) {
+			event.reason = reader.getString("reason", "");
+			event.severity = reader.getInt("severity", 0);
+		}
+		return event;
 	}
 
 	/** Job-editor pickers: in-game depots / sidings / platforms (decimal id strings + display names). */

@@ -225,6 +225,39 @@ public final class MmtrPlanDispatcher {
 		return new ObjectArrayList<>(states);
 	}
 
+	/**
+	 * P5：**冻结边界**（设计 §7）—— 每辆车"不许动到什么时候"。
+	 *
+	 * <p>规则：正在跑某一步的车，冻结到**它当前所在的那条交路条目结束**为止。
+	 * 条目就是"出库/一趟车/回库"，所以边界正好是"这趟车跑完"= 设计里
+	 * "frozenUntil = 它当前任务的预计完成时刻"的可计算形式（不需要另建一套在途状态：
+	 * 谁在跑、跑到哪一步，派发器自己就知道）。</p>
+	 *
+	 * @return 编组代码 → 冻结到的当日毫秒
+	 */
+	public java.util.Map<String, Long> frozenUntilByConsist() {
+		final java.util.HashMap<String, Long> out = new java.util.HashMap<>();
+		for (final WorkingState state : states) {
+			if (state.awaitingTaskId.isEmpty() || state.dispatchedSteps == 0) {
+				continue;
+			}
+			final MmtrTask running = state.tasks.get(Math.min(state.dispatchedSteps - 1, state.tasks.size() - 1));
+			long boundary = running.dueMs;
+			for (final MmtrDiagram.Working working : diagram.workings) {
+				if (!working.consistId.equals(state.consistId)) {
+					continue;
+				}
+				for (final MmtrDiagram.Entry entry : working.entries) {
+					if (running.dueMs >= entry.startMillis && running.dueMs <= entry.endMillis) {
+						boundary = entry.endMillis;
+					}
+				}
+			}
+			out.put(state.consistId, boundary);
+		}
+		return out;
+	}
+
 	@Override
 	public String toString() {
 		return "派发器 " + lineId + "：" + states.size() + " 辆车，已派 " + dispatchedTotal + " 步，跳过 " + skippedSteps + " 步，重试 " + retryCount

@@ -104,6 +104,12 @@ public class Simulator extends Data implements Utilities {
 	/** 上一次重建派发器用的输入签名（变了才重建，避免每 tick 重排一整天）。 */
 	private String mmtrPlanSignature = "";
 	/**
+	 * P5：**运行时事件**（临时高峰 / 延误 / 故障 / 降速）。
+	 *
+	 * <p>不落盘：配置里那份是**规则**，事件实例是"这次运营里发生了什么事"，重启即清空是对的。</p>
+	 */
+	public final org.mtr.core.mmtr.plan.MmtrEventRegistry mmtrPlanEvents = new org.mtr.core.mmtr.plan.MmtrEventRegistry();
+	/**
 	 * Rolling-stock manifest (车辆生成表): declares which consist each depot siding must carry after
 	 * the explicit vehicle reset on every server restart. AI diagram steps are disabled by default;
 	 * the manifest + per-vehicle operations own the traffic.
@@ -613,6 +619,9 @@ public class Simulator extends Data implements Utilities {
 			return 0;   // 输入有错就不排班（设计 §4.3：别让坏配置跑起来）
 		}
 		int built = 0;
+		final long dayTime = mmtrPlanDayTime();
+		final java.util.Map<String, Long> frozen = new java.util.HashMap<>();
+		mmtrPlanDispatchers.values().forEach(dispatcher -> frozen.putAll(dispatcher.frozenUntilByConsist()));
 		for (final org.mtr.core.mmtr.plan.MmtrLine line : mmtrPlanInputs.lines) {
 			final org.mtr.core.mmtr.plan.MmtrPattern pattern = mmtrPlanInputs.pattern(line.lineId);
 			if (pattern == null) {
@@ -620,13 +629,28 @@ public class Simulator extends Data implements Utilities {
 			}
 			final double speedKmh = mmtrPlanInputs.fleet.consists.isEmpty() ? 0 : mmtrPlanInputs.fleet.consists.get(0).maxSpeedKmh;
 			final org.mtr.core.mmtr.plan.MmtrTravelTimes times = org.mtr.core.mmtr.plan.MmtrRailTravelTimes.of(this, line, speedKmh);
-			final org.mtr.core.mmtr.plan.MmtrDiagram diagram =
-				org.mtr.core.mmtr.plan.MmtrDiagram.generate(line, pattern, mmtrPlanInputs.fleet, times);
+			/*
+			 * P5：**按事件重算**（不是直接生成）—— 于是"正常态"与"有事件"走的是同一条路：
+			 * 没有任何事件时，重算的结果与直接生成逐字段相同（这条本身就该是验收的一部分）。
+			 */
+			final org.mtr.core.mmtr.plan.MmtrPlanAdjustments.Result result = org.mtr.core.mmtr.plan.MmtrPlanAdjustments.recompute(
+				line, pattern, mmtrPlanInputs.fleet, times, mmtrPlanEvents.all(), dayTime, frozen);
+			final org.mtr.core.mmtr.plan.MmtrDiagram diagram = result.diagram;
 			mmtrPlanDispatchers.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
 			built++;
 			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
+			for (final String note : result.notes) {
+				System.out.println("[MMTR-PLAN] 事件改计划：" + note);
+			}
 		}
 		return built;
+	}
+
+	/** P5：现在几点（当日毫秒，与线路密度表同一口径；锚点优先用作业单调度的）。 */
+	public long mmtrPlanDayTime() {
+		final long schedulerAnchor = mmtrJobScheduler == null ? Long.MIN_VALUE : mmtrJobScheduler.getAnchor();
+		final long anchor = schedulerAnchor != Long.MIN_VALUE ? schedulerAnchor : mmtrPlanAnchorForDay();
+		return Math.floorMod(getCurrentMillis() - anchor, 86_400_000L);
 	}
 
 	/** 输入签名：线路/密度/车底任一改动都会变（用于"变了才重排"）。 */
@@ -645,6 +669,18 @@ public class Simulator extends Data implements Utilities {
 		}
 		sig.append(mmtrPlanInputs.fleet.consists.size()).append('+').append(mmtrPlanInputs.fleet.spares.size());
 		sig.append('#').append(rails.size());
+		// P5：事件也要进签名 —— 否则"加了事件"不会触发重算（那是"计划看着没动"的经典原因）
+		for (final org.mtr.core.mmtr.plan.MmtrEvent event : mmtrPlanEvents.all()) {
+			sig.append('@').append(event.eventId).append(':').append(event.kind()).append(':')
+				.append(event.startMillis).append('-').append(event.endMillis).append(':')
+				.append(event.targetText).append(':').append(event.severity);
+			if (event instanceof final org.mtr.core.mmtr.plan.MmtrEvent.PeakSurge surge) {
+				sig.append(':').append(surge.headwayMillis);
+			}
+			if (event instanceof final org.mtr.core.mmtr.plan.MmtrEvent.Delay delay) {
+				sig.append(':').append(delay.delayMillis).append(':').append(delay.strategy);
+			}
+		}
 		return sig.toString();
 	}
 

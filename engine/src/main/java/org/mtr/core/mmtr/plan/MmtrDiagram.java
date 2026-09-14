@@ -48,6 +48,8 @@ public final class MmtrDiagram {
 		/** 这一条之前要等多久（上一条结束到这一条开始；出库那条是 0）。 */
 		public final long waitBeforeMillis;
 		public final MmtrServicePlan.@Nullable Trip trip;
+		/** 这一条的说明：事件改过它时写清为什么（空 = 没被动过）。 */
+		public String note = "";
 
 		Entry(Kind kind, long stationId, long platformId, long sidingId, long startMillis, long endMillis, long waitBeforeMillis, MmtrServicePlan.@Nullable Trip trip) {
 			this.kind = kind;
@@ -62,6 +64,11 @@ public final class MmtrDiagram {
 
 		public long durationMillis() {
 			return endMillis - startMillis;
+		}
+
+		/** 交路视图/日志用：把"事件改过它"这件事说出来。 */
+		public String describeWithNote() {
+			return note.isEmpty() ? toString() : toString() + "（" + note + "）";
 		}
 
 		/** 目标是不是某条股道（出库/回库）。 */
@@ -260,13 +267,29 @@ public final class MmtrDiagram {
 	 * <p>不在这里算"应该等多久"，只报**实际的空档**：套班取整、终点处理、站台等待全都表现成它 ——
 	 * 交路视图（P6）与"为什么这辆车不连续"的排查都读这一个数。</p>
 	 */
-	private static void fillWaits(Working working) {
+	public static void fillWaits(Working working) {
 		for (int i = 0; i < working.entries.size(); i++) {
 			final Entry entry = working.entries.get(i);
 			final long wait = i == 0 ? 0 : Math.max(0, entry.startMillis - working.entries.get(i - 1).endMillis);
-			working.entries.set(i, new Entry(entry.kind, entry.stationId, entry.platformId, entry.sidingId,
-				entry.startMillis, entry.endMillis, wait, entry.trip));
+			final Entry updated = new Entry(entry.kind, entry.stationId, entry.platformId, entry.sidingId,
+				entry.startMillis, entry.endMillis, wait, entry.trip);
+			updated.note = entry.note;
+			working.entries.set(i, updated);
 		}
+	}
+
+	/**
+	 * **用另一组交路替换车底运用**（事件重算用，§7：重算只改未来的运用，不动时刻表结构）。
+	 *
+	 * <p>时刻表本身（ring/N/高峰间隔）与故障/延误无关，所以只换 {@code workings}，
+	 * 其它字段原样带过去 —— 这样"重算改了什么"一眼可辨。</p>
+	 */
+	public MmtrDiagram withWorkings(ObjectArrayList<Working> replacement) {
+		final MmtrDiagram out = new MmtrDiagram(lineId, ringMillis, peakHeadwayMillis, requiredConsists, capacityProblem);
+		out.workings.addAll(replacement);
+		out.idleConsistIds.addAll(idleConsistIds);
+		out.spareConsistIds.addAll(spareConsistIds);
+		return out;
 	}
 
 	/** 排了班的那些车（出库那条存在的）。 */
