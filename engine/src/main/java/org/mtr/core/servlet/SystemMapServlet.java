@@ -454,6 +454,13 @@ public final class SystemMapServlet extends ServletBase {
 				if (route != null) {
 					train.add("route", mmtrRouteJson(route));
 				}
+				// T2: 行车许可 —— 把信号显示翻译成"能走到哪、到那儿该多快"。本片只算不停
+				// （停车规则是 T3），出口放在这里是为了让运营台能看见"灯 → 许可"的对应关系。
+				final org.mtr.core.mmtr.segment.MmtrMotionPosition authorityWalker = vehicle.getMmtrMotionWalker();
+				if (authorityWalker != null) {
+					train.add("authority", mmtrAuthorityJson(
+						org.mtr.core.mmtr.signal.MmtrMovementAuthority.forVehicle(simulator, authorityWalker, vehicle.getId())));
+				}
 				final MmtrMission mission = vehicle.getMmtrMission();
 				if (mission != null) {
 					final com.google.gson.JsonObject missionJson = new com.google.gson.JsonObject();
@@ -532,6 +539,21 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonArray rails = new com.google.gson.JsonArray();
 		route.getRailHexes().forEach(rails::add);
 		json.add("rails", rails);
+		return json;
+	}
+
+	/** T2: one train's 行车许可 as the ops feed shows it (only present when it has a target). */
+	private static com.google.gson.JsonObject mmtrAuthorityJson(org.mtr.core.mmtr.signal.MmtrMovementAuthority authority) {
+		final com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+		json.addProperty("aspect", authority.aspect.name());
+		json.addProperty("cautionOnly", authority.cautionOnly);
+		json.addProperty("mustStop", authority.mustStop());
+		if (authority.hasTarget()) {
+			json.addProperty("targetRail", authority.targetRailHex);
+			json.addProperty("targetDistanceM", Math.round(authority.targetDistanceM * 10) / 10.0);
+			json.addProperty("targetSpeedKmh", Math.round(authority.targetSpeedKmh));
+		}
+		json.addProperty("reason", authority.reason);
 		return json;
 	}
 
