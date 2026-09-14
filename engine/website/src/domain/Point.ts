@@ -50,6 +50,14 @@ export interface RawPoint {
 	readonly far?: string;
 	/** 岔股（位置 1 时与根部连通）。 */
 	readonly branch?: string;
+	/**
+	 * **这个节点为什么不是一处单开道岔**（引擎的一行结论）。
+	 *
+	 * <p>用户 2026-09-14 要求"道岔的呈现要统一"：不是单开道岔的节点不该换一套卡片让人猜，
+	 * 而应在同一张卡片上说清原因（例如"四条线交汇 / 三条线在一个点上交汇"）。
+	 * 引擎侧与 `point why` 走同一段判定代码。</p>
+	 */
+	readonly whyNotTurnout?: string;
 }
 
 /** 一条腿（界面用的形状）：序号 + 分类 + 轨。 */
@@ -118,6 +126,8 @@ export class Point {
 	readonly stemHex: string;
 	readonly farHex: string;
 	readonly branchHex: string;
+	/** 不是单开道岔时的原因（引擎给的一行字）；是道岔时为空串。 */
+	readonly whyNotTurnoutText: string;
 
 	constructor(raw: RawPoint) {
 		this.x = raw.x;
@@ -136,6 +146,7 @@ export class Point {
 		this.stemHex = raw.stem ?? "";
 		this.farHex = raw.far ?? "";
 		this.branchHex = raw.branch ?? "";
+		this.whyNotTurnoutText = raw.whyNotTurnout ?? "";
 	}
 
 	/** 平面图坐标 = 世界 {@code (x, z)} 直映（见 `Node.planeZ` 的说明）。 */
@@ -178,13 +189,18 @@ export class Point {
 
 	/** 形态的中文说法。 */
 	get formText(): string {
+		/*
+		 * 不是单开道岔的节点**不许写"道岔"**：那种节点在卡片上已经有一行"为什么不是"，
+		 * 形态再自称"道岔（含直通腿）"就自相矛盾（用户 2026-09-14 要求呈现统一）。
+		 */
+		const prefix = this.isTurnout ? "道岔" : "岔口";
 		switch (this.form) {
 			case "FORK":
-				return "道岔（含直通腿）";
+				return `${prefix}（含直通腿）`;
 			case "TEE":
-				return "三通（只有左右）";
+				return `${prefix}（只有左右）`;
 			case "MULTI":
-				return "多腿（交叉/复式）";
+				return `${prefix}（多腿）`;
 			case "PASS_THROUGH":
 				return "直通（无分支）";
 			default:

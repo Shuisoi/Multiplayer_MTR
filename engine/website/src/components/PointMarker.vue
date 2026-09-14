@@ -188,6 +188,19 @@ const facts = computed(() => [
 					</div>
 				</div>
 
+				<div v-else-if="point.whyNotTurnoutText !== ''" class="turnout">
+					<!--
+						不是单开道岔的节点：**同一张卡片**上说明为什么（引擎的一行结论，与 point why 同源）。
+
+						用户 2026-09-14："道岔的呈现要统一" —— 这类节点（三岔口 / 四条线交汇）不该换一套
+						卡片形状让人猜"为什么这里和别处不一样"，而应就地给出原因。
+					-->
+					<div class="turnout-head">
+						<span class="badge badge-quiet">不是单开道岔</span>
+					</div>
+					<div class="turnout-note">{{ point.whyNotTurnoutText }}</div>
+				</div>
+
 				<dl class="facts">
 					<template v-for="fact in facts" :key="fact.label">
 						<dt>{{ fact.label }}</dt>
@@ -511,6 +524,13 @@ const facts = computed(() => [
 	color: #1a1204;
 	background: #f59e0b;
 	border-radius: 999px;
+}
+
+/* 「不是单开道岔」用同一个徽标形状、不同的语气：说的是事实，不是待操作的状态 */
+.badge-quiet {
+	color: var(--fg-secondary);
+	background: transparent;
+	border: 1px solid var(--hairline);
 }
 
 .turnout-state {

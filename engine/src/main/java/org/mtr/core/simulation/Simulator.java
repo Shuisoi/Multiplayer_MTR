@@ -860,9 +860,17 @@ public class Simulator extends Data implements Utilities {
 		boolean changed = false;
 		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
 			if (!mmtrPointBranches.containsNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ)) {
-				// 老存档没有节点级位置：从行视图反推（有人把任一进向扳到岔股 → 位置 1），
-				// 这样升级不会把既有的人工设置抹掉；没有任何行则默认 0（正线贯通 = 安全侧）。
-				mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, inferPositionFromRows(turnout));
+				/*
+				 * 新表型出来的节点：**默认 0（正线/更直那一侧）= 安全侧**。
+				 *
+				 * <p>用户 2026-09-14 的裁定。从前这里是"从行视图反推"（有人把任一进向扳到岔股 → 位置 1），
+				 * 本意是"升级不丢人工设置"；但世界上大量老行是**引擎早期铺的默认行**（每个进向 leg0），
+				 * 于是"默认行"被读成了"人工选了岔股" —— 实测 {@code -19,-60,51} 与 {@code -154,-60,-139}
+				 * 一表型出来就是位置 1。语义上那两句站不住，而 0 是安全侧（另一侧禁止通行、列车停在岔前），
+				 * 所以新表型节点一律 0；确实设过人工位的老岔口，升级后会回到 0 一次，重设即可
+				 * （现在人工搬岔还会落锁，见 {@link #mmtrOperatorSetTurnoutPosition}）。</p>
+				 */
+				mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, org.mtr.core.mmtr.point.MmtrTurnout.NORMAL);
 				changed = true;
 			}
 			changed |= normalizeTurnoutRows(turnout);
@@ -870,18 +878,6 @@ public class Simulator extends Data implements Utilities {
 		if (changed) {
 			persistMmtrPointBranches();
 		}
-	}
-
-	/** 从行视图反推节点位置：任何进向上"选的是岔股"即位置 1。 */
-	private int inferPositionFromRows(org.mtr.core.mmtr.point.MmtrTurnout turnout) {
-		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
-			final Integer branchLeg = turnout.branchLeg.get(via);
-			if (branchLeg != null && mmtrPointBranches.contains(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via)
-				&& mmtrPointBranches.get(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via) == branchLeg) {
-				return org.mtr.core.mmtr.point.MmtrTurnout.REVERSE;
-			}
-		}
-		return org.mtr.core.mmtr.point.MmtrTurnout.NORMAL;
 	}
 
 	/**

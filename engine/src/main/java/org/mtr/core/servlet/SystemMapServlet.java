@@ -822,6 +822,8 @@ public final class SystemMapServlet extends ServletBase {
 	 */
 	private static JsonObject getMmtrPoints(org.mtr.core.simulation.Simulator simulator) {
 		final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
+		// 一个节点算一次"为什么不是道岔"（同一节点有好几行）
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> whyNotTurnoutByNode = new it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<>();
 		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.point.MmtrPoint> discovered = org.mtr.core.mmtr.point.MmtrPoint.discoverDirectionAware(simulator);
 		for (final org.mtr.core.mmtr.point.MmtrPoint p : discovered) {
 			if (p.legs.size() < 2) {
@@ -849,6 +851,23 @@ public final class SystemMapServlet extends ServletBase {
 			 * 位置 1 = 岔股开放（正线被断开的那一侧禁行）。
 			 */
 			final org.mtr.core.mmtr.point.MmtrTurnout turnout = simulator.mmtrTurnout(p.nodeX, p.nodeY, p.nodeZ);
+			if (turnout == null) {
+				/*
+				 * 不是单开道岔的节点：把**为什么不是**一并说清（一行字，与 point why 同一段判定代码）。
+				 * 用户 2026-09-14 要求"道岔的呈现要统一" —— 这类节点不该换一套卡片形状让人猜，
+				 * 而应在同一张卡片上说明原因（例如"四条线交汇 / 三条线在一个点上交汇"）。
+				 */
+				final String nodeKey = p.nodeX + "," + p.nodeY + "," + p.nodeZ;
+				String why = whyNotTurnoutByNode.get(nodeKey);
+				if (why == null) {
+					final org.mtr.core.data.Position node = new org.mtr.core.data.Position(p.nodeX, p.nodeY, p.nodeZ);
+					why = org.mtr.core.mmtr.point.MmtrTurnout.rejectionReason(node, simulator.positionsToRail.get(node));
+					whyNotTurnoutByNode.put(nodeKey, why);
+				}
+				if (!why.isEmpty()) {
+					o.addProperty("whyNotTurnout", why);
+				}
+			}
 			final int turnoutPosition = turnout == null ? -1 : simulator.mmtrTurnoutPosition(p.nodeX, p.nodeY, p.nodeZ);
 			final String prohibitedRailHex = turnout == null ? "" : turnout.prohibitedRailHex(turnoutPosition);
 			if (turnout != null) {

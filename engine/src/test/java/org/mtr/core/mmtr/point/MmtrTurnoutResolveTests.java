@@ -258,4 +258,28 @@ public final class MmtrTurnoutResolveTests {
 		assertTrue(unmodelledText.contains("**不是**一处可建模的单开道岔"), "要给出否定结论：" + unmodelledText);
 		assertTrue(unmodelledText.contains("直角三岔口"), "要说清是哪种几何：" + unmodelledText);
 	}
+
+	/**
+	 * ⑧ {@code rejectionReason}：不是道岔时给出**一行原因**（网页在同一张卡片上显示它）。
+	 *
+	 * <p>用户 2026-09-14 要求"道岔的呈现要统一"：不是单开道岔的节点不该换一套卡片形状让人猜，
+	 * 而应就地说明为什么。这一行与 {@code resolve} 走同一段判定代码（判定时写下的最后一句）。</p>
+	 */
+	@Test
+	public void rejectionReasonExplainsWhyANodeIsNotATurnout() {
+		final Object2ObjectOpenHashMap<Position, Rail> tee =
+			neighbours(new Position(20, Y, 0), new Position(-20, Y, 0), new Position(0, Y, 20));
+		final String teeReason = MmtrTurnout.rejectionReason(NODE, tee);
+		assertTrue(teeReason.contains("岔尖"), "直角三岔口要说清「找不到岔尖」：" + teeReason);
+
+		final Object2ObjectOpenHashMap<Position, Rail> wye =
+			neighbours(new Position(20, Y, 0), new Position(-10, Y, 17), new Position(-10, Y, -17));
+		final String wyeReason = MmtrTurnout.rejectionReason(NODE, wye);
+		assertTrue(wyeReason.contains("三条线"), "120° 三角线要说清三条线在一个点上交汇：" + wyeReason);
+		assertTrue(wyeReason.contains("0.5") || wyeReason.contains("0.71"), "并把数字给出来：" + wyeReason);
+
+		final Object2ObjectOpenHashMap<Position, Rail> herringbone =
+			neighbours(new Position(-16, Y, 1), new Position(20, Y, -13), new Position(20, Y, 13));
+		assertEquals("", MmtrTurnout.rejectionReason(NODE, herringbone), "是道岔时没有「原因」这回事");
+	}
 }

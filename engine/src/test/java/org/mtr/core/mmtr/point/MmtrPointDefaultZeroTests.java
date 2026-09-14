@@ -42,8 +42,39 @@ public final class MmtrPointDefaultZeroTests {
 	@Test
 	public void flagOffNeverSeeds() {
 		final Simulator simulator = forkNet("build/mmtr-default-off");
-		simulator.mmtrEnsurePointDefaults(); // flag defaults to false in tests
-		assertEquals(0, simulator.mmtrPointBranches.branches.size(), "engine tests keep unset forks unset");
+		simulator.mmtrEnsurePointDefaults(); // flag defaults to false in tests		assertEquals(0, simulator.mmtrPointBranches.branches.size(), "engine tests keep unset forks unset");
+	}
+
+	/**
+	 * **新表型出来的道岔一律默认 0**（用户 2026-09-14 的裁定），哪怕老存档里的行"看起来像选了岔股"。
+	 *
+	 * <p>从前这里是"从行视图反推"（有人把任一进向扳到岔股 → 位置 1），本意是升级不丢人工设置；
+	 * 但世界上大量老行是**引擎早期铺的默认行**（每个进向 leg0），于是"默认行"被读成了"人工选了岔股"
+	 * —— 实测 {@code -19,-60,51} 与 {@code -154,-60,-139} 一表型出来就是位置 1。0 是安全侧
+	 * （另一侧禁止通行、列车停在岔前），所以新表型节点一律 0。</p>
+	 */
+	@Test
+	public void aNewlyModelledTurnoutStartsAtZeroEvenWhenStaleRowsLookLikeTheBranch() {
+		final Simulator simulator = forkNet("build/mmtr-default-migration");
+		final Position node = new Position(0, 0, 0);
+		final MmtrTurnout turnout = simulator.mmtrTurnout(node.getX(), node.getY(), node.getZ());
+		assertTrue(turnout != null, "夹具必须是单开道岔");
+
+		// 造一份"老存档的行"：某个进向上写的正是岔股那条腿（旧反推规则会把它读成位置 1）
+		final String via = turnout.stemRailHex;
+		final int branchLeg = turnout.branchLeg.getOrDefault(via, -1);
+		assertTrue(branchLeg >= 0, "根部那一行要能选到岔股");
+		simulator.mmtrPointBranches.set(node.getX(), node.getY(), node.getZ(), via, branchLeg);
+		simulator.mmtrPointBranches.nodePositions.remove(node.getX() + "," + node.getY() + "," + node.getZ());
+
+		// 触发表型重建（轨图签名变化）
+		simulator.rails.add(through(new Position(0, 0, 0), new Position(0, 0, 40)));
+		simulator.sync();
+
+		assertEquals(MmtrTurnout.NORMAL, simulator.mmtrTurnoutPosition(node.getX(), node.getY(), node.getZ()),
+			"新表型的道岔默认 0（不再从老行反推岔股）");
+		assertFalse(simulator.mmtrPointBranches.contains(node.getX(), node.getY(), node.getZ(), turnout.branchRailHex),
+			"位置 0 时岔股那一侧没有行（它禁止通行）");
 	}
 
 	@Test

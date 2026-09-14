@@ -229,6 +229,23 @@ public final class MmtrTurnout {
 		return verdict + out;
 	}
 
+	/**
+	 * 这个节点**为什么不是**一处单开道岔（一行字，给网页与指令用）；是道岔时返回空串。
+	 *
+	 * <p>为什么要有它：用户 2026-09-14 要求"道岔的呈现要统一" —— 不是单开道岔的节点不该换一套卡片，
+	 * 而应该在**同一张卡片**上说明为什么它不是。这一行与 {@link #resolve} 走同一段判定代码：
+	 * 拿的就是判定时写下的最后一句（每条否定路径都只写一句，成功路径的最后一句是岔尖/对称说明，
+	 * 所以只有返回 null 时这段文字才是"原因"）。</p>
+	 */
+	public static String rejectionReason(Position node, @Nullable Object2ObjectOpenHashMap<Position, Rail> neighbours) {
+		final StringBuilder out = new StringBuilder();
+		if (analyse(node, neighbours, out) != null) {
+			return "";
+		}
+		final String[] lines = out.toString().split("\n");
+		return lines.length == 0 ? "" : lines[lines.length - 1].trim();
+	}
+
 	/** 判定主体；{@code out} 非空时把每一步写进去（诊断），为空时是纯计算的热路径。 */
 	private static @Nullable MmtrTurnout analyse(Position node, @Nullable Object2ObjectOpenHashMap<Position, Rail> neighbours, @Nullable StringBuilder out) {
 		final String at = node.getX() + "," + node.getY() + "," + node.getZ();
