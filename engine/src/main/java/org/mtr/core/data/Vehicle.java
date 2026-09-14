@@ -3217,8 +3217,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * 同一个问题在两处各算一遍，迟早各说各话。</p>
 	 */
 	public @Nullable MmtrMovementAuthority mmtrMovementAuthority() {
+		// 读**登记表**而不是本车字段：登记表才是进路的权威来源（手术重建对象、手工发布进路等路径
+		// 都会写它），本车字段只是它的一个影子。
 		return data instanceof final Simulator simulator
-			? org.mtr.core.mmtr.signal.MmtrMovementAuthority.forVehicle(simulator, mmtrMotionWalker, getId(), getMmtrRoute())
+			? MmtrMovementAuthority.forVehicle(simulator, mmtrMotionWalker, getId(), simulator.mmtrRoutes.route(getId()))
 			: null;
 	}
 
