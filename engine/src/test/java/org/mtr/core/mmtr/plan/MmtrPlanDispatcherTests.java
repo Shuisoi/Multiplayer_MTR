@@ -60,16 +60,31 @@ public final class MmtrPlanDispatcherTests {
 		return fleet;
 	}
 
-	/** 假世界：给定一批"可用车列"，记录每一次派发。 */
+	/**
+	 * 假世界：给定一批"可用车列"，记录每一次派发。
+	 *
+	 * <p>{@code autoComplete} 打开时，派出去的活立刻算跑完（用例关心的是"派发顺序"）；
+	 * 关掉时车会一直忙，用来钉住"一辆车跑一整趟"和"不换车"这两条。</p>
+	 */
 	private static final class FakeWorld implements MmtrPlanDispatcher.World {
 		final List<Long> idle = new ArrayList<>();
 		final List<String> dispatched = new ArrayList<>();
 		final List<Long> dispatchedTo = new ArrayList<>();
+		final java.util.Map<Long, String> runningTasks = new java.util.HashMap<>();
 		boolean acceptDispatch = true;
+		boolean autoComplete = true;
 
 		FakeWorld(Long... vehicles) {
 			for (final Long vehicle : vehicles) {
 				idle.add(vehicle);
+			}
+		}
+
+		/** 手动收工（autoComplete=false 的用例用它推进）。 */
+		void complete(long vehicleId) {
+			runningTasks.remove(vehicleId);
+			if (!idle.contains(vehicleId)) {
+				idle.add(vehicleId);
 			}
 		}
 
@@ -84,7 +99,12 @@ public final class MmtrPlanDispatcherTests {
 
 		@Override
 		public boolean isVehicleIdle(long vehicleId) {
-			return idle.contains(vehicleId);
+			return idle.contains(vehicleId) && !runningTasks.containsKey(vehicleId);
+		}
+
+		@Override
+		public boolean isVehicleRunningTask(long vehicleId, String taskId) {
+			return taskId != null && taskId.equals(runningTasks.get(vehicleId));
 		}
 
 		@Override
@@ -94,6 +114,12 @@ public final class MmtrPlanDispatcherTests {
 			}
 			dispatched.add(task.kind().name() + "→" + task.targetRef + "@" + MmtrPattern.hhmm(task.dueMs));
 			dispatchedTo.add(vehicleId);
+			if (autoComplete) {
+				complete(vehicleId);
+			} else {
+				idle.remove(vehicleId);
+				runningTasks.put(vehicleId, task.taskId);
+			}
 			return true;
 		}
 	}
@@ -283,6 +309,41 @@ public final class MmtrPlanDispatcherTests {
 		assertEquals(0, d.dispatchedTotal, "一步都不补跑（设计 §7「过去不可改」）");
 		assertEquals(total, d.skippedSteps, "全部计成跳过：" + d.skippedSteps + "/" + total);
 		assertTrue(world.dispatched.isEmpty(), "世界那边一次都没收到");
+	}
+
+	// ---------------------------------------------------------------- 一辆车跑一整趟
+
+	/**
+	 * **一趟车由同一辆车跑完**（装机实测抓出来的缺陷）。
+	 *
+	 * <p>第一版把"车正忙着我派的那一步"当成"车被别人占了"，于是解绑、重新找车 ——
+	 * 五个派车日志、五个不同的车辆 id。修法是 World 多一条
+	 * {@link MmtrPlanDispatcher.World#isVehicleRunningTask}，把"忙"与"忙的是我的活"分开。</p>
+	 */
+	@Test
+	public void oneWorkingKeepsTheSameVehicleForTheWholeTrip() {
+		final MmtrPlanDispatcher d = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		// 两个编组、两辆车：如果会换车，那么第二辆车也会被用上
+		final FakeWorld world = new FakeWorld(9001L, 9002L);
+		world.autoComplete = false;   // 派出去的活一直"在跑"，直到用例手动收工
+
+		long clock = H07 - 5 * MIN;
+		for (int step = 0; step < 6; step++) {
+			d.tick(clock, world);
+			clock += MIN;
+		}
+		// 每一步都是同一辆车，而且它一直"在跑"（没有被解绑去换车）
+		assertEquals(1, world.dispatched.size(), "车忙着我派的活时不会再派下一步");
+		assertEquals(1, d.dispatchedTotal);
+		assertEquals(0, d.retryCount, "这不该记成重试：忙的是我自己的活");
+		assertEquals(9001L, world.dispatchedTo.get(0));
+
+		// 收工 → 下一步（到第二站，07:04 的计划时刻）立刻接着派给同一辆车
+		world.complete(9001L);
+		d.tick(clock + 10 * MIN, world);
+		assertEquals(2, world.dispatched.size());
+		assertEquals(9001L, world.dispatchedTo.get(1), "下一趟还是这辆车（不换车）");
+		assertFalse(world.dispatchedTo.contains(9002L), "第二辆车不该被牵进来（它还没沾过这条交路）");
 	}
 
 	// ---------------------------------------------------------------- 多条交路

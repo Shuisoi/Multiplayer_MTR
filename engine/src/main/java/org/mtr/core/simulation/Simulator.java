@@ -728,6 +728,24 @@ public class Simulator extends Data implements Utilities {
 			return mission == null || mission.isTerminal();
 		}
 
+		/**
+		 * 这辆车是不是正在跑**我派的**那一步：任务 id 对得上就算 —— 一趟车的每一步都由同一个 id 前缀
+		 * （{@code 线路/编组/序号}）认领，所以"忙"与"忙的是我的活"分得开。
+		 */
+		@Override
+		public boolean isVehicleRunningTask(long vehicleId, String taskId) {
+			final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+			if (vehicle == null) {
+				return false;
+			}
+			final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+			if (mission == null || mission.isTerminal()) {
+				return false;
+			}
+			final org.mtr.core.mmtr.task.MmtrTask task = mission.getTask();
+			return task != null && task.taskId.equals(taskId);
+		}
+
 		@Override
 		public boolean dispatchTask(long vehicleId, org.mtr.core.mmtr.task.MmtrTask task) {
 			final Vehicle vehicle = mmtrFindVehicle(vehicleId);

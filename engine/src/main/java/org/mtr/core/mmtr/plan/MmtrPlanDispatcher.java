@@ -34,6 +34,15 @@ public final class MmtrPlanDispatcher {
 		boolean isVehicleIdle(long vehicleId);
 
 		/**
+		 * 这辆车**正在跑我派的这一步吗**（任务 id 对得上）。
+		 *
+		 * <p>为什么需要它：一趟车要跑好几步（到站、停站、换端…），中间车是"忙"的 —— 但那是**我自己的活**。
+		 * 少了这条判据，派发器会把"我派出去的那一步"误当成"车被别人占了"，于是解绑、下一 tick 重新找车，
+		 * **一趟车的每一步都换一辆车**（装机实测：五条派车日志、五个不同的车辆 id）。</p>
+		 */
+		boolean isVehicleRunningTask(long vehicleId, String taskId);
+
+		/**
 		 * 真正把这一步挂到车上。
 		 *
 		 * @return false = 现在挂不上（车被占 / 目标不可达 / 任务不可行），派发器下一 tick 用**同一步**重试
@@ -49,6 +58,8 @@ public final class MmtrPlanDispatcher {
 		public int dispatchedSteps;
 		/** 绑定的车列（0 = 还没分到车）。 */
 		public long vehicleId;
+		/** 已经派出去、**还在等它跑完**的那一步的任务 id（空 = 手空着，可以派下一步）。 */
+		public String awaitingTaskId = "";
 		/** 上一次尝试派发的那一步的计划时刻（诊断用）。 */
 		public long lastAttemptMillis;
 
@@ -68,7 +79,8 @@ public final class MmtrPlanDispatcher {
 		@Override
 		public String toString() {
 			return consistId + (vehicleId == 0 ? "（未分车）" : "（车 " + vehicleId + "）")
-				+ " 已派 " + dispatchedSteps + "/" + tasks.size() + " 步";
+				+ " 已派 " + dispatchedSteps + "/" + tasks.size() + " 步"
+				+ (awaitingTaskId.isEmpty() ? "" : "，等 " + awaitingTaskId + " 跑完");
 		}
 	}
 
@@ -125,8 +137,30 @@ public final class MmtrPlanDispatcher {
 					continue;
 				}
 			}
+			/*
+			 * 手上有活（上一步派出去了还没跑完）→ 先把"这一步跑完了没有"这件事看完。
+			 *
+			 * 三种情形分得很清，也正是**一辆车跑一整趟**的关键：
+			 *   ① 还在跑我那一步 → 等（不算重试）；
+			 *   ② 车空了 → 我那一步跑完了，可以派下一步；
+			 *   ③ 车忙着但不是我的活（玩家开走/别的编排抢走）→ 解绑，重新找车。
+			 */
+			if (!state.awaitingTaskId.isEmpty()) {
+				if (world.isVehicleRunningTask(state.vehicleId, state.awaitingTaskId)) {
+					continue;   // 还在跑：等它
+				}
+				if (!world.isVehicleIdle(state.vehicleId)) {
+					// 车忙着，但忙的不是我的活（玩家开走 / 别的编排抢走）→ 解绑重新找车
+					state.vehicleId = 0;
+					state.awaitingTaskId = "";
+					retryCount++;
+					continue;
+				}
+				// 我那一步跑完了：同一次 tick 接着看下一步（不白等一个 tick）
+				state.awaitingTaskId = "";
+			}
 			if (!world.isVehicleIdle(state.vehicleId)) {
-				state.vehicleId = 0;   // 车被占了（人开走了/别的活）：下一 tick 重新找车
+				state.vehicleId = 0;   // 车被别的活占了：下一 tick 重新找车
 				retryCount++;
 				continue;
 			}
@@ -146,6 +180,7 @@ public final class MmtrPlanDispatcher {
 			state.lastAttemptMillis = dayTimeMillis;
 			if (world.dispatchTask(state.vehicleId, task)) {
 				state.dispatchedSteps++;
+				state.awaitingTaskId = task.taskId;
 				dispatchedTotal++;
 				dispatched++;
 			} else {
