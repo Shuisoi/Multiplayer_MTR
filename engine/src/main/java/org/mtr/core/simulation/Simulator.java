@@ -94,6 +94,16 @@ public class Simulator extends Data implements Utilities {
 	/** 加载/保存时算出来的输入问题（空的 = 通过）；P4 的派发器在非空时拒绝排班。 */
 	public final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> mmtrPlanErrors = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
 	/**
+	 * P4：**每条线路一个派发器**（{@code lineId → MmtrPlanDispatcher}）。
+	 *
+	 * <p>计划（趟次表 + 交路）是算出来的：输入一变就重建（{@link #mmtrRefreshPlanDispatchers}），
+	 * 派发器则带着"派到第几步/分给哪辆车"的状态跨 tick 存活 —— 那份状态不能每次重算，
+	 * 否则会重复派发。</p>
+	 */
+	public final java.util.HashMap<String, org.mtr.core.mmtr.plan.MmtrPlanDispatcher> mmtrPlanDispatchers = new java.util.HashMap<>();
+	/** 上一次重建派发器用的输入签名（变了才重建，避免每 tick 重排一整天）。 */
+	private String mmtrPlanSignature = "";
+	/**
 	 * Rolling-stock manifest (车辆生成表): declares which consist each depot siding must carry after
 	 * the explicit vehicle reset on every server restart. AI diagram steps are disabled by default;
 	 * the manifest + per-vehicle operations own the traffic.
@@ -580,7 +590,182 @@ public class Simulator extends Data implements Utilities {
 		if (problems > 0) {
 			System.out.println("[MMTR-PLAN] 计划输入有 " + problems + " 处问题（详见启动日志/接口的 errors）");
 		}
+		mmtrPlanSignature = "";   // 输入变了 → 下次 tick 重建派发器
 		return problems;
+	}
+
+	/**
+	 * P4：**重建每条线路的派发器**（趟次表 + 交路 + 任务序列）。
+	 *
+	 * <p>只在输入签名变化时重建：交路是"一整天几百步"的东西，每 tick 重排既浪费又会把
+	 * "派到第几步"的状态冲掉（那就是重复派发）。</p>
+	 *
+	 * @return 重建了几条线路（0 = 没变，不用重建）
+	 */
+	public int mmtrRefreshPlanDispatchers() {
+		final String signature = mmtrPlanSignature();
+		if (signature.equals(mmtrPlanSignature)) {
+			return 0;
+		}
+		mmtrPlanSignature = signature;
+		mmtrPlanDispatchers.clear();
+		if (!mmtrPlanErrors.isEmpty()) {
+			return 0;   // 输入有错就不排班（设计 §4.3：别让坏配置跑起来）
+		}
+		int built = 0;
+		for (final org.mtr.core.mmtr.plan.MmtrLine line : mmtrPlanInputs.lines) {
+			final org.mtr.core.mmtr.plan.MmtrPattern pattern = mmtrPlanInputs.pattern(line.lineId);
+			if (pattern == null) {
+				continue;
+			}
+			final double speedKmh = mmtrPlanInputs.fleet.consists.isEmpty() ? 0 : mmtrPlanInputs.fleet.consists.get(0).maxSpeedKmh;
+			final org.mtr.core.mmtr.plan.MmtrTravelTimes times = org.mtr.core.mmtr.plan.MmtrRailTravelTimes.of(this, line, speedKmh);
+			final org.mtr.core.mmtr.plan.MmtrDiagram diagram =
+				org.mtr.core.mmtr.plan.MmtrDiagram.generate(line, pattern, mmtrPlanInputs.fleet, times);
+			mmtrPlanDispatchers.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
+			built++;
+			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
+		}
+		return built;
+	}
+
+	/** 输入签名：线路/密度/车底任一改动都会变（用于"变了才重排"）。 */
+	private String mmtrPlanSignature() {
+		final StringBuilder sig = new StringBuilder();
+		for (final org.mtr.core.mmtr.plan.MmtrLine line : mmtrPlanInputs.lines) {
+			sig.append(line.lineId).append(':').append(line.stops.size()).append(':').append(line.yardSidingId)
+				.append(':').append(line.leadTimeMillis).append(':').append(line.loop).append('|');
+		}
+		for (final org.mtr.core.mmtr.plan.MmtrPattern pattern : mmtrPlanInputs.patterns) {
+			sig.append(pattern.lineId);
+			for (final org.mtr.core.mmtr.plan.MmtrPattern.Segment segment : pattern.segments) {
+				sig.append('.').append(segment.fromMillis).append('-').append(segment.toMillis).append('-').append(segment.headwayMillis);
+			}
+			sig.append('|');
+		}
+		sig.append(mmtrPlanInputs.fleet.consists.size()).append('+').append(mmtrPlanInputs.fleet.spares.size());
+		sig.append('#').append(rails.size());
+		return sig.toString();
+	}
+
+	/**
+	 * P4：走一个 tick 的派发（到点了把下一步挂到具体车列上）。
+	 *
+	 * <p>与旧的 {@code MmtrPeriodicTaskSource} 同一位置被调用，但语义完全不同：那个是"固定周期挑一辆
+	 * 空闲车、目标写 0"；这里是"按交路一步一步派，跨 tick 不重复、拿不到车就原地重试"。</p>
+	 */
+	public void mmtrTickPlanDispatchers() {
+		mmtrRefreshPlanDispatchers();
+		if (mmtrPlanDispatchers.isEmpty()) {
+			return;
+		}
+		final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.World world = new MmtrPlanWorld();
+		final long now = getCurrentMillis();
+		/*
+		 * **当日毫秒**（与线路密度表同一口径）：计划里的 07:00 是 25_200_000，不是纪元毫秒。
+		 * 锚点优先用作业单调度器的（两套编排的小时数必须是同一个意思），它还没有锚点时用我们自己的。
+		 */
+		final long schedulerAnchor = mmtrJobScheduler == null ? Long.MIN_VALUE : mmtrJobScheduler.getAnchor();
+		final long anchor = schedulerAnchor != Long.MIN_VALUE ? schedulerAnchor : mmtrPlanAnchorForDay();
+		final long dayTime = Math.floorMod(now - anchor, 86_400_000L);
+		mmtrPlanDispatchers.values().forEach(dispatcher -> dispatcher.tick(dayTime, world));
+	}
+
+	/** 计划派发器自己的"天"锚点（第一次 tick 时定下，与作业单调度器同一套口径）。 */
+	private long mmtrPlanAnchor = Long.MIN_VALUE;
+
+	private long mmtrPlanAnchorForDay() {
+		if (mmtrPlanAnchor == Long.MIN_VALUE) {
+			mmtrPlanAnchor = getCurrentMillis();
+		}
+		return mmtrPlanAnchor;
+	}
+
+	/**
+	 * P4 的**世界适配层**：派发器只问三件事（谁空着、它还空着吗、挂这一步）。
+	 *
+	 * <p>分车按"这条线路车场里的空闲车列"来 —— 车底代码（{@code C1/S1}）是配置里的名字，
+	 * 而真正跑的是世界里那几列车；两者的对应留给 P6 的接管/替补协议（那时要按编组代码精确认车）。</p>
+	 */
+	private final class MmtrPlanWorld implements org.mtr.core.mmtr.plan.MmtrPlanDispatcher.World {
+
+		@Override
+		public long[] idleVehiclesForYard(long yardSidingId) {
+			final it.unimi.dsi.fastutil.longs.LongArrayList out = new it.unimi.dsi.fastutil.longs.LongArrayList();
+			/*
+			 * 这条股道所在车辆段的**全部股道**都算"这个车场"：出库车不一定停在出库股道那条线上
+			 * （真实车场就是几条存车线共用一个咽喉）。找不到股道时退化成全部股道（配置还没对齐时
+			 * 不至于一步都派不出去）。
+			 */
+			final java.util.List<org.mtr.core.data.Siding> candidates = new java.util.ArrayList<>();
+			sidings.forEach(siding -> {
+				if (yardSidingId == 0 || siding.getId() == yardSidingId || siding.area != null && containsSiding(siding.area, yardSidingId)) {
+					candidates.add(siding);
+				}
+			});
+			if (candidates.isEmpty()) {
+				sidings.forEach(candidates::add);
+			}
+			for (final org.mtr.core.data.Siding siding : candidates) {
+				siding.iterateVehicles(vehicle -> {
+					if (isVehicleIdle(vehicle.getId()) && !out.contains(vehicle.getId())) {
+						out.add(vehicle.getId());
+					}
+				});
+			}
+			final long[] sorted = out.toLongArray();
+			java.util.Arrays.sort(sorted);
+			return sorted;
+		}
+
+		@Override
+		public boolean isVehicleIdle(long vehicleId) {
+			final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+			if (vehicle == null || vehicle.getIsOnRoute() || !vehicle.vehicleExtraData.getIsManualAllowed()) {
+				return false;
+			}
+			final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+			return mission == null || mission.isTerminal();
+		}
+
+		@Override
+		public boolean dispatchTask(long vehicleId, org.mtr.core.mmtr.task.MmtrTask task) {
+			final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+			if (vehicle == null || task == null) {
+				return false;
+			}
+			final long targetId = task.targetRef;
+			if (targetId == 0) {
+				return false;
+			}
+			final boolean targetIsPlatform = task.targetKind.equals(org.mtr.core.mmtr.task.MmtrTask.TARGET_PLATFORM)
+				|| task.kind() == org.mtr.core.mmtr.task.MmtrTaskKind.DRIVE_TO_PLATFORM
+				|| task.kind() == org.mtr.core.mmtr.task.MmtrTaskKind.STATION_SERVICE;
+			final org.mtr.core.mmtr.MmtrMission.Kind kind = targetIsPlatform
+				? org.mtr.core.mmtr.MmtrMission.Kind.PASSENGER : org.mtr.core.mmtr.MmtrMission.Kind.MANEUVER;
+			final org.mtr.core.mmtr.MmtrMission mission = new org.mtr.core.mmtr.MmtrMission(
+				vehicleId, kind, vehicle.getMmtrMission() == null ? 0 : vehicle.getMmtrMission().getTargetSidingId(), targetId, getCurrentMillis());
+			mission.attachTask(task);
+			if (!vehicle.setMmtrMission(mission)) {
+				return false;
+			}
+			if (!vehicle.isMmtrMotion()) {
+				vehicle.engageMissionAutopilot();
+			}
+			System.out.println("[MMTR-PLAN] 派车 " + task.describe() + " → 车 " + vehicleId
+				+ "（" + task.taskId + "）");
+			return true;
+		}
+
+		/** 车辆段里有没有这条股道（用来把"这个车场"解释成"这个段的全部股道"）。 */
+		private boolean containsSiding(org.mtr.core.data.Depot depot, long sidingId) {
+			for (final org.mtr.core.data.Siding siding : depot.savedRails) {
+				if (siding.getId() == sidingId) {
+					return true;
+				}
+			}
+			return false;
+		}
 	}
 
 	/**
@@ -2350,6 +2535,8 @@ public class Simulator extends Data implements Utilities {
 			// latch onto the rake they have drawn up to under a 调车授权.
 			org.mtr.core.mmtr.MmtrAutoCoupler.tick(this);
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
+			// P4：时刻表派发（P 系列）。输入有错/未配置时内部直接返回，不做任何事。
+			mmtrTickPlanDispatchers();
 			mmtrEnsurePointDefaults();
 			mmtrSyncTurnoutPositionsToGrants();
 			mmtrEnsureSignalColors();

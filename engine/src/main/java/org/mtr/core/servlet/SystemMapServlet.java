@@ -136,6 +136,48 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("deleted", ok);
 					yield result;
 				}
+				case "mmtr-plan-diagrams" -> {
+					// P4：派发器现场 —— 每条线路的周转/N/分车/已派步数（交路的产物在这里看得见）。
+					simulator.mmtrRefreshPlanDispatchers();
+					final com.google.gson.JsonArray lines = new com.google.gson.JsonArray();
+					simulator.mmtrPlanDispatchers.forEach((lineId, dispatcher) -> {
+						final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+						out.addProperty("lineId", lineId);
+						out.addProperty("ringMillis", dispatcher.diagram.ringMillis);
+						out.addProperty("peakHeadwayMillis", dispatcher.diagram.peakHeadwayMillis);
+						out.addProperty("requiredConsists", dispatcher.diagram.requiredConsists);
+						out.addProperty("yardSidingId", String.valueOf(dispatcher.yardSidingId));
+						out.addProperty("dispatchedTotal", dispatcher.dispatchedTotal);
+						out.addProperty("retryCount", dispatcher.retryCount);
+						out.addProperty("complete", dispatcher.isComplete());
+						if (dispatcher.diagram.capacityProblem != null) {
+							out.addProperty("capacityProblem", dispatcher.diagram.capacityProblem);
+						}
+						final com.google.gson.JsonArray workings = new com.google.gson.JsonArray();
+						for (final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.WorkingState state : dispatcher.snapshot()) {
+							final com.google.gson.JsonObject w = new com.google.gson.JsonObject();
+							w.addProperty("consistId", state.consistId);
+							w.addProperty("vehicleId", String.valueOf(state.vehicleId));
+							w.addProperty("steps", state.tasks.size());
+							w.addProperty("dispatchedSteps", state.dispatchedSteps);
+							final org.mtr.core.mmtr.task.MmtrTask next = state.nextTask();
+							if (next != null) {
+								w.addProperty("nextKind", next.kind().name());
+								w.addProperty("nextTarget", String.valueOf(next.targetRef));
+								w.addProperty("nextDueMs", next.dueMs);
+								w.addProperty("nextDescribe", next.describe());
+							}
+							workings.add(w);
+						}
+						out.add("workings", workings);
+						lines.add(out);
+					});
+					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+					result.add("lines", lines);
+					result.addProperty("configured", !simulator.getMmtrPlanInputs().isEmpty());
+					result.addProperty("problems", simulator.mmtrPlanErrors.size());
+					yield result;
+				}
 				case "mmtr-manifest-reset" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					result.addProperty("ok", true);

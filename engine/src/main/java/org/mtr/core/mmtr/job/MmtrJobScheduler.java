@@ -52,6 +52,18 @@ public final class MmtrJobScheduler {
 	private final Object2ObjectOpenHashMap<String, JobInstance> instances = new Object2ObjectOpenHashMap<>();
 	private long anchor = Long.MIN_VALUE;
 
+	/**
+	 * 时间锚点（{@code dayTime = (t - anchor) mod DAY}）。
+	 *
+	 * <p>给时刻表派发器（P4）共用：两套编排的小时数必须是**同一个意思**，否则运营台上
+	 * "作业单 08:00"与"线路 08:00"会差出一段，谁也说不清哪个对。</p>
+	 *
+	 * @return 锚点；还没 tick 过时返回 {@link Long#MIN_VALUE}
+	 */
+	public long getAnchor() {
+		return anchor;
+	}
+
 	private MmtrJobScheduler(ObjectArrayList<MmtrConsistJob> jobs) {
 		this.jobs.addAll(jobs);
 	}
