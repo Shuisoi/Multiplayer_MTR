@@ -130,4 +130,92 @@ public final class MmtrPointAuthorityTests {
 		final String held = MmtrRunPlanner.describeForkWait(ops, a, "v2");
 		assertTrue(held.contains("holder=v1@1"), "another train's hold is named: " + held);
 	}
+
+	/**
+	 * T1b ①：**循环等待**用例 —— A 要 [P,Q]、B 要 [Q,P]（同一对岔，顺序相反）。
+	 *
+	 * <p>修前 {@code requestForkOps} 逐个岔申请、失败**不回滚**，于是 A 持 P 等 Q、B 持 Q 等 P；
+	 * 又因为 armed 的任务每 tick 续期（授权永不超时），这是一个**永久**死锁。
+	 * 原子申请把 hold-and-wait 从构造上消灭：拿不到整组，手里就是空的 —— 环也就无从形成。</p>
+	 */
+	@Test
+	public void atomicAcquisitionLeavesNoPartialHoldingSoACircularWaitCannotForm() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final String p = "FFFF0000";
+		final String q = "FFFF1000";
+
+		final ObjectArrayList<String[]> setForward = new ObjectArrayList<>();
+		setForward.add(new String[]{"0", "0", "0", p, "0"});
+		setForward.add(new String[]{"10", "0", "0", q, "0"});
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.requestAtomically(setForward, "v1", 5000), "整组都空着 → 一次全拿到");
+		assertTrue(a.isGrantedTo(0, 0, 0, p, "v1"), "p 归 v1");
+		assertTrue(a.isGrantedTo(10, 0, 0, q, "v1"), "q 归 v1");
+
+		final ObjectArrayList<String[]> setReversed = new ObjectArrayList<>();
+		setReversed.add(new String[]{"10", "0", "0", q, "0"});
+		setReversed.add(new String[]{"0", "0", "0", p, "0"});
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(setReversed, "v2", 5000), "整组拿不到 → 一处都不拿");
+
+		assertFalse(a.isGrantedTo(10, 0, 0, q, "v2"), "**部分持有必须为空**：q 没有给 v2（修前它会先拿到这一处）");
+		assertFalse(a.isGrantedTo(0, 0, 0, p, "v2"), "p 也没有给 v2");
+		assertEquals("v1", a.holder(0, 0, 0, p), "p 仍在前车手里");
+		assertEquals("v1", a.holder(10, 0, 0, q), "q 也仍在前车手里");
+
+		a.passed(0, 0, 0, p, "v1");
+		a.passed(10, 0, 0, q, "v1");
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.requestAtomically(setReversed, "v2", 9000), "前车让空后整组到手");
+		assertTrue(a.isGrantedTo(0, 0, 0, p, "v2") && a.isGrantedTo(10, 0, 0, q, "v2"), "v2 整组都在手里");
+	}
+
+	/** T1b：原子组的"全无"包括**让出自己已经拿着的那一处**（部分持有正是死锁的原料）。 */
+	@Test
+	public void atomicFailureGivesUpAMemberThisOwnerAlreadyHeld() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final String p = "FFFF0000";
+		final String q = "FFFF1000";
+
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.request(0, 0, 0, p, "v1", 0, 5000), "v1 先单独拿到 p");
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.request(10, 0, 0, q, "v2", 0, 5000), "v2 拿走 q");
+
+		final ObjectArrayList<String[]> set = new ObjectArrayList<>();
+		set.add(new String[]{"0", "0", "0", p, "0"});
+		set.add(new String[]{"10", "0", "0", q, "0"});
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(set, "v1", 5000), "q 拿不到 → 整组不成立");
+		assertFalse(a.isGrantedTo(0, 0, 0, p, "v1"), "整组不成立时，连已经拿着的 p 也要让出去");
+	}
+
+	/**
+	 * T1b：原子等待者**跨自己的重试**不许留半个组。
+	 *
+	 * <p>诚实边界：逐进向队列的递补（{@code promote}）是按**单点**发生的，所以前车只让出一处时，
+	 * 等待者可能被临时提上来拿到那一处。这不是永久的：armed 的任务每 tick 重试，一问整组拿不到就
+	 * 把已有的让出去，所以部分持有被限制在一个 tick 之内，"永久循环等待"不成立。
+	 * 本用例把这个不变量钉住：重试之后**要么全有、要么全无**。</p>
+	 */
+	@Test
+	public void anAtomicWaiterNeverKeepsAHalfSetAcrossItsOwnRetry() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrPointAuthority a = authority(clock);
+		final String p = "FFFF0000";
+		final String q = "FFFF1000";
+
+		final ObjectArrayList<String[]> forward = new ObjectArrayList<>();
+		forward.add(new String[]{"0", "0", "0", p, "0"});
+		forward.add(new String[]{"10", "0", "0", q, "0"});
+		final ObjectArrayList<String[]> reversed = new ObjectArrayList<>();
+		reversed.add(new String[]{"10", "0", "0", q, "0"});
+		reversed.add(new String[]{"0", "0", "0", p, "0"});
+
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.requestAtomically(forward, "v1", 5000));
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(reversed, "v2", 5000), "v2 整组排队");
+
+		a.passed(0, 0, 0, p, "v1");   // 前车只让出一处（q 还占着）
+
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.requestAtomically(reversed, "v2", 9000), "整组仍未成立");
+		final boolean holdsP = a.isGrantedTo(0, 0, 0, p, "v2");
+		final boolean holdsQ = a.isGrantedTo(10, 0, 0, q, "v2");
+		assertEquals(holdsP, holdsQ, "重试之后整组要么全有、要么全无（p=" + holdsP + " q=" + holdsQ + "）");
+	}
 }

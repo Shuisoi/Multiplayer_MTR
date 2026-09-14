@@ -199,6 +199,130 @@ public final class MmtrPointAuthority {
 	}
 
 	/**
+	 * T1b: acquire a WHOLE set of point demands atomically - all of it, or none of it.
+	 *
+	 * <p>Why this is the deadlock cure. Before, {@code requestForkOps} walked the set one point at a
+	 * time and a failure only set a flag: <strong>it never rolled back</strong> the grants it had already
+	 * taken. Combined with the per-tick window refresh (a grant never expires while the mission is
+	 * armed), two trains needing the same two points in different orders produced A holds P waiting for
+	 * Q, B holds Q waiting for P - a <strong>permanent circular wait</strong>. Atomic acquisition removes
+	 * hold-and-wait by construction: fail to take the set and your hands are empty.</p>
+	 *
+	 * <p>The operational definition of the unit is "the set this train is currently approaching" (the
+	 * approach window, ~one throat's worth of points), so a far point is still never pre-occupied - the
+	 * approach-locking property the old design wanted. The set is also released as a whole on failure,
+	 * including any part of it this owner already held from an earlier tick: partial holding is exactly
+	 * what the invariant forbids.</p>
+	 *
+	 * <p>Implementation is dry-run-then-commit: the whole set is evaluated read-only first, and only if
+	 * every member is obtainable are the real requests issued (each then succeeds; single-threaded, and
+	 * nothing can interleave inside this call). The defensive rollback below should therefore be
+	 * unreachable - it exists so the invariant holds even if that reasoning is ever broken.</p>
+	 */
+	public Result requestAtomically(@Nullable ObjectArrayList<String[]> ops, String owner, long untilMillis) {
+		if (ops == null || ops.isEmpty()) {
+			return Result.GRANTED;
+		}
+		final long now = clock.getAsLong();
+		for (final String[] op : ops) {
+			final long x = Long.parseLong(op[0]);
+			final long y = Long.parseLong(op[1]);
+			final long z = Long.parseLong(op[2]);
+			final String via = op[3];
+			final MmtrTurnout turnout = turnoutAt(x, y, z);
+			if (turnout != null) {
+				final int demand = turnout.positionForLeg(via, Integer.parseInt(op[4]));
+				if (demand == Integer.MIN_VALUE) {
+					return Result.REJECTED;   // 整组里有物理上不存在的组合 → 整组都不申请
+				}
+				if (!physicallyGrantableTo(nodeKey(x, y, z), demand, owner, now)) {
+					releaseSet(ops, owner);
+					queueSet(ops, owner, untilMillis);
+					return Result.QUEUED;
+				}
+			}
+			if (!perApproachGrantableTo(key(x, y, z, via), owner, now)) {
+				releaseSet(ops, owner);
+				queueSet(ops, owner, untilMillis);
+				return Result.QUEUED;
+			}
+		}
+		for (final String[] op : ops) {
+			if (request(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], owner,
+					Integer.parseInt(op[4]), untilMillis) != Result.GRANTED) {
+				releaseSet(ops, owner);
+				queueSet(ops, owner, untilMillis);
+				return Result.QUEUED;
+			}
+		}
+		return Result.GRANTED;
+	}
+
+	/** 只读：这个进向现在能不能给我（没有人工锁、没有别人持有）。 */
+	private boolean perApproachGrantableTo(String k, String owner, long now) {
+		expireLocked(k, now);
+		if (locks.contains(k)) {
+			return false;
+		}
+		final Holder h = holders.get(k);
+		return h == null || h.owner.equals(owner);
+	}
+
+	/** 只读：这处道岔现在能不能按我要的位置给我（无持有者、是我自己、或位置相容）。 */
+	private boolean physicallyGrantableTo(String nk, int demand, String owner, long now) {
+		expirePhysical(nk, now);
+		final Physical holder = physicalHolders.get(nk);
+		return holder == null || holder.owner.equals(owner) || holder.position == demand;
+	}
+
+	/** 原子组的"全无"一半：把本 owner 在这组里持有的**一切**让出去（含它上一 tick 就有的）。 */
+	private void releaseSet(ObjectArrayList<String[]> ops, String owner) {
+		final long now = clock.getAsLong();
+		for (final String[] op : ops) {
+			final long x = Long.parseLong(op[0]);
+			final long y = Long.parseLong(op[1]);
+			final long z = Long.parseLong(op[2]);
+			final String k = key(x, y, z, op[3]);
+			final Holder h = holders.get(k);
+			if (h != null && h.owner.equals(owner)) {
+				holders.remove(k);
+				dropOwnerRequests(k, owner);
+				promote(k, now);
+			}
+			releasePhysicalIfHolder(x, y, z, owner, now);
+		}
+	}
+
+	/** 原子组等待时：在**整组每一处**排队（保住 FIFO 位置），幂等刷新窗口。 */
+	private void queueSet(ObjectArrayList<String[]> ops, String owner, long untilMillis) {
+		for (final String[] op : ops) {
+			final long x = Long.parseLong(op[0]);
+			final long y = Long.parseLong(op[1]);
+			final long z = Long.parseLong(op[2]);
+			final String via = op[3];
+			final int leg = Integer.parseInt(op[4]);
+			enqueueIdempotent(key(x, y, z, via), owner, leg, untilMillis);
+			final MmtrTurnout turnout = turnoutAt(x, y, z);
+			if (turnout != null) {
+				final int demand = turnout.positionForLeg(via, leg);
+				if (demand != Integer.MIN_VALUE) {
+					enqueuePhysical(nodeKey(x, y, z), owner, via, leg, demand, untilMillis);
+				}
+			}
+		}
+	}
+
+	private void enqueueIdempotent(String k, String owner, int leg, long untilMillis) {
+		final Req existing = findQueued(k, owner);
+		if (existing != null) {
+			existing.leg = leg;
+			existing.untilMillis = untilMillis;
+			return;
+		}
+		enqueue(k, new Req(owner, leg, untilMillis));
+	}
+
+	/**
 	 * The original per-approach machine (P3): one grant per (node, approach), competing requests queue
 	 * FIFO, an operator lock parks the approach, grants die with their window.
 	 */

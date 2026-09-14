@@ -482,7 +482,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			&& data instanceof final Simulator simulator && !mmtrPointOwner.isEmpty()) {
 			replenishForkRequests(simulator);
 			if (!mmtrPendingPointOps.isEmpty()) {
-				MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+				requestPendingForksAtomically(simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
 			}
 		}
 
@@ -628,9 +628,33 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				? org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN
 				: org.mtr.core.mmtr.route.MmtrRoute.Kind.SHUNT,
 			plan.routeRailHexes, plan.forkOps, plan.targetRailHex, data.getCurrentMillis()));
-		final boolean allForksGranted = MmtrRunPlanner.requestForkOps(mmtrPendingPointOps, authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
 		simulator.mmtrRoutes.refresh(getId(), authority);
 		return allForksGranted;
+	}
+
+	/**
+	 * T1b: request every fork this train is currently approaching **as one atomic set**
+	 * ({@link org.mtr.core.mmtr.point.MmtrPointAuthority#requestAtomically}).
+	 *
+	 * <p>The old call ({@code MmtrRunPlanner.requestForkOps}) walked the pending set point by point and
+	 * kept whatever it managed to take when a later point was refused - hold-and-wait, and with the
+	 * per-tick window refresh it never timed out: two trains needing the same two points in opposite
+	 * orders deadlocked permanently. All-or-nothing means a refused set leaves this train holding
+	 * nothing, so no cycle of holds can form.</p>
+	 *
+	 * <p>The set is "what is inside the approach window right now", so a far point is still never
+	 * pre-occupied - the approach-locking property is untouched; only the granularity of the
+	 * acquisition changed.</p>
+	 *
+	 * @return whether the whole set is currently granted to this owner
+	 */
+	private boolean requestPendingForksAtomically(org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner, long untilMillis) {
+		if (mmtrPendingPointOps.isEmpty()) {
+			return true;
+		}
+		return authority.requestAtomically(mmtrPendingPointOps, owner, untilMillis)
+			== org.mtr.core.mmtr.point.MmtrPointAuthority.Result.GRANTED;
 	}
 
 	/**
