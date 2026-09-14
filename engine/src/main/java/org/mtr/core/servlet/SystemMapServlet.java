@@ -116,6 +116,21 @@ public final class SystemMapServlet extends ServletBase {
 					result.add("errors", errors);
 					result.addProperty("valid", errors.isEmpty());
 					result.addProperty("configured", !simulator.getMmtrPlanInputs().isEmpty());
+					/*
+					 * P6 ④ / 指派页：**手工覆盖要看得见**（设计 §10 的验收"手工覆盖优先于自动排班且可见"）。
+					 *
+					 * 之前只能从"趟次跑到别人名下了"倒推人干过什么；这里把登记过的那几条原样列出来
+					 * （[从哪个编组, 从哪一趟（空 = 全部）, 交给谁]），指派页就不再需要靠猜。
+					 */
+					final com.google.gson.JsonArray assignments = new com.google.gson.JsonArray();
+					for (final String[] assignment : simulator.mmtrPlanManualAssignments) {
+						final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+						out.addProperty("fromConsistId", assignment.length > 0 ? assignment[0] : "");
+						out.addProperty("fromTripId", assignment.length > 1 ? assignment[1] : "");
+						out.addProperty("toConsistId", assignment.length > 2 ? assignment[2] : "");
+						assignments.add(out);
+					}
+					result.add("assignments", assignments);
 					yield result;
 				}
 				case "mmtr-plan-line-upsert" -> {
@@ -243,6 +258,8 @@ public final class SystemMapServlet extends ServletBase {
 							w.addProperty("steps", state.tasks.size());
 							w.addProperty("dispatchedSteps", state.dispatchedSteps);
 							w.addProperty("awaitingTaskId", state.awaitingTaskId);
+							// P6 ③：交路页上的"接管/归还"按钮要知道现在是谁在开（否则按了才知道状态）
+							w.addProperty("playerDriven", dispatcher.isPlayerDriven(state.consistId));
 							final org.mtr.core.mmtr.task.MmtrTask next = state.nextTask();
 							if (next != null) {
 								w.addProperty("nextKind", next.kind().name());
@@ -282,6 +299,7 @@ public final class SystemMapServlet extends ServletBase {
 							w.addProperty("dispatchedSteps", 0);
 							w.addProperty("awaitingTaskId", "");
 							w.addProperty("idle", true);
+							w.addProperty("playerDriven", dispatcher.isPlayerDriven(working.consistId));
 							w.addProperty("note", working.entries.isEmpty()
 								? "今天没有班（趟次已被指派给别人）"
 								: "今天没有班（只剩 " + working.entries.size() + " 条收尾条目）");
