@@ -831,7 +831,17 @@ public final class SystemMapServlet extends ServletBase {
 			o.addProperty("x", p.nodeX);
 			o.addProperty("y", p.nodeY);
 			o.addProperty("z", p.nodeZ);
-			o.addProperty("via", p.viaRailHex);
+			/*
+			 * 轨 hex 一律发**规范写法**（两个端点表示里字典序小的那个，见 canonicalHex）。
+			 *
+			 * <p>拓扑接口（网页画轨用的那份）早就这么做，理由是"同一条实体轨有两个互为逆序的 hex，
+			 * 取决于这条 Rail 怎么被声明"。道岔接口这里原来是原始写法，于是同一个节点上
+			 * **道岔说的轨名和地图上的轨名对不上**：实测 {@code -19,-60,51} 的两根东向轨，
+			 * 道岔发 {@code FFFFFFFFFFFFFFED…}、地图上是 {@code 0000000000000001…}，
+			 * 网页按 hex 比对就永远不相等 ⇒ "点亮当前开通那条腿"整条功能静默失效，
+			 * 卡片里"接哪两条轨（坐标）"也退化成 hex 前缀（用户 2026-09-14 现场报的正是这个）。</p>
+			 */
+			o.addProperty("via", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(p.viaRailHex));
 			o.addProperty("form", p.form.name());
 			/*
 			 * 物理道岔：一处道岔一个位置、两条互斥进路 —— 位置与"哪条进路禁止通行"都直接给出来，
@@ -843,17 +853,18 @@ public final class SystemMapServlet extends ServletBase {
 			final String prohibitedRailHex = turnout == null ? "" : turnout.prohibitedRailHex(turnoutPosition);
 			if (turnout != null) {
 				o.addProperty("position", turnoutPosition);
-				o.addProperty("prohibited", prohibitedRailHex);
-				o.addProperty("stem", turnout.stemRailHex);
+				// 与 via / legs 同一套规范写法：网页要拿这些 hex 去和地图上的轨比对（点亮当前开通那条腿）
+				o.addProperty("prohibited", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(prohibitedRailHex));
+				o.addProperty("stem", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(turnout.stemRailHex));
 				// 三条轨都给出来：网页要能**独立于当前位置**说出"扳到 0 是接哪条、扳到 1 是接哪条"，
 				// 只给"当前禁行的那一条"的话，位置一变操作台就得靠猜另一条是哪根。
-				o.addProperty("far", turnout.farRailHex);
-				o.addProperty("branch", turnout.branchRailHex);
+				o.addProperty("far", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(turnout.farRailHex));
+				o.addProperty("branch", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(turnout.branchRailHex));
 			}
 			final com.google.gson.JsonArray legs = new com.google.gson.JsonArray();
 			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : p.legs) {
 				final com.google.gson.JsonObject legJson = new com.google.gson.JsonObject();
-				legJson.addProperty("hex", leg.railHex);
+				legJson.addProperty("hex", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(leg.railHex));
 				legJson.addProperty("kind", leg.kind.name());
 				// 这条腿当前是不是禁止通行（道岔没开通它）：网页/操作台据此画红叉或灰掉
 				legJson.addProperty("prohibited", turnout != null && leg.railHex.equals(prohibitedRailHex));
@@ -861,14 +872,16 @@ public final class SystemMapServlet extends ServletBase {
 			}
 			o.add("legs", legs);
 			final org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore store = simulator.mmtrPointBranches;
-			final int manual = store.contains(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex) ? store.get(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex) : -1;
+			// 行也是按引擎内部的写法存的：查询时两种写法都试（返回给网页的 via 是规范写法）
+			final String viaHex = simulator.mmtrResolveRailHex(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex);
+			final int manual = store.contains(p.nodeX, p.nodeY, p.nodeZ, viaHex) ? store.get(p.nodeX, p.nodeY, p.nodeZ, viaHex) : -1;
 			o.addProperty("manual", manual);
-			o.addProperty("locked", simulator.mmtrPointAuthority.isLocked(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex));
-			final String holder = simulator.mmtrPointAuthority.holder(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex);
+			o.addProperty("locked", simulator.mmtrPointAuthority.isLocked(p.nodeX, p.nodeY, p.nodeZ, viaHex));
+			final String holder = simulator.mmtrPointAuthority.holder(p.nodeX, p.nodeY, p.nodeZ, viaHex);
 			o.addProperty("holder", holder == null ? "" : holder);
-			o.addProperty("holderLeg", simulator.mmtrPointAuthority.grantedLeg(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex));
+			o.addProperty("holderLeg", simulator.mmtrPointAuthority.grantedLeg(p.nodeX, p.nodeY, p.nodeZ, viaHex));
 			final com.google.gson.JsonArray queue = new com.google.gson.JsonArray();
-			for (final String q : simulator.mmtrPointAuthority.queuedSnapshot(p.nodeX, p.nodeY, p.nodeZ, p.viaRailHex)) {
+			for (final String q : simulator.mmtrPointAuthority.queuedSnapshot(p.nodeX, p.nodeY, p.nodeZ, viaHex)) {
 				queue.add(q);
 			}
 			o.add("queue", queue);

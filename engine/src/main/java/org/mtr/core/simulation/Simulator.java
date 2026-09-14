@@ -1090,31 +1090,34 @@ public class Simulator extends Data implements Utilities {
 	public boolean mmtrSetPoint(long x, long y, long z, String viaRailHex, int branch) {
 		refreshMmtrTurnouts();
 		mmtrLastOperatorThrowBlockedReason = null;
+		// 网页/指令回传的是**规范 hex**（见 mmtrResolveRailHex）：先翻成引擎内部的写法，
+		// 否则会静默落到另一把键上（行写了、位置却没动）。
+		final String via = mmtrResolveRailHex(x, y, z, viaRailHex);
 		if (mmtrTurnouts.containsKey(x + "," + y + "," + z)) {
 			// 单开道岔：入参是"某进向上的第几条腿"，翻译成**节点位置**（一处道岔只有两个位置）。
 			if (branch < 0) {
 				// 取消人工设置 = 回到默认 0（不是"锁在 0"）：这是"没有人工意见"，自动进路照常申请。
 				return mmtrSetTurnoutPosition(x, y, z, org.mtr.core.mmtr.point.MmtrTurnout.NORMAL);
 			}
-			final int position = mmtrTurnoutPositionForLeg(x, y, z, viaRailHex, branch);
+			final int position = mmtrTurnoutPositionForLeg(x, y, z, via, branch);
 			if (position == Integer.MIN_VALUE) {
-				System.out.println("[MMTR-PT] 拒绝 " + x + "," + y + "," + z + " 从 " + shortHex(viaRailHex)
+				System.out.println("[MMTR-PT] 拒绝 " + x + "," + y + "," + z + " 从 " + shortHex(via)
 					+ " 的第 " + branch + " 条腿：这两条进路互斥，物理上不存在（会把列车带上尖轨）");
 				return false;
 			}
 			return mmtrOperatorSetTurnoutPosition(x, y, z, position);
 		}
-		mmtrPointBranches.set(x, y, z, viaRailHex, branch);
+		mmtrPointBranches.set(x, y, z, via, branch);
 		if (branch < 0) {
 			// 清掉人工位：不锁（语义同单开道岔那条路）。
 			persistMmtrPointBranches();
-			System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> unset");
+			System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + via + " -> unset");
 			return true;
 		}
 		// 非单开道岔（没有物理模型）：人工位同样要锁住，否则自动申请会把它顶掉。
-		mmtrPointAuthority.lock(x, y, z, viaRailHex);
+		mmtrPointAuthority.lock(x, y, z, via);
 		persistMmtrPointBranches();
-		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + branch
+		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + via + " -> " + branch
 			+ "（人工位已锁定，自动进路排队等 point unlock）");
 		return true;
 	}
@@ -1310,13 +1313,49 @@ public class Simulator extends Data implements Utilities {
 
 	/** Operator parks a point for manual use: auto requests queue until mmtrPointUnlock. */
 	public void mmtrPointLock(long x, long y, long z, String viaRailHex) {
-		mmtrPointAuthority.lock(x, y, z, viaRailHex);
-		System.out.println("[MMTR-PT] lock " + x + "," + y + "," + z + " via " + viaRailHex);
+		final String via = mmtrResolveRailHex(x, y, z, viaRailHex);
+		mmtrPointAuthority.lock(x, y, z, via);
+		System.out.println("[MMTR-PT] lock " + x + "," + y + "," + z + " via " + via);
 	}
 
 	public void mmtrPointUnlock(long x, long y, long z, String viaRailHex) {
-		mmtrPointAuthority.unlock(x, y, z, viaRailHex);
-		System.out.println("[MMTR-PT] unlock " + x + "," + y + "," + z + " via " + viaRailHex);
+		final String via = mmtrResolveRailHex(x, y, z, viaRailHex);
+		mmtrPointAuthority.unlock(x, y, z, via);
+		System.out.println("[MMTR-PT] unlock " + x + "," + y + "," + z + " via " + via);
+	}
+
+	/**
+	 * 把"任意端点写法的轨 hex"翻成引擎内部用的 {@code getHexId()}（声明顺序）。
+	 *
+	 * <h3>为什么必须翻一次（用户 2026-09-14 现场报的"这个道岔不会高亮显示道岔状态"）</h3>
+	 * <p>一条轨的 hex 是「端点1-端点2」，**哪个端点写在前**取决于这条 Rail 怎么被声明/读出来：
+	 * 同一根实体轨，从 A 到 B 画与从 B 到 A 画会得到两个互为逆序的字符串
+	 * （见 {@code MmtrDirectionalBlockService.canonicalHex}）。接口对外一律发**规范写法**
+	 * （拓扑接口早就这么做，网页也把收到的 hex 原样发回来），而引擎内部的表（进向行、道岔的
+	 * stem/far/branch、授权、锁）用的是 {@code getHexId()}。不翻一次，网页按道岔卡片给出的 hex
+	 * 去比对地图上的轨就永远对不上（实测 {@code -19,-60,51} 的两根东向轨正是这种轨：
+	 * 道岔卡片说 {@code FFFFFFFFFFFFFFED…}，地图上是 {@code 0000000000000001…}），
+	 * 于是"点亮当前开通那条腿"整条功能静默失效。</p>
+	 *
+	 * @return 引擎内部的写法；找不到就原样返回（调用方按老行为处理）
+	 */
+	public @org.jspecify.annotations.Nullable String mmtrResolveRailHex(long x, long y, long z, @org.jspecify.annotations.Nullable String railHex) {
+		if (railHex == null || railHex.isEmpty()) {
+			return railHex;
+		}
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<org.mtr.core.data.Position, org.mtr.core.data.Rail> neighbours =
+			positionsToRail.get(new org.mtr.core.data.Position(x, y, z));
+		if (neighbours == null) {
+			return railHex;
+		}
+		final String wanted = org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(railHex);
+		for (final org.mtr.core.data.Rail rail : neighbours.values()) {
+			if (rail.getHexId().equals(railHex)
+				|| org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(rail.getHexId()).equals(wanted)) {
+				return rail.getHexId();
+			}
+		}
+		return railHex;
 	}
 
 	/** Release every turnout request held/queued by this owner (terminal missions, resets). */
