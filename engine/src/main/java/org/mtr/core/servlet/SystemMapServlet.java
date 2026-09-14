@@ -497,6 +497,19 @@ public final class SystemMapServlet extends ServletBase {
 		// S5: every live route (SET and PENDING), so the console can show the interlocking state
 		// independently of the train markers (and name what a waiting movement is blocked on).
 		root.add("routes", getMmtrRoutes(simulator));
+		// T5 第一块：敌对进路表（"什么算冲突"）—— **只报不改**，供运营台与诊断看见
+		// "这两条进路为什么不能同时成立"。放进 SET 判据是下一步的事。
+		final com.google.gson.JsonArray conflicts = new com.google.gson.JsonArray();
+		org.mtr.core.mmtr.route.MmtrEnemyRoutes.conflicts(simulator).forEach(conflict -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("vehicleA", String.valueOf(conflict.vehicleA));
+			out.addProperty("vehicleB", String.valueOf(conflict.vehicleB));
+			out.addProperty("kind", conflict.kind);
+			out.addProperty("bothSet", conflict.bothSet);
+			out.addProperty("detail", conflict.detail);
+			conflicts.add(out);
+		});
+		root.add("conflicts", conflicts);
 		// A2/A4: the exact derived view the CLIENT mirror is built from (MmtrRouteRegistry →
 		// PacketMmtrRoutes → MmtrClientRoutes → RenderSignalBase). Exposed so an operator can compare
 		// what the game shows with what the engine told the clients - and so the narrowing is
