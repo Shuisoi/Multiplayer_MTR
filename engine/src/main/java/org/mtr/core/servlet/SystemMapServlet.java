@@ -104,6 +104,37 @@ public final class SystemMapServlet extends ServletBase {
 					yield result;
 				}
 				case "mmtr-rolling-stock" -> Utilities.getJsonObjectFromData(simulator.getMmtrRollingStock());
+				case "mmtr-plan" -> {
+					// P1 时刻表生成器的输入层：线路 / 分段密度 / 车底 + 校验结果。
+					// 设计文档里写的是 REST 风格 /mtr/api/mmtr/plan/*；本引擎的 servlet 挂在
+					// /mtr/api/map/* 下，所以这里按既有惯例给 mmtr-plan* 几个端点（映射关系记在 notes）。
+					final com.google.gson.JsonObject result = Utilities.getJsonObjectFromData(simulator.getMmtrPlanInputs());
+					final com.google.gson.JsonArray errors = new com.google.gson.JsonArray();
+					for (final String error : simulator.mmtrPlanErrors) {
+						errors.add(error);
+					}
+					result.add("errors", errors);
+					result.addProperty("valid", errors.isEmpty());
+					yield result;
+				}
+				case "mmtr-plan-line-upsert" -> {
+					simulator.upsertMmtrLine(new org.mtr.core.mmtr.plan.MmtrLine(jsonReader));
+					yield planResult(simulator);
+				}
+				case "mmtr-plan-pattern-upsert" -> {
+					simulator.upsertMmtrPattern(new org.mtr.core.mmtr.plan.MmtrPattern(jsonReader));
+					yield planResult(simulator);
+				}
+				case "mmtr-plan-fleet-upsert" -> {
+					simulator.upsertMmtrFleet(new org.mtr.core.mmtr.plan.MmtrFleet(jsonReader));
+					yield planResult(simulator);
+				}
+				case "mmtr-plan-line-delete" -> {
+					final boolean ok = simulator.deleteMmtrLine(jsonReader.getString("lineId", ""));
+					final com.google.gson.JsonObject result = planResult(simulator);
+					result.addProperty("deleted", ok);
+					yield result;
+				}
 				case "mmtr-manifest-reset" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					result.addProperty("ok", true);
@@ -1248,6 +1279,24 @@ public final class SystemMapServlet extends ServletBase {
 			}
 		});
 		return found[0];
+	}
+
+	/**
+	 * P1：计划输入改动后统一回的那一句 —— {@code {ok, problems, errors[]}}。
+	 *
+	 * <p>**写进去就回问题**（而不是回一个空洞的 ok=true）：网页在保存前就能把"哪一条不对"显示出来，
+	 * 与"加载即报错"（设计 §4.3）是同一个口径。</p>
+	 */
+	private static JsonObject planResult(Simulator simulator) {
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		final com.google.gson.JsonArray errors = new com.google.gson.JsonArray();
+		for (final String error : simulator.mmtrPlanErrors) {
+			errors.add(error);
+		}
+		result.addProperty("ok", errors.isEmpty());
+		result.addProperty("problems", errors.size());
+		result.add("errors", errors);
+		return result;
 	}
 
 	/** Job-editor pickers: in-game depots / sidings / platforms (decimal id strings + display names). */

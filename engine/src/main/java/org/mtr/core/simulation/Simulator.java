@@ -86,6 +86,14 @@ public class Simulator extends Data implements Utilities {
 	public org.mtr.core.mmtr.job.MmtrJobRegistry mmtrJobRegistry = new org.mtr.core.mmtr.job.MmtrJobRegistry();
 	private java.nio.file.Path mmtrJobsPath;
 	/**
+	 * P1 时刻表生成器的**输入层**（线路 / 分段密度 / 车底）—— 持久化的只有输入，
+	 * 计划（趟次表 + 车底交路）永远是算出来的。见 {@code docs/01-设计/任务系统-线路派生与车底交路-设计.md}。
+	 */
+	public org.mtr.core.mmtr.plan.MmtrPlanInputs mmtrPlanInputs = new org.mtr.core.mmtr.plan.MmtrPlanInputs();
+	private java.nio.file.Path mmtrPlanPath;
+	/** 加载/保存时算出来的输入问题（空的 = 通过）；P4 的派发器在非空时拒绝排班。 */
+	public final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> mmtrPlanErrors = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+	/**
 	 * Rolling-stock manifest (车辆生成表): declares which consist each depot siding must carry after
 	 * the explicit vehicle reset on every server restart. AI diagram steps are disabled by default;
 	 * the manifest + per-vehicle operations own the traffic.
@@ -390,6 +398,26 @@ public class Simulator extends Data implements Utilities {
 			log.warn("Failed to load MMTR consist templates for {}: {}", dimension, e.getMessage());
 		}
 
+		// MMTR P1: 时刻表生成器的输入层（线路 / 分段密度 / 车底）。**持久化的是输入，计划是算出来的**；
+		// 输入不对就在这里报（设计 §4.3：别等到高峰才发现车底不够跑）。
+		mmtrPlanPath = savePath.resolve("mmtr-plan.json");
+		try {
+			if (java.nio.file.Files.exists(mmtrPlanPath)) {
+				mmtrPlanInputs = org.mtr.core.mmtr.plan.MmtrPlanInputs.fromFile(mmtrPlanPath);
+			}
+		} catch (Exception e) {
+			log.warn("Failed to load MMTR plan inputs for {}: {}", dimension, e.getMessage());
+		}
+		refreshMmtrPlanErrors();
+		if (!mmtrPlanErrors.isEmpty()) {
+			log.error("MMTR plan inputs for {} have {} problem(s) - the dispatcher will not schedule until they are fixed:", dimension, mmtrPlanErrors.size());
+			for (final String error : mmtrPlanErrors) {
+				log.error("  - {}", error);
+			}
+		} else if (!mmtrPlanInputs.lines.isEmpty()) {
+			log.info("MMTR: {}", mmtrPlanInputs.describe());
+		}
+
 		if (!mmtrJobRegistry.jobs.isEmpty()) {
 			expandMmtrJobTemplates();
 			mmtrJobsMode = true; // jobs present => web orchestration owns the traffic
@@ -483,6 +511,64 @@ public class Simulator extends Data implements Utilities {
 
 	public org.mtr.core.mmtr.job.MmtrJobRegistry getMmtrJobRegistry() {
 		return mmtrJobRegistry;
+	}
+
+	/**
+	 * P1：重新算一遍计划输入的问题清单（加载、每次 upsert 都跑）。
+	 *
+	 * @return 问题条数（0 = 通过）
+	 */
+	public int refreshMmtrPlanErrors() {
+		mmtrPlanErrors.clear();
+		mmtrPlanErrors.addAll(mmtrPlanInputs.validate());
+		return mmtrPlanErrors.size();
+	}
+
+	/** P1：计划输入（线路 / 分段密度 / 车底）。 */
+	public org.mtr.core.mmtr.plan.MmtrPlanInputs getMmtrPlanInputs() {
+		return mmtrPlanInputs;
+	}
+
+	/**
+	 * P1：把一条线路写进输入层并落盘（upsert）。落盘前重算问题清单 ——
+	 * **坏配置写进去就报**，而不是让它在内存里悄悄生效（P1 验收 ②）。
+	 */
+	public void upsertMmtrLine(org.mtr.core.mmtr.plan.MmtrLine line) {
+		mmtrPlanInputs.putLine(line);
+		persistMmtrPlanInputs();
+	}
+
+	/** P1：写一张密度表（同 lineId 覆盖）并落盘。 */
+	public void upsertMmtrPattern(org.mtr.core.mmtr.plan.MmtrPattern pattern) {
+		mmtrPlanInputs.putPattern(pattern);
+		persistMmtrPlanInputs();
+	}
+
+	/** P1：写车底、落盘。 */
+	public void upsertMmtrFleet(org.mtr.core.mmtr.plan.MmtrFleet fleet) {
+		mmtrPlanInputs.fleet = fleet;
+		persistMmtrPlanInputs();
+	}
+
+	/** P1：删一条线路（连带它的密度表）并落盘。 */
+	public boolean deleteMmtrLine(String lineId) {
+		final boolean removed = mmtrPlanInputs.removeLine(lineId);
+		if (removed) {
+			persistMmtrPlanInputs();
+		}
+		return removed;
+	}
+
+	/** P1：落盘 + 重算问题清单（返回问题条数）。 */
+	public int persistMmtrPlanInputs() {
+		if (mmtrPlanPath != null) {
+			mmtrPlanInputs.save(mmtrPlanPath);
+		}
+		final int problems = refreshMmtrPlanErrors();
+		if (problems > 0) {
+			System.out.println("[MMTR-PLAN] 计划输入有 " + problems + " 处问题（详见启动日志/接口的 errors）");
+		}
+		return problems;
 	}
 
 	/**
