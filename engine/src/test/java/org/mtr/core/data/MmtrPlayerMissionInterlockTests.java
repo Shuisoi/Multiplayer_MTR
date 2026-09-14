@@ -16,6 +16,7 @@ import org.mtr.core.tool.Angle;
 import java.nio.file.Paths;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -174,5 +175,25 @@ public final class MmtrPlayerMissionInterlockTests {
 			"默认关 ⇒ 无任务也不拦（这就是全量 561 例不受影响的原因）");
 		final Vehicle v = n.spawn();
 		assertFalse(v.canTakeMmtrControl(null), "没有骑乘者时本来就进不了操纵 —— 与任务无关");
+	}
+
+	/**
+	 * ③ **进路类型由任务类型决定**，而不是从"此刻有没有调车授权"反推。
+	 *
+	 * <p>反推的病根不是答错，而是**不稳定**：授权一来/一走，同一条 movement 的类型就翻，
+	 * 而 {@code MmtrRouteRegistry.request} 靠 {@code sameMovement}（含 kind）认"还是不是同一条进路"，
+	 * 于是每翻一次就换一个新对象，把信号层与运营台手里的那个对象 churn 掉。
+	 * 决策记录见 notes/122（含与设计文档字面的那一处偏离及理由）。</p>
+	 */
+	@Test
+	public void theRouteKindComesFromTheTaskTypeNotFromTransientAuthority() {
+		final MmtrMission passenger = new MmtrMission(1L, MmtrMission.Kind.PASSENGER, 1, 2, 0);
+		final MmtrMission maneuver = new MmtrMission(1L, MmtrMission.Kind.MANEUVER, 1, 2, 0);
+		assertEquals(MmtrRoute.Kind.MAIN, Vehicle.mmtrRouteKindOf(passenger, false), "客运作业、无副显示 ⇒ 列车进路");
+		assertEquals(MmtrRoute.Kind.MAIN, Vehicle.mmtrRouteKindOf(null, false), "没有任务 ⇒ 默认列车进路");
+		assertEquals(MmtrRoute.Kind.SHUNT, Vehicle.mmtrRouteKindOf(maneuver, false),
+			"③ **调车作业就是调车进路**，哪怕此刻还没有副显示授权（修前这里答 MAIN，还会随授权翻）");
+		assertEquals(MmtrRoute.Kind.SHUNT, Vehicle.mmtrRouteKindOf(passenger, true),
+			"客运作业但拿了副显示授权 ⇒ 也按调车（安全侧：主灯不许清）");
 	}
 }

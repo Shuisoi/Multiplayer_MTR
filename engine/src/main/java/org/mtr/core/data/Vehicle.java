@@ -433,6 +433,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * T4 ③：进路的**类型**由**任务类型**决定，而不是从"此刻有没有调车授权"反推。
+	 *
+	 * <p>反推的问题不是它答错了，而是它**不稳定**：授权一到/一走，同一条 movement 的类型就翻，
+	 * 于是 {@code MmtrRouteRegistry.request} 认不出"这还是同一条进路"（{@code sameMovement} 比 kind），
+	 * 每翻一次就换一个新对象 —— 信号层与运营台手里的那个对象被churn 掉。</p>
+	 *
+	 * <p>**与设计文档字面的一处偏离**（写清楚免得被当成漏做）：设计说"不再反推"，本实现保留了
+	 * "有调车授权 ⇒ 调车进路"这一条。理由是 {@code Kind.SHUNT} 的语义就是"这列车是由**副显示**
+	 * 授权的，主灯不许清"（{@code MmtrRoute} 的注释），而副显示授权恰恰**定义**了调车进路 ——
+	 * 它不是旁证，是判据本身。所以：作业类型是调车 ⇒ 调车；作业是客运但拿了副显示授权 ⇒ 也按调车
+	 * （安全侧：宁可不清主灯）。两者都成立时答案一致，既有用例不受影响。</p>
+	 */
+	static org.mtr.core.mmtr.route.MmtrRoute.Kind mmtrRouteKindOf(@Nullable MmtrMission mission, boolean hasShuntAuthority) {
+		if (mission != null && mission.getKind() == MmtrMission.Kind.MANEUVER) {
+			return org.mtr.core.mmtr.route.MmtrRoute.Kind.SHUNT;
+		}
+		return hasShuntAuthority ? org.mtr.core.mmtr.route.MmtrRoute.Kind.SHUNT : org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN;
+	}
+
+	/**
 	 * T4: 引擎该不该为这个任务**规划并发布进路**（自动车与玩家车都要）。
 	 *
 	 * <p>注意与 {@link #mmtrMissionDrivesItsOwnRoute} 的分工：**自臂发生在 auto 打开之前**，
@@ -672,9 +692,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// set. A shunt (调车) keeps its own kind: it is authorised by a subsidiary aspect, not a main one.
 		mmtrRoute = simulator.mmtrRoutes.request(new org.mtr.core.mmtr.route.MmtrRoute(
 			getId(), owner,
-			simulator.mmtrShuntAuthorities.active(getId()) == null
-				? org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN
-				: org.mtr.core.mmtr.route.MmtrRoute.Kind.SHUNT,
+			mmtrRouteKindOf(mmtrMission, simulator.mmtrShuntAuthorities.active(getId()) != null),
 			plan.routeRailHexes, plan.forkOps, plan.targetRailHex, data.getCurrentMillis()));
 		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
 		simulator.mmtrRoutes.refresh(getId(), authority);
