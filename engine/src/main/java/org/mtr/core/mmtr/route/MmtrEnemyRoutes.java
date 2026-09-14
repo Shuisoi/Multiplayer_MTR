@@ -66,18 +66,33 @@ public final class MmtrEnemyRoutes {
 	 * <p>纯派生：只读 {@link MmtrRouteRegistry} 与轨图，不改变任何状态、不扣任何车。</p>
 	 */
 	public static ObjectArrayList<Conflict> conflicts(Simulator simulator) {
-		final ObjectArrayList<Conflict> out = new ObjectArrayList<>();
 		final ObjectArrayList<MmtrRoute> routes = simulator.mmtrRoutes.allRoutes();
+		final ObjectArrayList<Conflict> out = new ObjectArrayList<>();
 		for (int i = 0; i < routes.size(); i++) {
 			for (int j = i + 1; j < routes.size(); j++) {
-				final MmtrRoute a = routes.get(i);
-				final MmtrRoute b = routes.get(j);
-				final boolean bothSet = a.isEstablished() && b.isEstablished();
-				turnoutConflict(simulator, a, b, bothSet, out);
-				opposingConflict(a, b, bothSet, out);
+				turnoutConflict(simulator, routes.get(i), routes.get(j), bothSet(routes.get(i), routes.get(j)), out);
+			}
+		}
+		out.addAll(opposingConflicts(routes));
+		return out;
+	}
+
+	/**
+	 * 只按**轨序**判的那一半 —— **不需要几何**，因此 {@code MmtrRouteRegistry.refresh} 能直接调它：
+	 * refresh 手里只有登记表，没有 Simulator（T5 把这一条接进了 SET 判定，见该类注释）。
+	 */
+	public static ObjectArrayList<Conflict> opposingConflicts(ObjectArrayList<MmtrRoute> routes) {
+		final ObjectArrayList<Conflict> out = new ObjectArrayList<>();
+		for (int i = 0; i < routes.size(); i++) {
+			for (int j = i + 1; j < routes.size(); j++) {
+				opposingConflict(routes.get(i), routes.get(j), bothSet(routes.get(i), routes.get(j)), out);
 			}
 		}
 		return out;
+	}
+
+	private static boolean bothSet(MmtrRoute a, MmtrRoute b) {
+		return a.isEstablished() && b.isEstablished();
 	}
 
 	/** 判据①：同一处道岔，两条进路要求的**位置**不同 ⇒ 物理上不可能同时成立。 */

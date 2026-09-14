@@ -69,6 +69,17 @@ public final class MmtrRouteRegistry {
 		if (route == null) {
 			return;
 		}
+		/*
+		 * ③ T5: **敌对进路不能同时 SET**（后到让先到）。
+		 *
+		 * 必须排在下面那两个早退**之前** —— "无岔的进路直接 SET" 这条对**无岔的两条对向进路**同样成立，
+		 * 而它们恰恰是最典型的敌对情形（同一段单线对开）。放在早退之后，它们会双双 SET。
+		 */
+		final String enemy = enemyBlockReason(route);
+		if (enemy != null) {
+			route.applyState(false, enemy);
+			return;
+		}
 		if (route.getForks().isEmpty()) {
 			route.applyState(true, "no turnout in this route");
 			return;
@@ -116,6 +127,51 @@ public final class MmtrRouteRegistry {
 		route.applyState(allGranted, allGranted
 			? "all turnouts held by " + route.getOwner()
 			: blockedReason.isEmpty() ? MmtrRunPlanner.describeForkWait(outstanding, authority, route.getOwner()) : blockedReason);
+	}
+
+	/**
+	 * T5: 我是不是被一条**比我优先**的敌对进路压住了。
+	 *
+	 * <p>裁决用**到达序**（{@code requestedMillis}，同刻按 vehicleId）—— 也就是 T1b 裁决链的**兜底那一档**；
+	 * 第一档"计划时刻"要等 P 系列把趟次表造出来（notes/118 已把机制与入口 `requestAtomically(..., priorityMillis)`
+	 * 留好，只差填值）。所以本片是"冲突裁决"里**不依赖时刻表**的那一半。</p>
+	 *
+	 * <p><b>判据只看排名，不看对方当前是不是 SET</b> —— 这一条是被用例逼出来的。
+	 * 第一版写的是"只在对方**已经 SET** 时才压我"，看起来更保守，其实有个洞：</p>
+	 * <pre>
+	 *   refresh(v1) 先跑，此时 v2 还没 refresh 过（established=false）⇒ v1 不受压 → SET；
+	 *   refresh(v2) 再跑，看到 v1 已 SET，但**排名上 v2 更优先** ⇒ 也不受压 → 两条都 SET。
+	 * </pre>
+	 * <p>也就是说"谁先被 refresh"会决定结果，而两条都 SET 正是这条规则要消灭的东西。
+	 * 改成**纯排名比较**之后结果与刷新顺序无关：一条进路被压住，当且仅当存在一条排名更高的敌对进路
+	 * —— 于是"最优先的那条 SET、其余 PENDING"是唯一解，且必然收敛。</p>
+	 *
+	 * <p><b>诚实边界</b>：排名更高的那条若长时间上不去（它自己的道岔被第三条进路占着），
+	 * 我就会被一直压着。这不是死锁（我什么都没持有，构不成循环等待），但它是一种**优先级反转**。
+	 * 兜底是：对方一旦不再需要这条进路（任务终态 / 删车），{@code Vehicle} 会 release 掉它，
+	 * 我的压制随之消失。真要治它得等时刻表（按计划时刻而不是到达序裁决）。</p>
+	 */
+	private @Nullable String enemyBlockReason(MmtrRoute route) {
+		for (final MmtrEnemyRoutes.Conflict conflict : MmtrEnemyRoutes.opposingConflicts(allRoutes())) {
+			final boolean mineIsA = conflict.vehicleA == route.getVehicleId();
+			if (!mineIsA && conflict.vehicleB != route.getVehicleId()) {
+				continue;
+			}
+			final long otherId = mineIsA ? conflict.vehicleB : conflict.vehicleA;
+			final MmtrRoute other = byVehicle.get(otherId);
+			if (other == null || !outranks(other, route)) {
+				continue;
+			}
+			return "敌对进路：与 v" + otherId + " " + conflict.detail + "；对方按到达序优先，本车退出（只有最优先的一条能 SET）";
+		}
+		return null;
+	}
+
+	/** 到达序优先：先申请的先走；同一时刻按 vehicleId 定序（保证结果确定）。 */
+	private static boolean outranks(MmtrRoute other, MmtrRoute mine) {
+		return other.getRequestedMillis() != mine.getRequestedMillis()
+			? other.getRequestedMillis() < mine.getRequestedMillis()
+			: other.getVehicleId() < mine.getVehicleId();
 	}
 
 	/** 0 = 正线贯通 / 1 = 岔股开放（{@code MmtrTurnout} 的两个位置），给人看的中文。 */
