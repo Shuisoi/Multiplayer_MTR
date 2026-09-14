@@ -214,6 +214,18 @@ public final class MmtrPointAuthorityE2ETests {
 		v.getMmtrMission().cancel();
 		n.siding.simulateVehicles(1000, null);
 		assertFalse(v.isMmtrMotionAuto(), "manual override path handed the vehicle back to idle");
+
+		/*
+		 * 收尾：人工搬岔 = 覆盖 + **锁定**（notes/130），锁随存档落盘 —— 不清的话下一跑一开始
+		 * 这道岔就是锁着的，第 195 行那条"任务先拿到授权"会当场红（实测过）。
+		 */
+		final org.mtr.core.mmtr.point.MmtrTurnout turnout = n.sim.mmtrTurnout(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ());
+		assertNotNull(turnout, "这个岔口现在是真道岔（有物理模型）");
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			authority.unlock(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), via);
+		}
+		n.sim.mmtrSetTurnoutPosition(n.yardMouth.getX(), n.yardMouth.getY(), n.yardMouth.getZ(), org.mtr.core.mmtr.point.MmtrTurnout.NORMAL);
+		n.sim.persistMmtrPointBranches();
 	}
 
 	@Test

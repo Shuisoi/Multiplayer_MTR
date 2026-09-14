@@ -321,6 +321,10 @@ public class Simulator extends Data implements Utilities {
 		// MMTR: operator turnout (道岔) branch states.
 		mmtrPointsPath = savePath.resolve("mmtr-points.json");
 		mmtrPointBranches = org.mtr.core.mmtr.point.MmtrPointRegistry.loadBranches(mmtrPointsPath);
+		// 人工锁（人工搬岔 = 覆盖 + 锁定）跟着存档一起回来，这样重启不会静默解锁。
+		for (final String lockKey : org.mtr.core.mmtr.point.MmtrPointRegistry.loadLocks(mmtrPointsPath)) {
+			mmtrPointAuthority.restoreLock(lockKey);
+		}
 
 		// MMTR: authoritative junction leg tables (进向表) - human/tool authored continuations per
 		// (node, via rail). They override geometric auto-detection wherever they exist.
@@ -763,6 +767,13 @@ public class Simulator extends Data implements Utilities {
 		if (turnout == null) {
 			return mmtrPointBranches.nodePosition(x, y, z);
 		}
+		/*
+		 * 人工搬岔 = 覆盖 + 锁定（用户 2026-09-14 的选择）：锁着的时候位置由人工说了算 ——
+		 * 物理持有者的授权、行视图的折算都不许把它扳回去，否则"人工优先"只是这一 tick 的假象。
+		 */
+		if (mmtrPointAuthority.isTurnoutLocked(x, y, z, turnout)) {
+			return mmtrPointBranches.nodePosition(x, y, z);
+		}
 		// T1: 有物理持有者时，位置由它决定 —— "行视图折进位置"这条老路（最后写入者为准）不得把
 		// 正在持有这道岔的列车脚下的位置改掉。
 		final int physicalHolderPosition = mmtrPointAuthority.physicalPosition(x, y, z);
@@ -798,6 +809,10 @@ public class Simulator extends Data implements Utilities {
 	 */
 	public void mmtrSyncTurnoutPositionToGrant(org.mtr.core.mmtr.point.MmtrTurnout turnout) {
 		final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+		// 人工锁着的道岔不跟着授权走（人工搬岔 = 覆盖 + 锁定，用户 2026-09-14）。
+		if (mmtrPointAuthority.isTurnoutLocked(turnout.nodeX, turnout.nodeY, turnout.nodeZ, turnout)) {
+			return;
+		}
 		/*
 		 * T1: **位置由持有者决定**。从前这里按 {stem, far, branch} 的数组顺序取第一个"有授权能翻译成位置"
 		 * 的进向，于是"哪一列车赢"取决于数组下标 —— 两列车从不同进向要求互斥位置时，先出现在数组里的
@@ -931,6 +946,58 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * **人工搬岔**：设位置并**锁住**这个道岔（用户 2026-09-14 的选择："人工搬岔同时把道岔锁住，
+	 * 永久生效直到解锁"；设计原文：人工 operator &gt; 显式任务/进路申请）。
+	 *
+	 * <p>为什么要锁：不锁的话，在途授权会在下一个 tick 把位置按自己的腿扳回去
+	 * （{@link #mmtrSyncTurnoutPositionsToGrants}），人工操作看着像没生效 —— 实测就是这样红掉的
+	 * （{@code manualOperatorBranchOutranksTheVehiclesOwnGrant}）。一处道岔只有一个位置，
+	 * 所以三个进向一起锁；解锁用 {@code point unlock}，锁随 {@code mmtr-points.json} 落盘。</p>
+	 */
+	public boolean mmtrOperatorSetTurnoutPosition(long x, long y, long z, int position) {
+		if (!mmtrSetTurnoutPosition(x, y, z, position)) {
+			return false;
+		}
+		final org.mtr.core.mmtr.point.MmtrTurnout turnout = mmtrTurnouts.get(x + "," + y + "," + z);
+		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
+			mmtrPointAuthority.lock(x, y, z, via);
+		}
+		persistMmtrPointBranches();
+		System.out.println("[MMTR-PT] 人工位已锁定 " + turnout.key() + "（自动进路排队等 point unlock）");
+		return true;
+	}
+
+	/**
+	 * **联锁按意图扳岔**（用户 2026-09-14 的选择 ①）：人工位 / 授权 / 任务目标这条"想走哪条腿"的意图
+	 * 一旦确定，就把道岔扳到它要的那一位 —— 与设计 §5.3"玩家不扳岔，联锁扳岔"一致。
+	 *
+	 * <p>两道闸门：<b>人工锁着的不扳</b>（人工优先，见 {@link #mmtrSetTurnoutPosition}），
+	 * <b>有人物理持有也不扳</b>（T1：不许把道岔从列车脚下抽走）。</p>
+	 *
+	 * @return true = 已经（或本来就在）那一位；false = 现在不能扳，调用方应让列车在岔前等
+	 */
+	public boolean mmtrThrowTurnoutForIntent(long x, long y, long z, int position) {
+		refreshMmtrTurnouts();
+		final org.mtr.core.mmtr.point.MmtrTurnout turnout = mmtrTurnouts.get(x + "," + y + "," + z);
+		if (turnout == null) {
+			return false;
+		}
+		if (mmtrPointAuthority.isTurnoutLocked(x, y, z, turnout)
+			|| mmtrPointAuthority.physicalPosition(x, y, z) != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
+			return false;
+		}
+		final int wanted = position == org.mtr.core.mmtr.point.MmtrTurnout.REVERSE
+			? org.mtr.core.mmtr.point.MmtrTurnout.REVERSE : org.mtr.core.mmtr.point.MmtrTurnout.NORMAL;
+		if (mmtrPointBranches.nodePosition(x, y, z) != wanted) {
+			mmtrPointBranches.setNode(x, y, z, wanted);
+			normalizeTurnoutRows(turnout);
+			persistMmtrPointBranches();
+			System.out.println("[MMTR-PT] 联锁按意图扳岔 " + turnout.key() + " -> 位置 " + wanted);
+		}
+		return true;
+	}
+
+	/**
 	 * **联锁扳动道岔**：某条进路/调车授权持有这个道岔时，道岔位置跟着授权的腿走。
 	 *
 	 * <p>这是"道岔 × 信号"真正接起来的那一环：进路要岔股 → 道岔扳到 1（正线那一侧随之禁止通行）；
@@ -943,6 +1010,10 @@ public class Simulator extends Data implements Utilities {
 		}
 		boolean changed = false;
 		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
+			// 人工锁着的道岔不跟着授权走（人工搬岔 = 覆盖 + 锁定，用户 2026-09-14 的选择）。
+			if (mmtrPointAuthority.isTurnoutLocked(turnout.nodeX, turnout.nodeY, turnout.nodeZ, turnout)) {
+				continue;
+			}
 			final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
 			// T1: 物理持有者优先（理由同 mmtrSyncTurnoutPositionToGrant）。
 			final int physical = mmtrPointAuthority.physicalPosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
@@ -993,6 +1064,7 @@ public class Simulator extends Data implements Utilities {
 		if (mmtrTurnouts.containsKey(x + "," + y + "," + z)) {
 			// 单开道岔：入参是"某进向上的第几条腿"，翻译成**节点位置**（一处道岔只有两个位置）。
 			if (branch < 0) {
+				// 取消人工设置 = 回到默认 0（不是"锁在 0"）：这是"没有人工意见"，自动进路照常申请。
 				return mmtrSetTurnoutPosition(x, y, z, org.mtr.core.mmtr.point.MmtrTurnout.NORMAL);
 			}
 			final int position = mmtrTurnoutPositionForLeg(x, y, z, viaRailHex, branch);
@@ -1001,11 +1073,20 @@ public class Simulator extends Data implements Utilities {
 					+ " 的第 " + branch + " 条腿：这两条进路互斥，物理上不存在（会把列车带上尖轨）");
 				return false;
 			}
-			return mmtrSetTurnoutPosition(x, y, z, position);
+			return mmtrOperatorSetTurnoutPosition(x, y, z, position);
 		}
 		mmtrPointBranches.set(x, y, z, viaRailHex, branch);
+		if (branch < 0) {
+			// 清掉人工位：不锁（语义同单开道岔那条路）。
+			persistMmtrPointBranches();
+			System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> unset");
+			return true;
+		}
+		// 非单开道岔（没有物理模型）：人工位同样要锁住，否则自动申请会把它顶掉。
+		mmtrPointAuthority.lock(x, y, z, viaRailHex);
 		persistMmtrPointBranches();
-		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + (branch < 0 ? "unset" : String.valueOf(branch)));
+		System.out.println("[MMTR-PT] set switch " + x + "," + y + "," + z + " via " + viaRailHex + " -> " + branch
+			+ "（人工位已锁定，自动进路排队等 point unlock）");
 		return true;
 	}
 
@@ -1016,7 +1097,10 @@ public class Simulator extends Data implements Utilities {
 	/** Persist the operator branch store to mmtr-points.json (batch clear before a mission arm). */
 	public void persistMmtrPointBranches() {
 		if (mmtrPointsPath != null) {
-			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches, mmtrPointBranches.nodePositions);
+			// 人工锁一并落盘：位置本身已经存了，但只存位置的话重启后自动进路会把位置按授权扳回去，
+			// "人工优先"就只在当前进程里成立（用户 2026-09-14 的选择：永久生效直到解锁）。
+			org.mtr.core.mmtr.point.MmtrPointRegistry.saveBranches(mmtrPointsPath, mmtrPointBranches.branches,
+				mmtrPointBranches.nodePositions, mmtrPointAuthority.locksSnapshot());
 		}
 	}
 

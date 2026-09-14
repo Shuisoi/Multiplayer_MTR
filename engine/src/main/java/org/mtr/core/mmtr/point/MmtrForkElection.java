@@ -131,7 +131,27 @@ public final class MmtrForkElection {
 			// 闸门：选出来的这条轨必须是道岔当前**开通**的那一侧；否则一律不放行
 			final String allowed = turnout.continuationFrom(viaHex, turnoutPosition);
 			if (allowed == null || !allowed.equals(chosen.getHexId())) {
-				return null;
+				/*
+				 * **联锁按意图扳岔**（用户 2026-09-14 的选择 ①）：人工位 / 授权 / 任务目标已经明确
+				 * "要这条腿"了，而道岔还停在默认位（0 = 正线贯通，岔股禁止通行）—— 那就把它扳过去，
+				 * 而不是让列车在岔前干等。与设计 §5.3"玩家不扳岔，联锁扳岔"一致；人工锁着的不扳、
+				 * 有人物理持有的也不扳（两道闸门在 Simulator#mmtrThrowTurnoutForIntent 里）。
+				 */
+				if (!(data instanceof final Simulator intentSimulator)) {
+					return null;
+				}
+				int leg = -1;
+				for (int i = 0; i < legs.size(); i++) {
+					if (legs.get(i).railHex.equals(chosen.getHexId())) {
+						leg = i;
+						break;
+					}
+				}
+				final int position = leg < 0 ? Integer.MIN_VALUE : turnout.positionForLeg(viaHex, leg);
+				if (position == Integer.MIN_VALUE
+					|| !intentSimulator.mmtrThrowTurnoutForIntent(node.getX(), node.getY(), node.getZ(), position)) {
+					return null;
+				}
 			}
 		}
 		return chosen;

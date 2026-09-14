@@ -173,6 +173,8 @@ public final class MmtrCommandDispatcher {
 		result.line("  signal why <x> <y> <z>");
 		result.line("  manifest list | manifest reload | manifest add <depotId> <sidingId> [车型...] | manifest remove <depotId> [sidingId]");
 		result.line("  point set <x> <y> <z> --via=<轨hex> --branch=n | point lock|unlock|release <x> <y> <z> --via=<轨hex>");
+		result.line("  point why <x> <y> <z>                                             ← 这个节点为什么（没）被认成一处道岔");
+		result.line("  point list");
 		result.line("  query <topology|signals|trains|points|sections|depots>");
 		result.line("  world scan-signals");
 		result.line("  server restart [--delay=<秒>] | server stop");

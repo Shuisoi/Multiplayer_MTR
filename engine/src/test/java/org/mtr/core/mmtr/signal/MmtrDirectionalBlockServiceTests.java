@@ -627,7 +627,16 @@ public final class MmtrDirectionalBlockServiceTests {
 
 		final ObjectArrayList<String> atNormal = protectedRailHexes(service, lamp);
 		assertFalse(atNormal.isEmpty(), "灯至少要守一条腿（不能变成不参与闭塞的死灯）");
-		assertTrue(atNormal.contains(turnout.farRailHex), "灯守它 FACING 那一侧的腿（" + shortHexes(atNormal) + "）");
+		/*
+		 * 灯立在**节点方块上**、朝东：引擎把这一盏归给东向的那条腿 —— 这个夹具里就是**岔股**
+		 * （`branchRailHex`）。这是引擎对"同一方块上有三根轨时这盏灯属于哪一根"的归属判定，与道岔
+		 * 把哪一侧叫"正线"无关。
+		 *
+		 * <p>注意这条断言从前写的是 {@code farRailHex}：那时老判据把岔股当成了 far（模型倒置，
+		 * 见 {@code MmtrTurnoutResolveTests}），所以"守岔股"看起来像"守 far"。判据修正后 far = 真·正线，
+		 * 归属没变，变的是名字。</p>
+		 */
+		assertTrue(atNormal.contains(turnout.branchRailHex), "灯守它 FACING 那一侧的腿（" + shortHexes(atNormal) + "）");
 
 		assertTrue(simulator.mmtrSetTurnoutPosition(50, 0, 0, org.mtr.core.mmtr.point.MmtrTurnout.REVERSE), "能扳到位置 1");
 		assertEquals(1, simulator.mmtrTurnoutPosition(50, 0, 0), "位置 1：岔股开放");

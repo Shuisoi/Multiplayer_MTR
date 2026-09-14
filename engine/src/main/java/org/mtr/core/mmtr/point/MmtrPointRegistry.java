@@ -169,8 +169,38 @@ public final class MmtrPointRegistry {
 		saveBranches(path, branches, Map.of());
 	}
 
+	/**
+	 * 人工锁（{@code "x,y,z|via"}）的落盘格式见 {@link #saveBranches(Path, Map, Map, java.util.Collection)}。
+	 *
+	 * <p>为什么要落盘：用户 2026-09-14 的选择是"人工搬岔同时把道岔锁住（永久生效直到解锁）"。
+	 * 位置本身已经落盘，但只存位置的话，重启后列车重新申请进路会把位置按授权扳回去 ——
+	 * "人工优先"就变成只在这一进程里成立。</p>
+	 */
+	public static ObjectArrayList<String> loadLocks(Path path) {
+		final ObjectArrayList<String> out = new ObjectArrayList<>();
+		try {
+			if (Files.exists(path)) {
+				final JsonElement root = JsonParser.parseString(new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
+				if (root.isJsonObject() && root.getAsJsonObject().has("locks") && root.getAsJsonObject().get("locks").isJsonArray()) {
+					for (final JsonElement el : root.getAsJsonObject().getAsJsonArray("locks")) {
+						final JsonObject o = el.getAsJsonObject();
+						out.add(o.get("x").getAsLong() + "," + o.get("y").getAsLong() + "," + o.get("z").getAsLong() + "|" + o.get("via").getAsString());
+					}
+				}
+			}
+		} catch (Exception e) {
+			System.out.println("[MMTR-PT] failed to load point locks: " + e.getMessage());
+		}
+		return out;
+	}
+
 	/** 落盘：行视图 + **节点级位置**（位置是权威、行视图是派生；两者都写便于人工核对与排错）。 */
 	public static void saveBranches(Path path, Map<String, Integer> branches, Map<String, Integer> nodePositions) {
+		saveBranches(path, branches, nodePositions, java.util.List.of());
+	}
+
+	/** 落盘：行视图 + 节点级位置 + **人工锁**（人工搬岔 = 覆盖并锁住，重启后仍生效直到解锁）。 */
+	public static void saveBranches(Path path, Map<String, Integer> branches, Map<String, Integer> nodePositions, java.util.Collection<String> locks) {
 		try {
 			if (path.getParent() != null) {
 				Files.createDirectories(path.getParent());
@@ -206,9 +236,27 @@ public final class MmtrPointRegistry {
 				o.addProperty("position", e.getValue());
 				positions.add(o);
 			}
+			final JsonArray lockArr = new JsonArray();
+			for (final String lockKey : locks) {
+				final String[] p = lockKey.split("\\|");
+				if (p.length != 2) {
+					continue;
+				}
+				final String[] c = p[0].split(",");
+				if (c.length != 3) {
+					continue;
+				}
+				final JsonObject o = new JsonObject();
+				o.addProperty("x", Long.parseLong(c[0]));
+				o.addProperty("y", Long.parseLong(c[1]));
+				o.addProperty("z", Long.parseLong(c[2]));
+				o.addProperty("via", p[1]);
+				lockArr.add(o);
+			}
 			final JsonObject root = new JsonObject();
 			root.add("positions", positions);
 			root.add("switches", arr);
+			root.add("locks", lockArr);
 			Files.write(path, root.toString().getBytes(StandardCharsets.UTF_8));
 		} catch (Exception ex) {
 			System.out.println("[MMTR-PT] failed to save point branches: " + ex.getMessage());

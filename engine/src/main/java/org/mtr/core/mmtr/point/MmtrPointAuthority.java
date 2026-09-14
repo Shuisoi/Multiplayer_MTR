@@ -437,6 +437,27 @@ public final class MmtrPointAuthority {
 		locks.add(key(x, y, z, viaRailHex));
 	}
 
+	/**
+	 * **一处道岔是不是被人工锁着**：任一进向有锁即算。
+	 *
+	 * <p>用户 2026-09-14 的选择："人工搬岔同时把道岔锁住（永久生效直到解锁）"。一处道岔只有一个位置，
+	 * 所以只要有一个进向被人工锁住，这个位置就不许自动扳 —— 否则列车会从另一个进向的授权把人工位顶掉
+	 * （实测：`manualOperatorBranchOutranksTheVehiclesOwnGrant` 正是这样红掉的）。</p>
+	 */
+	public boolean isTurnoutLocked(long x, long y, long z, MmtrTurnout turnout) {
+		return isLocked(x, y, z, turnout.stemRailHex) || isLocked(x, y, z, turnout.farRailHex) || isLocked(x, y, z, turnout.branchRailHex);
+	}
+
+	/** 人工锁的全部键（{@code "x,y,z|via"}）：落盘用（重启后仍然生效，直到 {@code point unlock}）。 */
+	public java.util.List<String> locksSnapshot() {
+		return new java.util.ArrayList<>(locks);
+	}
+
+	/** 从存档恢复一把人工锁（键形如 {@code "x,y,z|via"}）。 */
+	public void restoreLock(String lockKey) {
+		locks.add(lockKey);
+	}
+
 	public boolean isLocked(long x, long y, long z, String viaRailHex) {
 		return locks.contains(key(x, y, z, viaRailHex));
 	}

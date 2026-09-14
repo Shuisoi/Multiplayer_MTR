@@ -58,7 +58,8 @@ public final class MmtrPoint {
 		}
 	}
 
-	private static final double COS_STRAIGHT = 0.9;
+	/** 续行方向与本进向的 cos ≥ 此值 = 直股续行（互为直股的两根轨 = 道岔的正线；{@link MmtrTurnout#resolve} 也用它）。 */
+	static final double COS_STRAIGHT = 0.9;
 	private static final double COS_TURN = 0.5;
 
 	public final long nodeX, nodeY, nodeZ;

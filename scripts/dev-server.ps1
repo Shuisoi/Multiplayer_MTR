@@ -26,6 +26,11 @@
 #     "停在那里不动了"，而这正是最让人困惑的状态。
 # 判据不只看日志：服务端最终必须**在 8888 端口上应答**，那才是"能用了"。
 $ErrorActionPreference = 'Continue'
+# 工作区环境单一真源（`JAVA_HOME` 等）—— **必须**在这里取，不能靠机器上的环境变量：
+# 2026-09-14 实测，本机用户级 JAVA_HOME 指向 `C:\Program Files\Java\jre1.8.0_431`（JRE 8），
+# gradle 直接拒绝启动（"JAVA_HOME is set to an invalid directory"）。
+# `run-dev-server.bat` 一直是 `call env\workspace.env.bat` 的，这个 .ps1 是漏掉的那一个。
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'env\workspace.env.ps1')
 $mmtr = Split-Path -Parent $PSScriptRoot
 $game = Join-Path $mmtr 'game'
 $run = Join-Path $game 'fabric\run'
