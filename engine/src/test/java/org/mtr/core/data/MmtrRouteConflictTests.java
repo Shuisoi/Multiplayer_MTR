@@ -163,9 +163,22 @@ public final class MmtrRouteConflictTests {
 		final MmtrRoute route2 = v2.getMmtrRoute();
 		assertNotNull(route2, "train 2 published its route too");
 		assertFalse(route2.isEstablished(), "the conflicting route stays PENDING while train 1 holds the point");
-		assertTrue(route2.getStateReason().contains("holder=" + owner1), "the wait names the holding train: " + route2.getStateReason());
-		assertTrue(route2.getStateReason().contains(n.fork.getX() + "," + n.fork.getY() + "," + n.fork.getZ()),
-			"the wait names the point: " + route2.getStateReason());
+		/*
+		 * T1（2026-09-14）：等待理由改口径，但**不是措辞变了而已 —— 阻挡点换了**。
+		 *
+		 * 闸口 N={@code -20,0,0} 是一处单开道岔（{@code y1}/{@code throat} 是直股对、{@code y2} 是岔股）：
+		 * train 1 走 y1→throat 要**位置 0**，train 2 走 y2→throat 要**位置 1**，两者物理互斥。
+		 * 修前两列车各自拿"自己那一行"的授权，直到 M={@code 0,0,0} 的岔口才排队 —— 也就是
+		 * **两列车同时"持有"一处物理上不可能同时成立的道岔**；现在物理层在 N 就把它们分开，
+		 * 后车停在**咽喉口**（自己的股道上）而不是先开进咽喉再等。所以断言从"点名 holder=vN@leg"
+		 * 改成"点名**前车**" + "点名道岔坐标" + "点名互斥的位置"，判据本身没有放松。
+		 */
+		assertTrue(route2.getStateReason().contains(owner1), "the wait names the holding train: " + route2.getStateReason());
+		assertTrue(route2.getStateReason().contains(
+				n.throatEntry.getX() + "," + n.throatEntry.getY() + "," + n.throatEntry.getZ()),
+			"the wait names the point that blocks it: " + route2.getStateReason());
+		assertTrue(route2.getStateReason().contains("本车需要位置 1"),
+			"the wait names the mutually exclusive position it needs: " + route2.getStateReason());
 		assertFalse(v2.isMmtrMotionAuto(), "a train whose route is not set never arms");
 		assertEquals(n.y2.getHexId(), v2.getMmtrMotionWalker().railHex(), "train 2 waits in its siding");
 		assertEquals(route1, n.sim.mmtrRoutes.routeOverRail(n.p1.getHexId()), "train 1's SET route covers its target rail");

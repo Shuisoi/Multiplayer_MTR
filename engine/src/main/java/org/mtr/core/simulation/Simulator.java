@@ -144,7 +144,7 @@ public class Simulator extends Data implements Utilities {
 	}
 	/** P3 turnout authority (multi-level control): auto requests/grants per (node, via) point; the
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
-	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis);
+	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis).withTurnoutLookup(this::mmtrTurnout);
 	/** C3a 调车授权 (subsidiary-aspect authority): one train at a time may pass a signal at danger into
 	 * an occupied section to couple; the registry is the data plane the vehicle/yard read. */
 	public final org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry mmtrShuntAuthorities = new org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry(this::getCurrentMillis);
@@ -757,6 +757,12 @@ public class Simulator extends Data implements Utilities {
 		if (turnout == null) {
 			return mmtrPointBranches.nodePosition(x, y, z);
 		}
+		// T1: 有物理持有者时，位置由它决定 —— "行视图折进位置"这条老路（最后写入者为准）不得把
+		// 正在持有这道岔的列车脚下的位置改掉。
+		final int physicalHolderPosition = mmtrPointAuthority.physicalPosition(x, y, z);
+		if (physicalHolderPosition != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
+			return physicalHolderPosition;
+		}
 		/*
 		 * **行视图折进位置**（最后写入者为准）：老调用方（网页某一行的腿号、旧测试、手工改 mmtr-points.json）
 		 * 直接写"某进向的第几条腿"时，这里把能翻译成进路的那个腿采纳为节点位置。
@@ -786,6 +792,21 @@ public class Simulator extends Data implements Utilities {
 	 */
 	public void mmtrSyncTurnoutPositionToGrant(org.mtr.core.mmtr.point.MmtrTurnout turnout) {
 		final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+		/*
+		 * T1: **位置由持有者决定**。从前这里按 {stem, far, branch} 的数组顺序取第一个"有授权能翻译成位置"
+		 * 的进向，于是"哪一列车赢"取决于数组下标 —— 两列车从不同进向要求互斥位置时，先出现在数组里的
+		 * 那个说了算。现在物理层只有**一个**持有者，位置由它定；没有持有者才退回逐进向的老路
+		 * （人工位/默认位，人工随时可以再扳）。
+		 */
+		final int physical = mmtrPointAuthority.physicalPosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+		if (physical != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
+			if (physical != current) {
+				mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, physical);
+				normalizeTurnoutRows(turnout);
+				persistMmtrPointBranches();
+			}
+			return;
+		}
 		for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
 			final int granted = mmtrPointAuthority.grantedLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via);
 			if (granted < 0) {
@@ -917,6 +938,16 @@ public class Simulator extends Data implements Utilities {
 		boolean changed = false;
 		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
 			final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+			// T1: 物理持有者优先（理由同 mmtrSyncTurnoutPositionToGrant）。
+			final int physical = mmtrPointAuthority.physicalPosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+			if (physical != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
+				if (physical != current) {
+					mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, physical);
+					normalizeTurnoutRows(turnout);
+					changed = true;
+				}
+				continue;
+			}
 			for (final String via : new String[]{turnout.stemRailHex, turnout.farRailHex, turnout.branchRailHex}) {
 				final int granted = mmtrPointAuthority.grantedLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via);
 				if (granted < 0) {
