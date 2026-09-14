@@ -3257,24 +3257,37 @@ public final class MmtrDirectionalBlockService {
 			}
 			return;
 		}
-		// 走行停在这里 = 本段结束在这个节点；区间链接按它来连（不看出口灯的名字，见 rebuild）
-		section.endNodeKey = MmtrJunctionState.nodeKey(node);
+		/*
+		 * 走行停在这里 = 本段结束在这个节点；区间链接按它来连（不看出口灯的名字，见 rebuild）。
+		 *
+		 * <p>只有**这次运行走得到**的分支才决定"本段结束在哪"：走不到的腿（模型道岔切掉的那一侧）
+		 * 也会被走一遍、把 span 收进本段（保住"一盏灯守整个咽喉"），但它不是这条进路的出口 ——
+		 * 让它写结束节点/结束原因，链就会顺着它接到别的线上（实测用户 2026-09-14 追出来的
+		 * 就是这一条：{@code -152,-60,-122} 那盏灯的单黄来自 100 m 外另一条线上的股道）。</p>
+		 */
+		if (reachableRoute) {
+			section.endNodeKey = MmtrJunctionState.nodeKey(node);
+		}
 
 		// 这个节点上有没有灯（不论朝向）：背向的灯不切断走行，但要记下来，"为什么没停在这里"才有答案
 		final SignalEntry lampOnNode = lampAt(node);
 
 		final ObjectArrayList<Leg> legs = nextLegs(node, cameFromHex, headingX, headingZ);
 		if (legs.isEmpty()) {
-			section.endsAtDeadEnd = true;
-			section.endReason = "走到死胡同：节点 " + MmtrJunctionState.nodeKey(node) + " 没有可继续的轨"
-				+ (lampOnNode == null ? "（该节点上没有登记任何灯）"
-					: "（该节点上的灯 " + MmtrSignalRegistry.key(lampOnNode.x, lampOnNode.y, lampOnNode.z)
-						+ " 朝向 " + lampOnNode.angle + "°，是背向本方向的，所以不切断本区间）");
+			if (reachableRoute) {
+				section.endsAtDeadEnd = true;
+				section.endReason = "走到死胡同：节点 " + MmtrJunctionState.nodeKey(node) + " 没有可继续的轨"
+					+ (lampOnNode == null ? "（该节点上没有登记任何灯）"
+						: "（该节点上的灯 " + MmtrSignalRegistry.key(lampOnNode.x, lampOnNode.y, lampOnNode.z)
+							+ " 朝向 " + lampOnNode.angle + "°，是背向本方向的，所以不切断本区间）");
+			}
 			return;
 		}
 		if (railCount >= MAX_RAILS_PER_SECTION || section.lengthM() >= MAX_SECTION_LENGTH_M) {
-			section.endsAtDeadEnd = true;
-			section.endReason = "被长度/段数上限截断（段数 " + railCount + "，长 " + round(section.lengthM()) + " m）";
+			if (reachableRoute) {
+				section.endsAtDeadEnd = true;
+				section.endReason = "被长度/段数上限截断（段数 " + railCount + "，长 " + round(section.lengthM()) + " m）";
+			}
 			return;
 		}
 
@@ -3333,13 +3346,21 @@ public final class MmtrDirectionalBlockService {
 			 * 入口灯（{@code -70,-59,-139}，守南向、**其上停着车**）各管一支；按"任意一架就全停"，
 			 * 走行只认了与到达切线更贴合的那支（朝北），朝南那支根本没被走 —— 从支线过来的灯于是
 			 * 看不到咽喉另一侧的车（该双黄读绿）。</p>
+			 *
+			 * <p><b>但"走不到的腿"不许当出口</b>（用户 2026-09-14 追出来的）：模型道岔切掉的那一侧，
+			 * 这次运行根本进不去，它后面的区间不是这条进路的前方 —— 把它当出口，链就会接到别的线上，
+			 * 于是出现"这盏灯黄，原因是 100 m 外另一条线的股道里有车"。span 照样收（守住那条腿），
+			 * 出口灯/结束原因不收。</p>
 			 */
+			final boolean reachable = reachableRoute && reachableLeg;
 			final SignalEntry legBoundary = lampAt(node, spanHeadingX, spanHeadingZ);
 			if (legBoundary != null) {
 				anyLegHandled = true;
-				section.addExitLamp(MmtrSignalRegistry.key(legBoundary.x, legBoundary.y, legBoundary.z));
-				section.endReason = "停在面向本区间的灯 " + MmtrSignalRegistry.key(legBoundary.x, legBoundary.y, legBoundary.z)
-					+ "（正常：它是这条腿的入口灯，开的是下一段区间）";
+				if (reachable) {
+					section.addExitLamp(MmtrSignalRegistry.key(legBoundary.x, legBoundary.y, legBoundary.z));
+					section.endReason = "停在面向本区间的灯 " + MmtrSignalRegistry.key(legBoundary.x, legBoundary.y, legBoundary.z)
+						+ "（正常：它是这条腿的入口灯，开的是下一段区间）";
+				}
 				continue;
 			}
 
@@ -3348,9 +3369,11 @@ public final class MmtrDirectionalBlockService {
 				final MidRailLamp midRail = nearestLampOnSpan(next, arcOfNode, toArc, forward, spanHeadingX, spanHeadingZ, section.entrySignalKey);
 				if (midRail != null) {
 					addSpan(section, new RailSpan(nextHex, arcOfNode, midRail.arcM, spanHeadingX, spanHeadingZ));
-					section.addExitLamp(midRail.key);
-					section.endReason = "停在轨中的灯 " + midRail.key + "（正常：这是下一段区间的入口灯）";
 					anyLegHandled = true;
+					if (reachable) {
+						section.addExitLamp(midRail.key);
+						section.endReason = "停在轨中的灯 " + midRail.key + "（正常：这是下一段区间的入口灯）";
+					}
 					continue;
 				}
 				addSpan(section, new RailSpan(nextHex, arcOfNode, toArc, spanHeadingX, spanHeadingZ));
@@ -3358,7 +3381,7 @@ public final class MmtrDirectionalBlockService {
 			anyLegHandled = true;
 			final ObjectOpenHashSet<String> branchPath = new ObjectOpenHashSet<>(pathRails);
 			branchPath.add(nextHex);
-			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath, reachableRoute && reachableLeg);
+			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath, reachable);
 		}
 		if (!anyLegHandled) {
 			section.endsAtDeadEnd = true;

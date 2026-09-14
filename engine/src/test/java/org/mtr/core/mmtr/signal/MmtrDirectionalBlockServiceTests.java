@@ -738,6 +738,48 @@ public final class MmtrDirectionalBlockServiceTests {
 		assertTrue(simulator.mmtrSetTurnoutPosition(a.getX(), a.getY(), a.getZ(), org.mtr.core.mmtr.point.MmtrTurnout.NORMAL), "扳回位置 0");
 	}
 
+		/**
+	 * **走不到的那条腿的入口灯不许当出口灯**（用户 2026-09-14 追出来的第二层问题）。
+	 *
+	 * <p>现场：`-152,-60,-122` 那盏灯的单黄来自 100 m 外**另一条线**上股道里的停车。原因是区间在
+	 * 咽喉里拐上了按当前道岔位置**走不到**的腿（`-170,-60,-161` 在位置 1，正线远端那一侧是切断的），
+	 * 并把那条腿的入口灯当成了自己的出口 ⇒ 链顺着它接到了别的线上。</p>
+	 *
+	 * <p>规则：走不到的腿照旧**守住**（span 覆盖、占用仍算保守），但它的入口灯不进 `exitSignalKeys`
+	 * —— 链只沿这次运行走得出去的腿接。老式无模型咽喉不受影响（那里每条腿都算走得到，
+	 * 用户 2026-09-10 的裁定照旧）。</p>
+	 */
+	@Test
+	public void anUnreachableLegDoesNotContributeAnExitLamp() {
+		final Position a = new Position(0, 0, 0);
+		final Position b = new Position(-6, 0, 36);
+		final Rail farA = rail(a, new Position(0, 0, 36));
+		final Rail stemA = rail(a, new Position(0, 0, -17));
+		final Rail diagonal = rail(a, b);
+		final Rail farB = rail(b, new Position(-6, 0, 67));
+		final Rail stemB = rail(b, new Position(-6, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-unreachable-leg", farA, stemA, diagonal, farB, stemB);
+		assertEquals(0, simulator.mmtrTurnoutPosition(a.getX(), a.getY(), a.getZ()), "位置 0：正线贯通，岔股禁止通行");
+
+		/*
+		 * 两条腿各自的"入口灯"：走行从 A 拐进哪一条腿，就会停在那条腿的入口灯上。
+		 * 灯面方向 = 该腿的走行方向（`guardedHeadings` 的语义），所以这里**朝腿的远端**（不加 180）。
+		 */
+		final String lampThrough = addLamp(simulator, stemA, 5.0, (float) headingAngle(stemA, a));
+		final String lampBranch = addLamp(simulator, diagonal, 5.0, (float) headingAngle(diagonal, a));
+
+		// 灯立在正线远端上朝岔口：它的区间要走 farA → A → 两条腿
+		final String lamp = addLamp(simulator, farA, 5.0, (float) ((headingAngle(farA, a) + 180) % 360));
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(lamp);
+		assertNotNull(section);
+
+		assertTrue(section.exitSignalKeys.contains(lampThrough),
+			"走得到的那条腿（正线贯通侧）的入口灯要收：" + section.exitSignalKeys);
+		assertFalse(section.exitSignalKeys.contains(lampBranch),
+			"走不到的那条腿（岔股，位置 0 禁止通行）的入口灯**不收** —— 否则链会接到别的线上：" + section.exitSignalKeys);
+	}
+
 	/** 这盏灯当前保护的轨（去重后的 hex 列表）。 */
 	private static ObjectArrayList<String> protectedRailHexes(MmtrDirectionalBlockService service, String lamp) {
 		final ObjectArrayList<String> out = new ObjectArrayList<>();
