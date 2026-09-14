@@ -169,19 +169,64 @@ public final class MmtrTurnoutResolveTests {
 		}
 	}
 
-	/** ⑤ 直角三岔口与 120° 三角线**仍旧不建模**（现实里是两组道岔背靠背，没有"根部/被切断的一侧"可言）。 */
+	/**
+	 * ⑤ 直角三岔口与**三条线互成 120° 的三角线**仍旧不建模。
+	 *
+	 * <p>两者的拒绝理由**不同**（用户 2026-09-14 指出对称人字岔必须建模之后重写过）：</p>
+	 * <ul>
+	 *   <li>直角三岔口：**没有岔尖** —— 三根轨互相垂直，没有任何一根能"迎着"开出另外两根
+	 *       （cos 全是 0）。现实里是两组道岔背靠背。</li>
+	 *   <li>120° 三角线：**有岔尖**（从任一根看另外两根都在前方，cos 0.5），但更直的那根进路也只到
+	 *       0.5（偏 60°），远超过 45° 的门槛 ⇒ 三条线在一个点上交汇。现实里那是**两组可动件串起来**
+	 *       的三开道岔，而本模型一个节点只有一个可动件（表达不了三个状态）—— 宁可不建模也不猜。</li>
+	 * </ul>
+	 */
 	@Test
 	public void rightAngleTeeAndWyeAreStillNotTurnouts() {
 		final Object2ObjectOpenHashMap<Position, Rail> tee = neighbours(new Position(20, Y, 0), new Position(-20, Y, 0), new Position(0, Y, 20));
-		assertNull(MmtrTurnout.resolve(NODE, tee), "正线共线 + 一根垂直臂 = 直角三岔口，没有根部可言");
+		assertNull(MmtrTurnout.resolve(NODE, tee), "三根轨互相垂直 = 没有岔尖（现实里是两组道岔背靠背）");
 
 		final Object2ObjectOpenHashMap<Position, Rail> wye =
 			neighbours(new Position(20, Y, 0), new Position(-10, Y, 17), new Position(-10, Y, -17));
-		assertNull(MmtrTurnout.resolve(NODE, wye), "120° 三角线：没有任何一对互为直股");
+		assertNull(MmtrTurnout.resolve(NODE, wye), "有岔尖但更直的进路只到 0.5（偏 60°）⇒ 三条线交汇，不是一个可动件");
 	}
 
 	/**
-	 * ⑥ {@code point why <x> <y> <z>} 把判定过程写成人读的（用户点了名要这条指令）。
+	 * ⑥ **对称人字岔（正人字形）也是道岔**（用户 2026-09-14 的原话："其为正人字形，逻辑上与现在的无异"）。
+	 *
+	 * <p>实测 {@code -19,-60,51}：西轨（远端 -35,-60,52）是岔尖，另外两根去 (1,-60,38)/(1,-60,64)
+	 * 分别偏 29.4°/36.6°（cos 0.87 / 0.80）—— 两条进路**都算分岔**，没有哪一根是"直线正线"。
+	 * 老判据要求"存在一对近乎共线的直股"，于是把这种岔整个判成"不是道岔"（
+	 * 这正是它此前显示成 legacy 卡片的原因）。物理事实与单开道岔同构：一个可动件、两根互斥进路、一个岔尖。</p>
+	 */
+	@Test
+	public void aSymmetricHerringboneIsATurnoutToo() {
+		final Object2ObjectOpenHashMap<Position, Rail> map =
+			neighbours(new Position(-16, Y, 1), new Position(20, Y, -13), new Position(20, Y, 13));
+		final MmtrTurnout turnout = MmtrTurnout.resolve(NODE, map);
+		assertNotNull(turnout, "对称人字岔也是一处道岔（只是没有「直通」的含义）");
+		assertEquals("-16,1", farEndOf(map, turnout.stemRailHex), "岔尖 = 西轨（从它开进去，另外两根都在前方）：" + describe(turnout));
+		assertEquals("20,-13", farEndOf(map, turnout.farRailHex), "位置 0 开向更直的那一根（cos 0.87）：" + describe(turnout));
+		assertEquals("20,13", farEndOf(map, turnout.branchRailHex), "位置 1 开向另一根（cos 0.80）：" + describe(turnout));
+	}
+
+	/**
+	 * ⑥ 的第二个样子：同样没有"近似直线的正线"，但更直的那一根也在 45° 门槛内（cos 0.809 ≈ 36°），
+	 * 所以照样是道岔。实测 {@code -154,-60,-139}（改前它也没有模型）。
+	 */
+	@Test
+	public void aHerringboneWithoutAStraightRouteIsModelledAsLongAsOneRouteIsShallowEnough() {
+		final Object2ObjectOpenHashMap<Position, Rail> map =
+			neighbours(new Position(0, Y, 17), new Position(-8, Y, 17), new Position(-16, Y, -22));
+		final MmtrTurnout turnout = MmtrTurnout.resolve(NODE, map);
+		assertNotNull(turnout, "更直的那根 0.809 > 0.707 ⇒ 是一个可动件能表达的岔口");
+		assertEquals("-16,-22", farEndOf(map, turnout.stemRailHex), "岔尖 = 西南那根：" + describe(turnout));
+		assertEquals("0,17", farEndOf(map, turnout.farRailHex), "位置 0 开向更直的那一根（cos 0.809）：" + describe(turnout));
+		assertEquals("-8,17", farEndOf(map, turnout.branchRailHex), "位置 1 开向偏 61° 的那一根（cos 0.481）：" + describe(turnout));
+	}
+
+	/**
+	 * ⑦ {@code point why <x> <y> <z>} 把判定过程写成人读的（用户点了名要这条指令）。
 	 *
 	 * <p>它与 {@code resolve} 走同一段代码，所以这里同时钉住了两件事：真道岔给出"认成 1 处单开道岔 +
 	 * 互直度比较"，认不出的节点给出**为什么**（而不是只丢一张 legacy 卡片）。</p>
@@ -197,7 +242,8 @@ public final class MmtrTurnoutResolveTests {
 		final String modelledText = String.join("\n", modelled.lines);
 		assertTrue(modelled.ok, "指令要成功执行：" + modelledText);
 		assertTrue(modelledText.contains("认成 1 处单开道岔"), "要给出结论：" + modelledText);
-		assertTrue(modelledText.contains("候选直股对"), "要列出每一对的互直度：" + modelledText);
+		assertTrue(modelledText.contains("岔尖候选"), "要列出每根轨作为岔尖的候选与两个方向：" + modelledText);
+		assertTrue(modelledText.contains("岔尖 = "), "要点名岔尖是哪一根：" + modelledText);
 		assertTrue(modelledText.contains("岔股 = "), "要点名岔股是哪一根：" + modelledText);
 		assertTrue(modelledText.contains("闭塞归属"), "顺带给出闭塞归属（describeNodeResolution）：" + modelledText);
 

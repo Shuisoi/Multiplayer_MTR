@@ -257,7 +257,9 @@ public final class MmtrSignalAspectTests {
 		assertEquals(MmtrSignalAspect.Aspect.GREEN, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectOf(entry.getHexId()),
 			"道岔位置已定（默认 0）→ 不能因为「这个岔口没人决定」而压红");
 
-		// (1b) 120° 三岔口（三角线）：几何上不是单开道岔（没有互为最直续行的直股对），仍旧走老规则 ——
+		// (1b) 120° 三岔口（三角线）：几何上不是单开道岔 —— 它有"岔尖"（从任一根看另外两根都在前方），
+		// 但更直的那根进路也只到 cos 0.5（偏 60°），超过 45° 的门槛 ⇒ 三条线在一个点上交汇，
+		// 现实里要用两组可动件（三开道岔）才做得出来。没有物理道岔模型 ⇒ 仍旧走老规则 ——
 		// 没有任何人工位/授权 ⇒ 危险。
 		final Simulator wye = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-aspect-junction-wye"), false);
 		final Position c = new Position(0, 0, 0);

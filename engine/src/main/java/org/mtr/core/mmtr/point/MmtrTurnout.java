@@ -28,16 +28,16 @@ import org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg;
  *
  * <h3>怎么从几何认出这三条</h3>
  * <ol>
- *   <li><b>直股对</b>：互为"最直续行"（两个进向看对方都是直股，cos 都 ≥ {@link MmtrPoint#COS_STRAIGHT}）
- *       的那两根轨 = 正线的两端。浅岔口上**不止一对**够格（岔股只偏 10° 时它自己也够"直"），所以
- *       取**互直度最大**的一对 —— 真共线的那一对互直度 1.00，含岔股的那些只有 cos(偏角) ≈ 0.99。
- *       判据是几何本身，因此与哈希表的遍历顺序无关（见 {@link #resolve}）；</li>
- *   <li><b>岔股</b>：剩下的那根（它从两个正线进向看都是 LEFT/RIGHT，或者干脆在其中一个身后被排除）；</li>
- *   <li><b>根部</b>：从哪个正线进向看，岔股的 cos **为正且明显非零**（"迎着开过去能看到它分出去"）——
- *       实测本节点：南进向看岔股 cos=+0.49（左前方）→ 根部 = 南；北进向看岔股 cos=-0.49（在身后）
- *       → 北是"被断开的那一侧"，与用户说的 1 时北侧禁止通行完全一致。
- *       <b>两个正线进向都要看</b>：浅岔口上"另一个正线进向"会因为岔股几乎在正后方（cos ≈ -0.99）
- *       而根本看不见它，只判一个进向就会把整处道岔判成"不存在"。</li>
+ *   <li><b>岔尖（toe）</b>：存在一根轨，从它开进去**另外两根都在前方**（cos &gt; {@link #MIN_STEM_COS}）
+ *       —— 那一侧永远连通，另外两根则是二选一。几何上至多只有一个岔尖；找不到就是三条线在一个点上
+ *       交汇（直角三岔口 / 三角线），不是一进两出；</li>
+ *   <li><b>正线远端 / 岔股</b>：岔尖那两根里**更直的一根**叫正线远端（位置 0 开向它），另一根叫岔股；
+ *       更直的那根也必须在轴线的 45° 以内（{@link #MIN_THROUGH_COS}），否则是三条线交汇
+ *       （三开道岔现实里要两组可动件，本模型一个节点只有一个）；</li>
+ *   <li><b>对称人字岔</b>：两根进路一样斜时没有"直通"可言（cos 都 &lt; {@link MmtrPoint#COS_STRAIGHT}），
+ *       位置 0/1 只表示"先开哪一条" —— 判据**不因此拒绝**它（用户 2026-09-14：正人字形逻辑上与单开道岔无异）。
+ *       实测本节点 {@code -67,-60,-139}：南进向看岔股 cos=+0.49（左前方）→ 根部 = 南；北进向看岔股
+ *       cos=-0.49（在身后）→ 北是"被断开的那一侧"，与用户说的 1 时北侧禁止通行完全一致。</li>
  * </ol>
  */
 public final class MmtrTurnout {
@@ -48,6 +48,15 @@ public final class MmtrTurnout {
 
 	/** 岔股至少要比正线方向偏出这么多（cos ≤ 0.1 ≈ 偏 84° 以上）才算"看得见分出去"，否则是直角三岔口。 */
 	private static final double MIN_STEM_COS = 0.1;
+
+	/**
+	 * 岔尖的更直那一根进路至少要有这么直（cos 0.707 ≈ 45° 以内），否则是三条线在一个点上交汇。
+	 *
+	 * <p>为什么要有这道门槛：{@code -19,-60,51} 那种**对称人字岔**（两根进路各偏 29°/37°）是道岔，
+	 * 而三条线互成 120° 的三角线不是 —— 现实里后者要用**两组可动件串起来**做（三开道岔），
+	 * 而本模型一个节点只有一个可动件，表达不了"三个状态"，所以宁可不建模也不猜。</p>
+	 */
+	private static final double MIN_THROUGH_COS = 0.707;
 
 	public final long nodeX, nodeY, nodeZ;
 	/** 根部轨（两个位置都连通的那一侧）。 */
@@ -172,12 +181,12 @@ public final class MmtrTurnout {
 	 *
 	 * <p>只用几何 + 有序腿：不依赖任何人工声明，因此新画的道岔也能立刻被认出来。</p>
 	 *
-	 * <h3>修前为什么"有的道岔认不出来"（用户 2026-09-14 实测提出）</h3>
-	 * <p>老实现找直股对的办法是"遍历腿表，遇到互为直股的一对就记下来"—— **最后遇到的那一对获胜**，
-	 * 而外层是 {@code Object2ObjectOpenHashMap}（键 = 轨 hex），遍历顺序与几何无关。当岔股只偏十几度
-	 * （两条平行正线之间的渡线/汇入：横移 6 格要 23~36 格才走完，偏角必然只有 9.5°~14.6°）时，
-	 * 三根轨里有**三对**都够格"直股"：真共线的那一对互直度 1.00，含岔股的两对是 cos(9.5°) ≈ 0.986。
-	 * 于是：</p>
+	 * <h3>判据是"岔尖测试"，不是"有没有一段直线正线"（两轮现场修正）</h3>
+	 * <p><b>第一轮（浅岔口）</b>：老实现找直股对的办法是"遍历腿表，遇到互为直股的一对就记下来"——
+	 * **最后遇到的那一对获胜**，而外层是 {@code Object2ObjectOpenHashMap}（键 = 轨 hex），遍历顺序与
+	 * 几何无关。当岔股只偏十几度（两条平行正线之间的渡线/汇入：横移 6 格要 23~36 格才走完，
+	 * 偏角必然只有 9.5°~14.6°）时，三根轨里有**三对**都够格"直股"：真共线的那一对互直度 1.00，
+	 * 含岔股的两对是 cos(9.5°) ≈ 0.986。于是：</p>
 	 * <ul>
 	 *   <li>若含岔股的一对获胜 → 把**岔股当成正线**、把正线的一端当成岔股（模型倒置）；</li>
 	 *   <li>若获胜的那一对恰好是"岔股看不见正线另一端"的组合 → 找不到根部 → 返回 null，
@@ -185,7 +194,14 @@ public final class MmtrTurnout {
 	 * </ul>
 	 * <p>实测证据：{@code -147,-60,-169} 与 {@code -155,-60,-189} 的方位角多重集完全相同
 	 * （21.8°/158.2°/180°），却一个被认出一个没有；{@code -170,-60,-289}（渡线的一端）根本没有模型。
-	 * 判据改成"取互直度最大的一对"之后，答案只由几何决定，与遍历顺序无关。</p>
+	 * 第一轮的修法是改成"取互直度最大的一对"，答案因此只由几何决定。</p>
+	 *
+	 * <p><b>第二轮（对称人字岔）</b>：用户 2026-09-14 指出 {@code -19,-60,51} 是**正人字形**、
+	 * 逻辑上与单开道岔无异。上一轮那个"必须存在一对近乎共线的直股（cos ≥
+	 * {@link MmtrPoint#COS_STRAIGHT}）"就是**代理失真**：它描述的是单开道岔的<em>样子</em>，
+	 * 而对称人字岔两根进路一样斜（实测偏 29.4°/36.6°），根本没有"直线正线"，于是整处被误判成
+	 * "不是道岔"。真正的物理事实只有一条：**一个可动件、两根互斥进路、一个岔尖** —— 判据因此改成
+	 * 岔尖测试（见类注释），"更直的那根"只用来决定位置 0 开向谁、以及是否值得叫它"正线"。</p>
 	 */
 	public static @Nullable MmtrTurnout resolve(Position node, @Nullable Object2ObjectOpenHashMap<Position, Rail> neighbours) {
 		return analyse(node, neighbours, null);
@@ -268,75 +284,87 @@ public final class MmtrTurnout {
 			}
 		}
 
-		// 直股对 = 两根**互为最直续行**的轨；多对够格时取互直度（两个方向 cos 的较小者）最大的那一对。
-		// 互直度必须两边都看得见对方：真道岔的岔股从对面看是在身后（cos ≈ -1），那种组合不成对。
-		String throughA = null;
-		String throughB = null;
-		double bestScore = Double.NEGATIVE_INFINITY;
-		for (int i = 0; i < rails.size(); i++) {
-			for (int j = i + 1; j < rails.size(); j++) {
-				final double forward = legCos(legsByApproach.get(rails.get(i)), rails.get(j));
-				final double backward = legCos(legsByApproach.get(rails.get(j)), rails.get(i));
-				final double score = Math.min(forward, backward);
-				if (out != null) {
-					out.append("  候选直股对 (").append(label(farByRail, rails.get(i))).append(", ").append(label(farByRail, rails.get(j))).append(")：互直度 ")
-						.append(Double.isNaN(score) ? "—（互相看不见，不成对）" : num(score)).append('\n');
-				}
-				if (!Double.isNaN(score) && score > bestScore + 1.0e-9) {
-					// 严格更大才替换：并列时保持 hex 序在前的那个，结果因此是确定的
-					bestScore = score;
-					throughA = rails.get(i);
-					throughB = rails.get(j);
-				}
-			}
-		}
-		if (throughA == null || bestScore < MmtrPoint.COS_STRAIGHT) {
-			note(out, "没有互为直股的成对（最直的一对" + (throughA == null ? "不存在" : "只有互直度 " + num(bestScore) + "，低于 " + num(MmtrPoint.COS_STRAIGHT))
-				+ "）：三岔口 / 交叉，不是单开道岔");
-			return null;
-		}
-
-		String branchHex = null;
-		for (final String hex : rails) {
-			if (!hex.equals(throughA) && !hex.equals(throughB)) {
-				branchHex = hex;
-			}
-		}
-		if (branchHex == null) {
-			note(out, "直股对之外找不到第三根轨：几何异常，不猜");
-			return null;
-		}
-
-		// 根部 = 两个正线进向里"看岔股在前面"的那一个。**两个都要看**：浅岔口上另一个进向会因为岔股
-		// 几乎在正后方（cos ≈ -0.99 < -0.9）而根本看不见它，只看一个就会把整处道岔判成不存在。
+		/*
+		 * **判据：先找岔尖（toe），再定两条进路。**
+		 *
+		 * <p>一处道岔的物理事实是"一个可动件 + 两条互斥进路 + 一个岔尖"：岔尖那一侧永远连通，
+		 * 另外两根则是二选一。所以从几何上认它的判据就是**岔尖测试**：存在一根轨，从它开进去
+		 * 另外两根都在前方（cos &gt; {@link #MIN_STEM_COS}）。</p>
+		 *
+		 * <p>用户 2026-09-14 指出这里原来用错了代理判据："存在一对近乎共线的直股"只是**单开道岔**
+		 * 的样子；<b>对称人字岔（正人字形）</b>两根进路一样斜，没有哪一根是直线正线，于是被误判成
+		 * "不是道岔"。实测 {@code -19,-60,51}：西轨是岔尖（到 (-35,52)），另两根到 (1,38)/(1,64)
+		 * 分别在前方 cos 0.87 / 0.80 —— 结构与单开道岔**完全同构**，只是没有"正线"可言。</p>
+		 *
+		 * <p>保留一道角度门槛：岔尖的**更直那一根**进路必须在轴线的 45° 以内
+		 * （{@link #MIN_THROUGH_COS}）。否则就是三条线在一个点上交汇（三开道岔 / 三角线），
+		 * 现实里那是**两组可动件串起来**做的，而本模型一个节点只有一个可动件 —— 宁可不建模，也不猜。</p>
+		 */
 		String stemHex = null;
-		double stemCos = Double.NaN;
-		double seenCos = Double.NaN;
-		for (final String through : new String[]{throughA, throughB}) {
-			final double cos = legCos(legsByApproach.get(through), branchHex);
-			if (Double.isNaN(cos)) {
-				continue;
+		double stemCosFar = Double.NaN;
+		double stemCosBranch = Double.NaN;
+		String farHex = null;
+		String branchHex = null;
+		if (out != null) {
+			out.append("  岔尖候选（从它开进去，另外两根都在前方 = cos > ").append(num(MIN_STEM_COS)).append("）：\n");
+		}
+		for (final String candidate : rails) {
+			double firstCos = Double.NaN;
+			double secondCos = Double.NaN;
+			String firstHex = null;
+			String secondHex = null;
+			for (final String other : rails) {
+				if (other.equals(candidate)) {
+					continue;
+				}
+				final double cos = legCos(legsByApproach.get(candidate), other);
+				if (Double.isNaN(cos) || cos <= MIN_STEM_COS) {
+					continue;
+				}
+				// 两根里更直的那根当"正线远端"，另一根当"岔股"
+				if (firstHex == null || cos > firstCos + 1.0e-9) {
+					secondHex = firstHex;
+					secondCos = firstCos;
+					firstHex = other;
+					firstCos = cos;
+				} else {
+					secondHex = other;
+					secondCos = cos;
+				}
 			}
-			if (Double.isNaN(seenCos) || cos > seenCos) {
-				seenCos = cos;
+			if (out != null) {
+				out.append("    ").append(label(farByRail, candidate)).append("：")
+					.append(firstHex == null ? "（没有前方续行）" : label(farByRail, firstHex) + " cos " + num(firstCos)
+						+ (secondHex == null ? "（只有一根在前方）" : "、" + label(farByRail, secondHex) + " cos " + num(secondCos)))
+					.append('\n');
 			}
-			if (cos > MIN_STEM_COS && (stemHex == null || cos > stemCos)) {
-				stemCos = cos;
-				stemHex = through;
+			if (firstHex == null || secondHex == null) {
+				continue; // 不是岔尖：只有一根（或没有）在前方
 			}
+			stemHex = candidate;
+			farHex = firstHex;
+			branchHex = secondHex;
+			stemCosFar = firstCos;
+			stemCosBranch = secondCos;
+			break; // rails 已按 hex 定序 ⇒ 结果确定；几何上至多一个岔尖
 		}
 		if (stemHex == null) {
-			note(out, "岔股 " + label(farByRail, branchHex) + " 从两个正线进向都看不见"
-				+ (Double.isNaN(seenCos) ? "（都被当成长度近乎相反的回头轨排除）" : "（cos 最大只有 " + num(seenCos) + " ≤ " + num(MIN_STEM_COS) + "）")
-				+ "：直角三岔口，现实里是两组道岔背靠背，没有「根部」可言");
+			note(out, "找不到岔尖（没有任何一根轨能同时「迎着」开出另外两根）：三条线在一个点上交汇 / 直角三岔口 —— 不是一进两出，不建模");
 			return null;
 		}
-		final String farHex = stemHex.equals(throughA) ? throughB : throughA;
+		if (stemCosFar < MIN_THROUGH_COS) {
+			note(out, "更直的那根进路 " + label(farByRail, farHex) + " 偏离岔尖轴线太多（cos " + num(stemCosFar)
+				+ " < " + num(MIN_THROUGH_COS) + "）：三条线在此交汇（三开道岔 / 三角线，现实里要两组可动件），本模型一个节点只有一个可动件 —— 不建模");
+			return null;
+		}
 		if (out != null) {
-			out.append("  直股对 = (").append(label(farByRail, throughA)).append(", ").append(label(farByRail, throughB)).append(")，互直度 ").append(num(bestScore))
-				.append("（最直，所以是正线）\n");
-			out.append("  岔股 = ").append(label(farByRail, branchHex)).append("；根部 = ").append(label(farByRail, stemHex))
-				.append("（它看岔股 cos ").append(num(stemCos)).append(" > 0 = 迎着开过去看得到岔股分出去），正线远端 = ").append(label(farByRail, farHex)).append('\n');
+			out.append("  岔尖 = ").append(label(farByRail, stemHex)).append("（两侧都迎着开得出去）\n");
+			out.append("  正线远端 = ").append(label(farByRail, farHex)).append("（cos ").append(num(stemCosFar)).append("，更直的那根）")
+				.append("；岔股 = ").append(label(farByRail, branchHex)).append("（cos ").append(num(stemCosBranch)).append("）\n");
+			if (stemCosFar < MmtrPoint.COS_STRAIGHT || stemCosBranch < MmtrPoint.COS_STRAIGHT) {
+				out.append("  注意：这根「正线」并不近似直线（cos ").append(num(stemCosFar)).append(" < ").append(num(MmtrPoint.COS_STRAIGHT))
+					.append("）= **对称人字岔**：两条进路都算分岔，位置 0/1 只是「先开哪一条」，没有「直通」的含义\n");
+			}
 		}
 
 		final MmtrTurnout turnout = new MmtrTurnout(node.getX(), node.getY(), node.getZ(), stemHex, farHex, branchHex);
