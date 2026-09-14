@@ -253,4 +253,73 @@ public final class MmtrPlanAdjustments {
 		}
 		return out;
 	}
+
+	/**
+	 * P6 ④：**手工指派**（{@code assign}）—— 把某辆车从某一趟起的趟次交给另一辆车。
+	 *
+	 * <p>与自动排班的关系是**优先关系**（§3 的第三条）：手工覆盖自动，而且**看得见** ——
+	 * 搬过去的每一条都带上"人工指派"的说明，交路视图里一眼能认出来。
+	 * 起点之后的趟次**原样搬**（时刻不动），起点之前留在原车（那是它已经/正在跑的）。</p>
+	 *
+	 * @param fromTripId 从哪一趟起（含）；空 = 该车所有未跑的趟次
+	 * @return 新的交路集合（原车 + 接手的车），没找到就返回原图
+	 */
+	public static MmtrDiagram assignManually(MmtrDiagram diagram, String fromConsistId, @Nullable String fromTripId, String toConsistId,
+		ObjectArrayList<String> notes) {
+		if (diagram == null || fromConsistId == null || fromConsistId.isEmpty() || toConsistId == null || toConsistId.isEmpty()
+			|| fromConsistId.equals(toConsistId)) {
+			return diagram;
+		}
+		final MmtrDiagram.Working source = findWorking(diagram, fromConsistId);
+		if (source == null) {
+			return diagram;
+		}
+		final MmtrDiagram.Working receiver = findWorking(diagram, toConsistId);
+		if (receiver == null) {
+			notes.add("人工指派失败：没有编组 " + toConsistId + " 的交路可接手");
+			return diagram;
+		}
+		final ObjectArrayList<MmtrDiagram.Working> workings = new ObjectArrayList<>();
+		final MmtrDiagram.Working keptSource = new MmtrDiagram.Working(source.consistId);
+		final MmtrDiagram.Working extendedReceiver = new MmtrDiagram.Working(receiver.consistId);
+		extendedReceiver.entries.addAll(receiver.entries);
+		boolean handoverStarted = fromTripId == null || fromTripId.isEmpty();
+		int moved = 0;
+		for (final MmtrDiagram.Entry entry : source.entries) {
+			final boolean isTarget = handoverStarted || entry.trip != null && entry.trip.tripId.equals(fromTripId);
+			if (isTarget && entry.kind == MmtrDiagram.Entry.Kind.TRIP) {
+				handoverStarted = true;
+			}
+			if (handoverStarted && entry.kind != MmtrDiagram.Entry.Kind.STABLE_YARD) {
+				final MmtrDiagram.Entry movedEntry = copy(entry, 0, "人工指派 → " + toConsistId);
+				extendedReceiver.entries.add(movedEntry);
+				moved++;
+			} else {
+				keptSource.entries.add(entry);
+			}
+		}
+		MmtrDiagram.fillWaits(keptSource);
+		MmtrDiagram.fillWaits(extendedReceiver);
+		for (final MmtrDiagram.Working working : diagram.workings) {
+			if (working.consistId.equals(fromConsistId)) {
+				workings.add(keptSource);
+			} else if (working.consistId.equals(toConsistId)) {
+				workings.add(extendedReceiver);
+			} else {
+				workings.add(working);
+			}
+		}
+		notes.add("人工指派：" + fromConsistId + (fromTripId == null || fromTripId.isEmpty() ? " 全部" : " 自 " + fromTripId)
+			+ " 起的 " + moved + " 条交给 " + toConsistId + "（手工覆盖自动排班）");
+		return diagram.withWorkings(workings);
+	}
+
+	private static MmtrDiagram.@Nullable Working findWorking(MmtrDiagram diagram, String consistId) {
+		for (final MmtrDiagram.Working working : diagram.workings) {
+			if (working.consistId.equals(consistId)) {
+				return working;
+			}
+		}
+		return null;
+	}
 }

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -128,5 +129,43 @@ public final class MmtrSubstitutionTests {
 			fleet.addSpare(new MmtrFleet.ConsistSpec("S" + (i + 1), 80).addCar(new MmtrCarSpec()));
 		}
 		return fleet;
+	}
+
+	// ---------------------------------------------------------------- P6 ④ 手工指派
+
+	/** ④ **手工指派**：某辆车从某一趟起的趟次交给另一辆车，搬过去的每一条都带"人工指派"说明（看得见）。 */
+	@Test
+	public void aManualAssignmentWinsOverTheAutomaticRotaAndIsVisible() {
+		final MmtrLine line = line();
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, pattern(), fleet(2, 0), TIMES);
+		final MmtrDiagram.Working target = diagram.workings.get(1);
+		final String fromTrip = diagram.workings.get(0).trips().get(1).tripId;
+		final ObjectArrayList<String> notes = new ObjectArrayList<>();
+
+		final MmtrDiagram assigned = MmtrPlanAdjustments.assignManually(diagram, "C1", fromTrip, target.consistId, notes);
+		assertFalse(notes.isEmpty(), "要有可读说明：" + notes);
+		assertTrue(notes.get(0).contains("人工指派"), notes.get(0));
+
+		final MmtrDiagram.Working keptSource = assigned.workings.get(0);
+		final MmtrDiagram.Working receiver = assigned.workings.get(1);
+		// 起点之前留在原车；起点之后搬走（时刻原样）
+		assertTrue(keptSource.trips().stream().noneMatch(trip -> trip.tripId.equals(fromTrip)), "起点那趟已经不在原车上了");
+		final MmtrServicePlan.Trip moved = receiver.trips().stream().filter(trip -> trip.tripId.equals(fromTrip)).findFirst().orElse(null);
+		assertNotNull(moved, "接手的车要拿到那一趟");
+		assertEquals(diagram.workings.get(0).trips().stream().filter(trip -> trip.tripId.equals(fromTrip)).findFirst().orElseThrow().departureMillis,
+			moved.departureMillis, "手工指派不改时刻");
+		assertTrue(receiver.entries.stream().anyMatch(entry -> entry.note.contains("人工指派")), "要看得见（说明里带人工指派）");
+	}
+
+	/** ④ 续：指派给不存在的编组 → 报出来、计划不动（不静默失败）。 */
+	@Test
+	public void anAssignmentToAnUnknownConsistIsReportedNotSilentlyIgnored() {
+		final MmtrLine line = line();
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, pattern(), fleet(1, 0), TIMES);
+		final ObjectArrayList<String> notes = new ObjectArrayList<>();
+		final MmtrDiagram same = MmtrPlanAdjustments.assignManually(diagram, "C1", null, "NOPE", notes);
+		assertSame(diagram, same, "计划不该被动过");
+		assertEquals(1, notes.size());
+		assertTrue(notes.get(0).contains("人工指派失败"), notes.get(0));
 	}
 }
