@@ -58,6 +58,7 @@ public final class MmtrRoute {
 	 * multi-fork route would drop to PENDING the moment the train crossed its first point).
 	 */
 	private final ObjectOpenHashSet<String> crossedForkKeys = new ObjectOpenHashSet<>();
+	private long plannedMillis = Long.MAX_VALUE;
 	private boolean established;
 	private String stateReason = "not refreshed";
 
@@ -111,6 +112,25 @@ public final class MmtrRoute {
 
 	public long getRequestedMillis() {
 		return requestedMillis;
+	}
+
+	/**
+	 * T5: **计划时刻**（越小越优先）—— 冲突裁决的第一档。{@link Long#MAX_VALUE} = 没有计划。
+	 *
+	 * <p>来源是任务/作业单步骤（{@code MmtrTask.earliestMs}，缺省用 {@code dueMs}）：
+	 * 作业单实例化任务时带上时刻，{@code MmtrJobScheduler} 把它挂到 mission 上
+	 * （{@code mission.attachTask}），发布进路时由 {@code Vehicle} 填进来。</p>
+	 *
+	 * <p>它**只影响冲突裁决**（谁能 SET、谁先在道岔队列里），不影响进路本身 ——
+	 * 所以它可以随晚点/重排变化，而不必换掉进路对象。</p>
+	 */
+	public long getPlannedMillis() {
+		return plannedMillis;
+	}
+
+	/** T5: 由任务层在发布进路时填，或由登记表在同 movement 重发布时刷新（计划会随晚点变）。 */
+	public void setPlannedMillis(long plannedMillis) {
+		this.plannedMillis = plannedMillis;
 	}
 
 	/** The rail the movement starts on (the one the train stands on when the route is set). */

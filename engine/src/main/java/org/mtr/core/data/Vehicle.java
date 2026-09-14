@@ -433,6 +433,22 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * T5: 本车当前任务的**计划时刻**（{@code MmtrTask.earliestMs}，没设就用 {@code dueMs}）。
+	 *
+	 * <p>作业单步骤实例化任务时带上时刻（{@code MmtrJobScheduler} → {@code mission.attachTask}），
+	 * 这里把它交给进路与道岔申请，用于**冲突裁决**：计划早的先走。
+	 * 没有任务、或时刻没设（0）⇒ 无计划 ⇒ 退回**到达序**（行为与修前一致）。</p>
+	 */
+	private long mmtrPlannedMillis() {
+		final org.mtr.core.mmtr.task.MmtrTask task = mmtrMission == null ? null : mmtrMission.getTask();
+		if (task == null) {
+			return Long.MAX_VALUE;
+		}
+		final long planned = task.earliestMs > 0 ? task.earliestMs : task.dueMs;
+		return planned > 0 ? planned : Long.MAX_VALUE;
+	}
+
+	/**
 	 * T4 ③：进路的**类型**由**任务类型**决定，而不是从"此刻有没有调车授权"反推。
 	 *
 	 * <p>反推的问题不是它答错了，而是它**不稳定**：授权一到/一走，同一条 movement 的类型就翻，
@@ -540,7 +556,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			&& data instanceof final Simulator simulator && !mmtrPointOwner.isEmpty()) {
 			replenishForkRequests(simulator);
 			if (!mmtrPendingPointOps.isEmpty()) {
-				requestPendingForksAtomically(simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+				requestPendingForksAtomically(simulator.mmtrPointAuthority, mmtrPointOwner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS, mmtrPlannedMillis());
 			}
 		}
 
@@ -690,11 +706,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// signal layer sees PENDING (danger) while the points are being taken and SET the moment every
 		// one of them is held - the signal can never show proceed for a route the interlocking has not
 		// set. A shunt (调车) keeps its own kind: it is authorised by a subsidiary aspect, not a main one.
-		mmtrRoute = simulator.mmtrRoutes.request(new org.mtr.core.mmtr.route.MmtrRoute(
+		final org.mtr.core.mmtr.route.MmtrRoute publishedRoute = new org.mtr.core.mmtr.route.MmtrRoute(
 			getId(), owner,
 			mmtrRouteKindOf(mmtrMission, simulator.mmtrShuntAuthorities.active(getId()) != null),
-			plan.routeRailHexes, plan.forkOps, plan.targetRailHex, data.getCurrentMillis()));
-		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+			plan.routeRailHexes, plan.forkOps, plan.targetRailHex, data.getCurrentMillis());
+		// T5: 把任务的**计划时刻**交给进路 —— 冲突裁决的第一档（计划早的先走）。
+		publishedRoute.setPlannedMillis(mmtrPlannedMillis());
+		mmtrRoute = simulator.mmtrRoutes.request(publishedRoute);
+		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS, mmtrPlannedMillis());
 		simulator.mmtrRoutes.refresh(getId(), authority);
 		return allForksGranted;
 	}
@@ -715,11 +734,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 *
 	 * @return whether the whole set is currently granted to this owner
 	 */
-	private boolean requestPendingForksAtomically(org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner, long untilMillis) {
+	private boolean requestPendingForksAtomically(org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner, long untilMillis, long priorityMillis) {
 		if (mmtrPendingPointOps.isEmpty()) {
 			return true;
 		}
-		return authority.requestAtomically(mmtrPendingPointOps, owner, untilMillis)
+		return authority.requestAtomically(mmtrPendingPointOps, owner, untilMillis, priorityMillis)
 			== org.mtr.core.mmtr.point.MmtrPointAuthority.Result.GRANTED;
 	}
 

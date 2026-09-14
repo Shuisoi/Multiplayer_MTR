@@ -546,6 +546,10 @@ public final class SystemMapServlet extends ServletBase {
 		json.addProperty("railCount", route.getRailHexes().size());
 		json.addProperty("forkCount", route.getForks().size());
 		json.addProperty("requestedMillis", route.getRequestedMillis());
+		// T5：**计划时刻**（-1 = 无计划）。与 requestedMillis（实际申请的钟点）并排给出来，
+		// 运营台的"计划 vs 实际"就有得比了。
+		json.addProperty("plannedMillis", route.getPlannedMillis() == Long.MAX_VALUE ? -1L : route.getPlannedMillis());
+		json.addProperty("planStale", route.getPlannedMillis() != Long.MAX_VALUE && route.getPlannedMillis() < route.getRequestedMillis());
 		if (!route.isEstablished()) {
 			json.addProperty("stateReason", route.getStateReason());
 		}

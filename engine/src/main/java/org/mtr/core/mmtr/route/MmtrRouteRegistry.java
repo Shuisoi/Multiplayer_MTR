@@ -34,6 +34,9 @@ public final class MmtrRouteRegistry {
 	public MmtrRoute request(MmtrRoute route) {
 		final MmtrRoute existing = byVehicle.get(route.getVehicleId());
 		if (existing != null && existing.sameMovement(route)) {
+			// T5：同一条 movement 重发布时**刷新计划时刻**（计划会随晚点/重排变），但仍保留原对象
+			// —— 身份不能churn（notes/78），而计划时刻不进 sameMovement 正是为了这一点。
+			existing.setPlannedMillis(route.getPlannedMillis());
 			return existing;
 		}
 		byVehicle.put(route.getVehicleId(), route);
@@ -162,16 +165,45 @@ public final class MmtrRouteRegistry {
 			if (other == null || !outranks(other, route)) {
 				continue;
 			}
-			return "敌对进路：与 v" + otherId + " " + conflict.detail + "；对方按到达序优先，本车退出（只有最优先的一条能 SET）";
+			return "敌对进路：与 v" + otherId + " " + conflict.detail + "；对方优先（"
+				+ (other.getPlannedMillis() == Long.MAX_VALUE ? "到达序在先" : "计划时刻更早") + "），本车退出（只有最优先的一条能 SET）";
 		}
 		return null;
 	}
 
-	/** 到达序优先：先申请的先走；同一时刻按 vehicleId 定序（保证结果确定）。 */
+	/**
+	 * 优先次序：**计划时刻 > 到达序**（同刻按 vehicleId 定序）。
+	 *
+	 * <p>这就是 T1b 裁决链的头两档，只不过作用在**进路**上而不是道岔队列上。
+	 * 计划时刻来自任务/作业单步骤，**没有计划的进路排在最后** —— 于是"任务固定的红利"
+	 * 在这里兑现：谁该先进咽喉由**计划**说了算，而不是谁先申请。</p>
+	 */
 	private static boolean outranks(MmtrRoute other, MmtrRoute mine) {
+		final boolean otherLive = hasLivePlan(other);
+		final boolean mineLive = hasLivePlan(mine);
+		if (otherLive != mineLive) {
+			return otherLive;   // 计划还有效的那条优先
+		}
+		if (otherLive) {
+			return other.getPlannedMillis() < mine.getPlannedMillis();
+		}
 		return other.getRequestedMillis() != mine.getRequestedMillis()
 			? other.getRequestedMillis() < mine.getRequestedMillis()
 			: other.getVehicleId() < mine.getVehicleId();
+	}
+
+	/**
+	 * T5 **漂移退化策略**：计划时刻**已经过去**了就不再算计划，退回到达序。
+	 *
+	 * <p>判据不需要时钟：这条进路**申请的时刻**晚于它自己的**计划时刻**，就说明它已经晚点
+	 * （计划槽在它来要之前就过了）。没有这一条，一列晚点很久的车会永远赢 —— 它的计划时刻仍在过去、
+	 * 于是永远"更早"。这正是"计划优先"最容易变成"僵尸优先"的地方。</p>
+	 *
+	 * <p>退化之后并不惩罚它：只是不再靠计划占先，回到**到达序**（先来先服务）。</p>
+	 */
+	private static boolean hasLivePlan(MmtrRoute route) {
+		final long planned = route.getPlannedMillis();
+		return planned != Long.MAX_VALUE && planned >= route.getRequestedMillis();
 	}
 
 	/** 0 = 正线贯通 / 1 = 岔股开放（{@code MmtrTurnout} 的两个位置），给人看的中文。 */

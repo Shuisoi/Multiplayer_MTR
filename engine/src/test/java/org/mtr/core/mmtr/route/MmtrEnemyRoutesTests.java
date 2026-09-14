@@ -255,4 +255,66 @@ public final class MmtrEnemyRoutesTests {
 		assertTrue(largerIdAskedFirst.isEstablished(), "先申请的那条 SET（哪怕它的 vehicleId 更大）");
 		assertFalse(smallerIdAskedLater.isEstablished(), "后申请的让位（哪怕它的 vehicleId 更小）");
 	}
+
+	/**
+	 * **T5：冲突按计划定序** —— 晚到但**计划更早**的列车先走。
+	 *
+	 * <p>这是 T5 的招牌验收项，也是"任务固定"真正买到的东西：谁该先进咽喉由**计划**说了算，
+	 * 而不是谁先申请。计划时刻来自任务（{@code MmtrTask.earliestMs}），
+	 * 由 {@code Vehicle} 在发布进路时填进 {@link MmtrRoute#setPlannedMillis}。</p>
+	 */
+	@Test
+	public void plannedTimeDecidesConflictsNotArrivalOrder() {
+		final Corridor n = new Corridor("build/mmtr-enemy-planned");
+		final MmtrPointAuthority authority = new MmtrPointAuthority(() -> 0L);
+		// 两条都是**未来**的计划槽（计划时刻晚于自己申请的时刻，否则按 §漂移退化 就是过期计划）：
+		// 先申请的那条计划更晚，后申请的那条计划更早 ⇒ 后者该先走。
+		final MmtrRoute laterSlot = routeRequestedAt(n.sim, 1L, n.forward(), 1_000L);
+		laterSlot.setPlannedMillis(5_000L);
+		final MmtrRoute soonerSlot = routeRequestedAt(n.sim, 2L, n.backward(), 2_000L);
+		soonerSlot.setPlannedMillis(3_000L);
+
+		n.sim.mmtrRoutes.refresh(1L, authority);
+		n.sim.mmtrRoutes.refresh(2L, authority);
+
+		assertTrue(soonerSlot.isEstablished(), "T5 计划槽更早的那条先得到进路（哪怕它后申请）");
+		assertFalse(laterSlot.isEstablished(), "计划槽更晚的让位 —— 这就是任务固定的红利");
+		assertTrue(laterSlot.getStateReason().contains("计划时刻更早"), "理由说清是靠计划赢的：" + laterSlot.getStateReason());
+	}
+
+	/** 计划时刻**不进** `sameMovement`：晚点/重排改计划时不许换掉进路对象，但值要刷新。 */
+	@Test
+	public void replanningTheTimeKeepsTheRouteObjectButUpdatesItsPlannedTime() {
+		final Corridor n = new Corridor("build/mmtr-enemy-replan-time");
+		final MmtrRoute first = routeRequestedAt(n.sim, 1L, n.forward(), 1_000L);
+		first.setPlannedMillis(500L);
+
+		final MmtrRoute again = routeRequestedAt(n.sim, 1L, n.forward(), 1_000L);
+		again.setPlannedMillis(9_000L);
+		final MmtrRoute installed = n.sim.mmtrRoutes.request(again);
+
+		assertTrue(first == installed, "同一条 movement ⇒ 保留原对象（身份不churn）");
+		assertEquals(9_000L, installed.getPlannedMillis(), "但计划时刻被刷新（晚点重排会改它）");
+	}
+
+	/**
+	 * **T5 漂移退化策略**：计划槽已经过去（计划时刻早于它自己申请的时刻）⇒ 计划作废，退回到达序。
+	 *
+	 * <p>没有这一条，"计划优先"会变成"**僵尸优先**"：晚点很久的车计划时刻仍在过去，于是永远"更早"、
+	 * 永远赢。退化不惩罚它，只是不再让它靠计划占先。</p>
+	 */
+	@Test
+	public void aStalePlanFallsBackToArrivalOrder() {
+		final Corridor n = new Corridor("build/mmtr-enemy-stale-plan");
+		final MmtrPointAuthority authority = new MmtrPointAuthority(() -> 0L);
+		final MmtrRoute stale = routeRequestedAt(n.sim, 1L, n.forward(), 9_000L);
+		stale.setPlannedMillis(1_000L);   // 计划槽在它申请之前就过了 ⇒ 已漂移，不算计划
+		final MmtrRoute onTime = routeRequestedAt(n.sim, 2L, n.backward(), 2_000L);   // 无计划、但先申请
+
+		n.sim.mmtrRoutes.refresh(1L, authority);
+		n.sim.mmtrRoutes.refresh(2L, authority);
+
+		assertTrue(onTime.isEstablished(), "漂移的计划不再占先 ⇒ 按到达序：先申请的赢");
+		assertFalse(stale.isEstablished(), "晚点的那条退回到达序，不再靠（已过期的）计划赢");
+	}
 }
