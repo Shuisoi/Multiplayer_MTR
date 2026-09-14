@@ -47,6 +47,20 @@ public final class MmtrDriveAccess {
 		return Math.max(min, Math.min(value, max));
 	}
 	/**
+	 * T4 准入门槛：**无任务不得操纵**。
+	 *
+	 * <p>用户裁定"玩家的一切行为都在任务内"，所以一辆没有任务的车不该能被开走 —— 否则
+	 * "行为限制在任务内"就只是意图，不是规则。这一条是那道闸的唯一判据，做成纯函数以便直接测真值表。</p>
+	 *
+	 * <p><b>默认关</b>（{@code Simulator.mmtrRequireTaskToDrive}），真服务器上打开：
+	 * 引擎单测与工具链大量在"没有任务"的前提下开车，直接强制会把它们全部打断 ——
+	 * 与 {@code mmtrDefaultPointsZero} 同一个模式（策略开关，测试里保持关闭）。</p>
+	 */
+	public static boolean taskAdmitsDriving(boolean requireTask, boolean hasLiveTask) {
+		return !requireTask || hasLiveTask;
+	}
+
+	/**
 	 * @param senderIsRidingDriver    whether {@code sender} currently occupies a cab driver seat
 	 *                                of the consist
 	 * @param overrideActive          whether an MMTR manual override is currently held

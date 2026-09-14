@@ -414,6 +414,35 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		vehicleExtraData.setPowerLevel(MAX_POWER_LEVEL);
 	}
 
+	/** T4: 玩家执行的任务，进路是否已经发布过（它不设 auto / 停车目标，所以那两个当不了标志）。 */
+	private boolean mmtrPlayerRoutePublished = false;
+
+	/**
+	 * T4: 这列车的任务是否**由本车自己**推进"进路与道岔"这一层（规划 + 发布进路 + 申请道岔）。
+	 *
+	 * <p>修前这条路的门是 {@code executor == AUTOPILOT && mmtrMotionAuto}：于是**玩家执行的任务
+	 * 根本不发布进路、不申请道岔**（{@code Vehicle} 里两处申请点都进不去）。后果是玩家开车执行任务，
+	 * 到第一处道岔就撞上"位置停在默认 0、没有任何东西给它授权"的物理闸门 —— 任务做不下去。</p>
+	 *
+	 * <p>现在玩家执行的任务走同一条路；区别只在于**不接管油门**（见 {@link #mmtrMotionSelfArmMission}）：
+	 * 司机自己开，联锁照样为他设进路、扳道岔、给信号。这就是"玩家任务接入联锁"的全部含义。</p>
+	 */
+	private boolean mmtrMissionDrivesItsOwnRoute(MmtrMission mission) {
+		return mission.getExecutor() == MmtrMission.Executor.PLAYER
+			|| mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && mmtrMotionAuto;
+	}
+
+	/**
+	 * T4: 引擎该不该为这个任务**规划并发布进路**（自动车与玩家车都要）。
+	 *
+	 * <p>注意与 {@link #mmtrMissionDrivesItsOwnRoute} 的分工：**自臂发生在 auto 打开之前**，
+	 * 所以这里不能要求 {@code mmtrMotionAuto}（一开始写成同一个判据，八条既有用例立刻红 ——
+	 * 自动车根本没机会自臂）。那一个判据管的是"进路已发布、正在推进，需要每 tick 续期"。</p>
+	 */
+	private static boolean mmtrMissionNeedsRouteSetup(MmtrMission mission) {
+		return mission.getExecutor() == MmtrMission.Executor.AUTOPILOT || mission.getExecutor() == MmtrMission.Executor.PLAYER;
+	}
+
 	/**
 	 * MMTR (server): advance the active mission state machine from observed train state.
 	 * Missions are attached to the train; the executor (AUTOPILOT / PLAYER / AI) only reads or
@@ -429,8 +458,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// scheduler, periodic source) does not need to arm anything - the vehicle resolves the target
 		// platform/siding rail, plans the run and arms the auto step-run itself on the next tick.
 		// Missions armed eagerly by the ops layer (auto already on) are left alone.
-		if (motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && mission.getState() != MmtrMission.State.AT_TARGET && !mission.isTerminal()
-			&& !mmtrMotionAuto && mmtrMotionStopTargetM < 0 && data instanceof final Simulator simulator) {
+		if (motionMission && mmtrMissionNeedsRouteSetup(mission) && mission.getState() != MmtrMission.State.AT_TARGET && !mission.isTerminal()
+			&& !mmtrMotionAuto && mmtrMotionStopTargetM < 0 && data instanceof final Simulator simulator
+			&& !(mission.getExecutor() == MmtrMission.Executor.PLAYER && mmtrPlayerRoutePublished)) {
 			mmtrMotionSelfArmMission(simulator, mission);
 		}
 		switch (mission.getState()) {
@@ -468,6 +498,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// turnout authority requests (un-crossed forks) are released so queued trains can proceed.
 		if (motionMission && mission.isTerminal()) {
 			releaseMmtrPointRequests();
+			mmtrPlayerRoutePublished = false;   // T4: 任务结束，玩家任务的自臂闩一并清掉
 			mmtrMotionAuto = false;
 			mmtrMotionStopTargetM = -1;
 			mmtrMotionStoppedAtTarget = false;
@@ -485,7 +516,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// then refresh the grant/queue windows of the pending forks every tick so a slow run or a
 		// long lock wait never lets the requests expire mid-route; crossed forks were released at
 		// the crossing and must not be re-requested.
-		if (motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && mmtrMotionAuto && !mission.isTerminal()
+		if (motionMission && mmtrMissionDrivesItsOwnRoute(mission) && !mission.isTerminal()
 			&& data instanceof final Simulator simulator && !mmtrPointOwner.isEmpty()) {
 			replenishForkRequests(simulator);
 			if (!mmtrPendingPointOps.isEmpty()) {
@@ -582,9 +613,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			return;
 		}
-		setMmtrMotionAuto(true);
-		setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
-		System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
+		if (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT) {
+			setMmtrMotionAuto(true);
+			setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
+			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
+		} else {
+			// T4: 玩家执行 —— **只发布进路与授权，不接管油门**。司机自己开，联锁替他设进路/扳道岔/给信号；
+			// 引擎只观测（位置、门、停车点），到点由任务状态机照常推进。
+			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " (PLAYER) 进路已发布到 rail " + plan.targetRailHex
+				+ "，道岔已申请；油门留给司机");
+			// 玩家任务不设 auto / 停车目标，所以那两个不能当"已自臂"的标志 —— 单独记一个闩，
+			// 否则每 tick 都会重规划一遍（幂等，但日志会刷屏）。
+			mmtrPlayerRoutePublished = true;
+		}
 	}
 
 	/**
@@ -1976,6 +2017,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * no-identity callers (tests/tools) keep working.
 	 */
 	public boolean canTakeMmtrControl(@Nullable UUID uuid) {
+		// T4 准入闸门：无任务不得操纵（策略开关；默认关，见 MmtrDriveAccess.taskAdmitsDriving）。
+		if (!MmtrDriveAccess.taskAdmitsDriving(data instanceof final Simulator simulator && simulator.mmtrRequireTaskToDrive,
+			mmtrMission != null && !mmtrMission.isTerminal())) {
+			return false;
+		}
 		if (uuid == null) {
 			final boolean[] anyDriverRiding = {false};
 			vehicleExtraData.iterateRidingEntities(vehicleRidingEntity -> {
