@@ -94,22 +94,25 @@ public final class MmtrServicePlanTests {
 
 	// ---------------------------------------------------------------- ③ 到发时刻累计
 
-	/** ③ 各站到发时刻 = 前站开车 + 走行；开车 = 到点 + 停站；终点处理另计。 */
+	/**
+	 * ③ 各站到发时刻 = 前站开车 + 走行；**停站属于到达**（这一趟的起点站不停车 —— 车本来就在那儿）；
+	 * 终点处理另计。
+	 */
 	@Test
 	public void stopArrivalAndDepartureTimesAccumulateCorrectly() {
 		final MmtrServicePlan plan = MmtrServicePlan.generate(threeStopLine(), peakPattern(), TIMES);
 		final MmtrServicePlan.Trip trip = plan.trips.get(0);   // 07:00 发
 
 		assertEquals(3, trip.stopTimes.size(), "三站");
-		// A：07:00 到、07:00:30 开
+		// A（起点）：07:00 发车（时刻表那一栏就是车轮动的时刻，起点不再加一次停站）
 		assertEquals(H07, trip.stopTimes.get(0).arrivalMillis);
-		assertEquals(H07 + 30_000, trip.stopTimes.get(0).departureMillis);
-		// B：A 开车 + 4 min 走行 = 07:04:30 到，停 45 s → 07:05:15 开
-		assertEquals(H07 + 30_000 + LEG, trip.stopTimes.get(1).arrivalMillis);
-		assertEquals(H07 + 30_000 + LEG + 45_000, trip.stopTimes.get(1).departureMillis);
-		// C（终点）：B 开车 + 4 min = 07:09:15 到，停 30 s → 07:09:45 开（终点处理 3 min → 07:12:45）
-		assertEquals(H07 + 30_000 + LEG + 45_000 + LEG, trip.stopTimes.get(2).arrivalMillis);
-		assertEquals(H07 + 30_000 + LEG + 45_000 + LEG + 30_000, trip.stopTimes.get(2).departureMillis);
+		assertEquals(H07, trip.stopTimes.get(0).departureMillis);
+		// B：A 开车 + 4 min 走行 = 07:04 到，停 45 s → 07:04:45 开
+		assertEquals(H07 + LEG, trip.stopTimes.get(1).arrivalMillis);
+		assertEquals(H07 + LEG + 45_000, trip.stopTimes.get(1).departureMillis);
+		// C（终点）：B 开车 + 4 min = 07:08:45 到，停 30 s → 07:09:15 开（终点处理 3 min → 07:12:15）
+		assertEquals(H07 + LEG + 45_000 + LEG, trip.stopTimes.get(2).arrivalMillis);
+		assertEquals(H07 + LEG + 45_000 + LEG + 30_000, trip.stopTimes.get(2).departureMillis);
 		assertEquals(trip.stopTimes.get(2).departureMillis + TERMINAL, trip.terminalDoneMillis, "终点处理 3 min");
 		assertEquals(1003, trip.terminalStop().stationId);
 		assertEquals(MmtrLine.TerminalTreatment.CHANGE_ENDS, trip.terminalTreatment);
@@ -126,16 +129,23 @@ public final class MmtrServicePlanTests {
 		}
 	}
 
-	/** ring（周转）= 往程 + 停站 + 终点处理 + 返程 + 停站 —— 车底数的分母，必须手算得住。 */
+	/**
+	 * ring（周转）= 一辆车从发车到**再次能发车**的时长 = 往程一趟 + 返程一趟
+	 * （各自含走行、到达停站、末端处理）—— 车底数的分母，必须手算得住。
+	 *
+	 * <p>注意这与设计字面的"停站算两次、终点处理算一次"差一次处理：车回到起点后**还要换一次端**
+	 * 才能发下一趟，那一次同样是占用。P3 的交路用例正是这么把它抓出来的（见 notes/138/139）。</p>
+	 */
 	@Test
-	public void theRingAddsBothDirectionsDwellsAndTerminalHandling() {
+	public void theRingIsTheFullCycleTheVehicleIsBusy() {
 		final MmtrLine line = threeStopLine();
-		// 2 段 × 2 方向 × 4 min = 16 min 走行；停站 (30+45+30)s × 2 = 3.5 min；终点处理 3 min → 22.5 min
-		final long expected = 2 * 2 * LEG + 2 * (30_000 + 45_000 + 30_000) + TERMINAL;
-		assertEquals(expected, MmtrServicePlan.ringMillis(line, TIMES));
-		assertEquals(22 * MIN + 30_000, expected, "22.5 min（手算核对）");
-		assertEquals(5, MmtrFleet.requiredConsists(MmtrServicePlan.ringMillis(line, TIMES), 5 * MIN),
-			"22.5 min 周转 / 5 min 间隔 = 4.5 → 向上取整 5（这就是「车辆数固定要利用好」要盯的那个数）");
+		// 单程一趟 = 2 段 × 4 min 走行 + B 45 s + C 30 s 停站 + 终点处理 3 min = 12.25 min
+		final long oneWay = 2 * LEG + 45_000 + 30_000 + TERMINAL;
+		assertEquals(oneWay, MmtrServicePlan.tripDurationMillis(line, TIMES, MmtrServicePlan.Trip.Direction.OUT));
+		assertEquals(2 * oneWay, MmtrServicePlan.ringMillis(line, TIMES), "一个循环 = 往 + 返两趟");
+		assertEquals(24 * MIN + 30_000, MmtrServicePlan.ringMillis(line, TIMES), "24.5 min（手算核对）");
+		assertEquals(9, MmtrFleet.requiredConsists(MmtrServicePlan.ringMillis(line, TIMES), 3 * MIN),
+			"24.5 min 周转 / 3 min 高峰间隔 = 8.17 → 向上取整 9（这就是「车辆数固定要利用好」要盯的那个数）");
 	}
 
 	/** ③ 密度表为空 / 坏段时**不生成无穷多趟**（生成器不替输入层报错，但也不失控）。 */
@@ -168,7 +178,7 @@ public final class MmtrServicePlanTests {
 		}
 		assertEquals(plan.trips.get(0).stopTimes.get(0).stationId, plan.trips.get(plan.size() - 1).terminalStop().stationId,
 			"末趟终点 = 首趟起点");
-		assertEquals(3, MmtrServicePlan.ringMillis(loop, TIMES) / LEG / 2,
-			"环线四站 = 3 段，ring 是往返走行（3 段 × 2 方向 × 4 min；终点处理不计）");
+		assertEquals(2 * MmtrServicePlan.tripDurationMillis(loop, TIMES, MmtrServicePlan.Trip.Direction.OUT), MmtrServicePlan.ringMillis(loop, TIMES),
+			"环线的 ring = 往 + 返两趟（终点处理不计，因为环线不换端）");
 	}
 }

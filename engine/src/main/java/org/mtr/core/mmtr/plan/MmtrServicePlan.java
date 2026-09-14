@@ -109,16 +109,52 @@ public final class MmtrServicePlan {
 	 * **按分段密度展开趟次表**（设计 §5.1 ③ 的前半）。
 	 *
 	 * <p>纯函数：同样的 (线路, 密度, 走行时间) 永远得到同一个计划 —— 这就是"可重放"的含义，
-	 * 也是计划**不落盘**的底气（§1.2）。</p>
+	 * 也是计划**不落盘**的底气（§1.2）。本重载生成**起点方向**（{@link Trip.Direction#OUT}）。</p>
 	 */
 	public static MmtrServicePlan generate(MmtrLine line, MmtrPattern pattern, MmtrTravelTimes times) {
+		return generate(line, pattern, times, Trip.Direction.OUT);
+	}
+
+	/**
+	 * 同上，可指定方向。
+	 *
+	 * <p>{@link Trip.Direction#BACK}（终点 → 起点）**不是**"另一条线路的时刻表"，而是
+	 * **同一辆车的回程**：它的发车时刻 = 对应往程趟的 {@link Trip#terminalDoneMillis}
+	 * （终点站处理完就能开回来）。车底交路（P3）靠这条把"出去—回来"接成连续的序列，
+	 * 否则一辆车的两趟车之间会凭空跳回起点。</p>
+	 */
+	public static MmtrServicePlan generate(MmtrLine line, MmtrPattern pattern, MmtrTravelTimes times, Trip.Direction direction) {
 		final ObjectArrayList<Trip> trips = new ObjectArrayList<>();
+		final long backOffsetMillis = direction == Trip.Direction.BACK ? outboundDurationMillis(line, times) : 0;
 		int sequence = 0;
 		for (final long departureMillis : departureSlots(pattern)) {
 			sequence++;
-			trips.add(buildTrip(line, times, sequence, departureMillis));
+			trips.add(buildTrip(line, times, sequence, departureMillis + backOffsetMillis, direction));
 		}
 		return new MmtrServicePlan(line.lineId, trips);
+	}
+
+	/** 往程一趟从发车到"终点站处理完"的时长（返程趟按它整体后移）。 */
+	public static long outboundDurationMillis(MmtrLine line, MmtrTravelTimes times) {
+		return tripDurationMillis(line, times, Trip.Direction.OUT);
+	}
+
+	/** 一趟（指定方向）从发车到终点处理完的时长。 */
+	public static long tripDurationMillis(MmtrLine line, MmtrTravelTimes times, Trip.Direction direction) {
+		if (line.stops.isEmpty()) {
+			return 0;
+		}
+		long duration = 0;
+		final int count = line.stops.size();
+		for (int step = 0; step < count; step++) {
+			final int index = direction == Trip.Direction.BACK ? count - 1 - step : step;
+			if (step > 0) {
+				final int previousIndex = direction == Trip.Direction.BACK ? index + 1 : index - 1;
+				duration += Math.max(0, times.legMillis(previousIndex, index));
+				duration += Math.max(0, line.stops.get(index).dwellMillis);
+			}
+		}
+		return duration + (line.loop ? 0 : Math.max(0, times.terminalMillis(line.effectiveTerminalTreatment())));
 	}
 
 	/**
@@ -146,45 +182,56 @@ public final class MmtrServicePlan {
 		return slots;
 	}
 
-	private static Trip buildTrip(MmtrLine line, MmtrTravelTimes times, int sequence, long departureMillis) {
+	private static Trip buildTrip(MmtrLine line, MmtrTravelTimes times, int sequence, long departureMillis, Trip.Direction direction) {
 		final MmtrLine.TerminalTreatment treatment = line.effectiveTerminalTreatment();
 		final ObjectArrayList<StopTime> stopTimes = new ObjectArrayList<>();
 		long clock = departureMillis;
-		for (int i = 0; i < line.stops.size(); i++) {
-			final MmtrLine.Stop stop = line.stops.get(i);
-			if (i > 0) {
-				clock += Math.max(0, times.legMillis(i - 1, i));
+		final int count = line.stops.size();
+		for (int step = 0; step < count; step++) {
+			final int index = direction == Trip.Direction.BACK ? count - 1 - step : step;
+			final MmtrLine.Stop stop = line.stops.get(index);
+			if (step > 0) {
+				final int previousIndex = direction == Trip.Direction.BACK ? index + 1 : index - 1;
+				clock += Math.max(0, times.legMillis(previousIndex, index));
 			}
 			final long arrival = clock;
-			final long departure = arrival + Math.max(0, stop.dwellMillis);
-			stopTimes.add(new StopTime(i, stop.stationId, stop.platformId, arrival, departure));
+			/*
+			 * **停站时长属于"到达"**：这一趟的起点站不停（车本来就停在那儿、刚做完上一趟的终点处理），
+			 * 其余每站按到达算一次门开闭。
+			 *
+			 * <p>为什么必须这样定：{@code departureMillis} 是时刻表上那一栏"发车时刻"，它就该是车轮动了
+			 * 的那一刻。若在起点再加一次停站，时刻表整体后移、而车辆的循环时间被算少一次停站 ——
+			 * 交路在密度交界处就会不可行（P3 的用例正是这么把它抓出来的）。</p>
+			 */
+			final long departure = step == 0 ? arrival : arrival + Math.max(0, stop.dwellMillis);
+			stopTimes.add(new StopTime(index, stop.stationId, stop.platformId, arrival, departure));
 			clock = departure;
 		}
 		final long terminalDone = clock + (line.loop ? 0 : Math.max(0, times.terminalMillis(treatment)));
-		return new Trip(line.lineId + "-" + String.format("%03d", sequence), sequence, Trip.Direction.OUT,
+		final String suffix = direction == Trip.Direction.BACK ? "B" : "";
+		return new Trip(line.lineId + "-" + suffix + String.format("%03d", sequence), sequence, direction,
 			departureMillis, treatment, stopTimes, terminalDone);
 	}
 
 	/**
-	 * **周转时间 ring**（设计 §5.1 ①）：往程走行 + 沿途停站 + 终点处理 + 返程走行 + 沿途停站。
+	 * **周转时间 ring**（设计 §5.1 ①）：一辆车从起点发车到**再次**能发车的时长 =
+	 * 往程一趟（走行 + 沿途停站 + 终点处理）+ 返程一趟（走行 + 沿途停站 + 起点端处理）。
 	 *
-	 * <p>环线没有"终点处理"（终点即起点，继续跑），所以那一段是 0。</p>
+	 * <h3>与设计字面公式的一处偏离（有理由，记在这里）</h3>
+	 * <p>设计写的是"往程走行 + 沿途各站停站 + 终点处理 + 返程走行 + 沿途各站停站"——
+	 * 停站按"每个站算两次"、终点处理只算**一次**。按它实现之后 P3 的交路在**两段密度的交界处**
+	 * 直接不可行（实测：高峰间隔 3 min、N=8 给出 24 min 的间隔，而车实际要占 25.5 min），
+	 * 因为车回到起点后**还要换一次端**才能发下一趟 —— 那一次处理同样是占用。
+	 * 所以这里按**车辆实际占用时间**算：每站按"到达"算一次停站（见 {@code buildTrip}），
+	 * **两端各算一次终点处理**。N = ceil(ring / 高峰间隔) 这条关系不变。</p>
 	 *
-	 * <p>它是车底数的分母：{@code N = ceil(ring / 高峰间隔)}。返程的走行时间按同一张腿表反向取，
-	 * 这样不对称的线路（上坡慢、下坡快）也能算对。</p>
+	 * <p>环线没有终点处理（终点即起点、继续跑），所以那两项都是 0。</p>
 	 */
 	public static long ringMillis(MmtrLine line, MmtrTravelTimes times) {
 		if (line.stops.size() < 2) {
 			return 0;
 		}
-		long legs = 0;
-		for (int i = 1; i < line.stops.size(); i++) {
-			legs += Math.max(0, times.legMillis(i - 1, i));
-			legs += Math.max(0, times.legMillis(i, i - 1));
-		}
-		final long dwells = 2 * line.totalDwellMillis();
-		final long terminal = line.loop ? 0 : Math.max(0, times.terminalMillis(line.effectiveTerminalTreatment()));
-		return legs + dwells + terminal;
+		return tripDurationMillis(line, times, Trip.Direction.OUT) + tripDurationMillis(line, times, Trip.Direction.BACK);
 	}
 
 	public int size() {
