@@ -6,10 +6,12 @@ import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.MmtrDriveAccess;
 import org.mtr.core.mmtr.MmtrMission;
+import org.mtr.core.mmtr.point.MmtrPointAuthority;
 import org.mtr.core.mmtr.point.MmtrTurnout;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 import org.mtr.core.mmtr.route.MmtrRoute;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
+import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Angle;
 
@@ -55,6 +57,7 @@ public final class MmtrPlayerMissionInterlockTests {
 		final Position fork = new Position(52, 0, 0);
 		final Rail x;
 		final Rail s;
+		final Rail d;
 		final Siding siding;
 		final Platform platform;
 		final BranchStore store = new BranchStore();
@@ -69,7 +72,7 @@ public final class MmtrPlayerMissionInterlockTests {
 			x = through(new Position(12, 0, 0), fork);
 			// 站台那根轨必须是 **platform rail**，否则 Platform 挂不上车站（照抄 MmtrRouteConflictTests）。
 			s = Rail.newPlatformRail(fork, Angle.fromAngle(0), new Position(92, 0, 0), Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
-			final Rail d = through(fork, new Position(92, 0, 20));
+			d = through(fork, new Position(92, 0, 20));
 			final Depot depot = new Depot(TransportMode.TRAIN, sim);
 			// 车站要先于站台建立（与 MmtrRouteConflictTests 同序）—— 反过来站台挂不上车站。
 			final Station station = new Station(sim);
@@ -195,5 +198,63 @@ public final class MmtrPlayerMissionInterlockTests {
 			"③ **调车作业就是调车进路**，哪怕此刻还没有副显示授权（修前这里答 MAIN，还会随授权翻）");
 		assertEquals(MmtrRoute.Kind.SHUNT, Vehicle.mmtrRouteKindOf(passenger, true),
 			"客运作业但拿了副显示授权 ⇒ 也按调车（安全侧：主灯不许清）");
+	}
+
+	/**
+	 * ⑤ **调车进路同样受物理道岔预约约束** —— "副显示授权"不绕过联锁。
+	 *
+	 * <p>设计把这条列为待办，说法是"MmtrShuntAuthority 是绕过 S1 占用的**第二套授权**，与主进路并行"。
+	 * 先核实它到底是不是缺口，结论是：**结构上已经满足** ——</p>
+	 * <ul>
+	 *   <li>道岔申请与 kind 无关（{@code armMmtrPointRun} 对两类进路一视同仁）；</li>
+	 *   <li>{@code MmtrRouteRegistry.refresh} 的 SET 判据（授权 + T1 的物理位置）**没有 kind 过滤**。</li>
+	 * </ul>
+	 * <p>也就是"第二套授权"管的只是**副显示的灯显**与**S1 占用豁免**这两件事 —— 那正是设计要的
+	 * （调车本来就可以进占用区段），不是绕过联锁。本用例把它钉住：道岔被别人按在互斥位置时，
+	 * **即便手里握着副显示授权，调车进路也必须停在 PENDING**。</p>
+	 */
+	@Test
+	public void aShuntRouteCannotBypassTheTurnoutReservation() {
+		final Net n = new Net("build/mmtr-t4-shunt-interlock");
+		final MmtrTurnout turnout = n.sim.mmtrTurnout(n.fork.getX(), n.fork.getY(), n.fork.getZ());
+		assertNotNull(turnout, "夹具的岔口是一处单开道岔");
+		final int legToPlatform = turnout.farLeg.getOrDefault(n.x.getHexId(), -1);
+		final int legToBranch = turnout.branchLeg.getOrDefault(n.x.getHexId(), -1);
+		assertTrue(legToPlatform >= 0 && legToBranch >= 0, "几何腿号要能取到");
+		final long until = n.sim.getCurrentMillis() + 600_000L;
+		final long shuntId = 42L;
+		final String shuntOwner = "v" + shuntId;
+
+		// 另一列车先把这处道岔按在**正线贯通**（它要去站台）—— 物理位置已经被别人占了
+		assertEquals(MmtrPointAuthority.Result.GRANTED,
+			n.sim.mmtrPointAuthority.request(n.fork.getX(), n.fork.getY(), n.fork.getZ(), n.x.getHexId(), "vOther", legToPlatform, until),
+			"另一列车先拿到正线那一位");
+
+		// 调车进路：手里确实有 C3a 的副显示授权
+		n.sim.mmtrShuntAuthorities.grant(shuntId, n.x.getHexId(), n.d.getHexId(),
+			MmtrShuntAuthority.Kind.SUBSIDIARY_SHUNT, 25, 5 * 60 * 1000L);
+		assertNotNull(n.sim.mmtrShuntAuthorities.active(shuntId), "副显示授权已在手上");
+
+		final ObjectArrayList<String> rails = new ObjectArrayList<>();
+		rails.add(n.x.getHexId());
+		rails.add(turnout.branchRailHex);
+		final ObjectArrayList<String[]> forks = new ObjectArrayList<>();
+		forks.add(new String[]{String.valueOf(n.fork.getX()), String.valueOf(n.fork.getY()), String.valueOf(n.fork.getZ()),
+			n.x.getHexId(), String.valueOf(legToBranch)});
+		final MmtrRoute route = n.sim.mmtrRoutes.request(new MmtrRoute(shuntId, shuntOwner, MmtrRoute.Kind.SHUNT,
+			rails, forks, turnout.branchRailHex, n.sim.getCurrentMillis()));
+
+		assertEquals(MmtrPointAuthority.Result.QUEUED,
+			n.sim.mmtrPointAuthority.request(n.fork.getX(), n.fork.getY(), n.fork.getZ(), n.x.getHexId(), shuntOwner, legToBranch, until),
+			"⑤ 申请道岔走的是**同一条路**：互斥位置被占 ⇒ 只能排队");
+
+		n.sim.mmtrRoutes.refresh(shuntId, n.sim.mmtrPointAuthority);
+		assertFalse(route.isEstablished(), "⑤ 拿不到道岔 ⇒ **调车进路也必须 PENDING**（副显示不等于绕过联锁）");
+		assertTrue(route.getStateReason().contains("物理道岔"), "理由点名物理冲突：" + route.getStateReason());
+
+		// 前车越岔让位 → 调车进路这才 SET（与列车进路**同一套判定**）
+		n.sim.mmtrPointAuthority.passed(n.fork.getX(), n.fork.getY(), n.fork.getZ(), n.x.getHexId(), "vOther");
+		n.sim.mmtrRoutes.refresh(shuntId, n.sim.mmtrPointAuthority);
+		assertTrue(route.isEstablished(), "道岔到手 ⇒ 调车进路 SET（同一套判据，没有第二条路）");
 	}
 }
