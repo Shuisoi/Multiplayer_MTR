@@ -135,6 +135,11 @@ final class MmtrPointCommands {
 	 * 所以很容易被当成一条真实进路。这里把它点名出来，而不是笼统说"节点/轨不匹配"。</p>
 	 */
 	private static String failureText(Simulator simulator, Position node, String via, int branch) {
+		final String blocked = simulator.mmtrLastOperatorThrowBlockedReason();
+		if (blocked != null) {
+			// 车压在岔上被拒：把闸门那句原话回给操作者（含是哪根轨、多少米内、为什么）
+			return "设定失败：" + blocked;
+		}
 		final org.mtr.core.mmtr.point.MmtrTurnout turnout = simulator.mmtrTurnout(node.getX(), node.getY(), node.getZ());
 		final String where = node.getX() + "," + node.getY() + "," + node.getZ() + " / " + shortHex(via);
 		if (turnout == null) {

@@ -953,8 +953,32 @@ public class Simulator extends Data implements Utilities {
 	 * （{@link #mmtrSyncTurnoutPositionsToGrants}），人工操作看着像没生效 —— 实测就是这样红掉的
 	 * （{@code manualOperatorBranchOutranksTheVehiclesOwnGrant}）。一处道岔只有一个位置，
 	 * 所以三个进向一起锁；解锁用 {@code point unlock}，锁随 {@code mmtr-points.json} 落盘。</p>
+	 *
+	 * <p>被拒时 {@link #mmtrLastOperatorThrowBlockedReason()} 给出可读原因（指令层原话回给操作者）。</p>
 	 */
+	/**
+	 * 上一次人工扳岔被拒的原因（{@code null} = 没被拒）：指令层把这句话原样回给操作者，
+	 * 而不是笼统说"设定失败"（现场最需要知道的是"为什么"）。
+	 */
+	private String mmtrLastOperatorThrowBlockedReason = null;
+
+	public @org.jspecify.annotations.Nullable String mmtrLastOperatorThrowBlockedReason() {
+		return mmtrLastOperatorThrowBlockedReason;
+	}
+
 	public boolean mmtrOperatorSetTurnoutPosition(long x, long y, long z, int position) {
+		/*
+		 * 闸门：**车压在岔上就不许扳**（用户 2026-09-14："车压在岔上就拒绝人工扳岔"）。
+		 * 把道岔从车下抽走是脱轨级事故；判定与灯显示"岔区净空被占"读同一段代码，
+		 * 所以不会出现"灯说被占、道岔照样能扳"这种自相矛盾。
+		 */
+		final String blocked = org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(this, new org.mtr.core.data.Position(x, y, z));
+		if (blocked != null) {
+			System.out.println("[MMTR-PT] 拒绝人工扳岔 " + x + "," + y + "," + z + "：" + blocked);
+			mmtrLastOperatorThrowBlockedReason = blocked;
+			return false;
+		}
+		mmtrLastOperatorThrowBlockedReason = null;
 		if (!mmtrSetTurnoutPosition(x, y, z, position)) {
 			return false;
 		}
@@ -984,6 +1008,10 @@ public class Simulator extends Data implements Utilities {
 		}
 		if (mmtrPointAuthority.isTurnoutLocked(x, y, z, turnout)
 			|| mmtrPointAuthority.physicalPosition(x, y, z) != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
+			return false;
+		}
+		// 第三道闸门与人工那条一样：车压在岔上不扳（同一条判定，见 MmtrJunctionState.blockedThrowReason）。
+		if (org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(this, new org.mtr.core.data.Position(x, y, z)) != null) {
 			return false;
 		}
 		final int wanted = position == org.mtr.core.mmtr.point.MmtrTurnout.REVERSE
@@ -1061,6 +1089,7 @@ public class Simulator extends Data implements Utilities {
 	 * fork, never auto). */
 	public boolean mmtrSetPoint(long x, long y, long z, String viaRailHex, int branch) {
 		refreshMmtrTurnouts();
+		mmtrLastOperatorThrowBlockedReason = null;
 		if (mmtrTurnouts.containsKey(x + "," + y + "," + z)) {
 			// 单开道岔：入参是"某进向上的第几条腿"，翻译成**节点位置**（一处道岔只有两个位置）。
 			if (branch < 0) {

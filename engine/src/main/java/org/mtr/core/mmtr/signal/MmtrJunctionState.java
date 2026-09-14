@@ -100,6 +100,28 @@ public final class MmtrJunctionState {
 		return "";
 	}
 
+	/**
+	 * **人工/意图扳岔的闸门**：岔区净空被占时**不许扳** —— 把道岔从车下抽走是脱轨级事故
+	 * （用户 2026-09-14 定："车压在岔上就拒绝人工扳岔"）。
+	 *
+	 * <p>与灯的"清不掉"判定读**同一段** {@link #foulingRail}：显示的规则与动道岔的规则必须同源，
+	 * 否则会出现"这盏灯说岔区被占、道岔却照样能扳"这种自相矛盾的状态。</p>
+	 *
+	 * @return 说清原因的字符串（可直接回给操作者）；{@code null} = 净空干净，可以扳
+	 */
+	public static @org.jspecify.annotations.Nullable String blockedThrowReason(Simulator simulator, Position node) {
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(node);
+		if (neighbours == null) {
+			return null;
+		}
+		final Rail fouled = foulingRail(node, neighbours, simulator.mmtrOccupancyTrees());
+		if (fouled == null) {
+			return null;
+		}
+		return "岔区净空被占：轨 " + shortHex(fouled.getHexId()) + " 靠这个节点的 " + Vehicle.MMTR_JUNCTION_CLEARANCE_M
+			+ " m 内有车足迹 —— 不许把道岔从车下抽走（等车出清这一段再扳）";
+	}
+
 	private static String shortHex(String hex) {
 		return hex == null || hex.length() <= 8 ? String.valueOf(hex) : hex.substring(0, 8) + "…";
 	}
