@@ -209,6 +209,8 @@ public final class SystemMapServlet extends ServletBase {
 						out.addProperty("yardSidingId", String.valueOf(dispatcher.yardSidingId));
 						out.addProperty("dispatchedTotal", dispatcher.dispatchedTotal);
 						out.addProperty("retryCount", dispatcher.retryCount);
+						// notes/140 的尾巴：跳过（迟到不补跑）与"正在等哪一步"也要看得见 —— 运营台排查"车为什么没动"就靠这两个数
+						out.addProperty("skippedSteps", dispatcher.skippedSteps);
 						out.addProperty("complete", dispatcher.isComplete());
 						if (dispatcher.diagram.capacityProblem != null) {
 							out.addProperty("capacityProblem", dispatcher.diagram.capacityProblem);
@@ -220,6 +222,7 @@ public final class SystemMapServlet extends ServletBase {
 							w.addProperty("vehicleId", String.valueOf(state.vehicleId));
 							w.addProperty("steps", state.tasks.size());
 							w.addProperty("dispatchedSteps", state.dispatchedSteps);
+							w.addProperty("awaitingTaskId", state.awaitingTaskId);
 							final org.mtr.core.mmtr.task.MmtrTask next = state.nextTask();
 							if (next != null) {
 								w.addProperty("nextKind", next.kind().name());
