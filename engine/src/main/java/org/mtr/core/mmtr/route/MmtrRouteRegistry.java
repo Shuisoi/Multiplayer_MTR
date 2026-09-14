@@ -94,10 +94,24 @@ public final class MmtrRouteRegistry {
 			return;
 		}
 		final ObjectArrayList<String[]> outstanding = new ObjectArrayList<>();
+		/*
+		 * **一处道岔在一趟里被走两次**（折返 / 回头：先正线出去、再岔股折回）时，两程要的是**互斥的
+		 * 两个位置** —— 要求它们同时成立在物理上不可能，进路于是永远 PENDING。现场（2026-09-14，车场
+		 * aassdd 的调车）就是这样：车停在自己的出发信号前，理由写着"物理道岔 … 被 v<它自己> 按在位置 1，
+		 * 本车需要位置 0"。而它按着 1 也不是错的 —— 那是**后面那一程**要的位。
+		 *
+		 * <p>判据改成**同一个节点只算最先要过的那一程**：它越岔之后前一程由 crossing 释放，后一程自然
+		 * 成为"第一个未越过的"，接手判定。单车单趟（每个节点一处道岔）逐位不变。</p>
+		 */
+		final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
 		for (final String[] fork : route.getForks()) {
-			if (!route.isForkCrossed(fork)) {
-				outstanding.add(fork);
+			if (route.isForkCrossed(fork)) {
+				continue;
 			}
+			if (!nearestPassPerNode.add(fork[0] + "," + fork[1] + "," + fork[2])) {
+				continue;
+			}
+			outstanding.add(fork);
 		}
 		boolean allGranted = true;
 		String blockedReason = "";

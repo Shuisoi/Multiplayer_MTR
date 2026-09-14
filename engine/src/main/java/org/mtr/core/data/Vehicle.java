@@ -678,12 +678,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// further ahead join the pending set via replenishForkRequests as the run approaches them,
 		// so a following train never occupies the points the leading train still needs.
 		final double distanceNow = mmtrMotionWalker == null ? 0 : mmtrMotionWalker.distanceM();
+		/*
+		 * **一处道岔在一趟里只申请"最先要过的那一程"**（notes/137）。
+		 *
+		 * <p>折返（牵出—推进）会让同一处道岔出现在进路里两次，两程要**互斥的两个位置**。若两程都进
+		 * 申请集，后申请的那一程会把它自己的位按上（物理位置只认最后一个需求），而进路判定看的是
+		 * **最先要过的那一程** —— 于是"手里按着 1、进路需要 0"，谁也不动：车永远停在自己的出发信号前。
+		 * 同一节点只收**第一程**（forkOps 按行进次序）；它越岔之后，第二程自然进入窗口再申请。</p>
+		 */
+		final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
 		for (int j = 0; j < plan.forkOps.size(); j++) {
 			final String[] op = plan.forkOps.get(j);
 			final double forkAbsM = j < plan.forkMeters.size() ? plan.forkMeters.get(j) : Double.NaN;
 			final double remainingM = forkAbsM - distanceNow;
 			if (remainingM <= 0 || remainingM > MMTR_APPROACH_LOCK_METERS) {
 				continue; // already crossed or not yet in the approach window
+			}
+			if (!nearestPassPerNode.add(op[0] + "," + op[1] + "," + op[2])) {
+				continue; // 同一处道岔的**后一程**：等前一程过了再申请
 			}
 			mmtrPendingPointOps.add(op.clone());
 		}
@@ -741,9 +753,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final java.util.HashMap<String, Integer> wanted = new java.util.HashMap<>();
 		for (final String[] op : plan.forkOps) {
+			final String nodeKey = op[0] + "," + op[1] + "," + op[2];
+			if (wanted.containsKey(nodeKey)) {
+				continue;   // 同一处道岔走两次（折返）：**最先要过的那一程**说了算（notes/137）
+			}
 			final int demand = authority.turnoutDemand(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], Integer.parseInt(op[4]));
 			if (demand != Integer.MIN_VALUE) {
-				wanted.put(op[0] + "," + op[1] + "," + op[2], demand);
+				wanted.put(nodeKey, demand);
 			}
 		}
 		simulator.mmtrReleaseStalePhysicalHolds(owner, wanted);
@@ -784,6 +800,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		final double distanceNow = mmtrMotionWalker.distanceM();
+		final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
 		for (int j = 0; j < mmtrMotionPlan.forkOps.size(); j++) {
 			final String[] op = mmtrMotionPlan.forkOps.get(j);
 			final double forkAbsM = j < mmtrMotionPlan.forkMeters.size() ? mmtrMotionPlan.forkMeters.get(j) : Double.NaN;
@@ -797,6 +814,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 					continue;
 				}
 			} else if (pendingContainsFork(op)) {
+				continue;
+			}
+			/*
+			 * **同一处道岔只申请最先要过的那一程**（notes/137，理由见 {@link #armMmtrPointRun}）：
+			 * 折返时它出现在进路里两次、两程要互斥的两个位置，两程都申请会让后一程的位占住物理位置，
+			 * 而进路判定看的是最先要过的那一程 —— 结果是车永远停在自己的出发信号前。
+			 */
+			if (!nearestPassPerNode.add(op[0] + "," + op[1] + "," + op[2])) {
 				continue;
 			}
 			mmtrPendingPointOps.add(op.clone());

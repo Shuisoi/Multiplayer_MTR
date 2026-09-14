@@ -34,7 +34,8 @@ T 系列解决的是**三处断裂**：信号不控车、道岔许可按进向�
 | 物理不存在的组合一律拒绝（不排队、不留持有） | `MmtrPointAuthority.Result.REJECTED` + `MmtrTurnout.positionForLeg` | `impossibleCombinationsAreRejectedWithoutTakingThePoint` | `point set` 对"背向穿过尖轨"给出可读拒绝 |
 | **SET 判据 = 授权 ∧ 物理位置相符** | `MmtrRouteRegistry.refresh` 第二个条件；不符时 PENDING 且理由点名道岔/持有者/需要的位 | `mutuallyExclusiveRoutesCannotBothBeSet` | notes/130 §6c：日志里"两条进路互斥"的真实等待行 |
 | 咽喉双车：一列 SET、一列 PENDING 且停在**自己股道**上 | `MmtrRouteConflictTests`（期望值随 T1 从"开到咽喉口"改为"停在自己股道"） | `conflictingRoutesQueueAtTheThroatAndTheSecondSetsAfterTheFirstClears` | notes/84 采样（T1 前）；T1 后的现场待 §10 第 7 条 |
-| **自持有死锁**（现场缺陷）：持有者就是自己时谁也扳不动 | `mmtrThrowTurnoutForIntent(..., requesterOwner)` 对**持有者本人豁免**并改它自己的需求（`repointPhysicalHold`）；重新规划时 `mmtrReleaseStalePhysicalHolds` 放掉旧计划不要的位 | `onlyTheHolderItselfMayRepointATurnoutItPins`、`aReplanGivesUpThePositionTheOldPlanPinnedButKeepsTheOneItStillWants`、`aRouteBlockedOnlyByTheVehiclesOwnStaleHoldBecomesSetOnceItIsDropped` | notes/136 §3 的现场（车停在出发信号前）；本轮修完待现场复验 |
+| **自持有死锁**（现场缺陷）：持有者就是自己时谁也扳不动 | `mmtrThrowTurnoutForIntent(..., requesterOwner)` 对**持有者本人豁免**并改它自己的需求（`repointPhysicalHold`）；重新规划时 `mmtrReleaseStalePhysicalHolds` 放掉旧计划不要的位 | `onlyTheHolderItselfMayRepointATurnoutItPins`、`aReplanGivesUpThePositionTheOldPlanPinnedButKeepsTheOneItStillWants`、`aRouteBlockedOnlyByTheVehiclesOwnStaleHoldBecomesSetOnceItIsDropped` | notes/136 §3 的现场（车停在出发信号前）；本轮装机后**同一现场又复现**，见下一行 |
+| **一处道岔在一趟里被走两次**（真根因：折返的两程要互斥的两个位） | 判据一律**只认最先要过的那一程**：`MmtrRouteRegistry.refresh` 按节点去重；`Vehicle.armMmtrPointRun` / `replenishForkRequests` 只申请第一程；`mmtrReleaseStaleHoldsForPlan` 先写者胜 | `MmtrRouteRegistryTests.aRouteThatCrossesTheSameTurnoutTwiceOnlyNeedsTheNearestPass`（**验证过能红**：注掉去重即红） | notes/137 §1b：装机后的活世界当场复现，`train interlock` 输出 `SHUNT/PENDING forks=2 | 物理道岔 -212,-60,-159 被 v<它自己> 按在位置 1，本车需要位置 0` |
 
 ## 2. T1b · 咽喉原子获取 + 裁决链（notes/117/118）
 

@@ -99,6 +99,45 @@ public final class MmtrRouteRegistryTests {
 		assertEquals(route, registry.routeOverRail(RAIL_TARGET));
 	}
 
+	/**
+	 * **一处道岔在一趟里被走两次**（折返 / 回头）：两程要的是互斥的两个位置，同时要求它们成立在物理上
+	 * 不可能 —— 现场（2026-09-14 车场 aassdd 的调车）就是这样卡死的：车停在自己的出发信号前，
+	 * 理由写着"物理道岔 … 被 v&lt;它自己&gt; 按在位置 1，本车需要位置 0"，而它按着 1 也没错：
+	 * 那是**后面那一程**要的位。
+	 *
+	 * <p>判据：**同一节点只算最先要过的那一程**。它越岔之后前一程被 crossing 释放，后一程接手判定。</p>
+	 */
+	@Test
+	public void aRouteThatCrossesTheSameTurnoutTwiceOnlyNeedsTheNearestPass() {
+		final AtomicLong clock = new AtomicLong(1000);
+		final MmtrRouteRegistry registry = new MmtrRouteRegistry();
+		final MmtrPointAuthority authority = new MmtrPointAuthority(clock::get);
+
+		// 同一处道岔（0,0,0）走两次：第一程经 VIA_A 要腿 0，第二程经 VIA_B 要腿 1
+		final ObjectArrayList<String[]> forks = new ObjectArrayList<>();
+		final String[] firstPass = {"0", "0", "0", VIA_A, "0"};
+		final String[] secondPass = {"0", "0", "0", VIA_B, "1"};
+		forks.add(firstPass);
+		forks.add(secondPass);
+		final MmtrRoute route = registry.request(new MmtrRoute(1, "v1", MmtrRoute.Kind.SHUNT, rails(), forks, RAIL_TARGET, 1000));
+
+		// 第一程要的位已经拿到（持有者按在腿 0）
+		assertEquals(MmtrPointAuthority.Result.GRANTED, authority.request(0, 0, 0, VIA_A, "v1", 0, 5000));
+		registry.refresh(1, authority);
+		assertTrue(route.isEstablished(), "只看最先要过的那一程 ⇒ 进路可以 SET（修前这里永远 PENDING）");
+		assertEquals(route, registry.routeOverRail(RAIL_ENTRY), "信号层读得到它");
+
+		// 越岔：第一程释放并标记已越过 ⇒ 轮到第二程
+		route.markForkCrossed("0,0,0|" + VIA_A);
+		authority.passed(0, 0, 0, VIA_A, "v1");
+		registry.refresh(1, authority);
+		assertFalse(route.isEstablished(), "第二程还没拿到它要的位 ⇒ 回落 PENDING");
+
+		assertEquals(MmtrPointAuthority.Result.GRANTED, authority.request(0, 0, 0, VIA_B, "v1", 1, 5000));
+		registry.refresh(1, authority);
+		assertTrue(route.isEstablished(), "第二程拿到位 ⇒ 再次 SET");
+	}
+
 	@Test
 	public void operatorLockDropsASetRouteBackToPendingAndNamesThePoint() {
 		final AtomicLong clock = new AtomicLong(1000);
