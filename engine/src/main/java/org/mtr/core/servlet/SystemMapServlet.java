@@ -691,6 +691,20 @@ public final class SystemMapServlet extends ServletBase {
 				train.addProperty("isCurrentlyManual", vehicle.isCurrentlyManual());
 				train.addProperty("onRoute", vehicle.getIsOnRoute());
 				train.addProperty("moving", vehicle.isMoving());
+				/*
+				 * notes/149：**"车为什么不动"要能从接口上读出来**。
+				 *
+				 * 现场问题是"任务挂上了、进路 SET/PENDING、车速 0"，而司机台上显示的是"应答信号（按 H）"。
+				 * 这三件事其实指向三层不同的门，接口上却一个都看不见：
+				 *   - 手动接管（mmtrManualOverride）：车交给人在开 ⇒ 引擎**不允许**自己开（autoActive 要求它关着）；
+				 *   - 动车子系统自臂（mmtrMotionAuto）：自动驾驶那一路有没有接上；
+				 *   - AWS 点式警告（未确认）：只在**手动**驾驶时才会响 —— 所以"H 提示"本身就是"这车在手动"的证据。
+				 * 把这三条吐出来，"按 H 有没有用"这种问题就能用数据回答，而不是靠猜。
+				 */
+				train.addProperty("manualOverride", vehicle.isMmtrManualOverride());
+				train.addProperty("motionAuto", vehicle.isMmtrMotionAuto());
+				train.addProperty("stoppedAtTarget", vehicle.isMmtrMotionStoppedAtTarget());
+				train.addProperty("awsWarning", vehicle.isMmtrAwsWarningPending());
 				train.addProperty("speedKmh", Math.round(vehicle.getSpeed() * 3600000.0) / 1000.0);
 				train.addProperty("railProgressM", Math.round(vehicle.getRailProgress() * 100.0) / 100.0);
 				train.addProperty("doorsOpen", vehicle.vehicleExtraData.getDoorMultiplier() > 0);

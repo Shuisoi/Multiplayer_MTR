@@ -96,6 +96,9 @@ public final class MmtrPointAuthority {
 	/** T1b 防饿死：排队等待超过这个时长就提到上一档（不再排在任何新来者后面）。 */
 	public static final long MMTR_STARVATION_MILLIS = 5L * 60 * 1000;
 
+	/** owner → 上一次原子申请被拒的原因（人话，见 describeRefusal）。 */
+	private final Map<String, String> lastWaitReason = new HashMap<>();
+
 	/** T1: one turnout, one position - who has currently pinned it where. */
 	private static final class Physical {
 		final String owner;
@@ -289,8 +292,7 @@ public final class MmtrPointAuthority {
 	public Result requestAtomically(@Nullable ObjectArrayList<String[]> ops, String owner, long untilMillis, long priorityMillis) {
 		if (ops == null || ops.isEmpty()) {
 			return Result.GRANTED;
-		}
-		/*
+		}		/*
 		 * **同一处道岔只认最先要过的那一程**（notes/137）。
 		 *
 		 * <p>折返（牵出—推进）会让同一处道岔在一次申请里出现两次，两程要**互斥的两个位置**。
@@ -318,15 +320,18 @@ public final class MmtrPointAuthority {
 			if (turnout != null) {
 				final int demand = turnout.positionForLeg(via, Integer.parseInt(op[4]));
 				if (demand == Integer.MIN_VALUE) {
+					lastWaitReason.put(owner, describeRefusal(op, "组合不存在（positionForLeg 判死）", turnout, demand, now));
 					return Result.REJECTED;   // 整组里有物理上不存在的组合 → 整组都不申请
 				}
 				if (!physicallyGrantableTo(nodeKey(x, y, z), demand, owner, now)) {
+					lastWaitReason.put(owner, describeRefusal(op, "道岔位置给不了（物理层/净空闸）", turnout, demand, now));
 					releaseSet(effective, owner);
 					queueSet(effective, owner, untilMillis, priorityMillis);
 					return Result.QUEUED;
 				}
 			}
 			if (!perApproachGrantableTo(key(x, y, z, via), owner, now)) {
+				lastWaitReason.put(owner, describeRefusal(op, "进向被别人持有/被人工锁", turnout, -1, now));
 				releaseSet(effective, owner);
 				queueSet(effective, owner, untilMillis, priorityMillis);
 				return Result.QUEUED;
@@ -335,12 +340,52 @@ public final class MmtrPointAuthority {
 		for (final String[] op : effective) {
 			if (request(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], owner,
 					Integer.parseInt(op[4]), untilMillis) != Result.GRANTED) {
+				lastWaitReason.put(owner, describeRefusal(op, "最后一步授予被拒", turnoutAt(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2])), -1, now));
 				releaseSet(effective, owner);
 				queueSet(effective, owner, untilMillis, priorityMillis);
 				return Result.QUEUED;
 			}
 		}
+		lastWaitReason.remove(owner);
 		return Result.GRANTED;
+	}
+
+	/**
+	 * **到底是哪一处、哪一道门挡住了**（notes/149）。
+	 *
+	 * <p>为什么要记这句话：请求集合是**原子**的（一处不成，整组都不申请），而现场日志只报
+	 * "第一处没有持有的道岔" —— 那一处往往只是还没轮到，真正把整组按下去的是集合里**后面**某一处。
+	 * 于是操作者看到的是"没人锁、没人持有、就是不给"，而原因（净空闸 / 人工锁 / 位置给不了）
+	 * 只有在权限层内部才知道。这里把它记成一句人话，由日志/接口读出去。</p>
+	 */
+	private String describeRefusal(String[] op, String gate, @Nullable MmtrTurnout turnout, int demand, long now) {
+		final long x = Long.parseLong(op[0]);
+		final long y = Long.parseLong(op[1]);
+		final long z = Long.parseLong(op[2]);
+		final StringBuilder sb = new StringBuilder();
+		sb.append(gate).append("：point ").append(x).append(',').append(y).append(',').append(z)
+			.append(" wantLeg=").append(op[4]);
+		if (demand != Integer.MIN_VALUE) {
+			sb.append(" needPos=").append(demand);
+		}
+		sb.append(" | ").append(state(x, y, z, op[3]));
+		final String physical = physicalHolder(x, y, z);
+		sb.append(" phys=").append(physical == null ? "-" : physical);
+		if (turnout != null) {
+			sb.append(" 现位=").append(physicalPosition(x, y, z) == NO_PHYSICAL_HOLDER ? "无主" : String.valueOf(physicalPosition(x, y, z)));
+			if (demand != Integer.MIN_VALUE) {
+				final String blocked = positionChangeBlockedReason(x, y, z, demand, op.length > 5 ? op[5] : "");
+				if (blocked != null) {
+					sb.append(" 净空闸=").append(blocked);
+				}
+			}
+		}
+		return sb.toString();
+	}
+
+	/** 上一次原子申请被拒的原因（owner → 一句人话）；已授予/没申请过 = null。 */
+	public @Nullable String lastWaitReason(String owner) {
+		return lastWaitReason.get(owner);
 	}
 
 	/** 只读：这个进向现在能不能给我（没有人工锁、没有别人持有）。 */
@@ -673,6 +718,18 @@ public final class MmtrPointAuthority {
 		expirePhysical(nk, clock.getAsLong());
 		final Physical holder = physicalHolders.get(nk);
 		return holder == null ? null : holder.owner;
+	}
+
+	/**
+	 * **诊断出口**：现在能不能把这处道岔扳到 {@code newPosition}；返回原因 = 不能。
+	 *
+	 * <p>为什么要公开（notes/149）：请求被拒时排队信息里只有 {@code lock=false holder=-}——
+	 * 也就是"没人锁、没人持有"，看起来像引擎在无缘无故地卡自己。真正的原因往往在**净空闸**上
+	 * （另一列车压在岔区里），而那句话以前只活在内部判定里，日志/接口一个字都不说 ——
+	 * 现场于是没法回答"到底是谁挡着"。这条只读出口就是让那句话能被看见。</p>
+	 */
+	public @Nullable String positionChangeBlocked(long x, long y, long z, int newPosition, String owner) {
+		return positionChangeBlockedReason(x, y, z, newPosition, owner);
 	}
 
 	/**

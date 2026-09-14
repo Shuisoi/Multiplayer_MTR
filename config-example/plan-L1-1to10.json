@@ -1,0 +1,202 @@
+{
+  "lines": [
+    {
+      "lineId": "L1",
+      "name": "1-10 线",
+      "terminalTreatment": "CHANGE_ENDS",
+      "loop": false,
+      "yardSidingId": "-4629294257679021237",
+      "leadTimeMillis": 300000,
+      "stops": [
+        {
+          "stationId": "1870719232554423099",
+          "platformId": "-8021057666741005855",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "2498250995801625020",
+          "platformId": "8840155259502644057",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "4244617445981648900",
+          "platformId": "-8203092630879812517",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "-5165412675520792170",
+          "platformId": "39860473169674409",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "439286058854983703",
+          "platformId": "-16333677002112739",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "8944482319508612948",
+          "platformId": "-933898300966339206",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "-5500586084400229272",
+          "platformId": "-6769906902622305430",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "-4307838593610605132",
+          "platformId": "9181441402015485493",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "-3251244692129038012",
+          "platformId": "4022183260327049783",
+          "dwellMillis": 30000
+        },
+        {
+          "stationId": "7812413824965879490",
+          "platformId": "8821945135290913670",
+          "dwellMillis": 30000
+        }
+      ]
+    }
+  ],
+  "patterns": [
+    {
+      "lineId": "L1",
+      "segments": [
+        {
+          "fromMillis": 360000,
+          "toMillis": 2400000,
+          "headwayMillis": 180000
+        }
+      ]
+    }
+  ],
+  "fleet": {
+    "vehicleCount": 6,
+    "consists": [
+      {
+        "consistId": "C1",
+        "maxSpeedKmh": 80.0,
+        "cars": [
+          {
+            "vehicleId": "saf101",
+            "length": 16.0,
+            "width": 5.0,
+            "capacity": 400,
+            "bogie1Position": -5.0,
+            "bogie2Position": 5.0,
+            "couplingPadding1": 0.0,
+            "couplingPadding2": 0.0,
+            "powered": true,
+            "consistTypeId": "",
+            "mmtrCouplerAfter": false,
+            "mmtrAutoCoupler": true
+          }
+        ]
+      },
+      {
+        "consistId": "C2",
+        "maxSpeedKmh": 80.0,
+        "cars": [
+          {
+            "vehicleId": "saf101",
+            "length": 16.0,
+            "width": 5.0,
+            "capacity": 400,
+            "bogie1Position": -5.0,
+            "bogie2Position": 5.0,
+            "couplingPadding1": 0.0,
+            "couplingPadding2": 0.0,
+            "powered": true,
+            "consistTypeId": "",
+            "mmtrCouplerAfter": false,
+            "mmtrAutoCoupler": true
+          }
+        ]
+      },
+      {
+        "consistId": "C3",
+        "maxSpeedKmh": 80.0,
+        "cars": [
+          {
+            "vehicleId": "saf101",
+            "length": 16.0,
+            "width": 5.0,
+            "capacity": 400,
+            "bogie1Position": -5.0,
+            "bogie2Position": 5.0,
+            "couplingPadding1": 0.0,
+            "couplingPadding2": 0.0,
+            "powered": true,
+            "consistTypeId": "",
+            "mmtrCouplerAfter": false,
+            "mmtrAutoCoupler": true
+          }
+        ]
+      },
+      {
+        "consistId": "C4",
+        "maxSpeedKmh": 80.0,
+        "cars": [
+          {
+            "vehicleId": "saf101",
+            "length": 16.0,
+            "width": 5.0,
+            "capacity": 400,
+            "bogie1Position": -5.0,
+            "bogie2Position": 5.0,
+            "couplingPadding1": 0.0,
+            "couplingPadding2": 0.0,
+            "powered": true,
+            "consistTypeId": "",
+            "mmtrCouplerAfter": false,
+            "mmtrAutoCoupler": true
+          }
+        ]
+      },
+      {
+        "consistId": "C5",
+        "maxSpeedKmh": 80.0,
+        "cars": [
+          {
+            "vehicleId": "saf101",
+            "length": 16.0,
+            "width": 5.0,
+            "capacity": 400,
+            "bogie1Position": -5.0,
+            "bogie2Position": 5.0,
+            "couplingPadding1": 0.0,
+            "couplingPadding2": 0.0,
+            "powered": true,
+            "consistTypeId": "",
+            "mmtrCouplerAfter": false,
+            "mmtrAutoCoupler": true
+          }
+        ]
+      },
+      {
+        "consistId": "C6",
+        "maxSpeedKmh": 80.0,
+        "cars": [
+          {
+            "vehicleId": "saf101",
+            "length": 16.0,
+            "width": 5.0,
+            "capacity": 400,
+            "bogie1Position": -5.0,
+            "bogie2Position": 5.0,
+            "couplingPadding1": 0.0,
+            "couplingPadding2": 0.0,
+            "powered": true,
+            "consistTypeId": "",
+            "mmtrCouplerAfter": false,
+            "mmtrAutoCoupler": true
+          }
+        ]
+      }
+    ],
+    "spares": []
+  }
+}

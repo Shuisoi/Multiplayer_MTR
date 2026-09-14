@@ -646,7 +646,11 @@ public class Simulator extends Data implements Utilities {
 			/*
 			 * 输入有错：**不排班**（设计 §4.3：别让坏配置跑起来），旧班也不留 ——
 			 * 否则"配置改坏了"之后旧交路还在跑，看起来像新配置没生效。
+			 *
+			 * 但旧班**派出去的车要把任务收回来**（notes/149）：清掉派发器只清掉"记忆"，
+			 * 世界那台车还在开 —— 现场就是被两台这样的幽灵车堵住车场咽喉的。
 			 */
+			mmtrReleasePlanMissions(mmtrPlanDispatchers.values());
 			mmtrPlanDispatchers.clear();
 			return 0;
 		}
@@ -686,15 +690,124 @@ public class Simulator extends Data implements Utilities {
 			rebuilt.put(line.lineId, new org.mtr.core.mmtr.plan.MmtrPlanDispatcher(line, diagram));
 			// P6 ③：重建之后把"玩家正在开的编组"重新贴上去（接管是运行时状态，不属于计划输入）
 			mmtrPlanPlayerDriven.forEach(consistId -> rebuilt.get(line.lineId).setPlayerDriven(consistId, true));
+			/*
+			 * **换代交接**（notes/149）：把上一代"谁在跑、跑到第几步、正在等哪一步"接到这一代上。
+			 *
+			 * 不交接的后果是现场实测出来的：新派发器不认识世界里那台"上一代派出去的车"，
+			 * 于是它去牵另一台；被忘掉的那台永远停在原地并按 FIFO 继续占着道岔 ——
+			 * 两台幽灵车就把车场咽喉堵死，六台车一步都出不去（重建发生在每次改配置/事件重算时）。
+			 */
+			final org.mtr.core.mmtr.plan.MmtrPlanDispatcher previous = mmtrPlanDispatchers.get(line.lineId);
+			final it.unimi.dsi.fastutil.objects.ObjectArrayList<Long> orphans = rebuilt.get(line.lineId).adoptFrom(previous,
+				new org.mtr.core.mmtr.plan.MmtrPlanDispatcher.InFlightCheck() {
+					@Override
+					public boolean vehicleExists(long vehicleId) {
+						return mmtrFindVehicle(vehicleId) != null;
+					}
+
+					@Override
+					public boolean isStillRunning(long vehicleId, String taskId) {
+						return new MmtrPlanWorld().isVehicleRunningTask(vehicleId, taskId);
+					}
+				});
+			for (final long orphan : orphans) {
+				final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(orphan);
+				final org.mtr.core.mmtr.MmtrMission mission = vehicle == null ? null : vehicle.getMmtrMission();
+				final String taskId = mission == null || mission.getTask() == null ? "" : mission.getTask().taskId;
+				if (!taskId.isEmpty() && new MmtrPlanWorld().releaseTask(orphan, taskId)) {
+					System.out.println("[MMTR-PLAN] 收回任务：计划里已经没有这一步了 → 车 " + orphan + "（" + taskId + "）");
+				}
+			}
 			built++;
 			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
 			for (final String note : result.notes) {
 				System.out.println("[MMTR-PLAN] 事件改计划：" + note);
 			}
 		}
+		/*
+		 * 整条线路没了的那些（删线路 / 车底清空 / 输入坏掉）：它派出去的车必须**收回任务**。
+		 * 不然这些车会开着一个已经不存在的班走到天涯海角 —— 现场就是被两台这样的车堵住咽喉的。
+		 */
+		for (final java.util.Map.Entry<String, org.mtr.core.mmtr.plan.MmtrPlanDispatcher> entry : mmtrPlanDispatchers.entrySet()) {
+			if (!rebuilt.containsKey(entry.getKey())) {
+				mmtrReleasePlanMissions(java.util.List.of(entry.getValue()));
+			}
+		}
 		mmtrPlanDispatchers.clear();
 		mmtrPlanDispatchers.putAll(rebuilt);
+		mmtrReleaseUnclaimedPlanTasks(rebuilt);
 		return built;
+	}
+
+	/**
+	 * **扫一遍世界**：凡是跑着"这套计划的任务"、但新一代没有认领的车，把任务收回来。
+	 *
+	 * <p>为什么要有这一遍（notes/149）：换代交接只能接住"上一代记得的那些车"。世界里的任务还有别的来源 ——
+	 * 上一次服务端会话留下的（任务是随车落盘的）、车场重建之后换了车列的、以及"计划里已经把这条线删了"
+	 * 的。这些车会一直开下去并按 FIFO 占着道岔，把车场咽喉堵死；而派发器这边的账上**什么都没有**，
+	 * 从界面上看不出问题在哪。判据：任务 id 形如 {@code 线路/编组/序号}，线路必须是"这一版计划里的线路"，
+	 * 且 (车, 任务) 这一对没有被新一代的任何状态认领。作业单（job）的任务不满足这个形状，不会被碰。</p>
+	 *
+	 * @return 收回了几台车
+	 */
+	private int mmtrReleaseUnclaimedPlanTasks(java.util.Map<String, org.mtr.core.mmtr.plan.MmtrPlanDispatcher> rebuilt) {
+		final java.util.HashSet<String> claimed = new java.util.HashSet<>();
+		for (final org.mtr.core.mmtr.plan.MmtrPlanDispatcher dispatcher : rebuilt.values()) {
+			for (final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.WorkingState state : dispatcher.states) {
+				if (state.vehicleId != 0 && !state.awaitingTaskId.isEmpty()) {
+					claimed.add(state.vehicleId + "|" + state.awaitingTaskId);
+				}
+			}
+		}
+		final int[] released = {0};
+		final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.World world = new MmtrPlanWorld();
+		sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
+			final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+			final org.mtr.core.mmtr.task.MmtrTask task = mission == null ? null : mission.getTask();
+			final String taskId = task == null ? "" : task.taskId;
+			final int slash = taskId.indexOf('/');
+			if (slash <= 0) {
+				return;   // 不是"线路/编组/序号"这个形状：作业单/别的来源，不碰
+			}
+			final String lineId = taskId.substring(0, slash);
+			if (!rebuilt.containsKey(lineId) || claimed.contains(vehicle.getId() + "|" + taskId)) {
+				return;
+			}
+			if (world.releaseTask(vehicle.getId(), taskId)) {
+				System.out.println("[MMTR-PLAN] 收回任务：这一版计划没有认领它（" + lineId + " 已不在/已重排）→ 车 "
+					+ vehicle.getId() + "（" + taskId + "）");
+				released[0]++;
+			}
+		}));
+		return released[0];
+	}
+
+	/**
+	 * 把某一代派发器派出去、但计划里已经不打算继续跑的步**收回来**。
+	 *
+	 * <p>只碰"确实是这套计划派出去的"那些任务（任务 id 前缀 {@code 线路/编组/}）：作业单（job）、
+	 * 玩家自己开的车都不动 —— 判据窄一点，收错车的代价比漏收大得多。</p>
+	 *
+	 * @return 收回了几台车
+	 */
+	private int mmtrReleasePlanMissions(java.util.Collection<org.mtr.core.mmtr.plan.MmtrPlanDispatcher> dispatchers) {
+		int released = 0;
+		final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.World world = new MmtrPlanWorld();
+		for (final org.mtr.core.mmtr.plan.MmtrPlanDispatcher dispatcher : dispatchers) {
+			for (final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.WorkingState state : dispatcher.states) {
+				if (state.vehicleId == 0) {
+					continue;
+				}
+				final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(state.vehicleId);
+				final org.mtr.core.mmtr.MmtrMission mission = vehicle == null ? null : vehicle.getMmtrMission();
+				final String taskId = mission == null || mission.getTask() == null ? "" : mission.getTask().taskId;
+				if (taskId.startsWith(dispatcher.lineId + "/" + state.consistId + "/") && world.releaseTask(state.vehicleId, taskId)) {
+					System.out.println("[MMTR-PLAN] 收回任务：" + dispatcher.lineId + " 不再排这条交路 → 车 " + state.vehicleId + "（" + taskId + "）");
+					released++;
+				}
+			}
+		}
+		return released;
 	}
 
 	/**
@@ -898,6 +1011,27 @@ public class Simulator extends Data implements Utilities {
 			}
 			System.out.println("[MMTR-PLAN] 派车 " + task.describe() + " → 车 " + vehicleId
 				+ "（" + task.taskId + "）");
+			return true;
+		}
+
+		/**
+		 * 把这一步从车上收回来（只有"跑的正是在这一步"才收）。
+		 *
+		 * <p>收回 = 清任务。车会停在原地（不会自己继续开），下一步由新计划重新派 ——
+		 * 这正是"计划里已经没有这一步"时该有的样子。</p>
+		 */
+		@Override
+		public boolean releaseTask(long vehicleId, String taskId) {
+			final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+			if (vehicle == null || taskId == null || taskId.isEmpty()) {
+				return false;
+			}
+			final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+			final org.mtr.core.mmtr.task.MmtrTask task = mission == null ? null : mission.getTask();
+			if (task == null || !task.taskId.equals(taskId)) {
+				return false;   // 它跑的不是这一步（作业单/别的计划）：不动
+			}
+			vehicle.setMmtrMission(null);
 			return true;
 		}
 

@@ -788,6 +788,16 @@ public final class MmtrRunPlanner {
 	 * or the queue. Returns a short reason when nothing is blocked.
 	 */
 	public static String describeForkWait(ObjectArrayList<String[]> forkOps, org.mtr.core.mmtr.point.MmtrPointAuthority authority, String owner) {
+		/*
+		 * notes/149：**先说权限层记下的那一句**（"到底是哪一处、哪一道门挡住了"）。
+		 *
+		 * 请求集合是原子的，下面的循环只能报"第一处我没有持有的道岔" —— 它往往只是还没轮到，
+		 * 真正把整组按下去的是集合里后面某一处。那句话只有权限层知道，不问它就只能猜。
+		 */
+		final String refused = authority.lastWaitReason(owner);
+		if (refused != null) {
+			return refused;
+		}
 		if (forkOps.isEmpty()) {
 			return "no fork inside the approach window";
 		}
@@ -797,7 +807,19 @@ public final class MmtrRunPlanner {
 			final long z = Long.parseLong(op[2]);
 			final String viaHex = op[3];
 			if (!authority.isGrantedTo(x, y, z, viaHex, owner)) {
-				return "point " + x + "," + y + "," + z + " via=" + viaHex + " wantLeg=" + op[4] + " " + authority.state(x, y, z, viaHex);
+				/*
+				 * notes/149：描述里要带**物理层与净空闸**。只有 lock/holder/queue 时，最常见的现场
+				 * （"另一列车压在岔区里，位置改不动"）看起来是"没人锁、没人持有、就是不给" ——
+				 * 排查只能靠猜。净空闸那句话本来就在内部算出来了，这里把它说出来。
+				 */
+				final int demand = authority.turnoutDemand(x, y, z, viaHex, Integer.parseInt(op[4]));
+				final String physical = authority.physicalHolder(x, y, z);
+				final String blocked = demand == Integer.MIN_VALUE ? null : authority.positionChangeBlocked(x, y, z, demand, owner);
+				return "point " + x + "," + y + "," + z + " via=" + viaHex + " wantLeg=" + op[4]
+					+ " needPos=" + (demand == Integer.MIN_VALUE ? "（不存在）" : demand)
+					+ " " + authority.state(x, y, z, viaHex)
+					+ " phys=" + (physical == null ? "-" : physical)
+					+ (blocked == null ? "" : " 净空闸=" + blocked);
 			}
 		}
 		return "all requested forks granted";

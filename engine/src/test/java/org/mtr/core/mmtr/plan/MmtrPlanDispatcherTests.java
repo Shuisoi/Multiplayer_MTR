@@ -143,6 +143,43 @@ public final class MmtrPlanDispatcherTests {
 			}
 			return true;
 		}
+
+		/** 把任务收回来（只有"跑的正是在这一步"才收，与真的适配层同一条判据）。 */
+		@Override
+		public boolean releaseTask(long vehicleId, String taskId) {
+			if (taskId != null && taskId.equals(runningTasks.get(vehicleId))) {
+				runningTasks.remove(vehicleId);
+				if (!idle.contains(vehicleId)) {
+					idle.add(vehicleId);
+				}
+				released.add(taskId);
+				return true;
+			}
+			return false;
+		}
+
+		/** 被收回过的任务 id（换代交接的对账用）。 */
+		final List<String> released = new ArrayList<>();
+
+		/** 这台车世界上还有没有（换代交接要问世界的第二句）。 */
+		boolean knows(long vehicleId) {
+			return idle.contains(vehicleId) || runningTasks.containsKey(vehicleId);
+		}
+
+		/** 换代交接时"问世界"的那两问，直接用这个假世界回答。 */
+		MmtrPlanDispatcher.InFlightCheck check() {
+			return new MmtrPlanDispatcher.InFlightCheck() {
+				@Override
+				public boolean vehicleExists(long vehicleId) {
+					return knows(vehicleId);
+				}
+
+				@Override
+				public boolean isStillRunning(long vehicleId, String taskId) {
+					return isVehicleRunningTask(vehicleId, taskId);
+				}
+			};
+		}
 	}
 
 	private static MmtrPlanDispatcher dispatcher(MmtrLine.TerminalTreatment treatment, boolean loop) {
@@ -448,6 +485,107 @@ public final class MmtrPlanDispatcherTests {
 		assertFalse(boundaries.isEmpty(), "派出去一步之后，这辆车就有冻结边界了");
 		assertEquals(boundaries, MmtrPlanAdjustments.frozenSnapshot(java.util.List.of(d)), "快照必须原样带出边界（先取后用）");
 		assertTrue(boundaries.get("C1") >= H07, "边界是这辆车正在跑的那一段的结束时刻，不是 0");
+	}
+
+	// ---------------------------------------------------------------- 换代交接（重算不丢在途车）
+
+	/** 同一份定义、只换线路代码的派发器（用来演"新计划里没有这个编组/这一步了"）。 */
+	private static MmtrPlanDispatcher dispatcherWithLineId(String lineId) {
+		final MmtrLine line = new MmtrLine(lineId, "验证线 " + lineId);
+		line.yardSidingId = 42;
+		line.leadTimeMillis = 5 * MIN;
+		line.terminalTreatment = MmtrLine.TerminalTreatment.CHANGE_ENDS;
+		line.addStop(1001, 2001, 30_000);
+		line.addStop(1002, 2002, 45_000);
+		line.addStop(1003, 2003, 30_000);
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, shortPattern(), fleet(1), TIMES);
+		return new MmtrPlanDispatcher(line, diagram);
+	}
+
+	/**
+	 * **重算之后新一代要接住上一代的在途车**（notes/149 的现场缺陷）。
+	 *
+	 * <p>现场：改一次密度 ⇒ 重建派发器 ⇒ 新派发器不认识世界里那台"上一代派出去的车"，
+	 * 被忘掉的车永远停在原地并按 FIFO 占着道岔，两台就把车场咽喉堵死。判据只看任务 id
+	 * （{@code 线路/编组/序号}，跨次重算稳定），接上以后"在途不打断"对重算也成立。</p>
+	 *
+	 * <p>红证：去掉 {@code adoptFrom} 那一步，本用例的第二段会看到同一步被派第二遍。</p>
+	 */
+	@Test
+	public void aRebuildHandsTheInFlightStepToTheNextGeneration() {
+		final MmtrPlanDispatcher first = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final FakeWorld world = new FakeWorld(9001L, 9002L);
+		world.autoComplete = false;   // 车真的在跑那一步（交接的前提）
+		first.tick(H07 - 5 * MIN, world);
+		assertEquals(1, world.dispatched.size(), "第一代先把出库那一步派出去了");
+		final String inFlight = first.states.get(0).awaitingTaskId;
+		assertFalse(inFlight.isEmpty(), "派出去了就应该在等它跑完");
+		assertEquals(9001L, first.states.get(0).vehicleId);
+
+		final MmtrPlanDispatcher second = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final var orphaned = second.adoptFrom(first, world.check());
+		assertTrue(orphaned.isEmpty(), "这一步在新计划里还在、车也还在跑，不该被收回：" + orphaned);
+		assertEquals(9001L, second.states.get(0).vehicleId, "车还是那台（不许换车）");
+		assertEquals(inFlight, second.states.get(0).awaitingTaskId, "正在等的那一步照样是它");
+		assertEquals(first.states.get(0).dispatchedSteps, second.states.get(0).dispatchedSteps);
+
+		second.tick(H07 - 5 * MIN, world);
+		assertEquals(1, world.dispatched.size(), "同一步不许派第二遍：" + world.dispatched);
+		assertEquals(0, second.retryCount, "也不该记成重试（车跑的是我自己的活）");
+	}
+
+	/**
+	 * **接一台已经不存在的车 = 一台车都不动**（notes/149 第二轮现场）。
+	 *
+	 * <p>车场按生成表重建之后，上一代记的车列 id 全没了。照着记忆交接的话，新派发器会一直
+	 * "等一台不存在的车跑完" —— 比不交接更糟（不交接至少会重新找车）。所以交接必须**问世界**：
+	 * 车还在吗？还在跑这一步吗？</p>
+	 */
+	@Test
+	public void aBindingToAVehicleThatVanishedIsNotAdopted() {
+		final MmtrPlanDispatcher first = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final FakeWorld before = new FakeWorld(9001L);
+		before.autoComplete = false;
+		first.tick(H07 - 5 * MIN, before);
+		assertEquals(9001L, first.states.get(0).vehicleId);
+
+		// 车场重建：那台车没了（新的世界里只有 9002）
+		final FakeWorld after = new FakeWorld(9002L);
+		final MmtrPlanDispatcher second = dispatcher(MmtrLine.TerminalTreatment.CHANGE_ENDS, false);
+		final var orphaned = second.adoptFrom(first, after.check());
+		assertEquals(1, orphaned.size(), "接不上的车要交回给调用方：" + orphaned);
+		assertEquals(0, second.states.get(0).vehicleId, "不许把不存在的车接过来");
+		assertEquals(0, second.states.get(0).dispatchedSteps);
+
+		// 新一代 tick：自己去找一台真车，把同一步重新派出去
+		second.tick(H07 - 5 * MIN, after);
+		assertEquals(1, after.dispatched.size(), "重新派给活着的车");
+		assertEquals(9002L, after.dispatchedTo.get(0));
+	}
+
+	/** 新计划里**没有这个编组**了 ⇒ 把那台车交回给调用方去收回任务（不能让它开着一个不存在的班）。 */
+	@Test
+	public void aWorkingThatVanishesFromTheNewPlanIsHandedBackForRelease() {
+		final MmtrPlanDispatcher first = dispatcherWithLineId("L1");
+		final FakeWorld world = new FakeWorld(9001L);
+		world.autoComplete = false;
+		first.tick(H07 - 5 * MIN, world);
+		final long vehicle = first.states.get(0).vehicleId;
+		assertEquals(9001L, vehicle);
+		final String taskId = first.states.get(0).awaitingTaskId;
+		assertFalse(taskId.isEmpty());
+
+		// 新一代是另一条线路（编组代码一样，但计划里已经没有 L1/C1 那一步）
+		final MmtrPlanDispatcher second = dispatcherWithLineId("L9");
+		final var orphaned = second.adoptFrom(first, world.check());
+		assertEquals(1, orphaned.size(), "应该交回一台车：" + orphaned);
+		assertEquals(vehicle, orphaned.get(0));
+		assertEquals(0, second.states.get(0).vehicleId, "新一代不许把别的线路的车拿来用");
+
+		// 收回：只有"跑的正是在这一步"才收得动
+		assertFalse(world.releaseTask(vehicle, "L1/C1/999"), "不是这一步 ⇒ 不动");
+		assertTrue(world.releaseTask(vehicle, taskId), "就是这一步 ⇒ 收回来");
+		assertTrue(world.released.contains(taskId));
 	}
 
 	/**

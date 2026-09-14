@@ -48,6 +48,16 @@ public final class MmtrPlanDispatcher {
 		 * @return false = 现在挂不上（车被占 / 目标不可达 / 任务不可行），派发器下一 tick 用**同一步**重试
 		 */
 		boolean dispatchTask(long vehicleId, MmtrTask task);
+
+		/**
+		 * **把这一步收回来**（换代交接时，这一步在新计划里已经不存在了）。
+		 *
+		 * <p>不收回的后果是现场实测出来的：车会一直开着一个已经不存在的班，并且继续占着道岔 ——
+		 * 计划的每一次重算都会多留一台这样的"幽灵车"，最后把车场咽喉彻底堵死。</p>
+		 *
+		 * @return 是否真的收回了（车不在 / 它跑的不是这一步 = false，什么都不做）
+		 */
+		boolean releaseTask(long vehicleId, String taskId);
 	}
 
 	/** 一辆车当前的状态。 */
@@ -170,6 +180,102 @@ public final class MmtrPlanDispatcher {
 		for (final MmtrDiagram.Working working : diagram.scheduledWorkings()) {
 			states.add(new WorkingState(working.consistId, MmtrPlanTasks.expand(line, working)));
 		}
+	}
+
+	/**
+	 * 换代交接时向世界核对一句："这台车还在、还在跑这一步吗？"
+	 *
+	 * <p>为什么必须问世界而不是只看上一代的记忆：现场实测（notes/149）—— 车场按生成表重建之后，
+	 * 上一代记的车列 id 已经不存在了；照着记忆交接的话，新派发器会一直"等一台不存在的车跑完"，
+	 * 于是**一台车都不动**（比交接之前更糟）。</p>
+	 */
+	public interface InFlightCheck {
+		/** 这台车还在世界上吗。 */
+		boolean vehicleExists(long vehicleId);
+
+		/** 这台车现在跑的是不是这一步。 */
+		boolean isStillRunning(long vehicleId, String taskId);
+	}
+
+	/**
+	 * **换代交接**：把上一代派发器的"谁在跑、跑到第几步、正在等哪一步"接到这一代上。
+	 *
+	 * <p>为什么必须有这一步（现场实测，notes/149）：计划一重算就重建派发器，而**世界里那台车还在跑
+	 * 上一代派给它的那一步**。新派发器什么都不记得，于是它眼里的车是"没沾过这条交路"的，会去牵另一台；
+	 * 被忘掉的那台就永远停在原地，还继续按 FIFO 占着道岔 —— 车场咽喉被两台"幽灵车"堵死，
+	 * 后面六台车一步都出不去（现场：两台车分别卡在 (-153,-121) 与 (-211,-158)，路线 PENDING、
+	 * 排队等道岔、谁都不动）。</p>
+	 *
+	 * <p>判据是**两个**：任务 id 在新计划里还在（{@code 线路/编组/序号}，跨次重算稳定）**并且**
+	 * 世界说这台车还在跑它（{@link InFlightCheck}）。两个都对才接过来 —— "在途不打断"于是对重算成立，
+	 * 而"接一台不存在的车"这种更坏的情形被挡在外面。</p>
+	 *
+	 * @return 需要收回任务的车列 id（这些车手里的那一步在新计划里已经不存在、或已经不是它在跑了）
+	 */
+	public ObjectArrayList<Long> adoptFrom(@Nullable MmtrPlanDispatcher previous, InFlightCheck check) {
+		final ObjectArrayList<Long> orphaned = new ObjectArrayList<>();
+		if (previous == null) {
+			return orphaned;
+		}
+		for (final WorkingState old : previous.states) {
+			final WorkingState next = stateOf(old.consistId);
+			if (next == null) {
+				// 这个编组在新计划里没有班了：它手里那一步必须收回，否则它会一直开下去
+				if (old.vehicleId != 0) {
+					orphaned.add(old.vehicleId);
+				}
+				continue;
+			}
+			if (old.vehicleId == 0) {
+				continue;
+			}
+			final boolean inFlight = !old.awaitingTaskId.isEmpty();
+			final boolean usable = check.vehicleExists(old.vehicleId)
+				&& (!inFlight || check.isStillRunning(old.vehicleId, old.awaitingTaskId));
+			if (!usable) {
+				// 车没了、或者它跑的不是这一步了：不交接（按新计划重新派），并让调用方去收回
+				orphaned.add(old.vehicleId);
+				continue;
+			}
+			next.vehicleId = old.vehicleId;
+			next.dispatchedSteps = Math.min(old.dispatchedSteps, next.tasks.size());
+			next.lastAttemptMillis = old.lastAttemptMillis;
+			if (!inFlight) {
+				continue;
+			}
+			final int index = indexOfTask(next, old.awaitingTaskId);
+			if (index < 0) {
+				// 同一编组，但它正在等的那一步没了（趟次被取消/挪走）：车要收回
+				orphaned.add(old.vehicleId);
+				next.awaitingTaskId = "";
+				next.dispatchedSteps = 0;
+				next.vehicleId = 0;
+			} else {
+				// 接上：那一步已经派出去并且还没跑完 ⇒ 已派步数至少到它这里
+				next.dispatchedSteps = Math.max(next.dispatchedSteps, index + 1);
+				next.awaitingTaskId = old.awaitingTaskId;
+			}
+		}
+		return orphaned;
+	}
+
+	/** 这个编组的状态（没有 = 新计划里它没班）。 */
+	private @Nullable WorkingState stateOf(String consistId) {
+		for (final WorkingState state : states) {
+			if (state.consistId.equals(consistId)) {
+				return state;
+			}
+		}
+		return null;
+	}
+
+	private static int indexOfTask(WorkingState state, String taskId) {
+		for (int i = 0; i < state.tasks.size(); i++) {
+			if (state.tasks.get(i).taskId.equals(taskId)) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/**
