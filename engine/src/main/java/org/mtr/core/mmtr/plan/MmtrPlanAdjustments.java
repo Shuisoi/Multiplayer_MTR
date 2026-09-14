@@ -156,12 +156,30 @@ public final class MmtrPlanAdjustments {
 		for (final MmtrDiagram.Working working : diagram.workings) {
 			final long frozen = frozenUntil.getOrDefault(working.consistId, Long.MIN_VALUE);
 			if (downed.contains(working.consistId)) {
-				// 下线：**未来**的趟次取消（冻结期内的保留到跑完）
-				final MmtrDiagram.Working trimmed = trimAfter(working, dayTime, frozen, "车列下线");
-				workings.add(trimmed);
+				/*
+				 * 下线：**先看有没有替补**（P6 §8.1）。
+				 *
+				 * 有替补 → 后续趟次交给它（时刻表一行不改），替补要一条"从车场开到接续站"的前置任务；
+				 * 替补来不及的趟次**取消**并发出带理由的事件。没有替补 → 全取消（原来的行为）。
+				 */
+				final java.util.HashSet<String> used = new java.util.HashSet<>();
+				for (final MmtrDiagram.Working other : diagram.workings) {
+					if (other != working) {
+						used.add(other.consistId);
+					}
+				}
+				final String spare = MmtrSubstitution.firstSpare(fleet, used);
+				final MmtrSubstitution.Result handover = MmtrSubstitution.handOver(
+					line, working, dayTime, Math.max(frozen, Long.MIN_VALUE + 1), spare, "P6");
+				workings.add(handover.remaining);
+				if (handover.replacement != null) {
+					workings.add(handover.replacement);
+				}
 				changed = true;
-				notes.add("故障：车列 " + working.consistId + " 下线，取消 " + (working.tripCount() - trimmed.tripCount())
-					+ " 趟（替补顶替见 P6）");
+				notes.addAll(handover.notes);
+				if (handover.event != null) {
+					notes.add("对外事件：" + handover.event.describe(dayTime));
+				}
 				continue;
 			}
 			final MmtrEvent.Delay delay = delayed.get(working.consistId);
