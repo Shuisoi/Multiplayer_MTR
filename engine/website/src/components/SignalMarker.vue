@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import {computed, inject} from "vue";
+import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
 import type {Camera} from "@/domain/camera";
 import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled} from "@/domain/mapElements";
-import {ZOOM_RATIO} from "@/views/mapContext";
+import {useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
@@ -32,7 +32,7 @@ const props = defineProps<{
  * 并且写出"缩放时相对节点滑走"那类缺陷的原因。</p>
  */
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
-const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+const zoomRatio = useZoomRatio();
 
 /** 图标与灯点的**当前**屏幕尺寸 = 规格值 × 倍率换算（6× 时正好是规格值）。 */
 const iconPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
@@ -214,21 +214,23 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
  */
 .lamp {
 	position: absolute;
+	/* 半径也做成变量：下面描边/发光的宽度由它派生，于是它们随倍率一起缩放。 */
+	--lamp-r: v-bind('`${lampDotHalf}px`');
 	left: v-bind('`${-lampDotHalf}px`');
 	top: v-bind('`${-lampDotHalf}px`');
 	width: v-bind('`${lampDotPx}px`');
 	height: v-bind('`${lampDotPx}px`');
 	border-radius: 50%;
-	box-shadow: 0 0 0 1px #000000, 0 0 5px currentColor;
+	box-shadow: 0 0 0 calc(var(--lamp-r) * 0.25) #000000, 0 0 calc(var(--lamp-r) * 1.25) currentColor;
 }
 
 .signal.hovered .lamp {
-	box-shadow: 0 0 0 1px #000000, 0 0 0 2.5px rgba(255, 255, 255, 0.45);
+	box-shadow: 0 0 0 calc(var(--lamp-r) * 0.25) #000000, 0 0 0 calc(var(--lamp-r) * 0.63) rgba(255, 255, 255, 0.45);
 }
 
 /* 正在改绑定的灯：加一圈强调色环（比悬停更醒目，且不会因为指针离开而消失） */
 .signal.selected .lamp {
-	box-shadow: 0 0 0 1px #000000, 0 0 0 2.5px var(--accent), 0 0 10px var(--accent);
+	box-shadow: 0 0 0 calc(var(--lamp-r) * 0.25) #000000, 0 0 0 calc(var(--lamp-r) * 0.63) var(--accent), 0 0 calc(var(--lamp-r) * 2.5) var(--accent);
 }
 
 .signal {
@@ -342,5 +344,6 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	border-color: var(--accent);
 }
 </style>
+
 
 

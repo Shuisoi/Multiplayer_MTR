@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import {computed, nextTick, onBeforeUnmount, onMounted, provide, ref, useTemplateRef, watch} from "vue";import {useCameraView} from "@/composables/useCameraView";
+import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch} from "vue";
+import {useCameraView} from "@/composables/useCameraView";
 import {boundsOf} from "@/domain/camera";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
@@ -9,7 +10,7 @@ import type {Point} from "@/domain/Point";
 import type {Section} from "@/domain/Section";
 import type {Rail as RailEntity} from "@/domain/Rail";
 import type {StraightLookup} from "@/domain/railPath";
-import {CAMERA, ZOOM_RATIO} from "@/views/mapContext";
+import {provideMapContext} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
 import SectionLayer from "./SectionLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
@@ -106,9 +107,14 @@ const content = computed(() => boundsOf([
 ]));
 
 const view = useCameraView({host, camera, content});
-provide(CAMERA, camera);
-/** 缩放倍率注入给各元素：它们按它把"规格尺寸"（例如 6× 下 8 px）换算成当前像素。 */
-provide(ZOOM_RATIO, view.zoomRatio);
+/**
+ * 上下文交给各层：它们按倍率把"规格尺寸"（例如 6× 下 8 px）换算成当前像素。
+ *
+ * <p>写口是一个函数而不是两个 `provide(键, …)`：注入键是 `mapContext` 的模块私有量，
+ * 子层只能通过 `useCamera()` / `useZoomRatio()` 读，且必须在 setup 里读 ——
+ * 这样"把 inject 塞进 computed"那种静默降级的写法在类型上就写不出来（见 `mapContext.ts` 的说明）。</p>
+ */
+provideMapContext(camera, view.zoomRatio);
 
 /** 悬停中的节点 key（信息卡）。 */
 const hoveredKey = ref("");

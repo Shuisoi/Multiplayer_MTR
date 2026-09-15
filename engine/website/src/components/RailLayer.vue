@@ -3,6 +3,8 @@ import {computed, ref, watch} from "vue";
 import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
 import {buildStraightDirections, railScreenPath, straightLookup} from "@/domain/railPath";
+import {DECAL_KINDS, mapScale} from "@/domain/mapElements";
+import {useZoomRatio} from "@/views/mapContext";
 
 /*
  * 轨道层：把引擎给的每条轨画出来（SVG，**屏幕坐标**）。
@@ -50,6 +52,23 @@ const emit = defineEmits<{
 
 /** 悬停中的轨（hex）：候选轨上加一点反馈，让人知道"这条能点"。 */
 const hoveredRail = ref("");
+
+/** 缩放倍率（画布注入；拿不到按 1 算）。**必须在 setup 里读**，理由见 `useZoomRatio`。 */
+const zoomRatio = useZoomRatio();
+
+/**
+ * **本图层所有像素量共用的因子**：把规格值（见 `DECAL_KINDS`）换算到当前屏幕。
+ *
+ * <p>用户 2026-09-15 的要求是"**所有**地图元素都有类似效果，不是单单几个图标" ——
+ * 轨道线宽、护套、命中区与图标、菱形、区间带全都乘**同一个因子**，于是相机推近时整张图一起长，
+ * 而不是线条不动、图标在飘（那正是"没做到类似摄像机在地图上"的观感来源）。</p>
+ */
+const sizeFactor = computed(() => mapScale(zoomRatio.value));
+
+/** 本图层各处的**实际**屏幕像素（规格 × 因子）。样式表用这几个值，所以线宽自然跟着倍率走。 */
+const railWidthPx = computed(() => `${DECAL_KINDS.railWidth * sizeFactor.value}px`);
+const railShadowWidthPx = computed(() => `${DECAL_KINDS.railShadowWidth * sizeFactor.value}px`);
+const railHitWidthPx = computed(() => `${DECAL_KINDS.railHitWidth * sizeFactor.value}px`);
 
 /** 这一层现在能不能点轨（有候选才有意义）。 */
 const pickable = computed(() => props.candidateRails !== undefined && props.candidateRails.length > 0);
@@ -238,15 +257,15 @@ watch(drawn, items => {
 .shadow {
 	fill: none;
 	stroke: #000000;
-	stroke-width: 7.2;
+	stroke-width: v-bind(railShadowWidthPx);
 	stroke-linecap: round;
 }
 
-/* 本体：**4 px 纯白**（用户规格）。所有状态在下面按类覆盖。 */
+/* 本体：**4 px 纯白**（用户规格；随倍率缩放，见 sizeFactor）。所有状态在下面按类覆盖。 */
 .rail {
 	fill: none;
 	stroke: #ffffff;
-	stroke-width: 4;
+	stroke-width: v-bind(railWidthPx);
 	stroke-linecap: round;
 }
 
@@ -265,7 +284,7 @@ watch(drawn, items => {
  */
 .rail.bound {
 	stroke: #22c55e;
-	stroke-width: 4;
+	stroke-width: v-bind(railWidthPx);
 }
 
 /*
@@ -274,7 +293,7 @@ watch(drawn, items => {
  */
 .rail.candidate {
 	stroke: var(--accent);
-	stroke-width: 4;
+	stroke-width: v-bind(railWidthPx);
 	stroke-dasharray: 6 4;
 }
 
@@ -286,7 +305,7 @@ watch(drawn, items => {
  */
 .rail.connected {
 	stroke: #f59e0b;
-	stroke-width: 4;
+	stroke-width: v-bind(railWidthPx);
 	filter: drop-shadow(0 0 5px rgba(245, 158, 11, 0.85));
 }
 
@@ -298,7 +317,7 @@ watch(drawn, items => {
 .hit {
 	fill: none;
 	stroke: transparent;
-	stroke-width: 12;
+	stroke-width: v-bind(railHitWidthPx);
 	/*
 	 * 用 `all` 而不是 `stroke`：`stroke` 要求指针**正好落在描边覆盖的像素上**，
 	 * 而命中区是透明的宽描边 —— 一像素的取整误差就会让点击落到空白（实测点不下去，
@@ -308,3 +327,4 @@ watch(drawn, items => {
 	cursor: pointer;
 }
 </style>
+

@@ -54,6 +54,14 @@ $startFailures = 0
 # 开机清一次：上一轮如果是被强杀的，标记会留在这里，不清掉会变成"开机就重启"的死循环。
 Remove-Item $marker -ErrorAction SilentlyContinue
 Remove-Item $stopMarker -ErrorAction SilentlyContinue
+<#
+**停机标记要按"这一轮写的"算**（2026-09-15 实测）：上一轮服务端**优雅停机**时会在退出过程里补写
+`mmtr-stop.request`，那次写的时刻可能落在**下一轮已经开机之后**（部署/启动脚本先跑，旧 JVM 的
+shutdown 钩子后落盘）—— 于是新一轮刚把服务端拉起来，读完标记就判"是你要我停的"、自己结束了，
+现场表现为"部署完服务端没起来"（日志：`日志见服务端=True，停机标记=True`）。
+所以这里记一个本轮时钟，只有**比它新**的标记才算数。
+#>
+$roundStartedAt = Get-Date
 
 <#
 从字节偏移 $from 开始，读出日志里"这一轮"新增的部分。
@@ -107,9 +115,6 @@ while ($true) {
 		Remove-Item $marker -ErrorAction SilentlyContinue
 	}
 	$stopRequested = Test-Path $stopMarker
-	if ($stopRequested) {
-		Remove-Item $stopMarker -ErrorAction SilentlyContinue
-	}
 
 	# 判据之一：这一轮新增的日志里有没有"Minecraft 服务端跑起来并结束"的痕迹。
 	$roundLog = Read-LogSince $logOffset
@@ -118,6 +123,15 @@ while ($true) {
 	Write-Output ("第 " + $round + " 轮结束：日志见服务端=" + $ranServer + "，重启标记=" + $restartRequested + "，停机标记=" + $stopRequested + "，gradle 退出码=" + $gradleExit)
 
 	# 主动停机优先判断：这是用户明确要求的"停"，既不要重启，也**不是**启动失败
+	# （只认本轮写的标记：旧 JVM 退出时补写的那份不算，见 $roundStartedAt 的说明）
+	$stopRequested = $false
+	if (Test-Path $stopMarker) {
+		$stopRequested = (Get-Item $stopMarker).LastWriteTime -ge $roundStartedAt
+		if (-not $stopRequested) {
+			Write-Output ("忽略上一轮留下的停机标记（写在 " + (Get-Item $stopMarker).LastWriteTime + "，早于本轮开机 " + $roundStartedAt + "）")
+		}
+		Remove-Item $stopMarker -ErrorAction SilentlyContinue
+	}
 	if ($stopRequested) {
 		Write-Output "检测到停机标记（server stop）：这是主动停机，启动器结束（不当成启动失败重试）。"
 		break

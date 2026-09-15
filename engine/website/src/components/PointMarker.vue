@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import {computed, inject} from "vue";
+import {computed} from "vue";
 import type {Point} from "@/domain/Point";
 import type {Camera} from "@/domain/camera";
 import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled} from "@/domain/mapElements";
-import {ZOOM_RATIO} from "@/views/mapContext";
+import {useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
@@ -22,7 +22,7 @@ import {ZOOM_RATIO} from "@/views/mapContext";
 const LEADER_PX = DECAL_KINDS.turnoutLeader;
 
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
-const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+const zoomRatio = useZoomRatio();
 /** 菱形边长：**规格值 × 倍率**（6× 时为 8 px）。 */
 const diamondPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
 /** 引线长度同理跟着倍率走。 */
@@ -177,8 +177,8 @@ const facts = computed(() => [
 			里面的数字 = 当前开通的腿序号。
 			外面那层 `.hit` 是点击靶，整体偏在节点右下方（偏移量按"不许与灯点相接"算出来，见样式说明）。
 		-->
-		<div class="hit">
-			<div class="diamond" :style="{width: `${diamondPx}px`, height: `${diamondPx}px`}">
+		<div class="hit" :style="{'--d': `${diamondPx}px`}">
+			<div class="diamond">
 				<span class="leg-number">{{ markerNumber }}</span>
 			</div>
 
@@ -311,10 +311,18 @@ const facts = computed(() => [
  */
 .hit {
 	position: absolute;
-	left: 16px;
-	top: 16px;
-	width: 8px;
-	height: 8px;
+	/*
+	 * 偏移与尺寸**都从模型来**，不再写死。
+	 *
+	 * <p>写死这一处正是"缩放时脱层"的典型：菱形跟着倍率长，靶不动 —— 放大后菱形跑出靶外（点不到），
+	 * 缩小后靶比菱形大一圈（挡住隔壁灯点）。现在偏移是 {@code 对角方向 × 规格(16px) × 倍率}，
+	 * 尺寸是 {@code var(--d)}（与菱形同一边长），两者与菱形**同一个倍率**，
+	 * 所以上面那段"最坏情况仍有 ≈2.3px 空隙"的推导在任意倍率下都成立（它本来就是比例的）。</p>
+	 */
+	left: v-bind('`${offsetPx.x}px`');
+	top: v-bind('`${offsetPx.y}px`');
+	width: var(--d);
+	height: var(--d);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -343,15 +351,16 @@ const facts = computed(() => [
  * 默认开通位用琥珀色（"需要人管"），已锁闭用红色。
  */
 .diamond {
-	width: 8px;
-	height: 8px;
+	/* 边长由外层 `.hit` 按倍率写成 `--d`，这里只是继承（继承才能让靶与菱形同一个值）。 */
+	width: var(--d);
+	height: var(--d);
 	transform: rotate(45deg);
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	background: #f59e0b;
-	box-shadow: 0 0 0 1px #000000, 0 0 6px rgba(245, 158, 11, 0.55);
-	border-radius: 1px;
+	box-shadow: 0 0 0 calc(var(--d) * 0.125) #000000, 0 0 calc(var(--d) * 0.75) rgba(245, 158, 11, 0.55);
+	border-radius: calc(var(--d) * 0.125);
 	pointer-events: auto;
 	cursor: pointer;
 }
@@ -364,13 +373,13 @@ const facts = computed(() => [
 /*
  * 里面的数字要转回来，否则跟着菱形一起歪。
  *
- * <p>字号 6px：菱形对角线只有 11.3px，一行数字放得下但不宽裕 —— 详情在悬停卡片里，
- * 这里只要"能看出开通位是几"。</p>
+ * <p>字号由边长派生（`--d` 的 75%）：菱形对角线只有边长的 1.41 倍，一行数字放得下但不宽裕 ——
+ * 详情在悬停卡片里，这里只要"能看出开通位是几"。</p>
  */
 .leg-number {
 	transform: rotate(-45deg);
 	font-family: var(--font-value);
-	font-size: 6px;
+	font-size: calc(var(--d) * 0.75);
 	font-weight: 700;
 	line-height: 1;
 	color: #1a1204;
@@ -379,7 +388,7 @@ const facts = computed(() => [
 /* 未设定（走默认 0）：空心，提示"这一位不是人定的" */
 .point.is-default .diamond {
 	background: rgba(245, 158, 11, 0.28);
-	box-shadow: 0 0 0 1.5px #000000, inset 0 0 0 1.5px #f59e0b, 0 0 8px rgba(245, 158, 11, 0.35);
+	box-shadow: 0 0 0 calc(var(--d) * 0.19) #000000, inset 0 0 0 calc(var(--d) * 0.19) #f59e0b, 0 0 calc(var(--d) * 1) rgba(245, 158, 11, 0.35);
 }
 
 .point.is-default .leg-number {
@@ -388,7 +397,7 @@ const facts = computed(() => [
 
 .point.hovered .diamond,
 .point.expanded .diamond {
-	box-shadow: 0 0 0 2px #000000, 0 0 0 4px var(--accent), 0 0 14px var(--accent);
+	box-shadow: 0 0 0 calc(var(--d) * 0.25) #000000, 0 0 0 calc(var(--d) * 0.5) var(--accent), 0 0 calc(var(--d) * 1.75) var(--accent);
 }
 
 .point.expanded {
@@ -407,7 +416,7 @@ const facts = computed(() => [
  * 所以选中用**实心亮环**（不透明），也不随指针离开而消失。
  */
 .point.selected .diamond {
-	box-shadow: 0 0 0 2px #000000, 0 0 0 4px #f59e0b, 0 0 16px rgba(245, 158, 11, 0.9);
+	box-shadow: 0 0 0 calc(var(--d) * 0.25) #000000, 0 0 0 calc(var(--d) * 0.5) #f59e0b, 0 0 calc(var(--d) * 2) rgba(245, 158, 11, 0.9);
 }
 
 /* 选中时那条系回节点的连线也加亮：它是"这个亮线归哪个节点"的凭据 */
@@ -418,7 +427,7 @@ const facts = computed(() => [
 
 .point.locked .diamond {
 	background: #ef4444;
-	box-shadow: 0 0 0 1.5px #000000, 0 0 8px rgba(239, 68, 68, 0.6);
+	box-shadow: 0 0 0 calc(var(--d) * 0.19) #000000, 0 0 calc(var(--d) * 1) rgba(239, 68, 68, 0.6);
 }
 
 .card {
@@ -638,6 +647,7 @@ const facts = computed(() => [
 	color: var(--fg-faint);
 }
 </style>
+
 
 
 

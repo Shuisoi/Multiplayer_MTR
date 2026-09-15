@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import {computed, inject, onBeforeUnmount, watch} from "vue";
+import {computed, onBeforeUnmount, watch} from "vue";
 import {Node} from "@/domain/Node";
 import type {Camera} from "@/domain/camera";
 import {DECAL_KINDS, decalPlacement, decalTransform, scaled} from "@/domain/mapElements";
-import {ZOOM_RATIO} from "@/views/mapContext";
+import {useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个节点（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -48,7 +48,7 @@ const emit = defineEmits<{
  * 要恢复分档就在规格表里加"按度数取尺寸"的规则，而不是回到组件里写死。</p>
  */
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
-const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+const zoomRatio = useZoomRatio();
 /** 节点圆点半径：**规格值 × 倍率**（6× 时 3.6 px）。 */
 const radius = computed(() => scaled(DECAL_KINDS.nodeDot, zoomRatio.value));
 
@@ -245,22 +245,26 @@ watch(() => props.menuOpen, open => {
 	height: calc(var(--r) * 2);
 	border-radius: 50%;
 	background: #111111;
-	box-shadow: inset 0 0 0 1.4px #5f5f5f;
+	/* 描边与高光的宽度**由半径派生**（不是写死像素）：这样它们也随倍率一起缩放。 */
+	box-shadow: inset 0 0 0 calc(var(--r) * 0.39) #5f5f5f;
 	transition: box-shadow var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 
 .node.fork .dot {
 	background: #1c1c1c;
-	box-shadow: inset 0 0 0 1.6px #d0d0d0;
+	box-shadow: inset 0 0 0 calc(var(--r) * 0.44) #d0d0d0;
 }
 
 /* 悬停 / 打开菜单 / 选中：换成强调色描边（C# 端那套只把强调色用在关键处） */
 .node.active .dot {
 	background: #0d1b26;
-	box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft);
+	box-shadow: inset 0 0 0 calc(var(--r) * 0.56) var(--accent), 0 0 0 calc(var(--r) * 1.11) var(--accent-soft);
 }
 
-/* 鼠标靶：24px 见方的透明圆，覆盖在圆点上 */
+/*
+ * 鼠标靶：覆盖在圆点上的透明圆。**故意不随倍率缩放**：它是交互热区而不是可见元素 ——
+ * 缩放时热区跟着变小会让小图标点不中（可见元素的尺寸口径见 `domain/mapElements.ts`）。
+ */
 .node::before {
 	content: "";
 	position: absolute;

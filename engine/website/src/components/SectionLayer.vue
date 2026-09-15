@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import {computed, inject} from "vue";
+import {computed} from "vue";
 import type {Camera} from "@/domain/camera";
 import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
 import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
 import {railSpanPath, type StraightLookup} from "@/domain/railPath";
 import type {Rail} from "@/domain/Rail";
 import {DECAL_KINDS, scaled} from "@/domain/mapElements";
-import {ZOOM_RATIO} from "@/views/mapContext";
+import {useZoomRatio} from "@/views/mapContext";
 
 /*
  * 区间图（用户 2026-09-15 定的规格）。
@@ -44,7 +44,8 @@ import {ZOOM_RATIO} from "@/views/mapContext";
  * （`domain/mapElements.ts#DECAL_KINDS`），并且都**乘当前倍率** —— 口径是"世界不动、动的是摄像机"，
  * 所以规格值（6× 下 6 px 线心、2 px 状态条）要跟着倍率一起变。
  */
-const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+/** 缩放倍率（画布注入；拿不到按 1 算）。**必须在 setup 里读**，理由见 `useZoomRatio`。 */
+const zoomRatio = useZoomRatio();
 const stripeWidthPx = computed(() => scaled(DECAL_KINDS.stripeWidth, zoomRatio.value));
 const stripeNearPx = computed(() => scaled(DECAL_KINDS.stripeNear, zoomRatio.value));
 const stripeFarPx = computed(() => scaled(DECAL_KINDS.stripeFar, zoomRatio.value));

@@ -64,6 +64,18 @@ export const DECAL_KINDS = {
 	stripeFar: 5,
 	/** 区间线心宽度（用户规格 6 px）。 */
 	sectionBaseWidth: 6,
+	/**
+	 * **轨道线（路线图）的宽度**：4 px 本体 + 7.2 px 护套。
+	 *
+	 * <p>护套比本体宽 1.6 px/侧，用来在密集站场里"抠"出两条轨之间的缝。</p>
+	 *
+	 * <p>与图标同一个基准（6×）：它们是同一张图上的东西，**必须乘同一个因子** ——
+	 * 否则缩放时会"脱层"（线条不动、图标在动，看起来图标像贴在屏幕上的 HUD）。</p>
+	 */
+	railWidth: 4,
+	railShadowWidth: 7.2,
+	/** 改绑定时的透明命中区：比本体宽得多，只为好点中。 */
+	railHitWidth: 12,
 } as const;
 
 /** 元素种类名（要在规格表里加新元素就在这里加一项）。 */
@@ -88,6 +100,17 @@ export function mapScale(zoomRatio: number): number {
 export function scaled(specPx: number, zoomRatio: number): number {
 	return specPx * mapScale(zoomRatio);
 }
+
+/**
+ * **每一层都要用的那个因子**：把"图上任何一个像素量"从规格换算到当前屏幕。
+ *
+ * <p>存在的理由（用户 2026-09-15 的要求："这个是需要所有地图元素都有类似效果的，不是单单几个图标"）：
+ * 效果要**全图一致** —— 轨道线宽、节点圆点、灯的图标、道岔菱形、区间线心与状态条，全都乘同一个因子。
+ * 只要有一个元素漏乘，缩放时它就会与周围"脱层"（看起来像贴在屏幕上的 HUD）。</p>
+ *
+ * <p>所以各图层不要自己写 `scaled(..., ratio)`，直接用这个 computed 出来的因子乘 ——
+ * 这样"哪些元素跟着缩放"在代码里一眼看全，也不会漏。</p>
+ */
 
 /** 一个元素在屏幕上的位置：锚点的世界坐标 → 屏幕，再加深缩放后的方向偏移。 */
 export interface DecalPlacement {
@@ -141,3 +164,4 @@ export function decalTransform(placement: DecalPlacement, rotationDeg = 0): stri
 export function pixelOffset(direction: {x: number; y: number}, distancePx: number): {x: number; y: number} {
 	return {x: direction.x * distancePx, y: direction.y * distancePx};
 }
+
