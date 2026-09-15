@@ -83,18 +83,78 @@ public final class MmtrCommandExecutor {
 			executeInterlock(simulator, parts);
 			return;
 		}
-		// 闭塞区间 v2 (S6): the 水闸区间 layer itself - one cell per lamp, plus the node assignment check.
+		/*
+		 * 区间层（按方向划分）。`blocks <节点键>` = 这个节点被哪些区间覆盖；`blocks` = 逐区间转储。
+		 *
+		 * <p>原来这两条走 `MmtrDirectionalBlockReport`（水闸区间的"唯一归属"，notes/157 已删）。
+		 * 那个类的"诊断报告"职责现在由 `MmtrDirectionalBlockService` 自己承担：
+		 * 节点那一问用 `describeNodeSections`（**多值**，双向线路上一个节点被两个方向的区间同时覆盖），
+		 * 区间那一份直接遍历 `allSections()` 打印 —— 不再需要一层只做转储的中间类。</p>
+		 */
 		if (parts.length >= 1 && parts[0].equals("blocks")) {
-			simulator.mmtrCommandResult(parts.length >= 2
-				? org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describeNode(simulator, parts[1])
-				: org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describeBlocks(simulator));
+			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService blockService =
+				new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator);
+			if (parts.length >= 2) {
+				final String[] nodeParts = parts[1].split(",");
+				if (nodeParts.length == 3) {
+					try {
+						simulator.mmtrCommandResult("[blocks] 节点 " + parts[1] + " 覆盖它的区间："
+							+ blockService.describeNodeSections(new org.mtr.core.data.Position(
+								Long.parseLong(nodeParts[0].trim()), Long.parseLong(nodeParts[1].trim()), Long.parseLong(nodeParts[2].trim()))));
+					} catch (NumberFormatException ignored) {
+						simulator.mmtrCommandResult("[blocks] 节点坐标无法解析，用法: blocks <x>,<y>,<z>");
+					}
+				} else {
+					simulator.mmtrCommandResult("[blocks] 节点坐标无法解析，用法: blocks <x>,<y>,<z>");
+				}
+				return;
+			}
+			final var allSections = blockService.allSections();
+			int sectionCount = 0;
+			final StringBuilder report = new StringBuilder("[blocks] 有向区间（按方向划分）");
+			for (final var entry : allSections.entrySet()) {
+				for (final var section : entry.getValue()) {
+					sectionCount++;
+					report.append("\n  ").append(section.id)
+						.append(" → ").append(section.exitSignalKey == null || section.exitSignalKey.isEmpty() ? "尽头" : section.exitSignalKey)
+						.append(" 跨 ").append(section.spans.size()).append(" 段 长=").append(Math.round(section.lengthM() * 10) / 10.0);
+				}
+			}
+			report.append("\n[blocks] 合计 ").append(sectionCount).append(" 个区间");
+			simulator.mmtrCommandResult(report.toString());
 			return;
 		}
-		// 闭塞区间 v2 (S2): the directional lamp-to-lamp sections, next to the v1 report.
+		// 某一根轨属于哪几个区间（一个点属于哪几段，**多值**）。
 		if (parts.length >= 1 && parts[0].equals("blocks-v2")) {
-			simulator.mmtrCommandResult(parts.length >= 2 && !parts[1].equals("all")
-				? org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describe(simulator, parts[1])
-				: org.mtr.core.mmtr.signal.MmtrDirectionalBlockReport.describeAll(simulator));
+			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService blockService =
+				new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator);
+			if (parts.length >= 2 && !parts[1].equals("all")) {
+				final var onRail = blockService.sectionsOfRail(parts[1]);
+				if (onRail.isEmpty()) {
+					simulator.mmtrCommandResult("[blocks-v2] 轨 " + parts[1] + " 不属于任何区间（这一段没有灯照到）");
+					return;
+				}
+				final StringBuilder report = new StringBuilder("[blocks-v2] 轨 " + parts[1] + " 属于 " + onRail.size() + " 个有向区间");
+				for (final var section : onRail) {
+					// 本轨在这个区间里的弧窗（一个区间可能在这一根轨上出现多段，这里列出全部）
+					final StringBuilder windows = new StringBuilder();
+					for (final var span : section.spans) {
+						if (span.railHex.equals(parts[1])) {
+							if (windows.length() > 0) {
+								windows.append(" / ");
+							}
+							windows.append("[").append(Math.round(span.arcFromM * 10) / 10.0)
+								.append(", ").append(Math.round(span.arcToM * 10) / 10.0).append(")");
+						}
+					}
+					report.append("\n  ").append(section.id)
+						.append(" → ").append(section.exitSignalKey == null || section.exitSignalKey.isEmpty() ? "尽头" : section.exitSignalKey)
+						.append(" 本轨弧").append(windows);
+				}
+				simulator.mmtrCommandResult(report.toString());
+				return;
+			}
+			simulator.mmtrCommandResult("[blocks-v2] 用法: blocks-v2 all | blocks-v2 <轨hex>（逐区间转储请用 `blocks`）");
 			return;
 		}
 		// 闭塞区间 v2 (S4, observable before it is wired): what every lamp WOULD show under the v2 rule.
