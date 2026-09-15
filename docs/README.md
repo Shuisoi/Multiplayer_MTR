@@ -148,6 +148,11 @@
     （`SectionView.direction/entrySignalKey`、span 的 `dirOfTravel`、新增顶层 `byRail[]` 成员表），
     判定逻辑一行未改；并查清 628 m 巨块的成因是"走行在 U 弯处掉头"（列为批次 4）。
     **后续批次**：批次 2 删 `GateBlock`/节点 `block` 单值归属层、批次 3 Web 方向带、批次 4 方向不变量。
+  - **157 = 删除单值节点归属层（批次 2，已完成）**：`GateBlock`/`DirectionalReach`/`ReachIndex`/`nodeOwners`/
+    `blockAspect`/`describeNodeResolution` 连根拔掉，`MmtrDirectionalBlockReport` 整文件删除（全库零引用）；
+    净删 455 行（服务 3815 → 3360）。**信号显示逻辑零改动**（`blockAspect` 本来就是 `lampAspectNames` 那套规则，
+    `Section` 早就是唯一真源）。三个消费方改读 `sectionViews()`；方格图的格子归属由"查表"改成"按弧窗采样算几何"。
+    测试删 3 条（钉的是已消失的语义）、重写 3 条，判据改为**按方向**的划分不变量。引擎 689/0/4。
 
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。

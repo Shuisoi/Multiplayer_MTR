@@ -108,8 +108,6 @@ public final class MmtrDirectionalBlockService {
 	private static final double MAX_SECTION_LENGTH_M = 4000;
 	/** Two block boundaries closer than this on one rail are the same boundary (sampled arcs wobble). */
 	private static final double MIN_BLOCK_PIECE_M = 0.05;
-	/** A track-layer node this close to a block boundary is that boundary (its cell starts there). */
-	private static final double NODE_OWNER_TOLERANCE_M = 1.0;
 
 	/*
 	 * ---------------------------------------------------------------- 绑定关系挂在「节点」上
@@ -1291,6 +1289,15 @@ public final class MmtrDirectionalBlockService {
 			this.direction = direction;
 			this.spans = spans;
 		}
+
+		/** 区间长度（米）：与 {@link Section#lengthM()} 同一份算法，给显示层用。 */
+		public double lengthM() {
+			double length = 0;
+			for (final RailSpan span : spans) {
+				length += span.lengthM();
+			}
+			return length;
+		}
 	}
 
 	/**
@@ -1306,579 +1313,54 @@ public final class MmtrDirectionalBlockService {
 		return new Direction(0, 0, 1);
 	}
 
-	// ---------------------------------------------------------------- 水闸区间 (S6)
 
-	/** One 水闸区间: a stretch of line bounded by the lamps that face INTO it. */
-	public static final class GateBlock {
-		/**
-		 * The lamp that opens this block (the one facing into it); empty for a block that no lamp guards
-		 * (the end of the line, a plain siding).
-		 */
-		public final String entryLampKey;
-		/**
-		 * A stable id unique across the layer: the entry lamp's key, or {@code 无灯#<rail>|<arc>} for an
-		 * unguarded block. Names must be unique because the node assignment and the map colours key on them -
-		 * "no lamp" is a property of several blocks at once, not one shared name for all of them.
-		 */
-		public final String id;
-		/** True when the walk ran out (dead end) instead of closing on the next lamp. */
-		public final boolean endsOpen;
-		public final ObjectArrayList<RailSpan> spans = new ObjectArrayList<>();
 
-		GateBlock(String id, String entryLampKey, boolean endsOpen) {
-			this.id = id;
-			this.entryLampKey = entryLampKey;
-			this.endsOpen = endsOpen;
-		}
-
-		GateBlock(String id, String entryLampKey, boolean endsOpen, ObjectArrayList<RailSpan> spans) {
-			this(id, entryLampKey, endsOpen);
-			this.spans.addAll(spans);
-		}
-
-		public double lengthM() {
-			double length = 0;
-			for (final RailSpan span : spans) {
-				length += span.lengthM();
-			}
-			return length;
-		}
-
-		@Override
-		public String toString() {
-			return (entryLampKey.isEmpty() ? "（无灯 " + id + "）" : entryLampKey) + (endsOpen ? " → 开放端" : " → 下一盏灯")
-				+ " 跨 " + spans.size() + " 段 长=" + Math.round(lengthM() * 10) / 10.0;
-		}
-	}
-
-	/** How far a lamp's walk reaches in one travel direction, in arc order along that direction. */
-	private static final class DirectionalReach {
-		final String lampKey;
-		/** The travel direction every arc in {@code spans} is measured along. */
-		final double headingX;
-		final double headingZ;
-		final boolean endsOpen;
-		/** Rail hex -> the arc window of this rail the reach covers, normalised to increasing arc. */
-		final Object2ObjectOpenHashMap<String, double[]> windows = new Object2ObjectOpenHashMap<>();
-
-		DirectionalReach(String lampKey, double headingX, double headingZ, boolean endsOpen) {
-			this.lampKey = lampKey;
-			this.headingX = headingX;
-			this.headingZ = headingZ;
-			this.endsOpen = endsOpen;
-		}
-
-		/** Widen the window this reach covers on a rail (a reach passes a rail once per direction). */
-		void add(RailSpan span) {
-			final double low = Math.min(span.arcFromM, span.arcToM);
-			final double high = Math.max(span.arcFromM, span.arcToM);
-			final double[] existing = windows.get(span.railHex);
-			if (existing == null) {
-				windows.put(span.railHex, new double[]{low, high});
-			} else {
-				existing[0] = Math.min(existing[0], low);
-				existing[1] = Math.max(existing[1], high);
-			}
-		}
-	}
 
 	/**
-	 * 水闸区间 (user definition, 2026-09-10; **unique assignment added 2026-09-11**): the block layer is a
-	 * clean division of the line - every piece of track AND every track-layer node belongs to exactly ONE
-	 * block.
+	 * 这个节点**被哪些区间覆盖**，作为文字（诊断用；`point why` 的那一段）。
 	 *
-	 * <p>The rule, in the user's words: a signal is a <em>water gate</em>. A block is closed when every one
-	 * of its exits has a lamp facing INTO it; a lamp facing out of it belongs to the NEXT block; a stretch
-	 * with no lamp (the end of the line, a plain siding) forms a block by itself. Nodes and turnouts do NOT
-	 * cut blocks - they belong to the TRACK layer, which the map's rail/turnout layers already show.</p>
-	 *
-	 * <p>This matches real practice: a block section is a track-circuit section and the signal stands at its
-	 * ENTRANCE, so block boundaries are signal positions and "one section, one train" is what the section is
-	 * FOR (see 参考-英铁AWS与TPWS机制 §4).</p>
-	 *
-	 * <h2>Why the assignment needs a rule, and which one</h2>
-	 *
-	 * <p>Each lamp's own walk is only its REACH: at a ladder throat several lamps face into the same shared
-	 * rails, so those reaches contain each other (measured on the dev world: 287 overlapping pairs over 134
-	 * rails). To make the layer an actual division, every position is assigned to the <strong>nearest lamp
-	 * UPSTREAM of it</strong> - the first lamp a movement standing there would have had to pass - which is
-	 * exactly what the driver sees as "this is my block". Blocks are therefore the reaches CLIPPED where a
-	 * nearer lamp takes over, and the clipped pieces still tile the line end to end.</p>
-	 *
-	 * <p>Facing the opposite way is a different movement, so it may well be a different block; that is the
-	 * "directed" half of the model and not an overlap.</p>
+	 * <p>取代原来的 {@code describeNodeResolution}：那个函数回答的是"这个节点**唯一**归哪个水闸区间"，
+	 * 而"唯一归属"在双向线路上不成立（2026-09-15 按用户裁定连同水闸区间层一起删除）。这里如实列出
+	 * **全部**覆盖它的区间，每条带上它的行车方向与入口灯。</p>
 	 */
-	public ObjectArrayList<GateBlock> gateBlocks() {
+	public String describeNodeSections(Position node) {
 		refresh();
-		return computeGateBlocks();
-	}
-
-	private ObjectArrayList<GateBlock> computeGateBlocks() {
-		// Lamp -> the block id the console uses (a lamp-less block is numbered by its order of appearance).
-		final ObjectArrayList<GateBlock> out = new ObjectArrayList<>();
-		final Object2ObjectOpenHashMap<String, GateBlock> blocksByLamp = new Object2ObjectOpenHashMap<>();
-		final Object2ObjectOpenHashMap<String, DirectionalReach> increasing = new Object2ObjectOpenHashMap<>();
-		final Object2ObjectOpenHashMap<String, DirectionalReach> decreasing = new Object2ObjectOpenHashMap<>();
-		for (final Map.Entry<String, ObjectArrayList<Section>> entry : sectionsBySignal.entrySet()) {
-			for (final Section walk : entry.getValue()) {
-				if (walk.spans.isEmpty()) {
-					continue;
-				}
-				addReaches(entry.getKey(), walk, increasing, decreasing);
-			}
-		}
-
-		final ReachIndex upIndex = new ReachIndex(true);
-		final ReachIndex downIndex = new ReachIndex(false);
-		increasing.values().forEach(upIndex::add);
-		decreasing.values().forEach(downIndex::add);
-		final Object2ObjectOpenHashMap<String, ObjectArrayList<DirectionalReach>>[] byDirection = newDirectionArrays(upIndex, downIndex);
-		// One pass per rail HEX: the world may hold two rail entities with the same endpoints (the hex id IS
-		// the endpoints), and walking both would emit the same track twice - the overlap the layer must not
-		// have. Every other part of the engine keys rails by hex too, so one pass is the consistent reading.
-		final ObjectOpenHashSet<String> emitted = new ObjectOpenHashSet<>();
-		for (final Rail rail : simulator.rails) {
-			final String hex = rail.getHexId();
-			final double length = rail.railMath.getLength();
-			if (length <= 1e-6 || !emitted.add(hex)) {
-				continue;
-			}
-			emitRail(rail, hex, length, byDirection, blocksByLamp, out);
-		}
-		return out;
-	}
-
-	// ---------------------------------------------------------------- the unique assignment
-
-	/**
-	 * The rails of one travel direction with every lamp reach that covers them: rail hex -> the reaches on
-	 * it, in no particular order (the governing rule picks between them per arc).
-	 */
-	private static final class ReachIndex {
-		final Object2ObjectOpenHashMap<String, ObjectArrayList<DirectionalReach>> byRail = new Object2ObjectOpenHashMap<>();
-		/** Which way the arc index runs for this direction, so "upstream" and "downstream" mean something. */
-		final boolean upward;
-
-		ReachIndex(boolean upward) {
-			this.upward = upward;
-		}
-
-		void add(DirectionalReach reach) {
-			reach.windows.forEach((railHex, window) -> byRail.computeIfAbsent(railHex, ignored -> new ObjectArrayList<>()).add(reach));
-		}
-	}
-
-	/** Both directions as one pair: [0] = arc-increasing, [1] = arc-decreasing. */
-	@SuppressWarnings("unchecked")
-	private static Object2ObjectOpenHashMap<String, ObjectArrayList<DirectionalReach>>[] newDirectionArrays(ReachIndex upIndex, ReachIndex downIndex) {
-		return new Object2ObjectOpenHashMap[]{upIndex.byRail, downIndex.byRail};
-	}
-
-	/** The reaches covering one rail, per direction; an empty list when no lamp reaches it from that side. */
-	@SuppressWarnings("unchecked")
-	private static ObjectArrayList<DirectionalReach>[] reachesOn(@Nullable ObjectArrayList<DirectionalReach> up, @Nullable ObjectArrayList<DirectionalReach> down) {
-		return new ObjectArrayList[]{
-			up == null ? new ObjectArrayList<DirectionalReach>() : up,
-			down == null ? new ObjectArrayList<DirectionalReach>() : down,
-		};
-	}
-
-	/**
-	 * Split one lamp's walk into its per-direction reaches.
-	 *
-	 * <p><strong>One reach per lamp:</strong> the map is keyed by LAMP, not by rail. Keying by rail made the
-	 * second lamp on a rail overwrite the first, so the whole rail silently fell to whichever lamp was
-	 * rebuilt last - a two-headed 200 m rail came out as one 200 m block instead of one cell per head.</p>
-	 *
-	 * <p>A block is walked along ONE travel direction (the lamp either faces up the arc or down it), so
-	 * comparing two reaches is only meaningful when they run the same way; the two directions are kept
-	 * apart here and the uniqueness rule is applied within each of them.</p>
-	 */
-	private void addReaches(String lampKey, Section walk, Object2ObjectOpenHashMap<String, DirectionalReach> increasing, Object2ObjectOpenHashMap<String, DirectionalReach> decreasing) {
-		final boolean endsOpen = walk.exitSignalKey == null || walk.exitSignalKey.isEmpty();
-		for (final RailSpan span : walk.spans) {
-			final boolean up = span.arcToM > span.arcFromM;
-			final Object2ObjectOpenHashMap<String, DirectionalReach> side = up ? increasing : decreasing;
-			DirectionalReach reach = side.get(lampKey);
-			if (reach == null) {
-				reach = new DirectionalReach(lampKey, span.headingX, span.headingZ, endsOpen);
-				side.put(lampKey, reach);
-			}
-			if (span.lengthM() > 1e-9) {
-				reach.add(span);
-			}
-		}
-	}
-
-	/** Cut every rail into the pieces owned by their nearest upstream lamp, in arc order. */
-	private void emitRail(Rail rail, String hex, double length, Object2ObjectOpenHashMap<String, ObjectArrayList<DirectionalReach>>[] byDirection, Object2ObjectOpenHashMap<String, GateBlock> blocksByLamp, ObjectArrayList<GateBlock> out) {
-		final ObjectArrayList<DirectionalReach>[] reaches = reachesOn(byDirection[0].get(hex), byDirection[1].get(hex));
-		if (reaches[0].isEmpty() && reaches[1].isEmpty()) {
-			// 无信号灯的自己成一个区间: no lamp faces into this rail at all, so it is a block nobody guards.
-			// It is NOT merged with its neighbours - merging would need a node, and nodes are not a boundary
-			// in this layer - so the whole rail is emitted as one unguarded block.
-			final double[] heading = headingAt(rail, 0);
-			final ObjectArrayList<RailSpan> spans = new ObjectArrayList<>();
-			spans.add(new RailSpan(hex, 0, length, heading[0], heading[1]));
-			out.add(new GateBlock(unguardedId(hex, 0), "", true, spans));
-			return;
-		}
-
-		final java.util.TreeSet<Double> ordered = new java.util.TreeSet<>();
-		for (final ObjectArrayList<DirectionalReach> list : reaches) {
-			for (final DirectionalReach reach : list) {
-				final double[] window = reach.windows.get(hex);
-				ordered.add(clamp(window[0], 0, length));
-				ordered.add(clamp(window[1], 0, length));
-			}
-		}
-		final ObjectArrayList<Double> boundaries = new ObjectArrayList<>();
-		for (final double cut : ordered) {
-			if (boundaries.isEmpty() || cut - boundaries.get(boundaries.size() - 1) > MIN_BLOCK_PIECE_M) {
-				boundaries.add(cut);
-			}
-		}
-		if (boundaries.isEmpty() || boundaries.get(0) > MIN_BLOCK_PIECE_M) {
-			boundaries.add(0, 0.0);
-		}
-		if (boundaries.get(boundaries.size() - 1) < length - MIN_BLOCK_PIECE_M) {
-			boundaries.add(length);
-		}
-
-		// Per arc interval, per direction: who owns it. The owner is the nearest lamp upstream that still
-		// reaches this far (see governing()), so the cells tile the rail instead of containing each other.
-		// A run of intervals with one owner becomes ONE span, so a lamp whose cell is cut in half by a
-		// mid-rail head still gets one clean span per piece of track.
-		final DirectionalReach[] runningOwner = new DirectionalReach[]{null, null};
-		final GateBlock[] runningBlock = new GateBlock[]{null, null};
-		final double[] runningFrom = new double[]{0, 0};
-		final double[] runningHeadingX = new double[]{0, 0};
-		final double[] runningHeadingZ = new double[]{0, 0};
-		for (int i = 0; i + 1 < boundaries.size(); i++) {
-			final double from = boundaries.get(i);
-			final double to = boundaries.get(i + 1);
-			final double middle = (from + to) / 2;
-			for (int direction = 0; direction < 2; direction++) {
-				final DirectionalReach reach = governing(reaches[direction], hex, middle, direction == 0);
-				if (reach == runningOwner[direction]) {
-					continue; // nobody reaches here, or the same lamp still owns the run
-				}
-				if (runningOwner[direction] != null) {
-					addSpan(runningBlock[direction], new RailSpan(hex, runningFrom[direction], from, runningHeadingX[direction], runningHeadingZ[direction]));
-				}
-				if (reach == null) {
-					runningOwner[direction] = null;
-					runningBlock[direction] = null;
-					continue;
-				}
-				runningOwner[direction] = reach;
-				runningBlock[direction] = blockFor(reach, blocksByLamp, out);
-				runningFrom[direction] = from;
-				runningHeadingX[direction] = direction == 0 ? headingAt(rail, middle)[0] : -headingAt(rail, middle)[0];
-				runningHeadingZ[direction] = direction == 0 ? headingAt(rail, middle)[1] : -headingAt(rail, middle)[1];
-			}
-		}
-		for (int direction = 0; direction < 2; direction++) {
-			if (runningOwner[direction] != null) {
-				addSpan(runningBlock[direction], new RailSpan(hex, runningFrom[direction], length, runningHeadingX[direction], runningHeadingZ[direction]));
-			}
-		}
-
-		// 没有灯照到的弧段自成无灯区间: the tiling can leave a stretch owned by nobody where a lamp's cell
-		// begins inside the rail and the rail's far end lies past every window (a stabling road whose entry
-		// lamp stands mid-rail, and no other head reaches the tail). The layer must still cover the whole
-		// line - a gap is a place where a train would belong to no block at all - so every arc no reach
-		// covers gets its own unguarded block.
-		final ObjectArrayList<RailSpan> unowned = new ObjectArrayList<>();
-		for (int i = 0; i + 1 < boundaries.size(); i++) {
-			final double from = boundaries.get(i);
-			final double to = boundaries.get(i + 1);
-			final double middle = (from + to) / 2;
-			final boolean covered = governing(reaches[0], hex, middle, true) != null || governing(reaches[1], hex, middle, false) != null;
-			if (covered) {
-				continue;
-			}
-			if (!unowned.isEmpty() && Math.abs(unowned.get(unowned.size() - 1).arcToM - from) < 1e-6
-				&& unowned.get(unowned.size() - 1).matchesHeading(headingAt(rail, middle)[0], headingAt(rail, middle)[1])) {
-				// Extend the run rather than open a new block: one stretch, one cell.
-				final RailSpan last = unowned.remove(unowned.size() - 1);
-				unowned.add(new RailSpan(hex, last.arcFromM, to, last.headingX, last.headingZ));
-			} else {
-				final double[] heading = headingAt(rail, middle);
-				unowned.add(new RailSpan(hex, from, to, heading[0], heading[1]));
-			}
-		}
-		if (!unowned.isEmpty()) {
-			for (final RailSpan span : unowned) {
-				out.add(new GateBlock(unguardedId(hex, span.arcFromM), "", true, ObjectArrayList.of(span)));
-			}
-		}
-	}
-
-	/** The block that a reach belongs to, created on first use and keyed by its entry lamp. */
-	private static GateBlock blockFor(DirectionalReach reach, Object2ObjectOpenHashMap<String, GateBlock> blocksByLamp, ObjectArrayList<GateBlock> out) {
-		GateBlock block = blocksByLamp.get(reach.lampKey);
-		if (block == null) {
-			block = new GateBlock(reach.lampKey, reach.lampKey, reach.endsOpen);
-			blocksByLamp.put(reach.lampKey, block);
-			out.add(block);
-		}
-		return block;
-	}
-
-	/** The unique name of an unguarded block: the rail it starts on, so no two of them share one. */
-	private static String unguardedId(String railHex, double arcM) {
-		return "无灯#" + railHex + "@" + Math.round(arcM * 10) / 10.0;
-	}
-
-	/**
-	 * The reach that owns arc {@code arcM} of its rail, or null when no lamp reaches it.
-	 *
-	 * <p>The owner is the nearest lamp UPSTREAM <em>that actually reaches this far</em>: of the reaches
-	 * covering {@code arcM}, the one whose own start is closest to it, i.e. the innermost one. This single
-	 * rule settles every case the layer has:</p>
-	 *
-	 * <ul>
-	 * <li>a nearer lamp behind you takes the cell from the one further back, which is what makes the cells
-	 * tile the ladder instead of containing each other;</li>
-	 * <li>a reach that ENDS before {@code arcM} is ignored rather than winning the stretch past its own end,
-	 * which keeps one lamp's cells contiguous (closest-start would otherwise alternate and shred a block);</li>
-	 * <li>two lamps meeting nose to nose - one facing east at the rail's middle, one facing west at its far
-	 * end - each own their own side, so the inner lamp keeps the cell AHEAD of itself (the outer lamp's
-	 * reach stops being the answer there) exactly as the model says it should;</li>
-	 * <li>two lamps standing at the same node with the same reach (the four lamps on one 43 m stabling road
-	 * in the dev world) are one cell in this layer, not four copies of it.</li>
-	 * </ul>
-	 *
-	 * <p>{@code forward} says which way the arc index runs, so "start" means the end the movement comes
-	 * from rather than the smaller index. Ties are broken by the reach's own end and then by the lamp's key,
-	 * so the answer never depends on map iteration order.</p>
-	 */
-	private static @Nullable DirectionalReach governing(ObjectArrayList<DirectionalReach> reaches, @Nullable String railHex, double arcM, boolean forward) {
-		if (railHex == null) {
-			return null;
-		}
-		DirectionalReach best = null;
-		double bestStart = forward ? -Double.MAX_VALUE : Double.MAX_VALUE;
-		double bestEnd = 0;
-		String bestLampKey = "";
-		for (final DirectionalReach reach : reaches) {
-			final double[] window = reach.windows.get(railHex);
-			if (window == null || arcM < window[0] - 1e-6 || arcM > window[1] + 1e-6) {
-				continue;
-			}
-			final double start = forward ? window[0] : -window[1];
-			final double end = forward ? window[1] : -window[0];
-			if (best == null || start > bestStart
-				|| (start == bestStart && (end > bestEnd || (end == bestEnd && reach.lampKey.compareTo(bestLampKey) < 0)))) {
-				best = reach;
-				bestStart = start;
-				bestEnd = end;
-				bestLampKey = reach.lampKey;
-			}
-		}
-		return best;
-	}
-
-	/**
-	 * Every TRACK-layer node with the block it belongs to - the user's requirement that each node has
-	 * exactly one block (2026-09-10): "每个轨道层每个节点都有且只有一个区间层所属".
-	 *
-	 * <p>The node is a single physical point, so it needs one canonical direction to be read in: the block
-	 * of the movement LEAVING the node along the lexicographically first rail at it. That is deterministic
-	 * and independent of which rail the caller happens to be looking at, which is what makes the assignment
-	 * checkable ("every node appears exactly once").</p>
-	 *
-	 * <p>A key mapping to an EMPTY string is one no lamp reaches (an unguarded stretch): the node still
-	 * belongs to exactly one block, that block just has no entry lamp.</p>
-	 */
-	public Object2ObjectOpenHashMap<String, String> nodeOwners() {
-		refresh();
-		return computeNodeOwners();
-	}
-
-	private Object2ObjectOpenHashMap<String, String> computeNodeOwners() {
-		final Object2ObjectOpenHashMap<String, String> owners = new Object2ObjectOpenHashMap<>();
-		final ObjectArrayList<GateBlock> blocks = gateBlocks();
-		for (final Map.Entry<Position, Object2ObjectOpenHashMap<Position, Rail>> entry : simulator.positionsToRail.entrySet()) {
-			final Position node = entry.getKey();
-			final String nodeKey = node.getX() + "," + node.getY() + "," + node.getZ();
-			// Canonical reading of the node: the movement leaving it along the rail whose hex sorts first.
-			// Deterministic, and independent of which rail the caller happens to be looking at.
-			//
-			// The node is located by COMPARING the rail's two ends with it rather than by asking the rail for
-			// an arc: the dev world holds two rail entities for one endpoint pair, so the instance held by
-			// railByHex (and by the section walks) can be a different object from the one in positionsToRail,
-			// and the arc lookup then answers NaN for a node that is plainly on it. One node came out with no
-			// block at all that way.
-			String bestHex = null;
-			String bestOwner = "";
-			for (final Rail rail : entry.getValue().values()) {
-				if (bestHex != null && rail.getHexId().compareTo(bestHex) >= 0) {
-					continue;
-				}
-				final double length = rail.railMath.getLength();
-				// Which end of the rail this node is, read from the rail's own ordered ends (the same ordering
-				// Rail uses to build its arc space), rather than by identity against a possibly stale instance.
-				final Position[] ordered = rail.mmtrOrderedPositions();
-				final int comparison = node.compareTo(ordered[0]);
-				if (comparison != 0 && node.compareTo(ordered[1]) != 0) {
-					continue;
-				}
-				final boolean nodeAtLowArc = comparison == 0;
-				final double nodeArc = nodeAtLowArc ? 0 : length;
-				// Leaving the node means walking AWAY from it: up the arc when the node is the low end, down
-				// the arc when it is the high end.
-				final double sampleArc = clamp(nodeAtLowArc ? 1 : length - 1, 0, length);
-				final double[] heading = headingAt(rail, sampleArc);
-				final double[] outgoing = nodeAtLowArc ? heading : negate(heading);
-				bestHex = rail.getHexId();
-				bestOwner = ownerKey(blocks, bestHex, nodeArc, outgoing);
-			}
-			owners.put(nodeKey, bestOwner);
-		}
-		return owners;
-	}
-
-	/**
-	 * The id of the block owning {@code arcM} of {@code railHex} in the given travel direction ("" = none).
-	 *
-	 * <p>A node sits ON a cell boundary - spans are half-open, so the arc at a cell's far end is not
-	 * "inside" that cell by the strict test - and it must still come out with exactly one owner. The order
-	 * of preference is: the cell the movement is inside; else the cell that STARTS at the node (the node is
-	 * its entrance, so it is the node the driver reads the lamp from); else the cell that ENDS there (the
-	 * node is where that cell's movement runs out). The lowest such arc wins the ties, so the answer does
-	 * not depend on which direction the neighbouring cells happen to be walked in.</p>
-	 */
-	private static String ownerKey(ObjectArrayList<GateBlock> blocks, String railHex, double arcM, double[] heading) {
-		GateBlock starting = null;
-		double startingArc = 0;
-		GateBlock ending = null;
-		double endingArc = 0;
-		for (final GateBlock block : blocks) {
-			for (final RailSpan span : block.spans) {
-				if (!span.railHex.equals(railHex)) {
-					continue;
-				}
-				if (span.containsArc(arcM) && span.matchesHeading(heading[0], heading[1])) {
-					return block.id;
-				}
-				if (Math.abs(arcM - span.arcFromM) <= NODE_OWNER_TOLERANCE_M && (starting == null || span.arcFromM < startingArc)) {
-					starting = block;
-					startingArc = span.arcFromM;
-				}
-				if (Math.abs(arcM - span.arcToM) <= NODE_OWNER_TOLERANCE_M && (ending == null || span.arcToM < endingArc)) {
-					ending = block;
-					endingArc = span.arcToM;
-				}
-			}
-		}
-		if (starting != null) {
-			return starting.id;
-		}
-		return ending == null ? "" : ending.id;
-	}
-
-	private static double[] negate(double[] heading) {
-		return new double[]{-heading[0], -heading[1]};
-	}
-
-	/**
-	 * Whether any vehicle footprint stands inside {@code block} (the occupancy half of the layer, so the
-	 * map can show which cells are taken right now - 一区段一车).
-	 */
-	public boolean isOccupied(GateBlock block, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
-		return isOccupied(block, trees, 0);
-	}
-
-	/** As above, ignoring the footprints of {@code excludeVehicleId} (a train does not occupy itself). */
-	public boolean isOccupied(GateBlock block, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
-		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> occupancyTrees =
-			trees == null ? simulator.mmtrOccupancyTrees() : trees;
-		if (occupancyTrees == null || occupancyTrees.isEmpty()) {
-			return false;
-		}
-		for (final RailSpan span : block.spans) {
-			final Rail rail = railByHex.get(span.railHex);
-			if (rail == null || span.lengthM() <= 1e-9) {
-				continue;
-			}
-			final Position[] ordered = rail.mmtrOrderedPositions();
-			if (ordered == null || ordered.length < 2) {
-				continue;
-			}
-			for (int i = 0; i < occupancyTrees.size(); i++) {
-				final VehiclePosition vehiclePosition = footprintOn(occupancyTrees.get(i), ordered);
-				if (vehiclePosition != null && vehiclePosition.getClosestOverlap(span.arcFromM, span.arcToM, false, excludeVehicleId) >= 0) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * The aspect the block's OWN entry lamp shows: depth 0 (clear through the whole block) is green, the
-	 * next block occupied is a caution, and the block being occupied is red. Empty when the block has no
-	 * entry lamp - nobody guards it, so there is no light to read.
-	 */
-	public String blockAspect(GateBlock block, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes) {
-		if (block.entryLampKey.isEmpty()) {
-			return "";
-		}
-		final ObjectArrayList<Section> group = sectionsBySignal.get(block.entryLampKey);
-		if (group == null || group.isEmpty()) {
-			return "";
-		}
-		// 一灯多腿：取最不利的一条（与 lampAspectNames 同一条规则）
-		int worst = 0;
-		boolean anyRoute = false;
-		for (final Section section : group) {
-			if (section.blockedAtDeparture) {
-				continue; // 这条腿被道岔切断 = 不是一条进路（仍旧是守的轨）
-			}
-			anyRoute = true;
-			worst = Math.max(worst, aspectSeverity(depthAt(section, trees, restrictedNodes)));
-		}
-		return aspectName(severityToDepth(anyRoute ? worst : 4));
-	}
-
-	/**
-	 * Everything that decides one node's block, as text (diagnostics): the rail the node is read on, where on
-	 * it, the direction a movement leaves it, and every span that could claim it.
-	 */
-	public String describeNodeResolution(Position node) {
-		refresh();
-		final Object2ObjectOpenHashMap<Position, Rail> rails = simulator.positionsToRail.get(node);
-		if (rails == null) {
-			return "节点不在 positionsToRail 里（没有轨接在它上面）";
-		}
-		final ObjectArrayList<GateBlock> blocks = gateBlocks();
 		final StringBuilder out = new StringBuilder();
-		for (final Rail rail : rails.values()) {
-			final Position[] ordered = rail.mmtrOrderedPositions();
-			final int low = node.compareTo(ordered[0]);
-			final int high = node.compareTo(ordered[1]);
-			out.append("\n  候选轨 ").append(rail.getHexId().substring(0, 20)).append(".. len=").append(Math.round(rail.railMath.getLength() * 10) / 10.0)
-				.append(" 是低端=").append(low == 0).append(" 是高端=").append(high == 0);
-			if (low != 0 && high != 0) {
-				out.append("（这个节点不在这根轨的两端）");
-				continue;
-			}
-			final boolean nodeAtLowArc = low == 0;
-			final double nodeArc = nodeAtLowArc ? 0 : rail.railMath.getLength();
-			final double[] heading = headingAt(rail, clamp(nodeAtLowArc ? 1 : rail.railMath.getLength() - 1, 0, rail.railMath.getLength()));
-			final double[] outgoing = nodeAtLowArc ? heading : negate(heading);
-			out.append(" 节点弧=").append(Math.round(nodeArc * 10) / 10.0).append(" 离开方向=(")
-				.append(Math.round(outgoing[0] * 100) / 100.0).append(",").append(Math.round(outgoing[1] * 100) / 100.0).append(")");
-			for (final GateBlock block : blocks) {
-				for (final RailSpan span : block.spans) {
-					if (span.railHex.equals(rail.getHexId()) && (span.containsArc(nodeArc) || Math.abs(nodeArc - span.arcFromM) <= NODE_OWNER_TOLERANCE_M || Math.abs(nodeArc - span.arcToM) <= NODE_OWNER_TOLERANCE_M)) {
-						out.append("\n    区间 ").append(block.id).append(" 弧[").append(Math.round(span.arcFromM * 10) / 10.0).append(",")
-							.append(Math.round(span.arcToM * 10) / 10.0).append(") 同向=").append(span.matchesHeading(outgoing[0], outgoing[1]));
+		int shown = 0;
+		for (final ObjectArrayList<Section> group : sectionsBySignal.values()) {
+			for (final Section section : group) {
+				for (final RailSpan span : section.spans) {
+					final Rail rail = railByHex.get(span.railHex);
+					if (rail == null) {
+						continue;
+					}
+					final Position[] ordered = rail.mmtrOrderedPositions();
+					if (ordered == null || ordered.length < 2) {
+						continue;
+					}
+					// 这个节点是不是这根轨的某一端；是的话，节点弧 = 0 或轨长
+					final double nodeArc;
+					if (node.equals(ordered[0])) {
+						nodeArc = 0;
+					} else if (node.equals(ordered[1])) {
+						nodeArc = rail.railMath.getLength();
+					} else {
+						continue;
+					}
+					// span 含"贴着节点"的容差：判据与节点归属那套老的 NODE_OWNER_TOLERANCE 同量级
+					if (span.containsArc(nodeArc) || Math.abs(nodeArc - span.arcFromM) <= 1.0 || Math.abs(nodeArc - span.arcToM) <= 1.0) {
+						final Direction direction = directionOf(section);
+						out.append("\n  ").append(section.id)
+							.append("  方向=").append(direction.label()).append("(").append(direction.angle).append("°)")
+							.append("  入口灯=").append(section.entrySignalKey == null ? "（无）" : section.entrySignalKey)
+							.append("  轨=").append(shortHex(span.railHex)).append("[").append(round(span.arcFromM)).append(",").append(round(span.arcToM)).append(")");
+						shown++;
 					}
 				}
 			}
+		}
+		if (shown == 0) {
+			return "\n  （没有区间覆盖这个节点）";
 		}
 		return out.toString();
 	}
@@ -1920,10 +1402,6 @@ public final class MmtrDirectionalBlockService {
 		section.spans.add(span);
 	}
 
-	/** The same for the block layer: keep every run the tiling produced, in arc order. */
-	private static void addSpan(GateBlock block, RailSpan span) {
-		block.spans.add(span);
-	}
 
 	private void refresh() {
 		final String signature = signature();
@@ -3145,8 +2623,7 @@ public final class MmtrDirectionalBlockService {
 
 		// The movement leaves the rail straight into another lamp's cell: this lamp's reach starts at the
 		// next lamp's position, so this lamp would show nothing but the light standing in front of it. That
-		// section is dropped (an empty walk) and the cell it was aiming at belongs to the lamp ahead - the
-		// nearest-upstream rule in gateBlocks() then assigns the track to the lamp that actually reaches it.
+		// section is dropped (an empty walk): an empty section is not a block, and nothing joins it.
 		if (section.exitSignalKey != null && section.exitSignalKey.equals(entrySignalKey) && section.spans.isEmpty()) {
 			return section;
 		}

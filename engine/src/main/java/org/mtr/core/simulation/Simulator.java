@@ -698,6 +698,8 @@ public class Simulator extends Data implements Utilities {
 			 * 两台幽灵车就把车场咽喉堵死，六台车一步都出不去（重建发生在每次改配置/事件重算时）。
 			 */
 			final org.mtr.core.mmtr.plan.MmtrPlanDispatcher previous = mmtrPlanDispatchers.get(line.lineId);
+			// 出库闸门也要接手（notes/155 §17）：重建后闸门从 0 开始 ⇒ 几台车同时出库、在咽喉里互锁
+			rebuilt.get(line.lineId).adoptYardDepartureGate(previous);
 			final it.unimi.dsi.fastutil.objects.ObjectArrayList<Long> orphans = rebuilt.get(line.lineId).adoptFrom(previous,
 				new org.mtr.core.mmtr.plan.MmtrPlanDispatcher.InFlightCheck() {
 					@Override

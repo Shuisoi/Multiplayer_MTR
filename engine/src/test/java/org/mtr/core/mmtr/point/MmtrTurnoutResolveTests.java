@@ -245,7 +245,7 @@ public final class MmtrTurnoutResolveTests {
 		assertTrue(modelledText.contains("岔尖候选"), "要列出每根轨作为岔尖的候选与两个方向：" + modelledText);
 		assertTrue(modelledText.contains("岔尖 = "), "要点名岔尖是哪一根：" + modelledText);
 		assertTrue(modelledText.contains("岔股 = "), "要点名岔股是哪一根：" + modelledText);
-		assertTrue(modelledText.contains("闭塞归属"), "顺带给出闭塞归属（describeNodeResolution）：" + modelledText);
+		assertTrue(modelledText.contains("闭塞归属"), "顺带给出闭塞归属（describeNodeSections：列出覆盖该节点的**全部**区间，双向时有多条）：" + modelledText);
 
 		final Simulator tee = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-turnout-why-tee"), false);
 		tee.rails.add(rail(NODE, new Position(20, Y, 0)));

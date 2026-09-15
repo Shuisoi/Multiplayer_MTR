@@ -327,18 +327,23 @@ final class MmtrQueryCommands {
 		return result;
 	}
 
-	/** {@code query sections}：闭塞区间规模与占用概况。 */
+	/** {@code query sections}：闭塞区间规模与占用概况（按方向划分，见 notes/156）。 */
 	private static MmtrCommandDispatcher.Result sections(Simulator simulator) {
 		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "query", "sections");
-		final var blocks = simulator.mmtrDirectionalBlocks.gateBlocks();
 		final var trees = simulator.mmtrOccupancyTrees();
+		final var views = simulator.mmtrDirectionalBlocks.sectionViews(trees, ignored -> false);
 		int occupied = 0;
-		for (final var block : blocks) {
-			if (simulator.mmtrDirectionalBlocks.isOccupied(block, trees)) {
+		final it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap<String> byDirection = new it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap<>();
+		for (final var view : views) {
+			if (view.occupied) {
 				occupied++;
 			}
+			byDirection.addTo(view.direction.label(), 1);
 		}
-		result.line("闭塞区间 " + blocks.size() + " 个，其中被占用 " + occupied + " 个");
+		result.line("闭塞区间 " + views.size() + " 个（按方向：可能有同一根轨两个方向各一条），其中被占用 " + occupied + " 个");
+		for (final var entry : byDirection.object2IntEntrySet()) {
+			result.line("  " + entry.getKey() + "：" + entry.getIntValue() + " 个");
+		}
 		result.line("信号灯 " + simulator.mmtrSignals.signals.size() + " 个");
 		return result;
 	}

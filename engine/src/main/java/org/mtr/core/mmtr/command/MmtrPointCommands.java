@@ -77,8 +77,8 @@ final class MmtrPointCommands {
 			+ "，等待队列 = " + simulator.mmtrPointAuthority.physicalQueueSnapshot(x, y, z));
 		appendRows(result, simulator, turnout, x, y, z);
 
-		result.line("—— 闭塞归属（这个节点被算在哪条区间里）——");
-		appendLines(result, new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator).describeNodeResolution(node));
+		result.line("—— 闭塞归属（这个节点被哪些区间覆盖；双向线路上可能有多个方向各一条）——");
+		appendLines(result, new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator).describeNodeSections(node));
 		return result;
 	}
 

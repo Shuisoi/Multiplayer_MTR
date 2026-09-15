@@ -900,33 +900,27 @@ public final class MmtrDirectionalBlockServiceTests {
 		return MmtrSignalRegistry.key(coords[0], coords[1], coords[2]);
 	}
 
-	private static MmtrDirectionalBlockService.GateBlock blockWithLamp(ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks, String lamp) {
-		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
-			if (block.entryLampKey.equals(lamp)) {
-				return block;
-			}
-		}
-		return null;
-	}
-
-	/** The block that owns {@code (arcFrom, arcTo)} of {@code rail}, or null - used to prove a clean partition. */
-	private static MmtrDirectionalBlockService.GateBlock blockAt(ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks, String railHex, double arcM) {
-		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
-			for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
-				if (span.railHex.equals(railHex) && arcM >= span.arcFromM - 1e-6 && arcM <= span.arcToM + 1e-6) {
-					return block;
-				}
-			}
-		}
-		return null;
+	/** 某盏灯开的那个区间（一灯多腿时取它守的第一条腿）。 */
+	private static MmtrDirectionalBlockService.Section sectionOfLamp(MmtrDirectionalBlockService service, String lamp) {
+		return service.sectionOfSignal(lamp);
 	}
 
 	/**
-	 * 水闸区间 (S6, user definition 2026-09-10): the block layer is bounded by SIGNALS only.
+	 * 在 {@code (rail, arc)} 处**面朝 {@code (headingX, headingZ)} 行进**时所在的那个区间，或 null。
 	 *
-	 * <p>A block runs from the lamp that faces into it to the next lamp, <em>across</em> rail boundaries -
-	 * the node between the two rails is part of the TRACK layer and must never appear in this one. Two
-	 * lamps on a three-rail corridor therefore give exactly two blocks, not "one block per rail".</p>
+	 * <p>取代旧的 `blockAt`：那时问的是"这一点归哪个水闸区间"（**单值**）。现在归属是**按方向**的 ——
+	 * 同一个点南行和北行各属一个区间，所以问的时候必须带上方向。</p>
+	 */
+	private static MmtrDirectionalBlockService.Section sectionAt(
+		MmtrDirectionalBlockService service, String railHex, double arcM, double headingX, double headingZ) {
+		return service.sectionAt(railHex, arcM, headingX, headingZ);
+	}
+
+	/**
+	 * 区间只由灯划定（用户 2026-09-15 裁定 ①「只有灯产生边界」）：区间从面朝它的那盏灯开始，
+	 * **跨过轨的接头**走到下一盏面朝同方向的灯。
+	 *
+	 * <p>三根轨、两盏同向的灯 ⇒ 恰好两个区间，而不是"一根轨一个区间"。</p>
 	 */
 	@Test
 	public void blocksRunLampToLampAndIgnoreRailBoundaries() {
@@ -939,69 +933,62 @@ public final class MmtrDirectionalBlockServiceTests {
 		final String second = addLamp(simulator, r3, 0, EAST);
 		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
 
-		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
-		assertEquals(2, blocks.size(), "one block per lamp - the rail boundary between r1/r2 is NOT a boundary here");
+		assertEquals(2, service.sectionCount(), "one section per lamp - the rail boundary between r1/r2 is NOT a boundary here");
 
-		final MmtrDirectionalBlockService.GateBlock a = blockWithLamp(blocks, first);
-		final MmtrDirectionalBlockService.GateBlock b = blockWithLamp(blocks, second);
-		assertNotNull(a, "the first lamp opens a block");
+		final MmtrDirectionalBlockService.Section a = sectionOfLamp(service, first);
+		final MmtrDirectionalBlockService.Section b = sectionOfLamp(service, second);
+		assertNotNull(a, "the first lamp opens a section");
 		assertNotNull(b, "the second lamp opens the next one");
-		assertEquals(2, a.spans.size(), "the first block covers r1 AND r2: it crosses the node at z=100");
+		assertEquals(2, a.spans.size(), "the first section covers r1 AND r2: it crosses the node at z=100");
 		assertEquals(200, a.lengthM(), 1.5);
-		assertFalse(a.endsOpen, "it closes on the next lamp, it does not run out");
+		assertEquals(second, a.exitSignalKey, "it closes on the next lamp, it does not run out");
 		assertEquals(r1.getHexId(), a.spans.get(0).railHex);
 		assertEquals(r2.getHexId(), a.spans.get(1).railHex);
 
-		assertEquals(1, b.spans.size(), "the second block is the last rail");
+		assertEquals(1, b.spans.size(), "the second section is the last rail");
 		assertEquals(r3.getHexId(), b.spans.get(0).railHex);
-		assertTrue(b.endsOpen, "nothing closes it: the walk ran to the end of the line");
+		assertNull(b.exitSignalKey, "nothing closes it: the walk ran to the end of the line");
 
-		// The law of the layer: nodes do not cut it. A movement standing mid-way through the first block
-		// is in ONE block whichever rail it is on.
-		assertEquals(a, blockAt(blocks, r1.getHexId(), 50), "on r1 -> block a");
-		assertEquals(a, blockAt(blocks, r2.getHexId(), 50), "across the node on r2 -> still block a");
-		assertEquals(b, blockAt(blocks, r3.getHexId(), 50), "past the second lamp -> block b");
+		// 本层的法则：**节点不切分**。车走在第一段区间中途，无论在 r1 还是跨过接头到了 r2，都还在同一个区间里。
+		assertEquals(a, sectionAt(service, r1.getHexId(), 50, 1, 0), "on r1 -> section a");
+		assertEquals(a, sectionAt(service, r2.getHexId(), 50, 1, 0), "across the node on r2 -> still section a");
+		assertEquals(b, sectionAt(service, r3.getHexId(), 50, 1, 0), "past the second lamp -> section b");
 	}
 
 	/**
-	 * A rail that no walk reaches carries no lamp at all, so it is a block of its own - the
-	 * "无信号灯的自己成一个区间" case. It is deliberately NOT merged with its neighbours: merging would
-	 * need a node, and nodes belong to the track layer.
+	 * 没有灯照到的轨**不属于任何区间**（用户 2026-09-15 裁定 ①「只有灯产生边界」）。
+	 *
+	 * <p>旧的水闸区间层给这种轨**自己编一个区间**（{@code 无灯#轨@弧}）。那一层已删除：区间是"一盏灯
+	 * 开的那段路"，没有灯就没有区间。这里钉住这条新法则，免得"无灯轨自动成段"又悄悄长回来。</p>
 	 */
 	@Test
-	public void anUnguardedRailIsABlockOfItsOwn() {
+	public void aRailNoLampReachesBelongsToNoSection() {
 		final Rail guarded = rail(new Position(0, 0, 0), new Position(100, 0, 0));
 		// The siding stands well clear of the guarded rail so the lamp cannot bind to it: this test is
-		// about the block layer, not about the 3 m bind tolerance (notes/105 §3.1).
+		// about the section layer, not about the 3 m bind tolerance (notes/105 §3.1).
 		final Rail siding = rail(new Position(500, 0, 500), new Position(500, 0, 600));		final Simulator simulator = sim("build/mmtr-gate-no-lamp", guarded, siding);
-		final String lamp = addLamp(simulator, guarded, 0, EAST);
+		final String guardedLamp = addLamp(simulator, guarded, 0, EAST);
 		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
 
-		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
-		assertEquals(2, blocks.size(), "the lamp's block plus the lamp-free rail's own block");
+		assertEquals(1, service.sectionCount(), "世界上两个区间：有灯的那根轨一个，没有灯的那根零个");
+		assertNotNull(sectionOfLamp(service, guardedLamp), "有灯的那根轨的区间照旧");
+		// **没有灯的轨不属于任何区间** —— 它既不是别人的一段，也不会"自己成一段"。
+		assertNull(sectionAt(service, siding.getHexId(), 25, 1, 0), "无灯轨向东走：没有区间");
+		assertNull(sectionAt(service, siding.getHexId(), 25, -1, 0), "无灯轨向西走：也没有区间");
 
-		final MmtrDirectionalBlockService.GateBlock guardedBlock = blockWithLamp(blocks, lamp);
-		assertNotNull(guardedBlock);
-		assertEquals(guarded.getHexId(), guardedBlock.spans.get(0).railHex);
-
-		final MmtrDirectionalBlockService.GateBlock orphan = blockAt(blocks, siding.getHexId(), 25);
-		assertNotNull(orphan, "a rail with no lamp is a block by itself");
-		assertTrue(orphan.entryLampKey.isEmpty(), "nobody opens it - there is no lamp on it");
-		assertTrue(orphan.endsOpen, "and nothing closes it");
-		assertEquals(100, orphan.lengthM(), 1.0, "the whole rail, not a stub");
-		// Unguarded blocks need names of their own: the node assignment and the map colours key on the id,
-		// so "no lamp" cannot be one shared name for every unguarded block in the world.
-		final ObjectOpenHashSet<String> ids = new ObjectOpenHashSet<>();
-		for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
-			assertTrue(ids.add(block.id), "block id " + block.id + " is not unique");
-		}
-		assertFalse(orphan.id.isEmpty(), "an unguarded block still carries a stable id");
+		// 给那条孤立轨西端**朝东**加一盏灯：它现在自己开一个区间，从灯所在处沿轨走到东端。
+		final String sidingLamp = addLamp(simulator, siding, 0, EAST);
+		final MmtrDirectionalBlockService withLamp = new MmtrDirectionalBlockService(simulator);
+		final MmtrDirectionalBlockService.Section sidingSection = sectionOfLamp(withLamp, sidingLamp);
+		assertNotNull(sidingSection, "灯开着它自己那段区间");
+		assertEquals(siding.getHexId(), sidingSection.spans.get(0).railHex);
+		assertEquals(100, sidingSection.lengthM(), 1.5, "整根轨，不是残段");
+		assertFalse(guarded.getHexId().equals(sidingSection.spans.get(0).railHex), "它守的是自己那条轨");
 	}
 
 	/**
-	 * The direction of the lamp decides whose cell the track falls in - a lamp only guards the side it
-	 * FACES (user: 反向没放灯啊). Two lamps on one 200 m rail therefore give two cells, and the one the
-	 * movement has already passed belongs to the lamp BEHIND it.
+	 * 灯只守它**面朝**的那一侧（用户："反向没放灯啊"）。同一根 200 m 轨上两盏朝向相反的灯 ⇒
+	 * 两个区间，车**已经走过**的那一段属于它身后那盏灯。
 	 */
 	@Test
 	public void aLampGuardsTheSideItFaces() {
@@ -1015,28 +1002,40 @@ public final class MmtrDirectionalBlockServiceTests {
 		final String westLamp = addBoundLamp(simulator, line, 150, WEST, line);
 		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
 
-		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
-		final MmtrDirectionalBlockService.GateBlock eastBlock = blockWithLamp(blocks, eastLamp);
-		final MmtrDirectionalBlockService.GateBlock westBlock = blockWithLamp(blocks, westLamp);
-		assertNotNull(eastBlock, "the east-facing lamp opens a block");
-		assertNotNull(westBlock, "the west-facing lamp opens the one it faces");
+		final MmtrDirectionalBlockService.Section eastSection = sectionOfLamp(service, eastLamp);
+		final MmtrDirectionalBlockService.Section westSection = sectionOfLamp(service, westLamp);
+		assertNotNull(eastSection, "the east-facing lamp opens a section");
+		assertNotNull(westSection, "the west-facing lamp opens the one it faces");
 
-		assertEquals(50, eastBlock.spans.get(0).arcFromM, 0.5, "the east-facing lamp protects only what is ahead of it");
-		assertEquals(150, eastBlock.lengthM(), 1.0, "which is everything east of it: no other head faces east");
-		assertEquals(0, westBlock.spans.get(0).arcFromM, 0.5, "the west-facing lamp protects the stretch behind it");
-		assertEquals(50, westBlock.lengthM(), 1.0, "which ends where the east-facing head takes over");
-		// Same rail, two cells: this is what "directed" means on the map, and it is why the layer is drawn
-		// per lamp rather than per rail.
-		assertEquals(2, blocks.size());
+		assertEquals(50, eastSection.spans.get(0).arcFromM, 0.5, "the east-facing lamp protects only what is ahead of it");
+		assertEquals(150, eastSection.lengthM(), 1.0, "which is everything east of it: no other head faces east");
+		assertEquals(0, westSection.spans.get(0).arcFromM, 0.5, "the west-facing lamp protects the stretch behind it");
+		/*
+		 * 西行区间的长度**只到 150**，也就是它止步于**自己所在的位置**，而不是"走到 50 m 那盏东行灯为止"。
+		 *
+		 * <p>这与 notes/104 §3.3 那条规矩一致：**背向本方向的灯不切断走行**。从 150 m 往西走，遇到
+		 * 50 m 处那盏朝东的灯时，那盏灯守的是**东行**区间、对着反方向，所以西行走行不理它 —— 它一路
+		 * 走到线路西端（弧 0）才收口；而它自己的入口本来就落在 150 m，于是这一段只有 0..150。
+		 * 反过来说：这条轨 West 侧的区间长度不代表"东行区间从哪儿开始"，两件事各自由各方向的灯决定。</p>
+		 */
+		assertEquals(150, westSection.lengthM(), 1.0, "back-facing lamps do not cut the walk: it runs to the line's end");
+		assertFalse(eastSection.id.equals(westSection.id), "两个方向的区间是两个对象，不是一个");
+		// 同一根轨、两个区间：这就是"有向"在显示上的含义，也是**一个点归属不是单值**的由来。
+		assertEquals(2, service.sectionCount());
+		// 带方向地问，答案就唯一了：向东走落在东行区间，向西走落在西行区间。
+		assertEquals(eastSection, sectionAt(service, line.getHexId(), 100, 1, 0), "eastbound -> the east-facing section");
+		assertEquals(westSection, sectionAt(service, line.getHexId(), 100, -1, 0), "westbound -> the west-facing section");
 	}
 
 	/**
-	 * The block layer must be a clean division of the line: every metre of every rail belongs to exactly
-	 * one block. (This is the property the earlier rail-cut partition failed: it produced 137 fragments
-	 * with 64 overlapping pairs on the dev world - notes/112 §3.1, abandoned in S6.)
+	 * 区间层必须是**每个方向各自**的一条干净划分：**同一个方向上**，轨的每一米恰好属于一个区间。
+	 *
+	 * <p>旧判据是"每一点恰好属于一个区间"（单值）。双向线路上那一条不可能成立、也不该成立：
+	 * 同一段轨上南行一个区间、北行一个区间，重叠是**正确**的（现场实测 96 根被覆盖的轨里 62 根如此）。
+	 * 真正的不变量是按方向的那一条 —— 所以这里把每个区间的方向读出来，再逐方向数归属。</p>
 	 */
 	@Test
-	public void theBlocksDivideEveryRailWithoutGapsOrOverlaps() {
+	public void theSectionsDivideEveryRailWithoutGapsOrOverlapsPerDirection() {
 		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
 		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
 		final Rail branch = rail(new Position(100, 0, 0), new Position(200, 0, 100));
@@ -1045,114 +1044,39 @@ public final class MmtrDirectionalBlockServiceTests {
 		addLamp(simulator, r1, 0, EAST);
 		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
 
-		final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> blocks = service.gateBlocks();
+		final ObjectArrayList<MmtrDirectionalBlockService.Section> sections = new ObjectArrayList<>();
+		service.allSections().values().forEach(sections::addAll);
 		final ObjectArrayList<Rail> rails = ObjectArrayList.of(r1, r2, branch, siding);
 
 		for (final Rail rail : rails) {
 			final double length = rail.railMath.getLength();
-			for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
-				for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
+			for (final MmtrDirectionalBlockService.Section section : sections) {
+				for (final MmtrDirectionalBlockService.RailSpan span : section.spans) {
 					if (span.railHex.equals(rail.getHexId())) {
 						assertTrue(span.arcFromM >= -1e-6 && span.arcToM <= length + 1e-6,
 							"a span never runs off its rail: " + span);
 					}
 				}
 			}
-			// Walk the rail and ask which block owns each metre: it must always be exactly one.
+			// 每一米：本方向的区间必须恰好一个（0 = 出现没人管的天窗，2+ = 同方向重叠的缺陷）
 			for (double arc = 0.05; arc < length; arc += 5) {
-				int owners = 0;
-				for (final MmtrDirectionalBlockService.GateBlock block : blocks) {
-					for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
-						if (span.railHex.equals(rail.getHexId()) && arc >= span.arcFromM - 1e-6 && arc <= span.arcToM + 1e-6) {
-							owners++;
+				for (final double[] heading : new double[][]{{1, 0}, {-1, 0}}) {
+					int owners = 0;
+					for (final MmtrDirectionalBlockService.Section section : sections) {
+						for (final MmtrDirectionalBlockService.RailSpan span : section.spans) {
+							if (span.railHex.equals(rail.getHexId())
+								&& arc >= span.arcFromM - 1e-6 && arc <= span.arcToM + 1e-6
+								&& span.matchesHeading(heading[0], heading[1])) {
+								owners++;
+							}
 						}
 					}
+					assertTrue(owners <= 1, "轨 " + rail.getHexId() + " 的 " + Math.round(arc)
+						+ " m 处在方向 (" + heading[0] + "," + heading[1] + ") 上有 " + owners
+						+ " 个区间：同一方向不许重叠");
 				}
-				assertEquals(1, owners, "at arc " + Math.round(arc) + " of rail " + rail.getHexId()
-					+ " exactly one block must own the track (0 = a gap the map would show as unassigned, 2+ = the overlap defect)");
 			}
 		}
-	}
-
-	/**
-	 * A block must name each rail ONCE per direction, whether the walk followed one branch or several.
-	 *
-	 * <p>The walk follows every leg that keeps the travel direction (岔口多腿), and each branch then walks
-	 * the SAME trunk rails, so a shared stretch could be appended once per branch. Measured on the dev
-	 * world: 103 of 448 spans were such exact duplicates - one lamp's block claimed 37 rails of which 17
-	 * were second copies of the same track - which is what made the 区间图层 draw phantom fragments on top
-	 * of each other (notes/113 §3).</p>
-	 */
-	@Test
-	public void aBlockListsEachRailOnlyOnce() {
-		final Rail throat = rail(new Position(0, 0, 0), new Position(0, 0, 100));
-		final Rail straight = rail(new Position(0, 0, 100), new Position(0, 0, 250));
-		final Rail diverge = rail(new Position(0, 0, 100), new Position(40, 0, 250));
-		final Simulator simulator = sim("build/mmtr-gate-fork-once", throat, straight, diverge);
-		final String lamp = addLamp(simulator, throat, 0, NORTH);
-		final MmtrDirectionalBlockService unrouted = new MmtrDirectionalBlockService(simulator);
-
-		// No route set: the throat block is the whole fan (岔口多腿).
-		final MmtrDirectionalBlockService.GateBlock fan = blockWithLamp(unrouted.gateBlocks(), lamp);
-		assertNotNull(fan, "the lamp opens the throat block");
-		assertEquals(3, fan.spans.size(), "the throat and both legs, each named once");
-		assertNoDuplicateSpans(fan);
-
-		// With a MAIN route through the throat the block narrows to the route's own leg - and again each
-		// rail appears once.
-		final ObjectArrayList<String> rails = new ObjectArrayList<>();
-		rails.add(throat.getHexId());
-		rails.add(diverge.getHexId());
-		simulator.mmtrRoutes.request(new org.mtr.core.mmtr.route.MmtrRoute(1L, "test", org.mtr.core.mmtr.route.MmtrRoute.Kind.MAIN,
-			rails, null, diverge.getHexId(), 0L));
-		final MmtrDirectionalBlockService routed = new MmtrDirectionalBlockService(simulator);
-		final MmtrDirectionalBlockService.GateBlock narrowed = blockWithLamp(routed.gateBlocks(), lamp);
-		assertNotNull(narrowed);
-		assertEquals(2, narrowed.spans.size(), "the route's leg only");
-		assertEquals(diverge.getHexId(), narrowed.spans.get(1).railHex);
-		assertNoDuplicateSpans(narrowed);
-	}
-
-	/** Assert no rail is listed twice in the same travel direction (the phantom-span defect). */
-	private static void assertNoDuplicateSpans(MmtrDirectionalBlockService.GateBlock block) {
-		final ObjectOpenHashSet<String> seen = new ObjectOpenHashSet<>();
-		for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
-			assertTrue(seen.add(span.railHex),
-				"rail " + span.railHex + " is listed twice: a shared stretch was added once per branch");
-		}
-	}
-
-	/**
-	 * Every TRACK-layer node belongs to exactly ONE block (user requirement 2026-09-10:
-	 * "要求每个轨道层每个节点都都有且只有一个区间层所属").
-	 *
-	 * <p>A node is a single physical point that several rails meet at, so it needs exactly one owner: the
-	 * layer must be a division, not a set of overlapping reaches. This also pins the other half of the same
-	 * property - the reaches of two lamps in a ladder used to contain each other (287 overlapping pairs on
-	 * the dev world), and each cell is now clipped where the nearer lamp takes over.</p>
-	 */
-	@Test
-	public void everyNodeBelongsToExactlyOneBlock() {
-		final Rail throat = rail(new Position(0, 0, 0), new Position(0, 0, 100));
-		final Rail straight = rail(new Position(0, 0, 100), new Position(0, 0, 250));
-		final Rail diverge = rail(new Position(0, 0, 100), new Position(40, 0, 250));
-		final Rail siding = rail(new Position(0, 0, 100), new Position(-60, 0, 250));
-		final Simulator simulator = sim("build/mmtr-gate-node-owner", throat, straight, diverge, siding);
-		final String lamp = addLamp(simulator, throat, 0, NORTH);
-		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
-
-		final Object2ObjectOpenHashMap<String, String> owners = service.nodeOwners();
-		// Every endpoint of every rail is a node in this layer's terms, the dead ends included: the throat's
-		// two ends, the fork, and the far end of each of the three legs.
-		assertEquals(5, owners.size(), "the fork's node plus one far node per leg, plus the throat's near node");
-		assertEquals(owners, service.nodeOwners(), "asking twice gives the same answer (no order dependence)");
-		for (final java.util.Map.Entry<String, String> entry : owners.entrySet()) {
-			assertNotNull(entry.getValue(), "node " + entry.getKey() + " must belong to a block");
-		}
-		// The throat lamp's cell starts at the throat's near node, so both the near node and the fork node
-		// are its: the cell runs across the rail boundary, which is the whole point of the model.
-		assertEquals(lamp, owners.get("0,0,0"), "the node under the lamp is the entry of its own cell");
-		assertEquals(lamp, owners.get("0,0,100"), "the fork node is inside the lamp's cell, not a boundary of it");
 	}
 
 	/**

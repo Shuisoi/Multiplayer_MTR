@@ -48,7 +48,13 @@ public final class MmtrBlockSchematic {
 	private final Simulator simulator;
 	private final MmtrDirectionalBlockService blocks;
 	private final Object2ObjectOpenHashMap<String, Rail> railByHex = new Object2ObjectOpenHashMap<>();
-	private final ObjectArrayList<MmtrDirectionalBlockService.GateBlock> gateBlocks;
+	/**
+	 * The 区间 layer this diagram draws: **one entry per (灯, 方向)**.
+	 *
+	 * <p>原来这里装的是"水闸区间"（一盏灯一个格子、节点归属唯一）。那一层已按用户裁定删除：区间是
+	 * **某方向的一段路**，所以同一根轨、同一个格子可以同时属于两个方向的区间。</p>
+	 */
+	private final ObjectArrayList<MmtrDirectionalBlockService.SectionView> sections;
 	/** (cellX, cellZ) -> the lattice node id. */
 	private final Object2ObjectOpenHashMap<Long, Integer> nodeIdByCell = new Object2ObjectOpenHashMap<>();
 	/** Lattice node -> the world positions that snapped into it. */
@@ -59,7 +65,7 @@ public final class MmtrBlockSchematic {
 	private MmtrBlockSchematic(Simulator simulator) {
 		this.simulator = simulator;
 		this.blocks = new MmtrDirectionalBlockService(simulator);
-		this.gateBlocks = blocks.gateBlocks();
+		this.sections = blocks.sectionViews(null, ignored -> false);
 		simulator.rails.forEach(rail -> railByHex.putIfAbsent(rail.getHexId(), rail));
 	}
 
@@ -75,18 +81,22 @@ public final class MmtrBlockSchematic {
 		public final int cellZ;
 		/** How many real track nodes folded into this square (a ladder throat folds many into one). */
 		public final int mergedCount;
-		/** The block this square belongs to (a lamp key, or 无灯#... for an unguarded block). */
-		public final String block;
+		/**
+		 * 覆盖这个格子的区间 id（**可能多个**：双向线路上同一段轨同属两个方向的区间）。
+		 *
+		 * <p>原来的 `block` 字段是"唯一归属"，那正是被删掉的水闸区间语义。区间是某方向的一段路，
+		 * 所以这里必须是**集合**；空集 = 没有灯管到这一格。</p>
+		 */
+		public final ObjectArrayList<String> sections = new ObjectArrayList<>();
 		/** Drawn centre of the square, in diagram units. */
 		public final double x;
 		public final double z;
 
-		DiagramNode(int id, int cellX, int cellZ, int mergedCount, String block, double x, double z) {
+		DiagramNode(int id, int cellX, int cellZ, int mergedCount, double x, double z) {
 			this.id = id;
 			this.cellX = cellX;
 			this.cellZ = cellZ;
 			this.mergedCount = mergedCount;
-			this.block = block;
 			this.x = x;
 			this.z = z;
 		}
@@ -102,11 +112,11 @@ public final class MmtrBlockSchematic {
 		public final double z1;
 		public final double x2;
 		public final double z2;
-		/** Index into {@link Schematic#blocks} of the block owning each direction, or -1 when nobody does. */
-		public final int forwardBlock;
-		public final int backwardBlock;
+		/** Index into {@link Schematic#sections} of the section serving each direction, or -1 when nobody. */
+		public final int forwardSection;
+		public final int backwardSection;
 
-		DiagramRail(int fromNode, int toNode, int rails, double lengthM, double x1, double z1, double x2, double z2, int forwardBlock, int backwardBlock) {
+		DiagramRail(int fromNode, int toNode, int rails, double lengthM, double x1, double z1, double x2, double z2, int forwardSection, int backwardSection) {
 			this.fromNode = fromNode;
 			this.toNode = toNode;
 			this.rails = rails;
@@ -115,38 +125,45 @@ public final class MmtrBlockSchematic {
 			this.z1 = z1;
 			this.x2 = x2;
 			this.z2 = z2;
-			this.forwardBlock = forwardBlock;
-			this.backwardBlock = backwardBlock;
+			this.forwardSection = forwardSection;
+			this.backwardSection = backwardSection;
 		}
 	}
 
-	/** One block of the 水闸区间 layer as the diagram draws it. */
-	public static final class DiagramBlock {
+	/** One 区间 of the 灯到灯有向 layer as the diagram draws it（每个 (灯, 方向) 一条）。 */
+	public static final class DiagramSection {
 		public final int index;
 		public final String id;
-		/** The lamp that opens it (empty for a block no lamp guards). */
-		public final String lamp;
-		public final boolean endsOpen;
+		/** 开这个区间的那盏灯（入口灯）。 */
+		public final String entryLamp;
+		public final String exitLamp;
+		/** 本区间服务的行车方向：MTR 角（0=南 90=西 180=北 270=东）与中文名。 */
+		public final double directionAngle;
+		public final String directionLabel;
 		public final double lengthM;
 		public final boolean occupied;
-		/** The diagram edges this block owns. */
+		public final String aspect;
+		/** The diagram edges this section covers. */
 		public final ObjectOpenHashSet<Integer> railEdges = new ObjectOpenHashSet<>();
-		/** The squares this block owns. */
+		/** The squares this section covers. */
 		public final ObjectOpenHashSet<Integer> nodeIds = new ObjectOpenHashSet<>();
 		/** Human-readable span list (rail short hex + arc window), for the card list. */
 		public final ObjectArrayList<String> spans = new ObjectArrayList<>();
 
-		DiagramBlock(int index, String id, String lamp, boolean endsOpen, double lengthM, boolean occupied) {
+		DiagramSection(int index, String id, String entryLamp, String exitLamp, double directionAngle, String directionLabel, double lengthM, boolean occupied, String aspect) {
 			this.index = index;
 			this.id = id;
-			this.lamp = lamp;
-			this.endsOpen = endsOpen;
+			this.entryLamp = entryLamp;
+			this.exitLamp = exitLamp;
+			this.directionAngle = directionAngle;
+			this.directionLabel = directionLabel;
 			this.lengthM = lengthM;
 			this.occupied = occupied;
+			this.aspect = aspect;
 		}
 	}
 
-	/** The whole diagram: lattice nodes, lattice edges and the blocks mapped onto them. */
+	/** The whole diagram: lattice nodes, lattice edges and the sections mapped onto them. */
 	public static final class Schematic {
 		public final double cellSize;
 		public final int cellM;
@@ -157,12 +174,12 @@ public final class MmtrBlockSchematic {
 		public final int originCellZ;
 		public final ObjectArrayList<DiagramNode> nodes;
 		public final ObjectArrayList<DiagramRail> rails;
-		public final ObjectArrayList<DiagramBlock> blocks;
+		public final ObjectArrayList<DiagramSection> sections;
 		/** World-metre size of the folded network, for the card header. */
 		public final int worldWidthM;
 		public final int worldHeightM;
 
-		Schematic(double cellSize, int cellM, int cellWidth, int cellHeight, int originCellX, int originCellZ, ObjectArrayList<DiagramNode> nodes, ObjectArrayList<DiagramRail> rails, ObjectArrayList<DiagramBlock> blocks, int worldWidthM, int worldHeightM) {
+		Schematic(double cellSize, int cellM, int cellWidth, int cellHeight, int originCellX, int originCellZ, ObjectArrayList<DiagramNode> nodes, ObjectArrayList<DiagramRail> rails, ObjectArrayList<DiagramSection> sections, int worldWidthM, int worldHeightM) {
 			this.cellSize = cellSize;
 			this.cellM = cellM;
 			this.cellWidth = cellWidth;
@@ -171,7 +188,7 @@ public final class MmtrBlockSchematic {
 			this.originCellZ = originCellZ;
 			this.nodes = nodes;
 			this.rails = rails;
-			this.blocks = blocks;
+			this.sections = sections;
 			this.worldWidthM = worldWidthM;
 			this.worldHeightM = worldHeightM;
 		}
@@ -180,8 +197,6 @@ public final class MmtrBlockSchematic {
 	// ---------------------------------------------------------------- build
 
 	private Schematic assemble() {
-		final Object2ObjectOpenHashMap<String, String> nodeOwners = blocks.nodeOwners();
-
 		// 1. Snap every track node to its square. Nodes sharing a square become ONE lattice node.
 		int minCellX = Integer.MAX_VALUE;
 		int minCellZ = Integer.MAX_VALUE;
@@ -209,14 +224,13 @@ public final class MmtrBlockSchematic {
 		for (int id = 0; id < worldPositions.size(); id++) {
 			final int cellX = cellXs.get(id) - minCellX;
 			final int cellZ = cellZs.get(id) - minCellZ;
-			final Position first = worldPositions.get(id).get(0);
 			nodes.add(new DiagramNode(id, cellX, cellZ, worldPositions.get(id).size(),
-				nodeOwners.getOrDefault(key(first), ""), (cellX + 0.5) * PIXELS_PER_CELL, (cellZ + 0.5) * PIXELS_PER_CELL));
+				(cellX + 0.5) * PIXELS_PER_CELL, (cellZ + 0.5) * PIXELS_PER_CELL));
 			nodeIdByCell.put(cellKey(cellX, cellZ), id);
 		}
 
 		// 3. Fold the rails onto lattice edges: rails between the same pair of squares are one drawn line, and
-		//    the block covering each direction says what colour that direction takes.
+		//    the section serving each direction says what colour that direction takes.
 		final Object2ObjectOpenHashMap<Long, DiagramRailBuilder> edgeByPair = new Object2ObjectOpenHashMap<>();
 		final Object2ObjectOpenHashMap<String, ObjectArrayList<Integer>> edgeIndexesByRail = new Object2ObjectOpenHashMap<>();
 		for (final Rail rail : simulator.rails) {
@@ -243,57 +257,67 @@ public final class MmtrBlockSchematic {
 			}
 		}
 
-		// 4. Map every block onto the diagram.
-		final ObjectArrayList<DiagramBlock> diagramBlocks = new ObjectArrayList<>();
-		final Object2ObjectOpenHashMap<String, Integer> diagramBlockById = new Object2ObjectOpenHashMap<>();
-		for (int index = 0; index < gateBlocks.size(); index++) {
-			final MmtrDirectionalBlockService.GateBlock block = gateBlocks.get(index);
-			final DiagramBlock diagramBlock = new DiagramBlock(index, block.id, block.entryLampKey, block.endsOpen, block.lengthM(), false);
-			diagramBlocks.add(diagramBlock);
-			diagramBlockById.put(block.id, index);
-			for (final MmtrDirectionalBlockService.RailSpan span : block.spans) {
+		/*
+		 * 4. 把每个区间映射到图上。
+		 *
+		 * <p>与旧的水闸区间层最大的不同：**格子可以同时属于多个区间**（双向线路上同一段轨同属两个方向），
+		 * 所以节点的归属是"追加"而不是"独占赋值"；也没有"每个格子必有唯一归属"这条不变量了。</p>
+		 */
+		final ObjectArrayList<DiagramSection> diagramSections = new ObjectArrayList<>();
+		for (int index = 0; index < sections.size(); index++) {
+			final MmtrDirectionalBlockService.SectionView section = sections.get(index);
+			final DiagramSection diagramSection = new DiagramSection(index, section.id, section.entrySignalKey, section.exitSignalKey,
+				section.direction.angle, section.direction.label(), section.lengthM(), section.occupied, section.aspect);
+			diagramSections.add(diagramSection);
+			for (final MmtrDirectionalBlockService.RailSpan span : section.spans) {
 				final ObjectArrayList<Integer> edges = edgeIndexesByRail.get(span.railHex);
 				if (edges != null) {
-					diagramBlock.railEdges.addAll(edges);
+					diagramSection.railEdges.addAll(edges);
 				}
-				diagramBlock.spans.add(shortHex(span.railHex) + "[" + Math.round(span.arcFromM) + "," + Math.round(span.arcToM) + ")");
-				// A block whose rails never leave their own square (a 15 m stub, a road entirely inside one
-				// cell) has no lattice EDGE - without this it would be a block the diagram never shows. Anchor
-				// it to the square its stretch starts in, so the operator can still see that it exists.
+				diagramSection.spans.add(shortHex(span.railHex) + "[" + Math.round(span.arcFromM) + "," + Math.round(span.arcToM) + ")");
+				/*
+				 * 本区间覆盖的**格子**：由这段弧窗的两端点算出来，而不是去查"这个格子归谁"。
+				 *
+				 * <p>为什么必须这样：节点归属那种单值模型已经删掉了（区间是某方向的一段路，一个格子
+				 * 可以属于多个区间）。所以格子成员只能由**几何**推出来 —— 弧窗两端所在的两个格子，
+				 * 以及这段路经过的格子（沿弧窗采样几个点取格子）。</p>
+				 */
 				final Rail rail = railByHex.get(span.railHex);
-				if (rail != null && (edges == null || edges.isEmpty())) {
-					final Position start = span.arcToM >= span.arcFromM ? orderedAt(rail, span.arcFromM) : orderedAt(rail, span.arcFromM);
-					final Integer node = nodeIdByCell.get(cellKey(cell(start.getX()) - minCellX, cell(start.getZ()) - minCellZ));
-					if (node != null) {
-						diagramBlock.nodeIds.add(node);
+				if (rail != null) {
+					final double fromM = Math.min(span.arcFromM, span.arcToM);
+					final double toM = Math.max(span.arcFromM, span.arcToM);
+					for (int step = 0; step <= 4; step++) {
+						final double arc = fromM + (toM - fromM) * step / 4.0;
+						final Position at = orderedAt(rail, arc);
+						final Integer cellId = nodeIdByCell.get(cellKey(cell(at.getX()) - minCellX, cell(at.getZ()) - minCellZ));
+						if (cellId != null) {
+							diagramSection.nodeIds.add(cellId);
+							// 反向索引：这一格被哪些区间覆盖（多值，正是双向要表达的）
+							final DiagramNode node = nodes.get(cellId);
+							if (!node.sections.contains(section.id)) {
+								node.sections.add(section.id);
+							}
+						}
 					}
 				}
 			}
 		}
-		for (final DiagramNode node : nodes) {
-			final Integer owner = diagramBlockById.get(node.block);
-			if (owner != null) {
-				diagramBlocks.get(owner).nodeIds.add(node.id);
-			}
-		}
-		// A block also covers the SQUARES at the ends of the edges it owns. Without this, a block drawn purely
-		// as a line through a square would own no square at all (the square's node belongs to another block
-		// there), and the map's node ring for it would be missing.
+		// 区间也覆盖它所占边的两端格子（纯直线段采样未必落在两端格上）。
 		for (final DiagramRail rail : rails) {
-			if (rail.forwardBlock >= 0) {
-				diagramBlocks.get(rail.forwardBlock).nodeIds.add(rail.fromNode);
-				diagramBlocks.get(rail.forwardBlock).nodeIds.add(rail.toNode);
+			if (rail.forwardSection >= 0) {
+				diagramSections.get(rail.forwardSection).nodeIds.add(rail.fromNode);
+				diagramSections.get(rail.forwardSection).nodeIds.add(rail.toNode);
 			}
-			if (rail.backwardBlock >= 0) {
-				diagramBlocks.get(rail.backwardBlock).nodeIds.add(rail.fromNode);
-				diagramBlocks.get(rail.backwardBlock).nodeIds.add(rail.toNode);
+			if (rail.backwardSection >= 0) {
+				diagramSections.get(rail.backwardSection).nodeIds.add(rail.fromNode);
+				diagramSections.get(rail.backwardSection).nodeIds.add(rail.toNode);
 			}
 		}
 
 		final int cellWidth = Math.max(MIN_CELL_WIDTH, maxCellX - minCellX + 1);
 		final int cellHeight = Math.max(MIN_CELL_HEIGHT, maxCellZ - minCellZ + 1);
 		return new Schematic(PIXELS_PER_CELL, CELL_M, cellWidth, cellHeight, minCellX, minCellZ,
-			nodes, rails, diagramBlocks, (maxCellX - minCellX + 1) * CELL_M, (maxCellZ - minCellZ + 1) * CELL_M);
+			nodes, rails, diagramSections, (maxCellX - minCellX + 1) * CELL_M, (maxCellZ - minCellZ + 1) * CELL_M);
 	}
 
 	/** The world position at {@code arcM} of a rail, snapped to the block coordinate it stands in. */
@@ -307,8 +331,8 @@ public final class MmtrBlockSchematic {
 		final DiagramNode to;
 		int rails;
 		double lengthM;
-		int forwardBlock = -1;
-		int backwardBlock = -1;
+		int forwardSection = -1;
+		int backwardSection = -1;
 		final ObjectOpenHashSet<String> railHexes = new ObjectOpenHashSet<>();
 
 		DiagramRailBuilder(DiagramNode from, DiagramNode to) {
@@ -320,17 +344,22 @@ public final class MmtrBlockSchematic {
 			rails++;
 			lengthM += rail.railMath.getLength();
 			railHexes.add(rail.getHexId());
-			forwardBlock = ownerOf(rail, true, schematic);
-			backwardBlock = ownerOf(rail, false, schematic);
+			forwardSection = sectionServing(rail, true, schematic);
+			backwardSection = sectionServing(rail, false, schematic);
 		}
 
-		/** Which block owns this rail read in the ordered-position direction (forward) or against it. */
-		private int ownerOf(Rail rail, boolean forward, MmtrBlockSchematic schematic) {
+		/**
+		 * 这条边上**服务某个方向**的那个区间序号（没有则 -1）。
+		 *
+		 * <p>与旧实现同一判据（`RailSpan.matchesHeading`），但找的是**区间**而不是水闸区间：
+		 * 同一根轨上两个方向各属一个区间，所以两个方向会各自命中不同的区间 —— 这正是双向线路要画的东西。</p>
+		 */
+		private int sectionServing(Rail rail, boolean forward, MmtrBlockSchematic schematic) {
 			final double length = rail.railMath.getLength();
 			final double[] positive = MmtrDirectionalBlockService.railHeadingAt(rail, length <= 2 ? length / 2 : 1);
 			final double[] direction = forward ? positive : new double[]{-positive[0], -positive[1]};
-			for (int index = 0; index < schematic.gateBlocks.size(); index++) {
-				for (final MmtrDirectionalBlockService.RailSpan span : schematic.gateBlocks.get(index).spans) {
+			for (int index = 0; index < schematic.sections.size(); index++) {
+				for (final MmtrDirectionalBlockService.RailSpan span : schematic.sections.get(index).spans) {
 					if (span.railHex.equals(rail.getHexId()) && span.matchesHeading(direction[0], direction[1])) {
 						return index;
 					}
@@ -340,7 +369,7 @@ public final class MmtrBlockSchematic {
 		}
 
 		DiagramRail toRail() {
-			return new DiagramRail(from.id, to.id, rails, lengthM, from.x, from.z, to.x, to.z, forwardBlock, backwardBlock);
+			return new DiagramRail(from.id, to.id, rails, lengthM, from.x, from.z, to.x, to.z, forwardSection, backwardSection);
 		}
 	}
 

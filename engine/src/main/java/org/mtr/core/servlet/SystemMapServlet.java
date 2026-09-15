@@ -1093,80 +1093,14 @@ public final class SystemMapServlet extends ServletBase {
 			byRail.add(entry.getValue());
 		}
 		result.add("byRail", byRail);
-		// 区间图层 = 水闸区间: the cells between SIGNALS (a signal is a gate; nodes do NOT cut blocks - that is
-		// the TRACK layer's business). Every block the engine holds trains with is emitted whole, with its
-		// spans and the sampled world points of each span, so the console draws the engine's own division
-		// and computes nothing itself.
-		final com.google.gson.JsonArray blocks = new com.google.gson.JsonArray();
-		final java.util.HashMap<String, org.mtr.core.data.Rail> railsByHex = new java.util.HashMap<>();
-		simulator.rails.forEach(rail -> railsByHex.put(rail.getHexId(), rail));
-		final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.GateBlock> gateBlocks = simulator.mmtrDirectionalBlocks.gateBlocks();
-		for (int blockIndex = 0; blockIndex < gateBlocks.size(); blockIndex++) {
-			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.GateBlock block = gateBlocks.get(blockIndex);
-			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
-			// A block is named by its own unique id: the lamp that opens it, or 无灯#<rail>@<arc> when nobody
-			// guards it. Both the node assignment and the map's colours key on this name, so it must be unique
-			// - "no lamp" is a property of several blocks at once.
-			out.addProperty("index", blockIndex);
-			out.addProperty("id", block.id);
-			out.addProperty("lamp", block.entryLampKey);
-			out.addProperty("open", block.endsOpen);
-			out.addProperty("length", block.lengthM());
-			out.addProperty("occupied", simulator.mmtrDirectionalBlocks.isOccupied(block, trees));
-			out.addProperty("aspect", block.entryLampKey.isEmpty() ? "" : simulator.mmtrDirectionalBlocks.blockAspect(block, trees, restricted::contains));
-			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
-			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : block.spans) {
-				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
-				s.addProperty("hex", span.railHex);
-				s.addProperty("from", span.arcFromM);
-				s.addProperty("to", span.arcToM);
-				// Sampled world points, so the console draws a slice without re-implementing MTR's rail
-				// maths: a block cut mid-rail by a lamp is exactly what the layer has to show.
-				final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
-				final org.mtr.core.data.Rail rail = railsByHex.get(span.railHex);
-				if (rail != null && span.arcToM > span.arcFromM) {
-					for (int i = 0; i <= 8; i++) {
-						final double arc = span.arcFromM + (span.arcToM - span.arcFromM) * i / 8;
-						final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
-						points.add(Math.round(point.x() * 100) / 100.0);
-						points.add(Math.round(point.z() * 100) / 100.0);
-					}
-				}
-				s.add("points", points);
-				spans.add(s);
-			}
-			out.add("spans", spans);
-			blocks.add(out);
-		}
-		result.add("blocks", blocks);
-		// 区间层的节点归属: every track-layer node with the ONE block it belongs to (the user's requirement).
-		// The block is named by its INDEX in blocks, not by its lamp key: an unguarded block has no lamp, and
-		// several of them exist at once, so a lamp key would merge them into a single answer.
-		final com.google.gson.JsonArray blockNodes = new com.google.gson.JsonArray();
-		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> owners = simulator.mmtrDirectionalBlocks.nodeOwners();
-		final java.util.HashMap<String, Integer> indexByBlockId = new java.util.HashMap<>();
-		for (int blockIndex = 0; blockIndex < gateBlocks.size(); blockIndex++) {
-			indexByBlockId.put(gateBlocks.get(blockIndex).id, blockIndex);
-		}
-		simulator.positionsToRail.forEach((node, neighbourMap) -> {
-			if (neighbourMap.isEmpty()) {
-				return;
-			}
-			final String nodeKey = node.getX() + "," + node.getY() + "," + node.getZ();
-			if (!owners.containsKey(nodeKey)) {
-				return;
-			}
-			final String owner = owners.get(nodeKey);
-			final Integer index = indexByBlockId.get(owner);
-			final com.google.gson.JsonObject n = new com.google.gson.JsonObject();
-			n.addProperty("x", node.getX());
-			n.addProperty("y", node.getY());
-			n.addProperty("z", node.getZ());
-			n.addProperty("block", owner);
-			n.addProperty("index", index == null ? -1 : index);
-			blockNodes.add(n);
-		});
-		result.add("nodes", blockNodes);
+		/*
+		 * 区间图层 = **按方向划分的区间**（本函数上半部分已经发完：`sections` + `byRail`）。
+		 *
+		 * <p>这里原来还有两段：`blocks`（水闸区间）与 `nodes`（**每个节点唯一归属的那个区间**）。
+		 * 2026-09-15 按用户裁定删除：区间**只能**由灯划分（节点永不切分），而"一个节点属于一个区间"在
+		 * 双向线路上必然错——现场实测被区间覆盖的 96 根轨里 62 根属于 2 个以上区间（最多 5 个）。
+		 * 网页要的"一个点属于哪几个区间"由上面的 `byRail` 回答，那是**多值**的。</p>
+		 */
 		return result;
 	}
 
@@ -1199,7 +1133,15 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("x", node.x);
 			out.addProperty("z", node.z);
 			out.addProperty("merged", node.mergedCount);
-			out.addProperty("block", node.block);
+			/*
+			 * **这一格被哪些区间覆盖**（可能是多个：双向线路上同一段轨同属两个方向的区间）。
+			 *
+			 * <p>原来这里是单值的 `block`（"这一格归哪个水闸区间"）。那一层已按用户裁定删除：
+			 * 区间是某方向的一段路，归属必然是多值的，所以这里必须是数组。空数组 = 没有灯管到这一格。</p>
+			 */
+			final com.google.gson.JsonArray cellSections = new com.google.gson.JsonArray();
+			node.sections.forEach(cellSections::add);
+			out.add("sections", cellSections);
 			nodes.add(out);
 		}
 		result.add("nodes", nodes);
@@ -1215,37 +1157,41 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("z2", rail.z2);
 			out.addProperty("rails", rail.rails);
 			out.addProperty("length", rail.lengthM);
-			out.addProperty("forwardBlock", rail.forwardBlock);
-			out.addProperty("backwardBlock", rail.backwardBlock);
+			out.addProperty("forwardSection", rail.forwardSection);
+			out.addProperty("backwardSection", rail.backwardSection);
 			rails.add(out);
 		}
 		result.add("rails", rails);
 
-		final com.google.gson.JsonArray blocks = new com.google.gson.JsonArray();
-		for (final org.mtr.core.mmtr.signal.MmtrBlockSchematic.DiagramBlock block : schematic.blocks) {
+		final com.google.gson.JsonArray sections = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.signal.MmtrBlockSchematic.DiagramSection section : schematic.sections) {
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
-			out.addProperty("index", block.index);
-			out.addProperty("id", block.id);
-			out.addProperty("lamp", block.lamp);
-			out.addProperty("open", block.endsOpen);
-			out.addProperty("occupied", block.occupied);
-			out.addProperty("length", block.lengthM);
+			out.addProperty("index", section.index);
+			out.addProperty("id", section.id);
+			out.addProperty("entryLamp", section.entryLamp);
+			out.addProperty("exitLamp", section.exitLamp);
+			// 方向是区间的第一属性（0=南 90=西 180=北 270=东），网页靠它把两个方向画成两条带
+			out.addProperty("directionAngle", section.directionAngle);
+			out.addProperty("directionLabel", section.directionLabel);
+			out.addProperty("occupied", section.occupied);
+			out.addProperty("aspect", section.aspect);
+			out.addProperty("length", section.lengthM);
 			final com.google.gson.JsonArray edges = new com.google.gson.JsonArray();
-			for (final int edge : block.railEdges) {
+			for (final int edge : section.railEdges) {
 				edges.add(edge);
 			}
 			out.add("edges", edges);
 			final com.google.gson.JsonArray squares = new com.google.gson.JsonArray();
-			for (final int node : block.nodeIds) {
+			for (final int node : section.nodeIds) {
 				squares.add(node);
 			}
 			out.add("squares", squares);
 			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
-			block.spans.forEach(spans::add);
+			section.spans.forEach(spans::add);
 			out.add("spans", spans);
-			blocks.add(out);
+			sections.add(out);
 		}
-		result.add("blocks", blocks);
+		result.add("sections", sections);
 		return result;
 	}
 
@@ -1452,10 +1398,13 @@ public final class SystemMapServlet extends ServletBase {
 	 */
 	private static JsonObject getMmtrTopology(org.mtr.core.simulation.Simulator simulator) {
 		final com.google.gson.JsonArray nodes = new com.google.gson.JsonArray();
-		// 区间层: the block each track-layer node belongs to. The user's requirement is that every node has
-		// EXACTLY ONE block ("每个轨道层每个节点都有且只有一个区间层所属"), so the engine assigns it here and the
-		// console only paints what it is given.
-		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> nodeOwners = simulator.mmtrDirectionalBlocks.nodeOwners();
+		/*
+		 * 节点的 `block` 字段**已删除**（2026-09-15 用户裁定）。
+		 *
+		 * <p>它原来发的是"这个节点唯一归属哪个水闸区间"。区间是**某方向的一段路**，所以那个"唯一归属"
+		 * 在双向线路上必然错（现场实测：被区间覆盖的 96 根轨里 62 根属于 2 个以上区间，最多 5 个）。
+		 * 网页要的一格/一点属于哪几个区间，由 `/mmtr-sections` 的 `byRail` 回答（多值）。</p>
+		 */
 		simulator.positionsToRail.forEach((node, neighbourMap) -> {
 			if (neighbourMap.isEmpty()) {
 				return;
@@ -1465,7 +1414,6 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("y", node.getY());
 			out.addProperty("z", node.getZ());
 			out.addProperty("degree", neighbourMap.size());
-			out.addProperty("block", nodeOwners.getOrDefault(node.getX() + "," + node.getY() + "," + node.getZ(), ""));
 			/*
 			 * 节点的**游戏内朝向角**（度）。只有游戏端扫描上报过才有这个字段。
 			 *
