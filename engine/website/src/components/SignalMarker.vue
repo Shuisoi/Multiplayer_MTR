@@ -54,13 +54,21 @@ const anchor = signalUnitAnchor();
 /** 折角的线心折线：**与单测同一份几何**（`signalUnitChevronPath`），不许在模板里另写一遍。 */
 const chevronPath = signalUnitChevronPath();
 /**
- * 整盏灯相对锚点的偏移：让**灯点**落在锚点上（灯点不在 SVG 盒子的正中心，
- * 因为折角要画在它上方，所以整盒要按灯点在盒子里的比例往左上让）。
+ * 整盏灯相对锚点的偏移（**屏幕像素**）：让**灯点**落在锚点上。
+ *
+ * <p>灯点不在 SVG 盒子的正中心（折角要画在它上方），所以整盒要往左上让这么多 ——
+ * 与 `rootTransform` 里那个 `translate(-anchorX -anchorY)` 是同一个量，
+ * 只是单位从 viewBox 单位换成了像素。</p>
+ *
+ * <p><b>为什么不用百分比</b>：`left: -50%` 里的百分比是按**包含块**的宽度解析的，
+ * 而 `.signal` 是零尺寸锚点 ⇒ 包含块宽 0 ⇒ `-50%` 解析成 `0px`，
+ * 整盒左上角直接压在锚点上、还右移了半个盒子。**这个坑实测把 96 盏灯全画到了地图左上角**
+ * （`getBoundingClientRect` 全是同一个点），所以这里必须是实打实的像素。</p>
  */
-const boxOffsetPercent = {
-	x: (anchor.x / DECAL_KINDS.signalUnit.boxWidth) * 100,
-	y: (anchor.y / DECAL_KINDS.signalUnit.boxHeight) * 100,
-};
+const boxOffsetPx = computed(() => ({
+	x: (anchor.x / DECAL_KINDS.signalUnit.boxWidth) * iconPx.value,
+	y: (anchor.y / DECAL_KINDS.signalUnit.boxHeight) * boxHeightPx.value,
+}));
 
 /**
  * 灯位偏移：**只表示"灯在轨道的哪一侧"**，方向来自世界语义（司机的左手侧），距离 = 规格 × 倍率。
@@ -81,7 +89,8 @@ const offsetPx = computed(() => pixelOffset(
  */
 const rootTransform = computed(() => {
 	const placement = decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value);
-	return `${decalTransform(placement, props.signal.arrowRotation)} translate(${-anchor.x} ${-anchor.y})`;
+	// 旋转要绕**灯点**：先把原点搬到灯点，所以整盒先平移 −灯点（像素）
+	return `${decalTransform(placement, props.signal.arrowRotation)} translate(${-boxOffsetPx.value.x}px, ${-boxOffsetPx.value.y}px)`;
 });
 
 const emit = defineEmits<{
@@ -144,7 +153,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 			:width="iconPx"
 			:height="boxHeightPx"
 			:viewBox="`0 0 ${DECAL_KINDS.signalUnit.boxWidth} ${DECAL_KINDS.signalUnit.boxHeight}`"
-			:style="{'--anchor-x': `${boxOffsetPercent.x}%`, '--anchor-y': `${boxOffsetPercent.y}%`}"
+			:style="{'--box-x': `${boxOffsetPx.x}px`, '--box-y': `${boxOffsetPx.y}px`}"
 		>
 			<!--
 				折角：一个 `^`，尖朝组的上方。整组会被旋转到管辖方向，所以它指向管辖方向。
@@ -239,9 +248,13 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
  */
 .unit {
 	position: absolute;
-	/* 整盒往左上让，使**灯点**（而不是盒子中心）落在锚点上 */
-	left: calc(var(--anchor-x) * -1);
-	top: calc(var(--anchor-y) * -1);
+	/*
+	 * 整盒往左上让，使**灯点**（而不是盒子中心）落在锚点上。
+	 * 这里必须是像素：百分比会按**包含块**（零尺寸的 `.signal`）解析而变成 0 ——
+	 * 实测那一版把 96 盏灯全画到了地图左上角。
+	 */
+	left: calc(var(--box-x) * -1);
+	top: calc(var(--box-y) * -1);
 	overflow: visible;
 	filter: drop-shadow(0 0 1.5px #000000);
 }
