@@ -25,12 +25,17 @@
  */
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {DECAL_KINDS, REFERENCE_ZOOM, scaled, signalUnitAnchor, signalUnitChevronPath} from "../src/domain/mapElements.ts";
+import {DECAL_KINDS, signalUnitAnchor, signalUnitChevronPath} from "../src/domain/mapElements.ts";
 import {Signal} from "../src/domain/Signal.ts";
 
-/** 1 个 viewBox 单位 = 多少屏幕 px。 */
-function unitsToPx(zoomRatio: number): number {
-	return scaled(DECAL_KINDS.icon, zoomRatio) / DECAL_KINDS.signalUnit.boxWidth;
+/**
+ * 1 个 viewBox 单位 = 多少屏幕 px（**全览口径**：图标宽 8 px 对应 viewBox 宽 20 单位）。
+ *
+ * <p>内部几何在**所有倍率下形状相同**（相机是全局缩放），所以形状判据只需要这一个比例；
+ * "跟着倍率变大"是相机的事，由 `viewbox.test.ts` 钉住。</p>
+ */
+function unitsToPx(zoomRatio = 1): number {
+	return (DECAL_KINDS.icon / DECAL_KINDS.signalUnit.boxWidth) * zoomRatio;
 }
 
 /** 把 `signalUnitChevronPath()` 解析成两条腿（组件画的就是这条路径，测试量同一份）。 */
@@ -72,26 +77,32 @@ function lampRadiusPx(zoomRatio: number): number {
 const ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
 
 test("内部几何：折角与灯点不相接，且空隙够宽", () => {
-	const gap = chevronClearancePx(REFERENCE_ZOOM) - lampRadiusPx(REFERENCE_ZOOM);
+	const gap = chevronClearancePx(1) - lampRadiusPx(1);
 	assert.equal(gap > 0, true,
 		`折角可见外缘与灯点外缘重叠了（空隙 ${gap.toFixed(2)} px）—— 这就是用户第一次说的"戳在一起"`);
-	assert.equal(gap >= 0.6, true,
-		`可见空隙只有 ${gap.toFixed(2)} px（要 ≥ 0.6 px）—— 屏幕上会看着像粘住`);
-	assert.equal(gap <= 2.5, true,
-		`可见空隙有 ${gap.toFixed(2)} px（要 ≤ 2.5 px）—— 这就是用户第二次说的"距离太大"`);
+	/*
+	 * 空隙按**灯点直径的比例**判，不写绝对像素：图标尺寸是规格表的事，改规格不该让这条红。
+	 * 下界 = 10% 灯点直径（看着不粘），上界 = 60%（看着不散）—— 这两个比例是当初用绝对像素
+	 * 定下来那两条（≥0.6 px / ≤2.5 px，灯点 4 px）换算过来的，含义不变。
+	 */
+	const dotDiameter = DECAL_KINDS.lampDot;
+	assert.equal(gap >= 0.1 * dotDiameter, true,
+		`可见空隙只有 ${gap.toFixed(2)} px（要 ≥ 灯点直径的 10% = ${(0.1 * dotDiameter).toFixed(2)} px）—— 屏幕上会看着像粘住`);
+	assert.equal(gap <= 0.6 * dotDiameter, true,
+		`可见空隙有 ${gap.toFixed(2)} px（要 ≤ 灯点直径的 60% = ${(0.6 * dotDiameter).toFixed(2)} px）—— 这就是用户第二次说的"距离太大"`);
 });
 
 test("内部几何：整体尺寸在图标量级（不超框、也不比图标大太多）", () => {
 	const unit = DECAL_KINDS.signalUnit;
-	const perPx = unitsToPx(REFERENCE_ZOOM);
+	const perPx = unitsToPx();
 	const widthPx = unit.boxWidth * perPx;
 	const heightPx = unit.boxHeight * perPx;
-	assert.equal(widthPx, DECAL_KINDS.icon, `整体宽 ${widthPx} px 应当就是图标规格 ${DECAL_KINDS.icon} px`);
+	assert.ok(Math.abs(widthPx - DECAL_KINDS.icon) < 1e-9, `整体宽 ${widthPx} px 应当就是图标规格 ${DECAL_KINDS.icon} px`);
 	assert.equal(heightPx <= 1.5 * DECAL_KINDS.icon, true,
 		`整体高 ${heightPx.toFixed(2)} px 超过图标的 1.5 倍（${(1.5 * DECAL_KINDS.icon).toFixed(2)} px）—— 会盖住邻居`);
 	// 灯点直径必须等于灯点规格：它是"状态"的载体，改小了就看不见了
 	const dotPx = unit.lampRadius * 2 * perPx;
-	assert.equal(dotPx, DECAL_KINDS.lampDot, `灯点直径 ${dotPx} px 应当就是规格 ${DECAL_KINDS.lampDot} px`);
+	assert.ok(Math.abs(dotPx - DECAL_KINDS.lampDot) < 1e-9, `灯点直径 ${dotPx} px 应当就是规格 ${DECAL_KINDS.lampDot} px`);
 });
 
 test("内部几何：折角画在灯点正上方（整组转的时候不会因此换边）", () => {
@@ -109,8 +120,8 @@ test("整体尺寸与空隙都按倍率缩放（拉远推近都同一个比例�
 	const unit = DECAL_KINDS.signalUnit;
 	// 空隙只有 0.7 px 量级，直接比比值会被浮点噪声淹掉；改比"尺寸比 == 倍率比"（同一个口径）
 	const sizeAt = (zoom: number) => unit.boxHeight * unitsToPx(zoom);
-	for (const zoom of [1, REFERENCE_ZOOM, 12]) {
-		assert.equal(Math.abs(sizeAt(zoom) / sizeAt(REFERENCE_ZOOM) - zoom / REFERENCE_ZOOM) < 1e-9, true,
+	for (const zoom of [1, 6, 12]) {
+		assert.equal(Math.abs(sizeAt(zoom) / sizeAt(1) - zoom) < 1e-9, true,
 			`${zoom}× 的整体高 ${sizeAt(zoom).toFixed(3)} px 不按倍率缩放`);
 	}
 	/*
@@ -118,8 +129,8 @@ test("整体尺寸与空隙都按倍率缩放（拉远推近都同一个比例�
 	 * （空隙是"两个几何量相减"的结果，1× 时只有 0.12 px，量它的比值没有意义）。
 	 */
 	const gapAt = (zoom: number) => chevronClearancePx(zoom) - lampRadiusPx(zoom);
-	assert.equal(gapAt(12) > gapAt(REFERENCE_ZOOM) && gapAt(REFERENCE_ZOOM) > gapAt(1), true,
-		`空隙应当随倍率单调变大（1× ${gapAt(1).toFixed(2)} / 6× ${gapAt(REFERENCE_ZOOM).toFixed(2)} / 12× ${gapAt(12).toFixed(2)} px）`);
+	assert.equal(gapAt(12) > gapAt(1) && gapAt(6) > gapAt(1), true,
+		`空隙应当随倍率单调变大（1× ${gapAt(1).toFixed(2)} / 6× ${gapAt(6).toFixed(2)} / 12× ${gapAt(12).toFixed(2)} px）`);
 });
 
 /*
