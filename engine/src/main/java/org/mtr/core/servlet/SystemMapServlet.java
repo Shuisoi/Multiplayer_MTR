@@ -990,17 +990,33 @@ public final class SystemMapServlet extends ServletBase {
 		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.SectionView view : simulator.mmtrDirectionalBlocks.sectionViews(trees, restricted::contains)) {
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
 			out.addProperty("id", view.id);
+			// 入口灯单列一份：区间 id 在"一灯多腿"时带 #n 后缀，前端不该拆字符串去还原它。
+			out.addProperty("entrySignal", view.entrySignalKey);
 			out.addProperty("exitSignal", view.exitSignalKey);
 			out.addProperty("next", view.nextSectionId);
 			out.addProperty("aspect", view.aspect);
 			out.addProperty("occupied", view.occupied);
 			out.addProperty("length", view.lengthM);
+			/*
+			 * **区间属于哪个行车方向**（本轮新增）。
+			 *
+			 * 双向线路上"同一根物理轨"属于两个方向的各一个区间，所以方向是区间的第一属性，不是可以从
+			 * 几何猜出来的附属信息 —— 网页要按方向画成两条带（方案 B），没有这个字段就只能靠 id 猜。
+			 */
+			final com.google.gson.JsonObject direction = new com.google.gson.JsonObject();
+			direction.addProperty("angle", view.direction.angle);
+			direction.addProperty("label", view.direction.label());
+			direction.addProperty("dx", view.direction.dx);
+			direction.addProperty("dz", view.direction.dz);
+			out.add("direction", direction);
 			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
 			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : view.spans) {
 				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
 				s.addProperty("hex", span.railHex);
 				s.addProperty("from", span.arcFromM);
 				s.addProperty("to", span.arcToM);
+				// 本段是"沿弧增"还是"沿弧减"走过的：前端画方向箭头要用，且它与区间方向一致时才是正向段。
+				s.addProperty("dirOfTravel", span.matchesHeading(view.direction.dx, view.direction.dz));
 				// Sampled world points along the arc window, so the console can draw a slice WITHOUT
 				// re-implementing MTR's two-arc rail maths: a lamp standing mid-rail gives a span shorter
 				// than the rail, and where the slice starts is exactly what the layer has to show.
@@ -1024,6 +1040,59 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 		result.add("sections", sections);
 		result.addProperty("railCount", simulator.rails.size());
+		/*
+		 * **按轨索引的成员表：一个点属于哪几个区间**（本轮新增，方案 B 的地基）。
+		 *
+		 * <p>为什么必须有它：区间是"某方向的一段路"，所以**归属是多值的** —— 双向线路上同一根轨同时属于
+		 * 南行和北行的各一个区间。现场实测（2026-09-15，140 轨 / 73 灯）：被区间覆盖的 96 根轨里
+		 * **62 根属于 2 个以上区间、最多的一根属于 5 个**。所以旧的"一个节点/一个点 → 一个归属"
+		 * 那种单值模型在双向线路上必然错，前端也不该拿着区间列表自己去求交。</p>
+		 *
+		 * <p>粒度 = "轨 hex + 弧窗"：一根多归属的轨会展开成几条记录（每段弧窗一条），前端直接画。</p>
+		 */
+		final java.util.LinkedHashMap<String, com.google.gson.JsonObject> memberByKey = new java.util.LinkedHashMap<>();
+		final java.util.LinkedHashMap<String, java.util.List<com.google.gson.JsonObject>> membersByKey = new java.util.LinkedHashMap<>();
+		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.SectionView view : simulator.mmtrDirectionalBlocks.sectionViews(trees, restricted::contains)) {
+			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : view.spans) {
+				if (span.lengthM() <= 1e-9) {
+					continue;
+				}
+				final String key = span.railHex + "@" + Math.round(span.arcFromM * 100) / 100.0 + ".." + Math.round(span.arcToM * 100) / 100.0;
+				if (!memberByKey.containsKey(key)) {
+					final com.google.gson.JsonObject entry = new com.google.gson.JsonObject();
+					entry.addProperty("hex", span.railHex);
+					entry.addProperty("from", span.arcFromM);
+					entry.addProperty("to", span.arcToM);
+					entry.add("members", new com.google.gson.JsonArray());
+					memberByKey.put(key, entry);
+					membersByKey.put(key, new java.util.ArrayList<>());
+				}
+				final com.google.gson.JsonObject member = new com.google.gson.JsonObject();
+				member.addProperty("section", view.id);
+				member.addProperty("angle", view.direction.angle);
+				member.addProperty("label", view.direction.label());
+				member.addProperty("aspect", view.aspect);
+				member.addProperty("occupied", view.occupied);
+				membersByKey.get(key).add(member);
+			}
+		}
+		final com.google.gson.JsonArray byRail = new com.google.gson.JsonArray();
+		for (final java.util.Map.Entry<String, com.google.gson.JsonObject> entry : memberByKey.entrySet()) {
+			final java.util.List<com.google.gson.JsonObject> members = membersByKey.get(entry.getKey());
+			// 同一个方向在同一段弧上只算一次（咽喉处区间会重叠，但"几个方向"要看方向数）
+			final java.util.TreeSet<Double> angles = new java.util.TreeSet<>();
+			final com.google.gson.JsonArray memberArray = (com.google.gson.JsonArray) entry.getValue().get("members");
+			for (final com.google.gson.JsonObject member : members) {
+				memberArray.add(member);
+				angles.add(member.get("angle").getAsDouble());
+			}
+			entry.getValue().addProperty("memberCount", members.size());
+			entry.getValue().addProperty("directionCount", angles.size());
+			// 双向轨（两个方向都走）—— 方案 B 里要画两条带的就是它
+			entry.getValue().addProperty("bidirectional", angles.size() >= 2);
+			byRail.add(entry.getValue());
+		}
+		result.add("byRail", byRail);
 		// 区间图层 = 水闸区间: the cells between SIGNALS (a signal is a gate; nodes do NOT cut blocks - that is
 		// the TRACK layer's business). Every block the engine holds trains with is emitted whole, with its
 		// spans and the sampled world points of each span, so the console draws the engine's own division

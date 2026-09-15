@@ -1205,11 +1205,13 @@ public final class MmtrDirectionalBlockService {
 				final Section next = following(section);
 				out.add(new SectionView(
 					section.id,
+					section.entrySignalKey == null ? "" : section.entrySignalKey,
 					section.exitSignalKey == null ? "" : section.exitSignalKey,
 					next == null ? "" : next.id,
 					aspectName(depthAt(section, trees, restrictedNodes)),
 					isOccupied(section, trees),
 					section.lengthM(),
+					directionOf(section),
 					section.spans
 				));
 			}
@@ -1217,25 +1219,91 @@ public final class MmtrDirectionalBlockService {
 		return out;
 	}
 
+	/**
+	 * The travel direction a section belongs to, as a labelled heading.
+	 *
+	 * <p>Every section <em>is</em> a direction: it is the stretch of line between one lamp and the next lamp
+	 * facing the same way, so "which direction does this section serve" is a property of the section, not
+	 * something a reader should infer from the rails it happens to cover. The web layer draws one band per
+	 * direction, so it needs this as data.</p>
+	 */
+	public static final class Direction {
+		/** MTR facing degrees: 0 = south (+z), 90 = west (−x), 180 = north (−z), 270 = east (+x). */
+		public final double angle;
+		public final double dx;
+		public final double dz;
+
+		Direction(double angle, double dx, double dz) {
+			this.angle = angle;
+			this.dx = dx;
+			this.dz = dz;
+		}
+
+		/** 中文方向名（南北东西按 MTR 的角约定）。 */
+		public String label() {
+			if (Math.abs(dz) >= Math.abs(dx)) {
+				return dz > 0 ? "南行" : "北行";
+			}
+			return dx > 0 ? "东行" : "西行";
+		}
+	}
+
+	/**
+	 * 把"行进单位向量"换回 MTR 的 Facing 角度 —— 与读灯那份 {@link #headingOf} 严格互逆。
+	 *
+	 * <p>{@code headingOf(a) = (-sin a, cos a)}，所以 {@code a = atan2(-dx, dz)}；归一化到
+	 * {@code [0,360)} 之后与 {@code SignalEntry.angle} 同一套数（现场实测：0 = 南行、180 = 北行，
+	 * 与 {@code mmtr-signals} 报的角度逐盏对得上）。</p>
+	 */
+	public static double angleOfHeading(double headingX, double headingZ) {
+		double degrees = Math.toDegrees(Math.atan2(-headingX, headingZ));
+		if (degrees < 0) {
+			degrees += 360;
+		}
+		return Math.round(degrees * 10) / 10.0;
+	}
+
 	/** One section as the web console consumes it (see {@link #sectionViews}). */
 	public static final class SectionView {
 		public final String id;
+		/**
+		 * 本区间的**入口灯**（开这个区间的那盏灯）。区间 id 在"一灯多腿"时会带 {@code #n} 后缀，
+		 * 所以入口灯要单独给一份：前端画分界点靠它，不该去拆 id 的字符串。
+		 */
+		public final String entrySignalKey;
 		public final String exitSignalKey;
 		public final String nextSectionId;
 		public final String aspect;
 		public final boolean occupied;
 		public final double lengthM;
+		/** 本区间服务哪个行车方向（区间 = 某方向的一段路，见 {@link Direction}）。 */
+		public final Direction direction;
 		public final ObjectArrayList<RailSpan> spans;
 
-		SectionView(String id, String exitSignalKey, String nextSectionId, String aspect, boolean occupied, double lengthM, ObjectArrayList<RailSpan> spans) {
+		SectionView(String id, String entrySignalKey, String exitSignalKey, String nextSectionId, String aspect, boolean occupied, double lengthM, Direction direction, ObjectArrayList<RailSpan> spans) {
 			this.id = id;
+			this.entrySignalKey = entrySignalKey;
 			this.exitSignalKey = exitSignalKey;
 			this.nextSectionId = nextSectionId;
 			this.aspect = aspect;
 			this.occupied = occupied;
 			this.lengthM = lengthM;
+			this.direction = direction;
 			this.spans = spans;
 		}
+	}
+
+	/**
+	 * 本区间的行车方向：取**第一段**的行进朝向（区间内所有 span 必须同向，那是"走行不许掉头"的要求；
+	 * 这里是读出来给显示层用，不是去猜）。
+	 */
+	private static Direction directionOf(Section section) {
+		for (final RailSpan span : section.spans) {
+			if (Math.abs(span.headingX) > 1e-9 || Math.abs(span.headingZ) > 1e-9) {
+				return new Direction(angleOfHeading(span.headingX, span.headingZ), span.headingX, span.headingZ);
+			}
+		}
+		return new Direction(0, 0, 1);
 	}
 
 	// ---------------------------------------------------------------- 水闸区间 (S6)
@@ -3270,6 +3338,53 @@ public final class MmtrDirectionalBlockService {
 	}
 
 	/**
+	 * 站在 {@code node}、**背向**本走行方向、但**绑定在本区间走过（或正要走）的那根轨上**的灯
+	 * （notes/155 §15）。
+	 *
+	 * <p>为什么要它：面向本方向的灯才是"下一段区间的入口灯"，可当一条轨上只有**反方向**的灯时
+	 * （单线区间、环线、尽头 U 弯），走行就一架边界都遇不到，一路吞成巨块 —— 现场实测 562 m / 24 段，
+	 * 站在站台上的车把整条线按红。反向的灯在**它的那根轨上**同样是分界：走到它就该收口。</p>
+	 *
+	 * <p>限定"绑在本轨上"是关键：不然岔区旁另一条轨上的灯会被误当边界（notes/112/113 的碎片教训）。
+	 * 同一节点上两架灯（各守一个方向）时，本判据与面向那架灯的边界收在同一处，不产生碎片。</p>
+	 */
+	private @Nullable SignalEntry backFacingLampBoundToWalkedRail(Position node, double headingX, double headingZ, String legHex, Section section) {
+		SignalEntry best = null;
+		double bestDistance = Double.MAX_VALUE;
+		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
+			final double distance = distanceToNode(entry, node);
+			if (distance > NODE_BIND_RADIUS_M || distance >= bestDistance) {
+				continue;
+			}
+			if (facesInto(entry, headingX, headingZ)) {
+				continue;   // 面向本方向的：调用方已经先处理过（不会走到这里）
+			}
+			if (!protectsWalkedRail(entry, legHex, section)) {
+				continue;
+			}
+			best = entry;
+			bestDistance = distance;
+		}
+		return best;
+	}
+
+	/** 这盏灯守的是不是本区间走过（或正要走）的那根轨。 */
+	private boolean protectsWalkedRail(SignalEntry entry, String legHex, Section section) {
+		for (final ProtectedRail protectedRail : resolveProtectedRailsInternal(entry)) {
+			final String hex = protectedRail.rail.getHexId();
+			if (hex.equals(legHex)) {
+				return true;
+			}
+			for (final RailSpan span : section.spans) {
+				if (span.railHex.equals(hex)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Continue the section from {@code node} (having just left {@code cameFromHex}) in {@code heading}.
 	 *
 	 * <p><strong>岔口多腿 (user ruling 2026-09-10, route B)</strong>: at a junction the walk follows
@@ -3428,6 +3543,32 @@ public final class MmtrDirectionalBlockService {
 					section.addExitLamp(MmtrSignalRegistry.key(legBoundary.x, legBoundary.y, legBoundary.z));
 					section.endReason = "停在面向本区间的灯 " + MmtrSignalRegistry.key(legBoundary.x, legBoundary.y, legBoundary.z)
 						+ "（正常：它是这条腿的入口灯，开的是下一段区间）";
+				}
+				continue;
+			}
+
+			/*
+			 * **背向本方向、但绑在本轨上的灯，同样是边界**（notes/155 §15 现场）。
+			 *
+			 * <p>它守着的是同一条轨的**反方向** —— 走行经过它就说明已经走进"别人家的信号区"里去了。
+			 * 不认它，走行就会一路吞下去：实测本世界被并成一个 **562 m / 24 段轨**的巨块
+			 * （沿 x=-155 一路向下 → 尽头 U 弯 → 沿 x=-170 一路向上），于是**站在站台上的车
+			 * 把整条线上同方向的车全按红** —— 六台车谁也动不了（现场读数：四台车全停、全是红灯）。</p>
+			 *
+			 * <p><b>但这与既有用例冲突，暂不启用</b>：{@code aLampGuardingTheOppositeDirectionDoesNotEndTheSection}
+			 * 钉的是 notes/112 §3.1 的裁定 —— "管反方向的那盏灯不得当界"（否则本区间被切碎成没人守的碎片）。
+			 * 现场那条巨块的真因要再查（见 notes/155 §15 的两条待验证路线），先把判据留在这里：
+			 * 启用前必须先能说清"什么时候反方向的灯是边界、什么时候不是"。</p>
+			 */
+			final boolean oppositeFacingLampsAreBoundaries = false;
+			final SignalEntry backBoundary = oppositeFacingLampsAreBoundaries
+				? backFacingLampBoundToWalkedRail(node, spanHeadingX, spanHeadingZ, nextHex, section) : null;
+			if (backBoundary != null) {
+				anyLegHandled = true;
+				if (reachable) {
+					section.addExitLamp(MmtrSignalRegistry.key(backBoundary.x, backBoundary.y, backBoundary.z));
+					section.endReason = "停在背向本方向、但绑在本轨上的灯 " + MmtrSignalRegistry.key(backBoundary.x, backBoundary.y, backBoundary.z)
+						+ "（反方向的边界灯：本方向的走行到此收口，不再往反向信号区里走）";
 				}
 				continue;
 			}

@@ -228,6 +228,72 @@ public final class MmtrDirectionalBlockServiceTests {
 	}
 
 	@Test
+	public void aSectionReportsTheDirectionItServes() {
+		/*
+		 * 区间**属于哪个行车方向**必须能从接口读出来（本轮新增）。
+		 *
+		 * <p>为什么这是必须的而不是"可以从几何推"：双向线路上同一根轨同时属于两个方向各一个区间，
+		 * 显示层要按方向画成两条带（方案 B）。如果方向只能靠 id 猜，网页就无法把"南行区间"和
+		 * "北行区间"分开，双向线路永远画不对。</p>
+		 *
+		 * <p>判据：本用例这条轨上两个方向的区间各一个，<b>各自报出自己的方向</b>，且方向与
+		 * "开这个区间的那盏灯的面朝方向"一致（区间 = 那盏灯开的那段路）。角约定与灯一致：
+		 * 0 = 南行、90 = 西行、180 = 北行、270 = 东行。</p>
+		 */
+		final Rail line = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-section-direction", line);
+		simulator.mmtrSignals.put(0, 0, 0, EAST, 4, "BOUND", line.getHexId());
+		simulator.mmtrSignals.put(100, 0, 0, WEST, 4, "BOUND", line.getHexId());
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final ObjectArrayList<MmtrDirectionalBlockService.SectionView> views = service.sectionViews(null, key -> false);
+		assertEquals(2, views.size(), "one rail carrying both directions = two sections");
+
+		MmtrDirectionalBlockService.SectionView eastbound = null;
+		MmtrDirectionalBlockService.SectionView westbound = null;
+		for (final MmtrDirectionalBlockService.SectionView view : views) {
+			if (view.direction.dx > 0.5) {
+				eastbound = view;
+			} else if (view.direction.dx < -0.5) {
+				westbound = view;
+			}
+		}
+		assertNotNull(eastbound, "the east-facing lamp opens an EASTBOUND section");
+		assertNotNull(westbound, "the west-facing lamp opens a WESTBOUND section");
+		assertEquals(270, eastbound.direction.angle, 0.2, "east = 270 in the engine's facing convention");
+		assertEquals(90, westbound.direction.angle, 0.2, "west = 90");
+		assertEquals("东行", eastbound.direction.label());
+		assertEquals("西行", westbound.direction.label());
+		// 入口灯也单列一份：前端画分界点不该去拆 id 的字符串
+		assertEquals(MmtrSignalRegistry.key(0, 0, 0), eastbound.entrySignalKey);
+		assertEquals(MmtrSignalRegistry.key(100, 0, 0), westbound.entrySignalKey);
+	}
+
+	/**
+	 * 方向角与灯角是**同一套数**：{@code angleOfHeading} 必须是 {@code headingOf} 的逆。
+	 *
+	 * <p>这一条挡的是"两个方向各用一套约定"这种最难查的错——灯的角按 MTR 的 Facing（0=南），
+	 * 而区间方向如果按数学角（0=东）报出去，网页画出来的箭头会**整体转 90°**，而数字看着都"挺合理"。
+	 * 现场实测：{@code mmtr-sections} 报的方向角与 {@code mmtr-signals} 报的灯角逐盏对得上。</p>
+	 */
+	@Test
+	public void theDirectionAngleUsesTheSameConventionAsTheLamps() {
+		final double[][] cases = {{0, 0, 1}, {90, -1, 0}, {180, 0, -1}, {270, 1, 0}};
+		for (final double[] expected : cases) {
+			assertEquals(expected[0], MmtrDirectionalBlockService.angleOfHeading(expected[1], expected[2]), 0.2,
+				"heading (" + expected[1] + "," + expected[2] + ") must read back as the lamp angle " + expected[0]);
+		}
+		// 非正交方向也要能来回（区间方向不保证正好是四正方向）
+		for (double angle = 0; angle < 360; angle += 7) {
+			final double radians = Math.toRadians(angle);
+			final double headingX = -Math.sin(radians);
+			final double headingZ = Math.cos(radians);
+			assertEquals(angle, MmtrDirectionalBlockService.angleOfHeading(headingX, headingZ), 0.2,
+				"round trip through headingOf must return the original angle " + angle);
+		}
+	}
+
+	@Test
 	public void aLampFacingAwayFromARailDoesNotBindToIt() {
 		// The lamp stands on r1's rail but faces NORTH while the rail runs east-west: it must not be
 		// bound to r1 (v1 used nearest-rail-only, so a lamp could bind to a rail behind it).
