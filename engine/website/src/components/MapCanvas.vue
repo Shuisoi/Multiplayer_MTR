@@ -9,7 +9,7 @@ import type {Point} from "@/domain/Point";
 import type {Section} from "@/domain/Section";
 import type {Rail as RailEntity} from "@/domain/Rail";
 import type {StraightLookup} from "@/domain/railPath";
-import {CAMERA} from "@/views/mapContext";
+import {CAMERA, ZOOM_RATIO} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
 import SectionLayer from "./SectionLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
@@ -107,6 +107,8 @@ const content = computed(() => boundsOf([
 
 const view = useCameraView({host, camera, content});
 provide(CAMERA, camera);
+/** 缩放倍率注入给各元素：它们按它把"规格尺寸"（例如 6× 下 8 px）换算成当前像素。 */
+provide(ZOOM_RATIO, view.zoomRatio);
 
 /** 悬停中的节点 key（信息卡）。 */
 const hoveredKey = ref("");
@@ -364,6 +366,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 		ref="host"
 		class="map"
 		:class="{dragging: view.dragging.value, picking: selectedSignal !== null}"
+		:data-zoom-ratio="view.zoomRatio.value.toFixed(4)"
 		@pointerdown="view.onPointerDown"
 		@pointerdown.capture="onBackgroundDown"
 		@pointermove="view.onPointerMove"

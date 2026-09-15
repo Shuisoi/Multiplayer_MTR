@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import {computed, onBeforeUnmount, watch} from "vue";
+import {computed, inject, onBeforeUnmount, watch} from "vue";
 import {Node} from "@/domain/Node";
 import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform} from "@/domain/mapElements";
+import {DECAL_KINDS, decalPlacement, decalTransform, scaled} from "@/domain/mapElements";
+import {ZOOM_RATIO} from "@/views/mapContext";
 
 /*
  * 一个节点（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -46,7 +47,10 @@ const emit = defineEmits<{
  * "形状表达类型"已经由别的元素承担（灯是箭头、道岔是菱形），节点本身统一大小反而更整齐；
  * 要恢复分档就在规格表里加"按度数取尺寸"的规则，而不是回到组件里写死。</p>
  */
-const radius = DECAL_KINDS.nodeDot;
+/** 缩放倍率（画布注入；拿不到按 1 算）。 */
+const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+/** 节点圆点半径：**规格值 × 倍率**（6× 时 3.6 px）。 */
+const radius = computed(() => scaled(DECAL_KINDS.nodeDot, zoomRatio.value));
 
 /** 贴片锚点：节点的世界坐标 → 屏幕（节点不需要偏移，所以第二个参数省略）。 */
 const placement = computed(() => decalPlacement(props.node.planeX, props.node.planeZ, props.camera));
@@ -404,4 +408,5 @@ watch(() => props.menuOpen, open => {
 	font-family: var(--font-value);
 }
 </style>
+
 

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import {computed} from "vue";
+import {computed, inject} from "vue";
 import type {Point} from "@/domain/Point";
 import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset} from "@/domain/mapElements";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled} from "@/domain/mapElements";
+import {ZOOM_RATIO} from "@/views/mapContext";
 
 /*
  * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
@@ -20,6 +21,13 @@ import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset} from "@/domain
 
 const LEADER_PX = DECAL_KINDS.turnoutLeader;
 
+/** 缩放倍率（画布注入；拿不到按 1 算）。 */
+const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+/** 菱形边长：**规格值 × 倍率**（6× 时为 8 px）。 */
+const diamondPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
+/** 引线长度同理跟着倍率走。 */
+const leaderPx = computed(() => scaled(LEADER_PX, zoomRatio.value));
+
 /**
  * 菱形挂靠方向：**右下方**（屏幕对角）。
  *
@@ -30,7 +38,7 @@ const LEADER_PX = DECAL_KINDS.turnoutLeader;
 const DIAGONAL = {x: Math.SQRT1_2, y: Math.SQRT1_2};
 
 /** 相对锚点的固定像素偏移（诊断/测试要读它）。 */
-const offsetPx = computed(() => pixelOffset(DIAGONAL, DECAL_KINDS.turnoutOffset));
+const offsetPx = computed(() => pixelOffset(DIAGONAL, scaled(DECAL_KINDS.turnoutOffset, zoomRatio.value)));
 
 /** 贴片锚点：道岔的世界坐标 → 屏幕 + 固定像素偏移。 */
 const placement = computed(() => decalPlacement(props.point.planeX, props.point.planeY, props.camera, offsetPx.value));
@@ -158,7 +166,7 @@ const facts = computed(() => [
 			一条细连线把菱形系回它所属的节点：菱形偏移出去之后，世界图里节点很密，
 			没有这条线用户认不出这个菱形挂在哪个节点上。
 		-->
-		<svg class="leader" :width="LEADER_PX" :height="LEADER_PX" :viewBox="`0 0 ${LEADER_PX} ${LEADER_PX}`" aria-hidden="true">
+		<svg class="leader" :width="leaderPx" :height="leaderPx" :viewBox="`0 0 ${LEADER_PX} ${LEADER_PX}`" aria-hidden="true">
 			<line x1="3" y1="3" :x2="LEADER_PX - 3" :y2="LEADER_PX - 3" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.5"/>
 		</svg>
 
@@ -170,7 +178,7 @@ const facts = computed(() => [
 			外面那层 `.hit` 是点击靶，整体偏在节点右下方（偏移量按"不许与灯点相接"算出来，见样式说明）。
 		-->
 		<div class="hit">
-			<div class="diamond" :style="{width: `${DECAL_KINDS.icon}px`, height: `${DECAL_KINDS.icon}px`}">
+			<div class="diamond" :style="{width: `${diamondPx}px`, height: `${diamondPx}px`}">
 				<span class="leg-number">{{ markerNumber }}</span>
 			</div>
 
@@ -323,8 +331,9 @@ const facts = computed(() => [
 	position: absolute;
 	left: 3px;
 	top: 3px;
-	width: 16px;
-	height: 16px;
+	/* 引线长度跟着倍率走（规格 16 px @6×）；viewBox 不变，所以线本身的相对比例不变。 */
+	width: v-bind('`${leaderPx}px`');
+	height: v-bind('`${leaderPx}px`');
 	overflow: visible;
 	pointer-events: none;
 }
@@ -629,4 +638,7 @@ const facts = computed(() => [
 	color: var(--fg-faint);
 }
 </style>
+
+
+
 

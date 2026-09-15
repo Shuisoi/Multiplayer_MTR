@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import {computed} from "vue";
+import {computed, inject} from "vue";
 import type {Camera} from "@/domain/camera";
 import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
 import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
 import {railSpanPath, type StraightLookup} from "@/domain/railPath";
 import type {Rail} from "@/domain/Rail";
-import {DECAL_KINDS} from "@/domain/mapElements";
+import {DECAL_KINDS, scaled} from "@/domain/mapElements";
+import {ZOOM_RATIO} from "@/views/mapContext";
 
 /*
  * 区间图（用户 2026-09-15 定的规格）。
@@ -39,15 +40,16 @@ import {DECAL_KINDS} from "@/domain/mapElements";
  */
 
 /*
- * 线心的 6 px 与状态条的宽度/偏移都来自**规格表** `domain/mapElements.ts#DECAL_KINDS`，
- * 组件里不再写死像素值（那正是"每加一种元素就重写一遍"的根源）。
+ * 线心的宽度、状态条的宽度与偏移、端点圆点半径都来自**规格表**
+ * （`domain/mapElements.ts#DECAL_KINDS`），并且都**乘当前倍率** —— 口径是"世界不动、动的是摄像机"，
+ * 所以规格值（6× 下 6 px 线心、2 px 状态条）要跟着倍率一起变。
  */
-const STRIPE_WIDTH_PX = DECAL_KINDS.stripeWidth;
-const STRIPE_NEAR_OFFSET_PX = DECAL_KINDS.stripeNear;
-const STRIPE_OFFSET_PX = DECAL_KINDS.stripeFar;
-const BASE_WIDTH_PX = DECAL_KINDS.sectionBaseWidth;
-/** 区间端点圆点半径（规格表）。 */
-const ENDPOINT_DOT_PX = DECAL_KINDS.endpointDot;
+const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+const stripeWidthPx = computed(() => scaled(DECAL_KINDS.stripeWidth, zoomRatio.value));
+const stripeNearPx = computed(() => scaled(DECAL_KINDS.stripeNear, zoomRatio.value));
+const stripeFarPx = computed(() => scaled(DECAL_KINDS.stripeFar, zoomRatio.value));
+const baseWidthPx = computed(() => scaled(DECAL_KINDS.sectionBaseWidth, zoomRatio.value));
+const endpointDotPx = computed(() => scaled(DECAL_KINDS.endpointDot, zoomRatio.value));
 
 /**
  * 状态条的颜色 = **这条区间的入口信号灯显示的灯色**（用户 2026-09-15 定的规格）。
@@ -145,8 +147,8 @@ const bands = computed(() => {
 		const {color, dashed, state} = stripeOf(section);
 		// 方向决定状态条画在哪一侧（"第 1–2 px"还是"第 4–5 px"）—— 与路线图两侧的语义一致
 		const side = sideOfDirection(section.direction.angle);
-		const offset = (side > 0 ? 1 : -1) * STRIPE_OFFSET_PX;
-		const nearOffset = (side > 0 ? 1 : -1) * STRIPE_NEAR_OFFSET_PX;
+		const offset = (side > 0 ? 1 : -1) * stripeFarPx.value;
+		const nearOffset = (side > 0 ? 1 : -1) * stripeNearPx.value;
 		const selected = props.selectedSection === section.id;
 		section.spans.forEach((span: SectionSpan, index: number) => {
 			const rail = railOf(span.hex);
@@ -264,7 +266,7 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 			class="stripe"
 			:d="band.side"
 			:stroke="band.color"
-			:stroke-width="band.selected ? STRIPE_WIDTH_PX + 1 : STRIPE_WIDTH_PX"
+			:stroke-width="band.selected ? stripeWidthPx + 1 : stripeWidthPx"
 			:stroke-dasharray="band.dashed ? '4 3' : undefined"
 			:data-section="band.section"
 			:data-state="band.state"
@@ -276,7 +278,7 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 			class="endpoint"
 			:cx="dot.x"
 			:cy="dot.y"
-			:r="dot.selected ? ENDPOINT_DOT_PX + 1 : ENDPOINT_DOT_PX"
+			:r="dot.selected ? endpointDotPx + 1 : endpointDotPx"
 			:fill="dot.color"
 		/>
 	</g>
@@ -286,7 +288,7 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 .section-layer .base {
 	fill: none;
 	stroke: #ffffff;
-	stroke-width: v-bind('`${BASE_WIDTH_PX}px`');
+	stroke-width: v-bind('`${baseWidthPx}px`');
 	stroke-linecap: round;
 	stroke-linejoin: round;
 	pointer-events: none;
@@ -306,5 +308,6 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 	pointer-events: none;
 }
 </style>
+
 
 

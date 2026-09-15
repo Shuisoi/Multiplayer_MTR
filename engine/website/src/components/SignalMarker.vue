@@ -1,25 +1,24 @@
 <script setup lang="ts">
-import {computed} from "vue";
+import {computed, inject} from "vue";
 import type {Signal} from "@/domain/Signal";
 import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset} from "@/domain/mapElements";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled} from "@/domain/mapElements";
+import {ZOOM_RATIO} from "@/views/mapContext";
 
 /*
- * 一个信号灯（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
+ * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
  *
  * <p>三件事：**状态**（颜色）、**方向**（箭头 `^`）、**在哪**（由本组件按统一模型算）。</p>
  *
- * <p>为什么用 HTML 而不是 SVG：和节点层同一理由。贴片放进 SVG 就要再面对一次 viewBox 缩放
- * （旧版踩过，见 camera.ts）。</p>
- *
- * <p>尺寸与偏移**全部来自 `domain/mapElements.ts`**：贴片 8 px、灯点 4 px、相对节点横向 10 px。
- * 本组件不再自己定任何像素值 —— 那正是"每加一种元素就重写一遍逻辑、并且写出缩放时相对节点滑走"
- * 的根源。</p>
+ * <p><b>尺寸与偏移都是"规格值 × 当前倍率"</b>（用户 2026-09-15 定的口径："所谓的 8 px 是缩放为 6×
+ * 的时候大小是 8 px，这个应该跟随缩放变换大小 —— 可以理解成是摄像机在移动，地图大小和位置关系不动"）。
+ * 所以 6× 时图标 8 px、偏移 10 px；推近到 12× 就是 16 px / 20 px；拉远到 3× 就是 4 px / 5 px。
+ * 规格与换算都在 `domain/mapElements.ts`，组件不再自己定任何像素值。</p>
  */
 
 const props = defineProps<{
 	signal: Signal;
-	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，避免"位置"有两个来源）。 */
+	/** 当前相机：位置由它算（组件不接收屏幕坐标，"位置"只有一个来源）。 */
 	camera: Camera;
 	hovered: boolean;
 	/** 正在改这盏灯的绑定（点选绑定）：加一圈强调环。 */
@@ -32,22 +31,27 @@ const props = defineProps<{
  * <p>组件里不再出现"这几个像素是我算的"这类判断 —— 那正是以前每加一种元素就要重写一遍、
  * 并且写出"缩放时相对节点滑走"那类缺陷的原因。</p>
  */
-const ICON_PX = DECAL_KINDS.icon;
-const LAMP_DOT_PX = DECAL_KINDS.lampDot;
-const LAMP_DOT_HALF = LAMP_DOT_PX / 2;
+/** 缩放倍率（画布注入；拿不到按 1 算）。 */
+const zoomRatio = computed(() => inject(ZOOM_RATIO, undefined)?.value ?? 1);
+
+/** 图标与灯点的**当前**屏幕尺寸 = 规格值 × 倍率换算（6× 时正好是规格值）。 */
+const iconPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
+const lampDotPx = computed(() => scaled(DECAL_KINDS.lampDot, zoomRatio.value));
+const lampDotHalf = computed(() => lampDotPx.value / 2);
 
 /**
- * 贴片锚点：灯的世界坐标 → 屏幕，再加**固定像素**的横向偏移。
- *
- * <p>偏移方向由 {@link Signal.sideOffsetDirection} 给（管辖方向那一侧的反面，实测世界数据对得上），
- * 距离来自规格表（10 px）。因为距离是屏幕像素、且不参与相机变换，**缩放时它与节点的相对位置不变**。</p>
+ * 相对锚点的偏移：方向来自管辖方向（实测世界数据对得上），
+ * **距离 = 规格值 × 倍率** —— 所以它跟地图一起变，而不是像屏幕 HUD 那样固定。
  */
+const offsetPx = computed(() => pixelOffset(
+	props.signal.sideOffsetDirection,
+	scaled(DECAL_KINDS.signalSideOffset, zoomRatio.value),
+));
+
+/** 元素锚点：灯的世界坐标 → 屏幕 + 偏移。 */
 const placement = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value));
 
-/** 相对锚点的固定像素偏移（测试与诊断要读它）。 */
-const offsetPx = computed(() => pixelOffset(props.signal.sideOffsetDirection, DECAL_KINDS.signalSideOffset));
-
-/** 外层的位移（贴片锚点）。 */
+/** 外层的位移。 */
 const rootTransform = computed(() => decalTransform(placement.value));
 
 
@@ -113,8 +117,8 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		<svg
 			class="arrow"
 			:style="{transform: `translate(-50%, -50%) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
-			:width="ICON_PX"
-			:height="ICON_PX"
+			:width="iconPx"
+			:height="iconPx"
 			viewBox="0 0 20 20"
 		>
 			<!-- 先描一条比底色暗的粗线做"描边"，再画本色：暗底上任何颜色都能看清 -->
@@ -204,15 +208,16 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 }
 
 /*
- * 灯位圆点：直径与位置都来自规格表（`DECAL_KINDS.lampDot` = 4 px），所以 CSS 里不写死数字。
- * 它必须比 8 px 的方向箭头小一圈，否则箭头被自己压住、"方向"这件事又白做了。
+ * 灯位圆点：尺寸与位置都来自规格表 **再乘当前倍率**（`DECAL_KINDS.lampDot` = 4 px @6×），
+ * 所以 CSS 里不写死数字。
+ * 它必须比方向箭头小一圈，否则箭头被自己压住、"方向"这件事又白做了。
  */
 .lamp {
 	position: absolute;
-	left: v-bind('`${-LAMP_DOT_HALF}px`');
-	top: v-bind('`${-LAMP_DOT_HALF}px`');
-	width: v-bind('`${LAMP_DOT_PX}px`');
-	height: v-bind('`${LAMP_DOT_PX}px`');
+	left: v-bind('`${-lampDotHalf}px`');
+	top: v-bind('`${-lampDotHalf}px`');
+	width: v-bind('`${lampDotPx}px`');
+	height: v-bind('`${lampDotPx}px`');
 	border-radius: 50%;
 	box-shadow: 0 0 0 1px #000000, 0 0 5px currentColor;
 }
@@ -337,4 +342,5 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	border-color: var(--accent);
 }
 </style>
+
 
