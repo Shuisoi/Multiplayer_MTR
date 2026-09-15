@@ -46,10 +46,46 @@ const STRIPE_NEAR_OFFSET_PX = 1.5;
 /** 状态条宽度（用户规格：各 2 px）。 */
 const STRIPE_WIDTH_PX = 2;
 
-/** 三种状态色（用户规格）。线心与端点的颜色也从这几个常量走，样式表里只留线宽。 */
-const COLOR_OCCUPIED = "#e5484d";   // 红 = 占用
-const COLOR_FREE = "#e8c547";       // 黄 = 空闲
-const COLOR_ANOMALY = "#e8c547";    // 虚线黄 = 其他（同一个黄，靠 stroke-dasharray 区分）
+/**
+ * 状态条的颜色 = **这条区间的入口信号灯显示的灯色**（用户 2026-09-15 定的规格）。
+ *
+ * <p>用户原话："虚线黄就是后面信号灯是双黄灯的意思呗，是信号灯颜色"。所以这一层**不是**自己编状态，
+ * 而是把引擎算出来的 signal aspect 直接画出来 —— 区间层与信号灯层说的是同一件事。</p>
+ *
+ * <table>
+ *   <tr><th>引擎 aspect</th><th>画法</th><th>含义</th></tr>
+ *   <tr><td>{@code RED}</td><td>红实线</td><td>危险：前方区间被占（或没有进路）</td></tr>
+ *   <tr><td>{@code SINGLE_YELLOW}</td><td>黄实线</td><td>单黄：下一段要停</td></tr>
+ *   <tr><td>{@code DOUBLE_YELLOW}</td><td><b>黄虚线</b></td><td>双黄：前方两段之内有情况</td></tr>
+ *   <tr><td>{@code GREEN}</td><td>黄实线</td><td>绿灯：畅通</td></tr>
+ * </table>
+ *
+ * <p><b>按用户规格只用三种颜色</b>（红 / 黄 / 虚线黄），所以绿灯与单黄都落在"黄实线"上 ——
+ * 这一点是有意合并的（用户："因为区间端点，所以区间颜色只需要有红，黄，虚线黄颜色即可"）。
+ * 要区分绿与单黄的话得再加一色，那要用户点头。</p>
+ *
+ * <p>灯色的色值沿用信号灯层那一套（`SignalMarker.stateColor`），这样同一盏灯在两张图上颜色一致。</p>
+ */
+const COLOR_RED = "#ef4444";        // RED（与信号灯的红同色）
+const COLOR_YELLOW = "#f59e0b";     // SINGLE_YELLOW / GREEN（黄）
+
+/** 区间 → 该画成什么（颜色 + 是否虚线）。 */
+function stripeOf(section: Section): {color: string; dashed: boolean; state: string} {
+	switch (section.aspect) {
+		case "RED":
+			return {color: COLOR_RED, dashed: false, state: "red"};
+		case "DOUBLE_YELLOW":
+			// 用户规格里的"虚线黄"就是它
+			return {color: COLOR_YELLOW, dashed: true, state: "double-yellow"};
+		case "SINGLE_YELLOW":
+			return {color: COLOR_YELLOW, dashed: false, state: "single-yellow"};
+		case "GREEN":
+			return {color: COLOR_YELLOW, dashed: false, state: "green"};
+		default:
+			// 引擎没给 aspect（例如灯没接进闭塞层）：灰，不猜
+			return {color: "#6b7280", dashed: false, state: "unknown"};
+	}
+}
 
 const props = defineProps<{
 	sections: readonly Section[];
@@ -81,20 +117,6 @@ function railOf(hex: string): Rail | undefined {
 }
 
 /** 区间状态：红 / 黄 / 虚线黄（用户规格的三种）。 */
-function stateOf(section: Section): "occupied" | "free" | "anomaly" {
-	if (section.occupied) {
-		return "occupied";
-	}
-	/*
-	 * "其他"（虚线黄）：这条区间**当前不是一条能走通的进路** ——
-	 * 没有出口灯（走不到下一段/撞在道岔禁行侧），或者链没接上下一个区间。
-	 * 判据都在引擎已经发出来的字段里，不在前端猜几何。
-	 */
-	if (section.exitSignal === "" || section.next === "") {
-		return "anomaly";
-	}
-	return "free";
-}
 
 /**
  * 一段区间的线（6 px 线心 + 两条 2 px 状态条）。
@@ -117,8 +139,8 @@ const bands = computed(() => {
 		if (!hasDirection(section)) {
 			continue;
 		}
-		const state = stateOf(section);
-		const color = state === "occupied" ? COLOR_OCCUPIED : state === "anomaly" ? COLOR_ANOMALY : COLOR_FREE;
+		// 颜色与实线/虚线**直接来自信号灯的 aspect**（用户："是信号灯颜色"）
+		const {color, dashed, state} = stripeOf(section);
 		// 方向决定状态条画在哪一侧（"第 1–2 px"还是"第 4–5 px"）—— 与路线图两侧的语义一致
 		const side = sideOfDirection(section.direction.angle);
 		const offset = (side > 0 ? 1 : -1) * STRIPE_OFFSET_PX;
@@ -138,7 +160,7 @@ const bands = computed(() => {
 				base: path,
 				side: offsetSvgPath(path, offset),
 				color,
-				dashed: state === "anomaly",
+				dashed,
 				section: section.id,
 				state,
 				selected,
@@ -149,7 +171,7 @@ const bands = computed(() => {
 				base: "",
 				side: offsetSvgPath(path, nearOffset),
 				color,
-				dashed: state === "anomaly",
+				dashed,
 				section: section.id,
 				state,
 				selected,
@@ -199,8 +221,8 @@ const endpointDots = computed(() => {
 		if (!hasDirection(section) || section.spans.length === 0) {
 			continue;
 		}
-		const state = stateOf(section);
-		const color = state === "occupied" ? COLOR_OCCUPIED : state === "anomaly" ? COLOR_ANOMALY : COLOR_FREE;
+		// 端点圆点也用**该区间入口灯的颜色**，于是"灯什么色、这一段就是什么色"在图上处处一致
+		const {color} = stripeOf(section);
 		const first = section.spans[0]!;
 		const last = section.spans[section.spans.length - 1]!;
 		for (const [suffix, span, atEnd] of [["a", first, false], ["b", last, true]] as const) {
