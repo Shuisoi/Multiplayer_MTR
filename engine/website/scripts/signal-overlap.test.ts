@@ -25,7 +25,7 @@
  */
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {DECAL_KINDS, signalUnitAnchor, signalUnitChevronPath} from "../src/domain/mapElements.ts";
+import {DECAL_KINDS, SIGNAL_UNIT, signalUnitAnchor, signalUnitChevronPath} from "../src/domain/mapElements.ts";
 import {Signal} from "../src/domain/Signal.ts";
 
 /**
@@ -35,7 +35,7 @@ import {Signal} from "../src/domain/Signal.ts";
  * "跟着倍率变大"是相机的事，由 `viewbox.test.ts` 钉住。</p>
  */
 function unitsToPx(zoomRatio = 1): number {
-	return (DECAL_KINDS.icon / DECAL_KINDS.signalUnit.boxWidth) * zoomRatio;
+	return (DECAL_KINDS.icon / SIGNAL_UNIT.boxWidth) * zoomRatio;
 }
 
 /** 把 `signalUnitChevronPath()` 解析成两条腿（组件画的就是这条路径，测试量同一份）。 */
@@ -52,7 +52,7 @@ function chevronLegs(): {x: number, y: number}[][] {
 function chevronClearancePx(zoomRatio: number): number {
 	const unit = unitsToPx(zoomRatio);
 	const anchor = signalUnitAnchor();
-	const strokeHalf = (DECAL_KINDS.signalUnit.chevronOutline / 2) * unit;
+	const strokeHalf = (SIGNAL_UNIT.chevronOutline / 2) * unit;
 	let min = Number.POSITIVE_INFINITY;
 	for (const [a, b] of chevronLegs()) {
 		const ax = a!.x * unit;
@@ -70,7 +70,7 @@ function chevronClearancePx(zoomRatio: number): number {
 
 /** 灯点半径（px）。 */
 function lampRadiusPx(zoomRatio: number): number {
-	return DECAL_KINDS.signalUnit.lampRadius * unitsToPx(zoomRatio);
+	return SIGNAL_UNIT.lampRadius * unitsToPx(zoomRatio);
 }
 
 /** 八个朝向（放置与朝向无关，但这条测试把这个前提也验一遍）。 */
@@ -93,21 +93,28 @@ test("内部几何：折角与灯点不相接，且空隙够宽", () => {
 });
 
 test("内部几何：整体尺寸在图标量级（不超框、也不比图标大太多）", () => {
-	const unit = DECAL_KINDS.signalUnit;
+	const unit = SIGNAL_UNIT;
 	const perPx = unitsToPx();
 	const widthPx = unit.boxWidth * perPx;
 	const heightPx = unit.boxHeight * perPx;
 	assert.ok(Math.abs(widthPx - DECAL_KINDS.icon) < 1e-9, `整体宽 ${widthPx} px 应当就是图标规格 ${DECAL_KINDS.icon} px`);
 	assert.equal(heightPx <= 1.5 * DECAL_KINDS.icon, true,
 		`整体高 ${heightPx.toFixed(2)} px 超过图标的 1.5 倍（${(1.5 * DECAL_KINDS.icon).toFixed(2)} px）—— 会盖住邻居`);
-	// 灯点直径必须等于灯点规格：它是"状态"的载体，改小了就看不见了
+	/*
+	 * 灯点直径由**内部几何**导出（图标宽 × 2r / 盒宽），不是独立给的规格：
+	 * `signalUnit` 的盒子宽 20 单位就是图标宽，所以灯点占图标的 2×3.4/20 = 34%。
+	 * 它必须够大（"状态"的载体）又必须够小（别把方向箭头挤没）—— 两头都钉住。
+	 */
 	const dotPx = unit.lampRadius * 2 * perPx;
-	assert.ok(Math.abs(dotPx - DECAL_KINDS.lampDot) < 1e-9, `灯点直径 ${dotPx} px 应当就是规格 ${DECAL_KINDS.lampDot} px`);
+	const derived = DECAL_KINDS.icon * (unit.lampRadius * 2 / unit.boxWidth);
+	assert.ok(Math.abs(dotPx - derived) < 1e-9, `灯点直径 ${dotPx.toFixed(2)} px 应当由内部几何导出（${derived.toFixed(2)}）`);
+	assert.ok(dotPx >= 0.25 * DECAL_KINDS.icon, `灯点直径 ${dotPx.toFixed(2)} px 太小（不到图标的 25%）—— 状态看不清`);
+	assert.ok(dotPx <= 0.6 * DECAL_KINDS.icon, `灯点直径 ${dotPx.toFixed(2)} px 太大（超过图标的 60%）—— 会把方向箭头挤没`);
 });
 
 test("内部几何：折角画在灯点正上方（整组转的时候不会因此换边）", () => {
 	const anchor = signalUnitAnchor();
-	const apex = {x: DECAL_KINDS.signalUnit.apexX, y: DECAL_KINDS.signalUnit.apexY};
+	const apex = {x: SIGNAL_UNIT.apexX, y: SIGNAL_UNIT.apexY};
 	assert.equal(apex.x, anchor.x, "尖与灯点同一条竖线 —— 否则转起来箭头会偏到一侧（用户第三次说的那件事）");
 	assert.equal(apex.y < anchor.y, true, "尖在灯点上方（屏幕 y 向下）");
 	// 两条腿左右对称
@@ -117,7 +124,7 @@ test("内部几何：折角画在灯点正上方（整组转的时候不会因�
 });
 
 test("整体尺寸与空隙都按倍率缩放（拉远推近都同一个比例）", () => {
-	const unit = DECAL_KINDS.signalUnit;
+	const unit = SIGNAL_UNIT;
 	// 空隙只有 0.7 px 量级，直接比比值会被浮点噪声淹掉；改比"尺寸比 == 倍率比"（同一个口径）
 	const sizeAt = (zoom: number) => unit.boxHeight * unitsToPx(zoom);
 	for (const zoom of [1, 6, 12]) {

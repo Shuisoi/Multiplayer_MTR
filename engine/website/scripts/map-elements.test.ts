@@ -1,84 +1,76 @@
 /**
  * 地图元素尺度模型的单测（`npm run test:elements`）。
  *
- * <p>口径（用户 2026-09-15 **最终定的**）：**整幅地图一起缩放，基准是全览尺寸**。
- * 于是规格值是**世界单位**（乘一个标定常量即世界尺寸），屏幕大小由相机决定。
- * 这条在实现里反复搞错过三次（先按缩放 → 又做成固定像素 → 再改成固定偏移 → 又试过"6× 基准"），
- * 所以这里逐条钉住。</p>
+ * <h2>三组口径（用户 2026-09-15 逐条定下来的）</h2>
+ * <ol>
+ *   <li><b>有实际坐标的东西按格</b>（1 格 = 1 世界单位）：轨道线 1 格、节点圆点 1 格 —— "我的世界的坐标
+ *       永远都是 1x1x1，方块也是，就不能按 1x1x1 进行放置吗？"；</li>
+ *   <li><b>绑在节点上的东西用固定屏幕像素</b>：灯 8 px、道岔菱形 8 px —— "信号灯，道岔是绑定在节点上的，
+ *       直接固定显示在节点旁不行吗？不要掺活实际坐标进来"；</li>
+ *   <li><b>尺寸只有两处换算</b>：{@link specToWorld}（格 → 世界单位）、{@link pxToWorld}
+ *       （屏幕像素 → 世界单位）。</li>
+ * </ol>
  */
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {
+	BLOCK,
 	DECAL_KINDS,
-	REFERENCE_ZOOM,
+	WORLD_UNIT,
+	blockGridLines,
 	decalPlacement,
 	decalTransform,
-	mapScale,
 	pixelOffset,
-	scaled,
+	pxToWorld,
 	screenPxOfSpec,
 	specToWorld,
-	WORLD_UNIT,
 } from "../src/domain/mapElements.ts";
 
-/** 一台相机：`scale` = 一个世界单位占多少屏幕像素；`originX/Y` = 视口左上角对应的世界坐标。 */
-function camera(scale: number, originX = 0, originY = 0) {
-	return {originX, originY, scale};
-}
-
-test("尺寸是**世界单位**：只由规格 × 标定常量决定，与视口/地图大小无关", () => {
-	/*
-	 * 用户 2026-09-15 点出的要害："为什么全览 2px 写死？那么以后特别大的地图的话，
-	 * 岂不是线越来越粗？" —— 所以尺寸不再挂在"取景比例"上，而是世界属性：
-	 * 世界单位 = 规格 × WORLD_UNIT（一个标定常量）。
-	 */
-	assert.equal(specToWorld(DECAL_KINDS.railWidth), DECAL_KINDS.railWidth * WORLD_UNIT, "轨道线：规格 × 常量");
-	assert.equal(specToWorld(DECAL_KINDS.icon), DECAL_KINDS.icon * WORLD_UNIT, "图标：规格 × 常量");
-	// 同一个规格在任何视口、任何地图大小下都得到同一个世界尺寸
-	assert.equal(specToWorld(DECAL_KINDS.railWidth), specToWorld(DECAL_KINDS.railWidth), "世界尺寸是常量");
-	// 屏幕上看到多少，由相机决定（相机比例 = 世界 → 屏幕）
-	assert.ok(screenPxOfSpec(specToWorld(DECAL_KINDS.icon), 6) > screenPxOfSpec(specToWorld(DECAL_KINDS.icon), 1),
-		"推近 ⇒ 屏幕上更大（相机的事，不是规格的事）");
-	// 端点必须明显细于线心，否则会盖住线心/状态条
-	assert.equal(DECAL_KINDS.endpointDot * 2 < DECAL_KINDS.sectionBaseWidth, true,
-		"端点必须明显小于线心");
-});
-test("尺寸跟着倍率变（世界不动、动的是摄像机）", () => {
-	// `scaled` 仍是"规格 × 倍率/基准"这条旧口径的换算，用于**视图层的读数**（倍率本身）
-	assert.equal(scaled(DECAL_KINDS.icon, REFERENCE_ZOOM), 8, "基准倍率处 = 规格值");
-	assert.equal(scaled(DECAL_KINDS.icon, 12), 16, "12× 时是规格的两倍");
-	assert.equal(scaled(DECAL_KINDS.icon, 3), 4, "3× 时是规格的一半");
-	const sizes = [1, 3, 6, 12].map(z => scaled(DECAL_KINDS.icon, z));
-	for (let i = 1; i < sizes.length; i++) {
-		assert.equal(sizes[i]! > sizes[i - 1]!, true, "倍率增大 ⇒ 读数必须增大：" + sizes.join(" < "));
+test("① 有实际坐标的东西按格：1 格 = 1 世界单位", () => {
+	assert.equal(WORLD_UNIT, 1, "一个世界单位就是一格（Minecraft 方块）");
+	assert.equal(specToWorld(1), 1, "规格 1 格 = 1 世界单位");
+	assert.equal(specToWorld(DECAL_KINDS.railWidth), DECAL_KINDS.railWidth, "轨道线宽 = 规格格数");
+	// 轨宽、节点圆点都应当在"格"的量级上（不是几十格，也不是百分之一格）
+	for (const [name, spec] of [["轨道线", DECAL_KINDS.railWidth], ["节点圆点", DECAL_KINDS.nodeDot]] as const) {
+		assert.ok(spec >= 0.5 && spec <= 3, `${name} 的规格 ${spec} 格应当在 1 格量级（方块尺度）`);
 	}
-	// 退化输入不炸
-	assert.equal(mapScale(0), 1, "倍率 0（异常）回退到 1，不产生 NaN/Infinity");
-	assert.equal(mapScale(-3), 1, "负倍率同理");
+	assert.equal(specToWorld(DECAL_KINDS.railWidth), specToWorld(DECAL_KINDS.railWidth), "世界尺寸是常量");
 });
 
-test("偏移的方向来自世界语义、距离同样跟着倍率", () => {
-	// 灯：方向 = 管辖方向的垂直侧（单位向量），距离 = 规格 10 px × 倍率
-	const direction = {x: 1, y: 0};
-	assert.deepEqual(pixelOffset(direction, screenPxOfSpec(DECAL_KINDS.signalSideOffset, 1)), {x: DECAL_KINDS.signalSideOffset, y: 0},
-		"全览时偏移 = 规格值");
-	assert.deepEqual(pixelOffset(direction, screenPxOfSpec(DECAL_KINDS.signalSideOffset, 2)), {x: DECAL_KINDS.signalSideOffset * 2, y: 0},
-		"12× 时偏移 20 px —— 与尺寸同步变化，所以相对位置不会漂");
+test("① 方块网格：1×1 格，格线落在整数格上", () => {
+	assert.equal(BLOCK.size, 1, "一格就是 1 世界单位");
+	assert.equal(BLOCK.lineWidth > 0 && BLOCK.lineWidth < 0.1, true, "格线要细（0.02 格）");
+	assert.equal(blockGridLines(1), "M 1 0 L 1 1 L 0 1", "一格 tile 画右下两条边");
+	assert.equal(Number.isInteger(BLOCK.origin.x) && Number.isInteger(BLOCK.origin.y), true,
+		"格线相位应当是整数格，否则网格与方块错位半格");
 });
 
-test("锚点现在就是『世界坐标 + 偏移』（相机已由外层承担）", () => {
-	/*
-	 * 坐标系重构（`notes/164`）之后 `decalPlacement` **不再碰相机**：相机由 SVG 的 `viewBox`
-	 * 与标记层的 `.layer` 变换承担，于是"位置"只有一处换算 —— 世界坐标本身。
-	 * 旧断言（"锚点随相机比例变"）钉的是被删掉的那套行为，所以这条跟着改。
-	 */
-	const offset = pixelOffset({x: 0, y: -1}, DECAL_KINDS.signalSideOffset);
+test("② 绑在节点上的东西：规格是屏幕像素，折成世界单位后屏幕大小恒定", () => {
+	for (const viewScale of [0.4667, 1.2, 2.872]) {
+		for (const [name, spec] of [["图标", DECAL_KINDS.icon], ["菱形", DECAL_KINDS.turnoutDiamond]] as const) {
+			const world = pxToWorld(spec, viewScale);
+			assert.ok(Math.abs(world * viewScale - spec) < 1e-9,
+				`${name}：相机比例 ${viewScale} 时屏幕上应当是 ${spec} px（实得 ${world * viewScale}）`);
+		}
+	}
+	assert.ok(pxToWorld(DECAL_KINDS.icon, 2.872) < pxToWorld(DECAL_KINDS.icon, 0.4667),
+		"推近 ⇒ 同样的屏幕像素对应更小的世界尺寸");
+});
+
+test("③ 屏幕尺寸 = 世界尺寸 × 相机比例（相机的事，不是规格的事）", () => {
+	const rail = specToWorld(DECAL_KINDS.railWidth);
+	for (const zoom of [1, 3, 6, 12]) {
+		assert.ok(Math.abs(screenPxOfSpec(rail, zoom) - rail * zoom) < 1e-9, `${zoom}× 的屏幕尺寸`);
+	}
+	assert.ok(screenPxOfSpec(rail, 12) > screenPxOfSpec(rail, 1), "推近 ⇒ 屏幕上更大");
+});
+
+test("锚点 = 世界坐标 + 偏移（相机由外层承担）", () => {
+	const offset = pixelOffset({x: 0, y: -1}, DECAL_KINDS.turnoutOffset);
 	const near = decalPlacement(100, 50, offset);
-	assert.deepEqual(near, {x: 100, y: 50 - DECAL_KINDS.signalSideOffset}, "世界坐标 + 偏移 —— 不再乘相机");
-	// 与相机无关：换任何相机都是同一个结果（这正是"世界坐标是唯一真源"）
-	assert.deepEqual(decalPlacement(100, 50, offset), near, "同一个世界坐标永远得到同一个锚点");
-	// 省略偏移就是世界坐标本身
+	assert.deepEqual(near, {x: 100, y: 50 - DECAL_KINDS.turnoutOffset}, "世界坐标 + 偏移 —— 不乘相机");
 	assert.deepEqual(decalPlacement(100, 50), {x: 100, y: 50}, "没有偏移时锚点 = 世界坐标");
+	assert.equal(DECAL_KINDS.signalSideOffset, 0, "灯直接显示在节点上（用户口径：不要掺实际坐标）");
 });
 
 test("位移与旋转写在同一个 transform 里", () => {
@@ -87,25 +79,14 @@ test("位移与旋转写在同一个 transform 里", () => {
 		"要转时必须与位移同一个 transform（分开写会互相覆盖）");
 });
 
-test("区间状态条的像素规格：两条 2 px 落在 6 px 线心中（第 1–2 / 第 4–5 px）", () => {
+test("区间状态条：比例与用户那三个数同源", () => {
 	const {stripeWidth, stripeNear, stripeFar, sectionBaseWidth} = DECAL_KINDS;
-	/*
-	 * 用户规格（2026-09-15）："一根 6px 的线，1-2、4-5 是用于显示轨道区间的，也就是说绘图只有三根线"。
-	 * 基准改成全览之后整体等比折半（线心 3 px、条 1 px），**比例关系不变**：
-	 *   条中心落在 0.75 与 2.25（条宽 1 ⇒ 覆盖 0.25–1.25 与 1.75–2.75），
-	 *   即"线心的第 1–2 px 与第 4–5 px"按同样比例缩小后的位置。
-	 */
-	assert.equal(sectionBaseWidth, 3, "线心 3 px（全览口径）");
-	assert.equal(stripeWidth, 1, "状态条 1 px（全览口径）");
-	assert.equal(stripeNear, 0.75);
-	assert.equal(stripeFar, 2.25);
-	const near = [stripeNear - stripeWidth / 2, stripeNear + stripeWidth / 2];
-	const far = [stripeFar - stripeWidth / 2, stripeFar + stripeWidth / 2];
-	assert.deepEqual(near, [0.25, 1.25], "内侧条覆盖 0.25–1.25 px");
-	assert.deepEqual(far, [1.75, 2.75], "外侧条覆盖 1.75–2.75 px");
-	assert.equal(far[1] <= sectionBaseWidth, true, "外侧条的最外缘仍落在线心内（2.25 + 0.5 = 2.75 ≤ 3）");
-	assert.equal(near[1] < far[0], true, "两条之间仍留 0.5 px 缝（1.25 → 1.75），不会糊成一条宽带");
-	// 比例关系（与用户那三个数同源）：条中心 = 线心的 1/4 与 3/4
+	// 用户规格："一根线，1-2、4-5 用来表示区间" ⇒ 条中心在线心的 1/4 与 3/4 处
 	assert.equal(stripeNear, sectionBaseWidth / 4, "内侧条中心在线心的 1/4 处");
 	assert.equal(stripeFar, sectionBaseWidth * 3 / 4, "外侧条中心在线心的 3/4 处");
+	assert.equal(stripeWidth, sectionBaseWidth / 3, "条宽是线心的 1/3");
+	const near = [stripeNear - stripeWidth / 2, stripeNear + stripeWidth / 2];
+	const far = [stripeFar - stripeWidth / 2, stripeFar + stripeWidth / 2];
+	assert.equal(far[1] <= sectionBaseWidth, true, "外侧条的最外缘仍落在线心内");
+	assert.equal(near[1] < far[0], true, "两条之间留缝，不会糊成一条宽带");
 });

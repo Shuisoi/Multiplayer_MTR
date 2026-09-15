@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import {computed} from "vue";
+import type {Camera} from "@/domain/camera";
 import type {Signal} from "@/domain/Signal";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specToWorld, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
+import {DECAL_KINDS, SIGNAL_UNIT, decalPlacement, decalTransform, pixelOffset, pxToWorld, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
 
 /*
  * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
@@ -27,6 +28,12 @@ import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specToWorld, s
 
 const props = defineProps<{
 	signal: Signal;
+	/** 当前相机：**只用来把屏幕像素规格折成世界单位**（标记层画在世界坐标里）。 */
+	camera: Camera;
+	/** 节点键 → 平面坐标：灯的锚点从它取（灯**绑在节点上**）。 */
+	nodePlane: ReadonlyMap<string, {x: number; y: number}>;
+	/** 这盏灯绑定的节点键。 */
+	nodeKey: string;
 	/** 当前相机：位置由它算（组件不接收屏幕坐标，"位置"只有一个来源）。 */
 	hovered: boolean;
 	/** 正在改这盏灯的绑定（点选绑定）：加一圈强调环。 */
@@ -47,9 +54,14 @@ const props = defineProps<{
  *
  * <p>整套系统里只有这一处尺寸换算，之后由相机统一缩放 —— 见 `specToWorld`。</p>
  */
-const iconPx = computed(() => specToWorld(DECAL_KINDS.icon));
+/**
+ * 图标宽度（**世界单位**）：规格是屏幕像素，按相机比例折回世界单位
+ * （`pxToWorld`）—— 于是缩放时屏幕上恒为 8 px（绑在节点上的拓扑标记）。
+ */
+const viewScale = computed(() => (props.camera.scale > 0 ? props.camera.scale : 1));
+const iconPx = computed(() => pxToWorld(DECAL_KINDS.icon, viewScale.value));
 /** 整个 SVG 的高度：viewBox 是 20 × 20.5，高度按同一个比例走。 */
-const boxHeightPx = computed(() => iconPx.value * (DECAL_KINDS.signalUnit.boxHeight / DECAL_KINDS.signalUnit.boxWidth));
+const boxHeightPx = computed(() => iconPx.value * (SIGNAL_UNIT.boxHeight / SIGNAL_UNIT.boxWidth));
 /** 灯点在 viewBox 里的位置（世界坐标就落在它上面，也是旋转中心）。 */
 const anchor = signalUnitAnchor();
 /** 折角的线心折线：**与单测同一份几何**（`signalUnitChevronPath`），不许在模板里另写一遍。 */
@@ -88,7 +100,7 @@ const chevronPath = signalUnitChevronPath();
  */
 const boxOffsetPx = computed(() => {
 	const anchor = signalUnitAnchor();
-	const unit = DECAL_KINDS.signalUnit;
+	const unit = SIGNAL_UNIT;
 	return {
 		x: (anchor.x / unit.boxWidth) * iconPx.value,
 		y: (anchor.y / unit.boxHeight) * boxHeightPx.value,
@@ -96,18 +108,22 @@ const boxOffsetPx = computed(() => {
 });
 
 /**
- * 灯位偏移（**世界单位**）：规格 × `unitsPerPx`（与尺寸用同一个常量）。
+ * 灯位偏移：**屏幕像素、固定**（用户 2026-09-15 的口径②）。
  *
- * <p>父容器（标记层的 `.layer`）承担相机，所以标记的 `left/top` 是**世界坐标**；
- * 偏移与尺寸一样只需要乘那一个常量，之后就由相机统一缩放。</p>
+ * <p>"信号灯，道岔是绑定在节点上的，直接固定显示在节点旁不行吗？**不要掺活实际坐标进来**。"
+ * 所以偏移是像素、与缩放无关，也不再由灯自己的方块坐标决定。</p>
  */
 const offsetWorld = computed(() => pixelOffset(
 	props.signal.sideOffsetDirection,
-	specToWorld(DECAL_KINDS.signalSideOffset),
+	pxToWorld(DECAL_KINDS.signalSideOffset, viewScale.value),
 ));
 
-/** 灯点的**世界坐标**（世界坐标 + 灯位偏移）：**锚点**，旋转绕它发生。 */
-const anchorPx = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, offsetWorld.value));
+/** 这盏灯绑定的**节点**的平面坐标（锚点的唯一来源）。 */
+const nodeX = computed(() => props.nodePlane.get(props.nodeKey)?.x ?? props.signal.planeX);
+const nodeY = computed(() => props.nodePlane.get(props.nodeKey)?.y ?? props.signal.planeY);
+
+/** 灯点的位置 = **节点** + 固定像素偏移：**锚点**，旋转绕它发生。 */
+const anchorPx = computed(() => decalPlacement(nodeX.value, nodeY.value, offsetWorld.value));
 
 /** 内层的反向缩放：父容器已被相机缩放，这里乘回去 ⇒ 整盏灯屏幕尺寸恒定。 */
 const counterScale = computed(() => 1);
@@ -197,17 +213,17 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 				class="unit"
 				:width="iconPx"
 				:height="boxHeightPx"
-				:viewBox="`0 0 ${DECAL_KINDS.signalUnit.boxWidth} ${DECAL_KINDS.signalUnit.boxHeight}`"
+				:viewBox="`0 0 ${SIGNAL_UNIT.boxWidth} ${SIGNAL_UNIT.boxHeight}`"
 				:style="{'--box-x': `${boxOffsetPx.x}px`, '--box-y': `${boxOffsetPx.y}px`, transform: `scale(${counterScale})`}"
 			>
 			<!--
 				折角：一个 `^`，尖朝组的上方。整组会被旋转到管辖方向，所以它指向管辖方向。
-				路径与笔画宽都来自 `DECAL_KINDS.signalUnit`（与单测同一份几何）。
+				路径与笔画宽都来自 `SIGNAL_UNIT`（与单测同一份几何）。
 			-->
 			<path
 				class="chevron-outline"
 				:d="chevronPath"
-				:stroke-width="DECAL_KINDS.signalUnit.chevronOutline"
+				:stroke-width="SIGNAL_UNIT.chevronOutline"
 				fill="none"
 				stroke-linecap="round"
 				stroke-linejoin="round"
@@ -216,7 +232,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 				class="chevron"
 				:d="chevronPath"
 				:stroke="stateColor"
-				:stroke-width="DECAL_KINDS.signalUnit.chevronStroke"
+				:stroke-width="SIGNAL_UNIT.chevronStroke"
 				fill="none"
 				stroke-linecap="round"
 				stroke-linejoin="round"
@@ -226,7 +242,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 				class="lamp"
 				:cx="anchor.x"
 				:cy="anchor.y"
-				:r="DECAL_KINDS.signalUnit.lampRadius"
+				:r="SIGNAL_UNIT.lampRadius"
 				:fill="stateColor"
 			/>
 			</svg>

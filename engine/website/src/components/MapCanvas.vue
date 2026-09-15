@@ -11,6 +11,7 @@ import type {Section} from "@/domain/Section";
 import type {Rail as RailEntity} from "@/domain/Rail";
 import type {StraightLookup} from "@/domain/railPath";
 import {provideMapContext} from "@/views/mapContext";
+import GridLayer from "./GridLayer.vue";
 import RailLayer from "./RailLayer.vue";
 import SectionLayer from "./SectionLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
@@ -128,6 +129,44 @@ provideMapContext(camera, view.zoomRatio, view.baseScale);
  * "等比 + 居中"的第二套对账（历史文档里 `meet` 与实际系数差 35 倍那次就是它引起的）。</p>
  */
 const viewBox = computed(() => viewBoxOf(camera.value, {width: view.width.value, height: view.height.value}));
+/** viewBox 的宽高（世界单位）：网格层要知道可见范围才铺。 */
+const viewBoxWidth = computed(() => {
+	const scale = camera.value.scale > 0 ? camera.value.scale : 1;
+	return view.width.value > 0 ? view.width.value / scale : 1;
+});
+const viewBoxHeight = computed(() => {
+	const scale = camera.value.scale > 0 ? camera.value.scale : 1;
+	return view.height.value > 0 ? view.height.value / scale : 1;
+});
+
+/** 节点键 → 平面坐标：灯与道岔的锚点从它取（它们**绑在节点上**）。 */
+const nodePlane = computed(() => {
+	const map = new Map<string, {x: number; y: number}>();
+	for (const node of props.nodes) {
+		map.set(node.key, {x: node.planeX, y: node.planeZ});
+	}
+	return map;
+});
+
+/**
+ * 这盏灯绑定的**节点键**：取离它最近的那个节点。
+ *
+ * <p>用户口径："信号灯是绑定在节点上的，直接固定显示在节点旁" —— 所以灯的锚点是节点，
+ * 不是它自己的方块坐标（实测灯离最近节点 0–4.5 格，那点偏差在"节点旁固定偏移"的读法下没有意义）。
+ * 匹配用**平面距离**，只在这里做一次。</p>
+ */
+function nodeKeyOfSignal(signal: {planeX: number, planeY: number}): string {
+	let bestKey = "";
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (const node of props.nodes) {
+		const distance = Math.hypot(node.planeX - signal.planeX, node.planeZ - signal.planeY);
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestKey = node.key;
+		}
+	}
+	return bestKey;
+}
 
 /**
  * **HTML 标记层的相机变换**：与 SVG 的 `viewBox` 是**同一个映射**（`translate(-origin × k)` 后 `scale(k)`）。
@@ -438,6 +477,14 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			:data-world-px-scale="camera.scale"
 			preserveAspectRatio="none"
 		>
+			<!--
+				**方块网格**（1×1 格）：铺在最底下的半透明底衬 —— 用户 2026-09-15：
+				"给屏幕加一个 1x1x1 的半透明叠加底层。"
+				它同时也是**标尺**：格线落在整数世界坐标上（平面坐标即方块中心），
+				所以"元素有没有按格放"（轨宽一条格带、节点一格）在屏幕上一眼能看出来。
+			-->
+			<GridLayer :view-width="viewBoxWidth" :view-height="viewBoxHeight" />
+
 			<!-- 路线图：切到区间图时整层不渲染（用户规格："路线图直接隐身"） -->
 			<RailLayer
 				v-if="showRoute !== false"
@@ -493,6 +540,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			<div class="layer" :style="{transform: cameraTransform}">
 				<PointLayer
 					:points="points"
+					:camera="camera"
 					:rail-ends="railEnds"
 					:hovered-key="hoveredPointKey"
 					:expanded-key="expandedPointKey"
@@ -511,6 +559,8 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 				<SignalLayer
 					:signals="signals"
 					:camera="camera"
+					:node-plane="nodePlane"
+					:node-key-of="nodeKeyOfSignal"
 					:hovered-key="hoveredSignalKey"
 					:selected-key="selectedSignal?.key ?? ''"
 					@hover="hoveredSignalKey = $event"

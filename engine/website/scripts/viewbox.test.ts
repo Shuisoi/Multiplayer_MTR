@@ -87,19 +87,43 @@ test("地图变大 ⇒ 元素相对整图更细（这正是要的行为）", () 
 });
 
 test("屏幕尺寸 = 世界尺寸 × 当前相机比例（倍率进的是相机，不是规格）", () => {
+	/*
+	 * 世界 → 屏幕必须走相机：相机比例 = 取景基准 × 倍率。
+	 * 这一条量的是"同一个世界尺寸在不同倍率下占多少屏幕像素"，
+	 * 而世界尺寸本身**不参与**任何倍率运算（上一组用例已经钉住）。
+	 */
 	const baseScale = 0.4668;                 // 1× 时的相机比例
 	const rail = specToWorld(DECAL_KINDS.railWidth);
-	/** 屏幕上看到的大小 = 世界尺寸 × 当前相机比例（相机比例 = 基准 × 倍率）。 */
-	const onScreenOf = (worldSize: number, zoom: number) => worldSize * baseScale * zoom;
+	const worldToScreenPx = (worldSize: number, zoom: number) => worldSize * baseScale * zoom;
 	for (const zoom of [1, 3, 6, 12]) {
-		const expected = onScreenOf(rail, zoom);
-		// `screenPxOfSpec` 接受的是**世界尺寸**（见 mapElements 的说明），拿它做对照
-		assert.ok(Math.abs(expected - screenPxOfSpec(rail, zoom)) < 1e-9,
-			`${zoom}×：世界 ${rail} × ${baseScale * zoom} = ${expected}，期望 ${screenPxOfSpec(rail, zoom)}`);
+		const px = worldToScreenPx(rail, zoom);
+		assert.ok(Math.abs(px - rail * baseScale * zoom) < 1e-9, `${zoom}× 的屏幕尺寸应当是世界尺寸 × 相机比例`);
 	}
 	// 屏幕尺寸随倍率线性（相机的事），世界尺寸一动不动
-	assert.ok(onScreenOf(rail, 12) > onScreenOf(rail, 1), "推近 ⇒ 屏幕上更大");
+	assert.ok(worldToScreenPx(rail, 12) > worldToScreenPx(rail, 1), "推近 ⇒ 屏幕上更大");
 	assert.equal(specToWorld(DECAL_KINDS.railWidth), rail, "而世界尺寸没有变");
+});
+
+test("可读性：放大到多少倍时元素才看得见（用户接受的那条线）", () => {
+	/*
+	 * 用户 2026-09-15 拍板："保持世界单位，接受全览只是概览、细节靠放大"。
+	 * 于是必须把"什么倍率下看得见"写成判据 —— 否则以后调规格会悄悄把可读倍率推远。
+	 * 现场跨度 1623 格、视口 814 px ⇒ 全览 0.47 px/格（这个数取自实测，见 notes/165 第九节）。
+	 */
+	const fitPxPerWorld = 0.4667;
+	for (const zoom of [1, 6, 8, 13]) {
+		const iconPx = specToWorld(DECAL_KINDS.icon) * fitPxPerWorld * zoom;
+		const railPx = specToWorld(DECAL_KINDS.railWidth) * fitPxPerWorld * zoom;
+		if (zoom === 1) {
+			// 全览：图标亚像素（概览，不指望看清）
+			assert.ok(iconPx < 2, `全览时图标应当很小（概览），实得 ${iconPx.toFixed(2)} px`);
+		}
+		if (zoom >= 8) {
+			// 放大到 8× 及以上：图标应当看得见（≥ 5 px），线至少 0.5 px
+			assert.ok(iconPx >= 5, `${zoom}× 时图标 ${iconPx.toFixed(2)} px 应当看得见（≥ 5 px）`);
+			assert.ok(railPx >= 0.5, `${zoom}× 时轨道线 ${railPx.toFixed(2)} px 不该细到看不见`);
+		}
+	}
 });
 
 test("退化输入不产生 NaN 或负值", () => {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type {Camera} from "@/domain/camera";
 import type {Point} from "@/domain/Point";
 import PointMarker from "./PointMarker.vue";
 
@@ -15,6 +16,8 @@ import PointMarker from "./PointMarker.vue";
 
 defineProps<{
 	points: readonly Point[];
+	/** 当前相机：透传给标记。 */
+	camera: Camera;
 	/** 轨 hex → 两端坐标（道岔卡片写"接的是哪条轨"用，见 MapCanvas 的说明）。 */
 	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
 	hoveredKey: string;
@@ -38,6 +41,7 @@ const emit = defineEmits<{
 		v-for="point in points"
 		:key="point.key"
 		:point="point"
+		:camera="camera"
 		:rail-ends="railEnds"
 		:hovered="hoveredKey === point.key"
 		:expanded="expandedKey === point.key"

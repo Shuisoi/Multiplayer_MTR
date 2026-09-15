@@ -6,15 +6,19 @@ import SignalMarker from "./SignalMarker.vue";
 /*
  * 信号灯层：把每盏灯摆出来。
  *
- * <p>这一层**不再自己算屏幕坐标**：位置由标记组件按统一模型（`domain/mapElements.ts`）算 ——
- * 世界坐标 + 固定像素偏移。以前在这一层 `worldToScreen`、在标记里再加偏移，等于"位置"有两个来源，
- * 而两者用的尺子不同就会写出"缩放时相对节点滑走"那类缺陷。</p>
+ * <p>灯**绑在节点上**（用户 2026-09-15："信号灯，道岔是绑定在节点上的，直接固定显示在节点旁
+ * 不行吗？不要掺活实际坐标进来"）。所以这一层只转发两样东西：节点的坐标表、
+ * 以及"这盏灯属于哪个节点"的匹配函数 —— 位置由标记组件按"节点 + 固定像素偏移"算。</p>
  */
 
 defineProps<{
 	signals: readonly Signal[];
-	/** 当前相机：只用来做尺寸换算（见 SignalMarker）。 */
+	/** 当前相机：透传给标记（它们用它把屏幕像素规格折成世界单位）。 */
 	camera: Camera;
+	/** 节点键 → 平面坐标：灯的锚点从它取（灯绑在节点上）。 */
+	nodePlane: ReadonlyMap<string, {x: number; y: number}>;
+	/** 每盏灯绑定的节点键（`MapCanvas` 用"离它最近的节点"匹配出来的）。 */
+	nodeKeyOf: (signal: Signal) => string;
 	hoveredKey: string;
 	/** 正在改绑定的那盏灯（点选绑定）：它会被强调出来。 */
 	selectedKey: string;
@@ -34,6 +38,8 @@ const emit = defineEmits<{
 		:key="signal.key"
 		:signal="signal"
 		:camera="camera"
+		:node-plane="nodePlane"
+		:node-key="nodeKeyOf(signal)"
 		:hovered="hoveredKey === signal.key"
 		:selected="selectedKey === signal.key"
 		@hover="emit('hover', $event)"

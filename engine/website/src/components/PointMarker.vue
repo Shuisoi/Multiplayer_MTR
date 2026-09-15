@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import {computed} from "vue";
+import type {Camera} from "@/domain/camera";
 import type {Point} from "@/domain/Point";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specToWorld} from "@/domain/mapElements";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, pxToWorld} from "@/domain/mapElements";
 
 /*
  * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
@@ -17,13 +18,14 @@ import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specToWorld} f
  * 本组件不再自己定像素值。</p>
  */
 
-const LEADER_PX = DECAL_KINDS.turnoutLeader;
+
 
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
 /** 菱形边长：**规格值 × 倍率**（6× 时为 8 px）。 */
-const diamondPx = computed(() => specToWorld(DECAL_KINDS.icon));
+const viewScale = computed(() => (props.camera.scale > 0 ? props.camera.scale : 1));
+const diamondPx = computed(() => pxToWorld(DECAL_KINDS.turnoutDiamond, viewScale.value));
 /** 引线长度同理跟着倍率走。 */
-const leaderPx = computed(() => specToWorld(LEADER_PX));
+const leaderPx = computed(() => pxToWorld(DECAL_KINDS.turnoutLeader, viewScale.value));
 
 /**
  * 菱形挂靠方向：**右下方**（屏幕对角）。
@@ -41,17 +43,20 @@ const DIAGONAL = {x: Math.SQRT1_2, y: Math.SQRT1_2};
 const counterScale = computed(() => 1);
 /** 规格像素 → 世界单位的那个**唯一常量**（取景校准一次）。 */
 /** 相对锚点的偏移（**世界单位**）：方向来自屏幕对角、距离是规格（全览 16 px）。 */
-const offsetWorld = computed(() => pixelOffset(DIAGONAL, specToWorld(DECAL_KINDS.turnoutOffset)));
+const offsetWorld = computed(() => pixelOffset(DIAGONAL, pxToWorld(DECAL_KINDS.turnoutOffset, viewScale.value)));
 /** 菱形与引线的定位用同一个偏移（都在世界坐标里）。 */
 const offsetScreenPx = offsetWorld;
 
 /** 贴片锚点：道岔的世界坐标 → 屏幕 + 固定像素偏移。 */
+/* 道岔的锚点 = 它绑定的**节点**（`point.key` 就是节点键）—— 不掺实际坐标。 */
 const placement = computed(() => decalPlacement(props.point.planeX, props.point.planeY, offsetWorld.value));
 
 const rootTransform = computed(() => decalTransform(placement.value));
 
 const props = defineProps<{
 	point: Point;
+	/** 当前相机：**只用来把屏幕像素规格折成世界单位**。 */
+	camera: Camera;
 	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，避免"位置"有两个来源）。 */
 	/** 轨 hex → 两端坐标：把"接哪条轨"说成坐标（用户按坐标认轨）。 */
 	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
@@ -171,8 +176,8 @@ const facts = computed(() => [
 			一条细连线把菱形系回它所属的节点：菱形偏移出去之后，世界图里节点很密，
 			没有这条线用户认不出这个菱形挂在哪个节点上。
 		-->
-		<svg class="leader" :width="leaderPx" :height="leaderPx" :viewBox="`0 0 ${LEADER_PX} ${LEADER_PX}`" aria-hidden="true">
-			<line x1="3" y1="3" :x2="LEADER_PX - 3" :y2="LEADER_PX - 3" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.5"/>
+		<svg class="leader" :width="leaderPx" :height="leaderPx" :viewBox="`0 0 ${leaderPx} ${leaderPx}`" aria-hidden="true">
+			<line x1="3" y1="3" :x2="leaderPx - 3" :y2="leaderPx - 3" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.5"/>
 		</svg>
 
 		<!--
