@@ -707,16 +707,26 @@ public class Simulator extends Data implements Utilities {
 
 					@Override
 					public boolean isStillRunning(long vehicleId, String taskId) {
-						return new MmtrPlanWorld().isVehicleRunningTask(vehicleId, taskId);
+						/*
+						 * notes/153：这里问的是"**车上还挂着这一步吗**"，不是"这一步还在跑吗"。
+						 *
+						 * 差别就是现场那台车：它开到了站台（这一步的移动部分做完了），任务状态已经不是"在跑"，
+						 * 于是交接不认它 ⇒ 任务被当成"没人认领"收掉 ⇒ 车空着停在站外，
+						 * 而派发器只在车场股道上找车（找不到站外的它）⇒ 这条交路再也分不到车，
+						 * 它还杵在咽喉口把后面的车挡在区间外。
+						 * 到站只是"这一步跑完了"，任务仍在车上，派发器下一步正要处理它 —— 那就还是它的活。
+						 */
+						final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(vehicleId);
+						final org.mtr.core.mmtr.MmtrMission mission = vehicle == null ? null : vehicle.getMmtrMission();
+						final org.mtr.core.mmtr.task.MmtrTask task = mission == null ? null : mission.getTask();
+						return task != null && task.taskId.equals(taskId);
 					}
 				});
 			for (final long orphan : orphans) {
 				final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(orphan);
 				final org.mtr.core.mmtr.MmtrMission mission = vehicle == null ? null : vehicle.getMmtrMission();
 				final String taskId = mission == null || mission.getTask() == null ? "" : mission.getTask().taskId;
-				if (!taskId.isEmpty() && new MmtrPlanWorld().releaseTask(orphan, taskId)) {
-					System.out.println("[MMTR-PLAN] 收回任务：计划里已经没有这一步了 → 车 " + orphan + "（" + taskId + "）");
-				}
+				mmtrWithdrawPlanTask(orphan, taskId, "计划里已经没有这一步了");
 			}
 			built++;
 			System.out.println("[MMTR-PLAN] " + diagram + "（走行时间按轨图算）");
@@ -773,15 +783,64 @@ public class Simulator extends Data implements Utilities {
 			if (!rebuilt.containsKey(lineId) || claimed.contains(vehicle.getId() + "|" + taskId)) {
 				return;
 			}
-			if (world.releaseTask(vehicle.getId(), taskId)) {
-				System.out.println("[MMTR-PLAN] 收回任务：这一版计划没有认领它（" + lineId + " 已不在/已重排）→ 车 "
-					+ vehicle.getId() + "（" + taskId + "）");
+			final int before = mmtrPendingPlanReleases.size();
+			mmtrWithdrawPlanTask(vehicle.getId(), taskId, "这一版计划没有认领它（" + lineId + " 已不在/已重排）");
+			if (mmtrPendingPlanReleases.size() == before) {
 				released[0]++;
 			}
 		}));
 		return released[0];
 	}
 
+	/**
+	 * **收回一个计划任务**（notes/153）：车还在动就先记账、等它停稳再收。
+	 *
+	 * <p>为什么不能当场收：计划一变（改密度 / 事件重算 / 手工指派），某台车正在跑的那一步可能
+	 * 已经不在新计划里了 —— 该收。但它可能正开在咽喉里：当场撤活，车就停在那儿，把后面的车全挡住
+	 * （现场实测：一台被撤活的车停在咽喉区间里，后面那台开到站台前被它挡在区间外）。
+	 * 与引擎既有的"任务终态才收回"是同一条原则 —— 只是把"终态"换成了"停稳"。</p>
+	 */
+	private void mmtrWithdrawPlanTask(long vehicleId, String taskId, String why) {
+		if (taskId == null || taskId.isEmpty()) {
+			return;
+		}
+		final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		if (vehicle != null && vehicle.isMoving()) {
+			if (mmtrPendingPlanReleases.defer(String.valueOf(vehicleId), taskId, getCurrentMillis())) {
+				System.out.println("[MMTR-PLAN] 暂缓收回任务：" + why + " —— 车 " + vehicleId
+					+ " 正在走这一步（等它停稳再收，见 notes/153）");
+			}
+			return;
+		}
+		if (new MmtrPlanWorld().releaseTask(vehicleId, taskId)) {
+			System.out.println("[MMTR-PLAN] 收回任务：" + why + " → 车 " + vehicleId + "（" + taskId + "）");
+		}
+		mmtrPendingPlanReleases.forget(String.valueOf(vehicleId), taskId);
+	}
+
+	/** 每次 tick 问一遍账上那些车：停稳了就把任务收掉（返回收回几台）。 */
+	private int mmtrFlushPendingPlanReleases() {
+		if (mmtrPendingPlanReleases.size() == 0) {
+			return 0;
+		}
+		final org.mtr.core.mmtr.plan.MmtrPlanDispatcher.World world = new MmtrPlanWorld();
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String[]> ready = mmtrPendingPlanReleases.claimReleasable(vehicleId -> {
+			final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(Long.parseLong(vehicleId));
+			return vehicle != null && vehicle.isMoving();
+		});
+		int released = 0;
+		for (final String[] entry : ready) {
+			final long vehicleId = Long.parseLong(entry[0]);
+			final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(vehicleId);
+			final org.mtr.core.mmtr.MmtrMission mission = vehicle == null ? null : vehicle.getMmtrMission();
+			final String running = mission == null || mission.getTask() == null ? "" : mission.getTask().taskId;
+			if (running.equals(entry[1]) && world.releaseTask(vehicleId, entry[1])) {
+				System.out.println("[MMTR-PLAN] 收回任务（已停稳）：车 " + vehicleId + "（" + entry[1] + "）");
+				released++;
+			}
+		}
+		return released;
+	}
 	/**
 	 * 把某一代派发器派出去、但计划里已经不打算继续跑的步**收回来**。
 	 *
@@ -801,8 +860,8 @@ public class Simulator extends Data implements Utilities {
 				final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(state.vehicleId);
 				final org.mtr.core.mmtr.MmtrMission mission = vehicle == null ? null : vehicle.getMmtrMission();
 				final String taskId = mission == null || mission.getTask() == null ? "" : mission.getTask().taskId;
-				if (taskId.startsWith(dispatcher.lineId + "/" + state.consistId + "/") && world.releaseTask(state.vehicleId, taskId)) {
-					System.out.println("[MMTR-PLAN] 收回任务：" + dispatcher.lineId + " 不再排这条交路 → 车 " + state.vehicleId + "（" + taskId + "）");
+				if (taskId.startsWith(dispatcher.lineId + "/" + state.consistId + "/")) {
+					mmtrWithdrawPlanTask(state.vehicleId, taskId, dispatcher.lineId + " 不再排这条交路");
 					released++;
 				}
 			}
@@ -873,6 +932,7 @@ public class Simulator extends Data implements Utilities {
 	 */
 	public void mmtrTickPlanDispatchers() {
 		mmtrRefreshPlanDispatchers();
+		mmtrFlushPendingPlanReleases();
 		if (mmtrPlanDispatchers.isEmpty()) {
 			return;
 		}
@@ -906,6 +966,9 @@ public class Simulator extends Data implements Utilities {
 		final long seconds = Math.floorDiv(dayTimeMillis, 1000);
 		return String.format("%02d:%02d:%02d", Math.floorDiv(seconds, 3600), Math.floorMod(Math.floorDiv(seconds, 60), 60), Math.floorMod(seconds, 60));
 	}
+
+	/** 计划一变就"该收回、但车还在动"的那些任务（notes/153：等它停稳再收，别把车撂在咽喉里）。 */
+	private final org.mtr.core.mmtr.plan.MmtrPendingPlanReleases mmtrPendingPlanReleases = new org.mtr.core.mmtr.plan.MmtrPendingPlanReleases();
 
 	/** 上一次用的日钟基准（只在日志里用，见 {@link #mmtrTickPlanDispatchers()}）。 */
 	private long mmtrPlanLastAnchor = Long.MIN_VALUE;
@@ -960,9 +1023,17 @@ public class Simulator extends Data implements Utilities {
 		@Override
 		public boolean isVehicleIdle(long vehicleId) {
 			final Vehicle vehicle = mmtrFindVehicle(vehicleId);
-			if (vehicle == null || vehicle.getIsOnRoute() || !vehicle.vehicleExtraData.getIsManualAllowed()) {
+			if (vehicle == null || !vehicle.vehicleExtraData.getIsManualAllowed()) {
 				return false;
 			}
+			/*
+			 * notes/153：**"在进路上"不等于"忙"**。
+			 *
+			 * 修前这里还有一条 `vehicle.getIsOnRoute()` —— 而一列**停在站台上**的车照样"在进路上"
+			 * （它脚下就是那条进路），于是派发器认定它"被别人占着"：解绑、再去车场股道上找车
+			 * （站外的它不在任何股道上，找不到）⇒ 交路开到第一站就到头了；车空着杵在站台/咽喉口，
+			 * 还把后面的车挡在区间外（现场实测）。"忙"的正确判据是**手上有没有没跑完的任务**。
+			 */
 			final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
 			return mission == null || mission.isTerminal();
 		}
@@ -2970,4 +3041,3 @@ public class Simulator extends Data implements Utilities {
 	) {
 	}
 }
-

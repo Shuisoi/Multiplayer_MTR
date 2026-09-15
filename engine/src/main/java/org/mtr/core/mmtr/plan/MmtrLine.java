@@ -43,7 +43,16 @@ public final class MmtrLine implements SerializedDataBase {
 	/** 一站：停哪个站台、停多久。 */
 	public static final class Stop implements SerializedDataBase {
 		public long stationId;
+		/** 去程（1→10）用的站台。 */
 		public long platformId;
+		/**
+		 * **回程（10→1）用的站台**（0 = 与去程同一个站台）。
+		 *
+		 * <p>为什么需要它（用户 2026-09-15）：一条线原来只有"一份站序"，两个方向共用同一个站台 ——
+		 * 而现场每个站都有两个站台，回程该走**另一个**（否则回程车会开进对向站台/同一条股道）。
+		 * 同一站序、两个方向各自的台，是"一条线、两套站台"的最小表达。</p>
+		 */
+		public long returnPlatformId;
 		/** 停站时长（ms）：车门开着的那一段。 */
 		public long dwellMillis;
 
@@ -64,6 +73,7 @@ public final class MmtrLine implements SerializedDataBase {
 		public void updateData(ReaderBase readerBase) {
 			stationId = MmtrPlanIds.parse(readerBase, "stationId");
 			platformId = MmtrPlanIds.parse(readerBase, "platformId");
+			returnPlatformId = MmtrPlanIds.parse(readerBase, "returnPlatformId");
 			dwellMillis = readerBase.getLong("dwellMillis", 0);
 		}
 
@@ -71,6 +81,9 @@ public final class MmtrLine implements SerializedDataBase {
 		public void serializeData(WriterBase writerBase) {
 			writerBase.writeString("stationId", String.valueOf(stationId));
 			writerBase.writeString("platformId", String.valueOf(platformId));
+			if (returnPlatformId != 0) {
+				writerBase.writeString("returnPlatformId", String.valueOf(returnPlatformId));
+			}
 			writerBase.writeLong("dwellMillis", dwellMillis);
 		}
 

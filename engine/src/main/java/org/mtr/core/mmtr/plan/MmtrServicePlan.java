@@ -223,7 +223,13 @@ public final class MmtrServicePlan {
 			 * 交路在密度交界处就会不可行（P3 的用例正是这么把它抓出来的）。</p>
 			 */
 			final long departure = step == 0 ? arrival : arrival + Math.max(0, stop.dwellMillis);
-			stopTimes.add(new StopTime(index, stop.stationId, stop.platformId, arrival, departure));
+			/*
+			 * notes/154：**回程走另一侧站台**（用户 2026-09-15：每个站都有两个站台，回程该走 2 站台）。
+			 * 站序仍是一份，两个方向各自的台由 {@code Stop#returnPlatformId} 给出（0 = 与去程同一个台）。
+			 */
+			final long platform = direction == Trip.Direction.BACK && stop.returnPlatformId != 0
+				? stop.returnPlatformId : stop.platformId;
+			stopTimes.add(new StopTime(index, stop.stationId, platform, arrival, departure));
 			clock = departure;
 		}
 		final long terminalDone = clock + (line.loop ? 0 : Math.max(0, times.terminalMillis(treatment)));

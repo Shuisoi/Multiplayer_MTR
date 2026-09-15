@@ -181,4 +181,55 @@ public final class MmtrServicePlanTests {
 		assertEquals(2 * MmtrServicePlan.tripDurationMillis(loop, TIMES, MmtrServicePlan.Trip.Direction.OUT), MmtrServicePlan.ringMillis(loop, TIMES),
 			"环线的 ring = 往 + 返两趟（终点处理不计，因为环线不换端）");
 	}
+
+	/**
+	 * **回程走另一侧站台**（notes/154，用户 2026-09-15 的补充要求）。
+	 *
+	 * <p>现场每个站都有两个站台：去程走 1 站台、回程走 2 站台。线路的站序仍是一份，每个站多一个
+	 * "回程站台"（{@code returnPlatformId}），只有返程趟次用它 —— 于是"一条线、两套站台"不必拆成两条线，
+	 * 周转与套班的算法一个字都不用改。</p>
+	 *
+	 * <p>红证：把返程那一行改回 {@code stop.platformId}，本用例红。</p>
+	 */
+	@Test
+	public void theReturnTripUsesTheOtherPlatformOfEachStation() {
+		final MmtrLine line = new MmtrLine("L1", "1 号线");
+		line.yardSidingId = 42;
+		line.leadTimeMillis = 5 * MIN;
+		line.terminalTreatment = MmtrLine.TerminalTreatment.CHANGE_ENDS;
+		for (int i = 0; i < 3; i++) {
+			final MmtrLine.Stop stop = new MmtrLine.Stop(1000 + i, 2000 + i, 30_000);
+			stop.returnPlatformId = 3000 + i;
+			line.stops.add(stop);
+		}
+		final MmtrPattern pattern = new MmtrPattern("L1").addSegment(H07, H07 + 30 * MIN, 10 * MIN);
+		final MmtrTravelTimes times = MmtrTravelTimes.uniform(4 * MIN, 3 * MIN);
+
+		final MmtrServicePlan out = MmtrServicePlan.generate(line, pattern, times, MmtrServicePlan.Trip.Direction.OUT);
+		final MmtrServicePlan back = MmtrServicePlan.generate(line, pattern, times, MmtrServicePlan.Trip.Direction.BACK);
+
+		assertEquals(2000, out.trips.get(0).stopTimes.get(0).platformId, "去程首站走 1 站台");
+		assertEquals(2002, out.trips.get(0).stopTimes.get(2).platformId, "去程末站也是 1 站台");
+
+		assertEquals(3002, back.trips.get(0).stopTimes.get(0).platformId, "回程从末站的 2 站台发车");
+		assertEquals(3001, back.trips.get(0).stopTimes.get(1).platformId, "中途站也走 2 站台");
+		assertEquals(3000, back.trips.get(0).stopTimes.get(2).platformId, "回程终点（首站）走 2 站台");
+		assertEquals(1002, back.trips.get(0).stopTimes.get(0).stationId, "站 id 不受影响");
+	}
+
+	/** 没设"回程站台"时，回程仍走去程那个台（旧配置行为不变）。 */
+	@Test
+	public void withoutAReturnPlatformTheOldBehaviourStands() {
+		final MmtrLine line = new MmtrLine("L1", "1 号线");
+		line.addStop(1001, 2001, 30_000);
+		line.addStop(1002, 2002, 30_000);
+		line.yardSidingId = 42;
+		line.terminalTreatment = MmtrLine.TerminalTreatment.CHANGE_ENDS;
+		final MmtrPattern pattern = new MmtrPattern("L1").addSegment(H07, H07 + 30 * MIN, 10 * MIN);
+		final MmtrTravelTimes times = MmtrTravelTimes.uniform(4 * MIN, 3 * MIN);
+
+		final MmtrServicePlan back = MmtrServicePlan.generate(line, pattern, times, MmtrServicePlan.Trip.Direction.BACK);
+		assertEquals(2002, back.trips.get(0).stopTimes.get(0).platformId, "回程首站仍是去程那个台");
+		assertEquals(2001, back.trips.get(0).stopTimes.get(1).platformId);
+	}
 }

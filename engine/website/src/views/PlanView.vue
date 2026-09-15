@@ -97,6 +97,14 @@ function platformOptions(stationId: string) {
 	}));
 }
 
+/**
+ * 回程站台的选项：第一项是"同去程站台"（空 = 不填 returnPlatformId，引擎按老行为走）。
+ * 写在脚本里而不是模板里：模板里的内联数组带引号嵌套，`vue-tsc` 直接报语法错（踩过）。
+ */
+function returnPlatformOptions(stationId: string) {
+	return [{label: "回程：同去程站台", value: ""}, ...platformOptions(stationId)];
+}
+
 const sidingOptions = computed(() => (world.value?.depots ?? []).flatMap(depot =>
 	depot.sidings.map(siding => ({
 		label: `${depot.name || "车场"}/${siding.name || "股道"}  #${siding.id}（现停 ${siding.vehicles} 台）`,
@@ -126,6 +134,8 @@ const tripOptions = computed(() => {
 interface StopDraft {
 	stationId: string;
 	platformId: string;
+	/** 回程站台（空 = 与去程同一个站台）。现场每个站两个台，回程走另一侧。 */
+	returnPlatformId: string;
 	dwellSeconds: number | null;
 }
 
@@ -165,6 +175,7 @@ function editLine(line: PlanLine): void {
 		stops: line.stops.map(stop => ({
 			stationId: stop.stationId,
 			platformId: stop.platformId,
+			returnPlatformId: stop.returnPlatformId && stop.returnPlatformId !== "0" ? stop.returnPlatformId : "",
 			dwellSeconds: Math.round(stop.dwellMillis / 1000)
 		}))
 	};
@@ -180,12 +191,15 @@ function newLine(): void {
 		loop: false,
 		yardSidingId: "",
 		leadMinutes: 5,
-		stops: [{stationId: "", platformId: "", dwellSeconds: 30}, {stationId: "", platformId: "", dwellSeconds: 30}]
+		stops: [
+			{stationId: "", platformId: "", returnPlatformId: "", dwellSeconds: 30},
+			{stationId: "", platformId: "", returnPlatformId: "", dwellSeconds: 30}
+		]
 	};
 }
 
 function addStop(): void {
-	lineDraft.value.stops.push({stationId: "", platformId: "", dwellSeconds: 30});
+	lineDraft.value.stops.push({stationId: "", platformId: "", returnPlatformId: "", dwellSeconds: 30});
 }
 
 function removeStop(index: number): void {
@@ -195,6 +209,7 @@ function removeStop(index: number): void {
 /** 换站要顺带把站台清掉：留着上一个站的台 id 就是"站/台不匹配"，引擎那边只能报错。 */
 function onStationChange(stop: StopDraft): void {
 	stop.platformId = "";
+	stop.returnPlatformId = "";
 }
 
 async function saveLine(): Promise<void> {
@@ -222,6 +237,7 @@ async function saveLine(): Promise<void> {
 		stops: draft.stops.map(stop => ({
 			stationId: stop.stationId,
 			platformId: stop.platformId,
+			returnPlatformId: stop.returnPlatformId === "" ? "0" : stop.returnPlatformId,
 			dwellMillis: (stop.dwellSeconds ?? 0) * 1000
 		}))
 	}), `线路 ${draft.lineId}`);
@@ -703,6 +719,12 @@ const workingColumns: DataTableColumns<WorkingRow> = [
 											:options="platformOptions(stop.stationId)"
 											placeholder="站台"
 											filterable
+											class="grow"
+										/>
+										<NSelect
+											v-model:value="stop.returnPlatformId"
+											:options="returnPlatformOptions(stop.stationId)"
+											placeholder="回程站台"
 											class="grow"
 										/>
 										<NInputNumber v-model:value="stop.dwellSeconds" :min="0" :max="1800" class="dwell">

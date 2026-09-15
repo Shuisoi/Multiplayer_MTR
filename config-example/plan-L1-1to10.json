@@ -11,51 +11,61 @@
         {
           "stationId": "1870719232554423099",
           "platformId": "-8021057666741005855",
+          "returnPlatformId": "1067577243292760039",
           "dwellMillis": 30000
         },
         {
           "stationId": "2498250995801625020",
           "platformId": "8840155259502644057",
+          "returnPlatformId": "-5224482131162675969",
           "dwellMillis": 30000
         },
         {
           "stationId": "4244617445981648900",
           "platformId": "-8203092630879812517",
+          "returnPlatformId": "1058477666616733399",
           "dwellMillis": 30000
         },
         {
           "stationId": "-5165412675520792170",
           "platformId": "39860473169674409",
+          "returnPlatformId": "8591964083314666171",
           "dwellMillis": 30000
         },
         {
           "stationId": "439286058854983703",
           "platformId": "-16333677002112739",
+          "returnPlatformId": "-5341866319758324699",
           "dwellMillis": 30000
         },
         {
           "stationId": "8944482319508612948",
           "platformId": "-933898300966339206",
+          "returnPlatformId": "2339632766796383914",
           "dwellMillis": 30000
         },
         {
           "stationId": "-5500586084400229272",
           "platformId": "-6769906902622305430",
+          "returnPlatformId": "-82431849548192114",
           "dwellMillis": 30000
         },
         {
           "stationId": "-4307838593610605132",
           "platformId": "9181441402015485493",
+          "returnPlatformId": "-2181455863135577397",
           "dwellMillis": 30000
         },
         {
           "stationId": "-3251244692129038012",
           "platformId": "4022183260327049783",
+          "returnPlatformId": "-6313537443420333057",
           "dwellMillis": 30000
         },
         {
           "stationId": "7812413824965879490",
           "platformId": "8821945135290913670",
+          "returnPlatformId": "6577603478860689631",
           "dwellMillis": 30000
         }
       ]

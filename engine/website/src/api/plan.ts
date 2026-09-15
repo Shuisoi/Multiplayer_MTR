@@ -40,8 +40,14 @@ export interface PlanAssignment {
 export interface PlanStop {
 	/** 站 id（十进制字符串）。 */
 	stationId: string;
-	/** 站台 id（十进制字符串）。 */
+	/** 去程（1→10）用的站台 id（十进制字符串）。 */
 	platformId: string;
+	/**
+	 * 回程（10→1）用的站台 id（十进制字符串；空/`"0"` = 与去程同一个台）。
+	 *
+	 * <p>现场每个站有两个站台，回程该走另一侧 —— 站序仍是一份，两个方向各自的台由这一项给出。</p>
+	 */
+	returnPlatformId?: string;
 	readonly dwellMillis: number;
 }
 

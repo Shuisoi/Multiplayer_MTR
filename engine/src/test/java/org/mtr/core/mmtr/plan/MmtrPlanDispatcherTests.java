@@ -691,6 +691,43 @@ public final class MmtrPlanDispatcherTests {
 		assertTrue(MmtrPlanDispatcher.yardDepartureAllowed(first + 30 * MIN, first), "过了很久 ⇒ 当然放行");
 	}
 
+	// ---------------------------------------------------------------- 撤活的时机（别把车撂在咽喉里）
+
+	/**
+	 * **车还在动就先别撤它的活**（notes/153 现场）。
+	 *
+	 * <p>计划一变，某台车正在跑的那一步可能已经不在新计划里了 —— 该收。但它可能正开在咽喉里：
+	 * 当场撤活，车就停在那儿把后面的车全挡住（现场实测：一台被撤活的车停在咽喉区间里，
+	 * 后面那台开到站台前被它挡在区间外）。所以收回分两步：先记账，**等它停稳再收**。</p>
+	 *
+	 * <p>红证：把"在不在动"那一问去掉（谓词永远返回 false），动着的车会被立刻收走 —— 本用例红。</p>
+	 */
+	@Test
+	public void aTaskIsNotTakenAwayFromAMovingTrain() {
+		final MmtrPendingPlanReleases ledger = new MmtrPendingPlanReleases();
+		assertTrue(ledger.defer("v1", "L1/C1/001", 1000L), "记账成功");
+		assertFalse(ledger.defer("v1", "L1/C1/001", 2000L), "同一条不重复记");
+		assertTrue(ledger.defer("v2", "L1/C2/001", 2000L));
+		assertEquals(2, ledger.size());
+
+		// v1 还在动、v2 停稳了 ⇒ 只收 v2；v1 留在账上等下一次
+		final var first = ledger.claimReleasable(vehicleId -> vehicleId.equals("v1"));
+		assertEquals(1, first.size(), "只有停稳的那台能收：" + first.size());
+		assertEquals("v2", first.get(0)[0]);
+		assertEquals(1, ledger.size(), "动着的还在账上");
+
+		// v1 停稳了 ⇒ 这一次收掉它
+		final var second = ledger.claimReleasable(vehicleId -> false);
+		assertEquals(1, second.size());
+		assertEquals("v1", second.get(0)[0]);
+		assertEquals(0, ledger.size(), "账清空");
+
+		// 车没了/任务换了：把账划掉，不许一直挂着
+		ledger.defer("v3", "L1/C3/001", 3000L);
+		ledger.forget("v3", "L1/C3/001");
+		assertEquals(0, ledger.size());
+	}
+
 	/**
 	 * ③ **接管只换执行者**（设计 §8.2）：玩家接管后派发器一步不派、交路与任务**一个字节都不改**；
 	 * 归还后**从那一步续行**（不跳步、不从头上再来）。
