@@ -326,6 +326,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private boolean mmtrTaskActionDone;
 	/** 站台作业这次**已经开始停站了没有**（用来只打一次"开门停站"的日志；门可能是进站时就开着的）。 */
 	private boolean mmtrStationServiceAnnounced;
+	/** "被岔挡住、按计划补申请"这条自救日志的节流（它每 tick 都会成立）。 */
+	private long mmtrLastForkSelfHealLogMillis;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -539,6 +541,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		 */
 		if (motionMission && data instanceof final Simulator stuckSimulator) {
 			mmtrYieldTurnoutsWhenStuck(stuckSimulator);
+		}
+		/*
+		 * **被岔挡住时，照计划自己补一条申请**（notes/155 §17 现场）。
+		 *
+		 * 现场：车停在信号前一动不动十几分钟，进路是 SET、前方区间也没别人，而道岔层里
+		 * **没有任何属于它的申请**（`holder` 空）—— 它的进路明明从那处岔上过。
+		 * 手工发一条 {@code point-req} 立刻就走（实测：735 m → 1115 m）。
+		 */
+		if (motionMission && data instanceof final Simulator forkSimulator) {
+			mmtrRequestPointWhenHeldAtFork(forkSimulator);
 		}
 		/*
 		 * **任务语义的执行者**（notes/150）。
@@ -892,6 +904,72 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 *
 	 * <p>与"自臂失败时的让位"共用同一套计时与阈值：判据统一为"等/停了够久 + 不在让位窗口里"。</p>
 	 */
+	/**
+	 * **停着不动、且前方岔口需要一次决策时，按计划把这处岔申请下来**（notes/155 §17 现场）。
+	 *
+	 * <p>为什么要有这一句：现场那辆车停在 735 m 的信号前十几分钟 —— 进路 SET、前方区间没别人、
+	 * 道岔也没人锁，但道岔层里**没有它的任何申请**（{@code holder=""}），于是走行的岔口选举失败
+	 * （{@code wouldHaltAtForkOn} 为真）→ 区间不开 → 车不动。手工发一条 {@code point-req} 立刻就走了
+	 * （实测 735 m → 1115 m），说明缺的就是这一次申请：**计划知道要过哪根轨，却没人把它翻译成申请**。</p>
+	 *
+	 * <p>判据三条，缺一不可：①停着不动；②下一根轨的远端岔口"需要决策"（走行自己说了算）；③
+	 * **计划里确实从那处岔接着走**（{@code plannedRailAfter}）—— 计划不走那里的车绝不去抢岔。</p>
+	 */
+	private void mmtrRequestPointWhenHeldAtFork(Simulator simulator) {
+		if (isMoving() || mmtrMotionWalker == null || mmtrMotionPlan == null || mmtrPointOwner.isEmpty()) {
+			return;
+		}
+		/*
+		 * **不能用 {@code peekNextRail()}**：它的契约就是"该车会停/到头时返回 null" ——
+		 * 而"被岔挡住"恰恰是这种情形，于是第一版在这里一律提前返回、什么都不做（现场实测：
+		 * 自救日志一行都没有）。改用"当前轨 + 前方节点 + 计划说接着走哪根轨"三件事实。
+		 */
+		final org.mtr.core.data.Rail currentRail = mmtrMotionWalker.currentRail();
+		final Position forkNode = mmtrMotionWalker.aheadNode();
+		if (currentRail == null || forkNode == null) {
+			return;
+		}
+		final String desiredHex = org.mtr.core.mmtr.MmtrRunPlanner.plannedRailAfter(mmtrMotionPlan, currentRail.getHexId());
+		final org.mtr.core.data.Rail desired = org.mtr.core.mmtr.MmtrRunPlanner.railByHex(simulator, desiredHex);
+		if (desired == null) {
+			return;   // 计划不从这里走：不乱扳岔（要报的话见下面的"计划要的腿不在表里"那一支）
+		}
+		final java.util.Map<Position, org.mtr.core.data.Rail> neighbors = simulator.positionsToRail.get(forkNode);
+		if (neighbors == null || neighbors.size() < 2) {
+			return;   // 不是岔口：没有决策要申请
+		}
+		final int leg = org.mtr.core.mmtr.MmtrRunPlanner.legIndexForRail(simulator, mmtrMotionWalker.enteredFromPosition(), forkNode, currentRail, desired);
+		if (leg < 0) {
+			mmtrLogForkSelfHeal("按计划补申请：车 " + getId() + " 被 " + org.mtr.core.mmtr.signal.MmtrJunctionState.nodeKey(forkNode)
+				+ " 挡住，但计划要的腿不在岔口腿表里 —— 需要重规划");
+			return;
+		}
+		final org.mtr.core.mmtr.point.MmtrPointAuthority authority = simulator.mmtrPointAuthority;
+		if (authority.isGrantedTo(forkNode.getX(), forkNode.getY(), forkNode.getZ(), currentRail.getHexId(), mmtrPointOwner)) {
+			return;   // 已经拿到了：不用每 tick 重复申请
+		}
+		final org.mtr.core.mmtr.point.MmtrPointAuthority.Result result = simulator.mmtrPointRequest(
+			forkNode.getX(), forkNode.getY(), forkNode.getZ(), currentRail.getHexId(), mmtrPointOwner, leg,
+			data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS);
+		if (result == org.mtr.core.mmtr.point.MmtrPointAuthority.Result.GRANTED) {
+			mmtrLogForkSelfHeal("按计划补申请：车 " + getId() + " 被 " + org.mtr.core.mmtr.signal.MmtrJunctionState.nodeKey(forkNode)
+				+ " 挡住，申请第 " + leg + " 条腿 → 已授予");
+		} else {
+			mmtrLogForkSelfHeal("按计划补申请：车 " + getId() + " 被 " + org.mtr.core.mmtr.signal.MmtrJunctionState.nodeKey(forkNode)
+				+ " 挡住，申请第 " + leg + " 条腿 → " + result + "（" + authority.lastWaitReason(mmtrPointOwner) + "）");
+		}
+	}
+
+	/** 自救日志的节流（同一件事最多每 {@link #MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS} 说一次）。 */
+	private void mmtrLogForkSelfHeal(String message) {
+		final long now = System.currentTimeMillis();
+		if (now - mmtrLastForkSelfHealLogMillis < MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS) {
+			return;
+		}
+		mmtrLastForkSelfHealLogMillis = now;
+		System.out.println("[MMTR-PT] " + message);
+	}
+
 	private void mmtrYieldTurnoutsWhenStuck(Simulator simulator) {
 		final long now = System.currentTimeMillis();
 		if (isMoving()) {

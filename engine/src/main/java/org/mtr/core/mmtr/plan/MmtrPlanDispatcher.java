@@ -140,6 +140,22 @@ public final class MmtrPlanDispatcher {
 	private long lastYardDepartureMillis;
 
 	/**
+	 * **把"上一台刚出库"的时刻接手过来**（notes/155 §17 现场）。
+	 *
+	 * <p>为什么必须有这一句：出库闸门（两次出库至少隔 {@link #YARD_DEPARTURE_GAP_MILLIS}）是
+	 * **派发器实例上的状态**，而每次改配置/事件重算都会重建派发器 —— 重建之后闸门从 0 开始，
+	 * 于是几条交路的"出库那一步"在同一个 tick 里一起出去，两台车同时进咽喉：
+	 * 一台要扳的道岔正在另一台脚下（净空闸正确地拒绝），两台车就互相把对方锁死
+	 * （现场读数：车 A `point -170,-60,-161 … phys=车B 现位=1 净空闸=岔区净空被占`、
+	 * 车 B 同时 `红灯：停在这架信号前`）。</p>
+	 */
+	public void adoptYardDepartureGate(@Nullable MmtrPlanDispatcher previous) {
+		if (previous != null && previous.lastYardDepartureMillis > lastYardDepartureMillis) {
+			lastYardDepartureMillis = previous.lastYardDepartureMillis;
+		}
+	}
+
+	/**
 	 * 现在能不能放**下一个编组出库**：上一次出库之后至少隔 {@link #YARD_DEPARTURE_GAP_MILLIS}。
 	 *
 	 * <p>抽成纯函数是为了能被钉住（红证）：这条规矩的两个后果都很直白 —— 太短则两台车挤在咽喉里

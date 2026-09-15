@@ -861,6 +861,15 @@ public final class MmtrRunPlanner {
 	/** Index of the desired next rail in the direction-ordered fork legs (same ordering the
 	 * walker's electAtFork uses at runtime), or -1 when desired is not a candidate leg. */
 	private static int branchOperator(Simulator sim, Position approachNode, Position forkNode, Rail incoming, ObjectArrayList<Rail> forwards, Rail desired) {
+		return legIndexForRail(sim, approachNode, forkNode, incoming, desired);
+	}
+
+	/**
+	 * **这条腿在岔口有序腿表里的序号**（与运行时 {@code MmtrForkElection.electAtFork} 同一份排序），
+	 * 找不到返回 -1。公开出来是给"车被岔挡住时自己补一条申请"用的（notes/155 §17 现场）：
+	 * 申请接口收的是腿序号，而不是轨 hex。
+	 */
+	public static int legIndexForRail(Simulator sim, Position approachNode, Position forkNode, Rail incoming, @Nullable Rail desired) {
 		final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(forkNode);
 		if (neighbors == null || incoming == null || desired == null) {
 			return -1;
@@ -873,6 +882,27 @@ public final class MmtrRunPlanner {
 			}
 		}
 		return -1;
+	}
+
+	/** 轨 hex → 图上的轨（诊断/自救用）。 */
+	public static @Nullable Rail railByHex(Simulator sim, @Nullable String hex) {
+		return hex == null ? null : findRail(sim, hex);
+	}
+
+	/**
+	 * **计划里"这根轨之后要走的那根轨"**（自救用，notes/155 §17）：在 {@link Plan#routeRailHexes}
+	 * 里找 {@code railHex} 的下一项；计划不走这根轨、或它是最后一根，返回 null。
+	 */
+	public static @Nullable String plannedRailAfter(@Nullable Plan plan, @Nullable String railHex) {
+		if (plan == null || railHex == null) {
+			return null;
+		}
+		for (int i = 0; i + 1 < plan.routeRailHexes.size(); i++) {
+			if (plan.routeRailHexes.get(i).equals(railHex)) {
+				return plan.routeRailHexes.get(i + 1);
+			}
+		}
+		return null;
 	}
 
 	@Nullable
