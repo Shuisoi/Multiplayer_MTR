@@ -743,15 +743,28 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrTurnoutWaitSinceMillis = now;
 			}
 			if (org.mtr.core.mmtr.point.MmtrPointAuthority.shouldYieldForOthers(now, mmtrTurnoutWaitSinceMillis, mmtrTurnoutYieldUntilMillis)) {
-				// "退得干净"这一层权限层早就有（releaseAll：逐进向持有 + 两处排队 + 物理位置一起放，放了立刻递补）；
-				// 缺的是**什么时候退**这条策略 —— 就是这里这一句。
-				simulator.mmtrPointAuthority.releaseAll(mmtrPointOwner);
-				releaseMmtrPointRequests();
-				mmtrTurnoutYieldUntilMillis = now + org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
-				mmtrTurnoutWaitSinceMillis = 0;
-				System.out.println("[MMTR-PT] 让位：车 " + getId() + " 等道岔超过 " + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
-					+ " 秒，放掉自己在道岔层的持有与排队，让别的车先走（" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000) + " 秒后再申请）");
-				return;
+				if (!simulator.mmtrPointAuthority.someoneHasPriorityOver(mmtrPointOwner)) {
+					/*
+					 * **没有比我更该走的车 ⇒ 不让**（notes/155 §13 现场）。
+					 *
+					 * <p>只按"等够了"就让位会让领先车把自己刚拿到的位置也放掉：后车拿到、它再申请、
+					 * 再让 —— 现场每 20 秒一轮的"让位"日志就是这么刷出来的，几台车谁也走不了。
+					 * 道岔只有一个位置，该退的是**计划时刻更晚**的那一方（与通行优先权同一口径）。</p>
+					 *
+					 * <p>这一支**不打日志**：它每 tick 都可能成立，打出来就是刷屏；
+					 * "在等哪一处道岔、谁挡着"由下面那条周期性日志负责。</p>
+					 */
+				} else {
+					// "退得干净"这一层权限层早就有（releaseAll：逐进向持有 + 两处排队 + 物理位置一起放，放了立刻递补）；
+					// 缺的是**什么时候退**这条策略 —— 就是这里这一句。
+					simulator.mmtrPointAuthority.releaseAll(mmtrPointOwner);
+					releaseMmtrPointRequests();
+					mmtrTurnoutYieldUntilMillis = now + org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
+					mmtrTurnoutWaitSinceMillis = 0;
+					System.out.println("[MMTR-PT] 让位：车 " + getId() + " 等道岔超过 " + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
+						+ " 秒，且挡着计划更早的车 —— 放掉自己在道岔层的持有与排队（" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000) + " 秒后再申请）");
+					return;
+				}
 			}
 			if (now < mmtrTurnoutYieldUntilMillis) {
 				return;   // 让位窗口里：连申请都不发，确保对方能拿到位置
@@ -898,6 +911,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!org.mtr.core.mmtr.point.MmtrPointAuthority.shouldYieldForOthers(now, mmtrTurnoutWaitSinceMillis, mmtrTurnoutYieldUntilMillis)) {
 			return;
 		}
+		if (!simulator.mmtrPointAuthority.someoneHasPriorityOver(mmtrPointOwner)) {
+			/*
+			 * 停着的车本来该给"计划更早"的车让位；可如果**等着的车计划都比我晚**，那就是我该先走 ——
+			 * 这时候放掉手里刚拿到的位置只会制造振荡（notes/155 §13 现场）。
+			 *
+			 * 这条**不打日志**：它每 tick 都会成立，打出来就是刷屏（"等哪一处道岔、谁挡着"那条
+			 * 周期性日志已经把现场说清楚了）。
+			 */
+			return;
+		}
 		simulator.mmtrPointAuthority.releaseAll(mmtrPointOwner);
 		releaseMmtrPointRequests();
 		// 位置不在了，旧进路也不能再算数：让任务下一 tick 重新规划（自臂会重新排一次）
@@ -905,7 +928,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrMotionStopTargetM = -1;
 		mmtrTurnoutYieldUntilMillis = now + org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
 		mmtrTurnoutWaitSinceMillis = 0;
-		System.out.println("[MMTR-PT] 让位（停着不动）：车 " + getId() + " 放掉自己在道岔层的持有与排队，" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
+		System.out.println("[MMTR-PT] 让位（停着不动）：车 " + getId() + " 挡着计划更早的车，放掉自己在道岔层的持有与排队，" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
 			+ " 秒后重新规划并申请");
 	}
 

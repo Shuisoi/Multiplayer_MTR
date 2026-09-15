@@ -233,14 +233,14 @@ public final class MmtrPointAuthority {
 	public Result request(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis, long priorityMillis) {
 		final MmtrTurnout turnout = turnoutAt(x, y, z);
 		if (turnout == null) {
-			return requestPerApproach(x, y, z, viaRailHex, owner, leg, untilMillis);
+			return requestPerApproach(x, y, z, viaRailHex, owner, leg, untilMillis, priorityMillis);
 		}
 		// 一处道岔只有两个位置：先把"某进向的第几条腿"翻译成**位置需求**。
 		final int demand = turnout.positionForLeg(viaRailHex, leg);
 		if (demand == Integer.MIN_VALUE) {
 			return Result.REJECTED;
 		}
-		final Result perApproach = requestPerApproach(x, y, z, viaRailHex, owner, leg, untilMillis);
+		final Result perApproach = requestPerApproach(x, y, z, viaRailHex, owner, leg, untilMillis, priorityMillis);
 		if (perApproach != Result.GRANTED) {
 			return perApproach;   // 同进向排队 / 人工锁：语义与从前一致，物理层不参与
 		}
@@ -506,6 +506,18 @@ public final class MmtrPointAuthority {
 	 * FIFO, an operator lock parks the approach, grants die with their window.
 	 */
 	public Result requestPerApproach(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis) {
+		return requestPerApproach(x, y, z, viaRailHex, owner, leg, untilMillis, Long.MAX_VALUE);
+	}
+
+	/**
+	 * 同上，但把**这一步的计划时刻**（{@code priorityMillis}）也带进逐进向这一层（notes/155 §13）。
+	 *
+	 * <p>为什么：{@link #request} 在没有真实道岔对象时会走这一层（测试网、纯逐进向的点），
+	 * 而原来这一层把优先权丢掉了（{@code new Req(owner, leg, untilMillis)} ⇒ priority = MAX）——
+	 * 于是"谁该先走"的判据在这些场合全变成"先到先得"，让位策略也就认不出优先权。
+	 * 旧签名保持"先到先得"（既有调用方/用例行为不变）。</p>
+	 */
+	public Result requestPerApproach(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis, long priorityMillis) {
 		final String k = key(x, y, z, viaRailHex);
 		final long now = clock.getAsLong();
 		expireLocked(k, now);
@@ -514,9 +526,10 @@ public final class MmtrPointAuthority {
 			if (existing != null) {
 				existing.leg = leg;
 				existing.untilMillis = untilMillis;
+				existing.priorityMillis = Math.min(existing.priorityMillis, priorityMillis);
 				return Result.QUEUED;
 			}
-			enqueue(k, new Req(owner, leg, untilMillis));
+			enqueue(k, new Req(owner, leg, untilMillis, priorityMillis));
 			return Result.QUEUED;
 		}
 		final Holder h = holders.get(k);
@@ -524,18 +537,20 @@ public final class MmtrPointAuthority {
 			if (h.owner.equals(owner)) {
 				h.leg = leg;
 				h.untilMillis = untilMillis;
+				h.priorityMillis = Math.min(h.priorityMillis, priorityMillis);
 				return Result.GRANTED;
 			}
 			final Req existing = findQueued(k, owner);
 			if (existing != null) {
 				existing.leg = leg;
 				existing.untilMillis = untilMillis;
+				existing.priorityMillis = Math.min(existing.priorityMillis, priorityMillis);
 				return Result.QUEUED;
 			}
-			enqueue(k, new Req(owner, leg, untilMillis));
+			enqueue(k, new Req(owner, leg, untilMillis, priorityMillis));
 			return Result.QUEUED;
 		}
-		holders.put(k, new Holder(new Req(owner, leg, untilMillis)));
+		holders.put(k, new Holder(new Req(owner, leg, untilMillis, priorityMillis)));
 		byOwner.computeIfAbsent(owner, o -> new ObjectArrayList<>()).add(holders.get(k));
 		return Result.GRANTED;
 	}
@@ -677,6 +692,75 @@ public final class MmtrPointAuthority {
 			return false;
 		}
 		return now - waitSinceMillis >= MMTR_TURNOUT_YIELD_MILLIS;
+	}
+
+	/**
+	 * **该不该让位（完整判据）**：等够了 + 不在静默窗口里 + **挡着的人比我更该走**。
+	 *
+	 * <p>为什么第三条是必须的（notes/155 §13 现场）：只按时间判会让**领先车也把自己刚拿到的位置放掉** ——
+	 * 后车于是拿到位置、前车再申请、再让 —— 现场每 20 秒一轮的"让位"日志就是这么来的，
+	 * 几台车谁也走不了。道岔只有一个位置，解环要让**该让的那一方**退：谁的计划时刻更早谁先走
+	 * （与 {@code priorityMillis} 的通行优先权同一口径），而不是"谁等得久谁退"。</p>
+	 *
+	 * <p>同优先权（现场常见：两台车都还没算出计划时刻）时按持有者 id 定序 —— 关键是**判断必须不对称**，
+	 * 保证同一时刻只有一方认为自己该让（两边同时让位等于回到振荡）。</p>
+	 */
+	public boolean shouldYieldForOthers(String owner, long now, long waitSinceMillis, long yieldUntilMillis) {
+		return shouldYieldForOthers(now, waitSinceMillis, yieldUntilMillis) && someoneHasPriorityOver(owner);
+	}
+
+	/**
+	 * 我按着（或排在前面的）那些道岔上，有没有**比我更该先走**的等待者要一个跟我互斥的位置。
+	 *
+	 * <p>两层都看：物理位置（{@code physicalHolders}）与逐进向持有（{@code holders}）。</p>
+	 */
+	public boolean someoneHasPriorityOver(String owner) {
+		for (final Map.Entry<String, Physical> entry : physicalHolders.entrySet()) {
+			final Physical mine = entry.getValue();
+			if (!mine.owner.equals(owner)) {
+				continue;
+			}
+			final ArrayDeque<PhysicalReq> queue = physicalQueued.get(entry.getKey());
+			if (queue == null) {
+				continue;
+			}
+			for (final PhysicalReq other : queue) {
+				// 要的是同一个位子 ⇒ 不冲突（它排在我后面等同一个位置而已）
+				if (other.owner.equals(owner) || other.position == mine.position) {
+					continue;
+				}
+				if (outranks(other.priorityMillis, other.owner, mine.priorityMillis, owner)) {
+					return true;
+				}
+			}
+		}
+		for (final Map.Entry<String, Holder> entry : holders.entrySet()) {
+			final Holder mine = entry.getValue();
+			if (!mine.owner.equals(owner)) {
+				continue;
+			}
+			final ArrayDeque<Req> queue = queued.get(entry.getKey());
+			if (queue == null) {
+				continue;
+			}
+			for (final Req other : queue) {
+				if (other.owner.equals(owner) || other.leg == mine.leg) {
+					continue;
+				}
+				if (outranks(other.priorityMillis, other.owner, mine.priorityMillis, owner)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** {@code other} 是不是比 {@code mine} 更该先走：计划时刻更早；同优先权按持有者 id 定序（判断不对称）。 */
+	private static boolean outranks(long otherPriority, String otherOwner, long minePriority, String mineOwner) {
+		if (otherPriority != minePriority) {
+			return otherPriority < minePriority;
+		}
+		return otherOwner.compareTo(mineOwner) < 0;
 	}
 
 	/** Operator releases the park: the longest-waiting auto request takes the point. */

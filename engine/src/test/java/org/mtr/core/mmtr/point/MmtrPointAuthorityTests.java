@@ -56,9 +56,52 @@ public final class MmtrPointAuthorityTests {
 			"窗口一过，重新按「等够了」算（waitSince 由调用方归零，这里给的是最保守的输入）");
 	}
 
+	/**
+	 * **让位要认优先权**（notes/155 §13 现场）。
+	 *
+	 * <p>现场：多车在咽喉里每 20 秒互相"让位"一轮，谁也走不了。原因是让位只看"等够了"：
+	 * **领先车也会把自己刚拿到的位置放掉** —— 后车拿到位置、前车再申请、再让，来回振荡。
+	 * 道岔只有一个位置，该退的是**计划时刻更晚**的那一方（与 {@code priorityMillis} 的通行优先权同一口径）。</p>
+	 *
+	 * <p>红证：把 {@code someoneHasPriorityOver} 从判据里去掉（退回"等够了就让"），
+	 * 本用例第二段（计划更晚的车在等 ⇒ 不该让）就红。</p>
+	 */
 	@Test
-	public void lockParksPointForManualUseAndUnlockGrantsFifoHead() {		final AtomicLong clock = new AtomicLong(1000);
+	public void aTrainYieldsOnlyToSomeoneWhoHasPriorityOverIt() {
+		final long threshold = MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS;
+		final long start = 1_000_000L;
+		final AtomicLong clock = new AtomicLong(start);
 		final MmtrPointAuthority a = authority(clock);
+		final long mine = 300_000L;      // 我的计划时刻
+		final long earlier = 200_000L;   // 比我早 ⇒ 比我该先走
+		final long later = 400_000L;
+
+		// 我按住 leg 1；后面有人（计划更早）在等互斥的 leg 0
+		assertEquals(MmtrPointAuthority.Result.GRANTED, a.request(0, 0, 0, VIA, "vMe", 1, start + 900_000, mine));
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.request(0, 0, 0, VIA, "vEarlier", 0, start + 900_000, earlier));
+		assertTrue(a.someoneHasPriorityOver("vMe"), "挡着计划更早的车 ⇒ 我该让");
+		assertTrue(a.shouldYieldForOthers("vMe", start + threshold, start, 0), "等够了 + 挡着更该走的 ⇒ 让位");
+
+		// 反过来：等的是计划更晚的车 —— 不该让（现场那种振荡就是这么来的）
+		a.releaseAll("vEarlier");
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.request(0, 0, 0, VIA, "vLater", 0, start + 900_000, later));
+		assertFalse(a.someoneHasPriorityOver("vMe"), "让我给计划更晚的车让位 = 把该走的车按死");
+		assertFalse(a.shouldYieldForOthers("vMe", start + threshold * 3, start, 0), "再等也不让：我是该先走的那个");
+		assertEquals("vMe", a.holder(0, 0, 0, VIA), "位置还在我手里（没被自己让掉）");
+
+		// 同优先权（现场常见：两边都还没算出计划时刻）：按持有者 id 定序，保证只有一方让
+		a.releaseAll("vLater");
+		assertEquals(MmtrPointAuthority.Result.QUEUED, a.request(0, 0, 0, VIA, "vAaa", 0, start + 900_000, mine));
+		assertTrue(a.someoneHasPriorityOver("vMe"), "同优先权时按 id 定序：vAaa 排在前 ⇒ 我让");
+		assertFalse(a.someoneHasPriorityOver("vAaa"), "它不用让 —— 两边同时让位等于回到振荡");
+
+		// 没人等 ⇒ 不让（正常等待前车过岔）
+		a.releaseAll("vAaa");
+		assertFalse(a.someoneHasPriorityOver("vMe"), "没人等就不该让");
+	}
+
+	@Test
+	public void lockParksPointForManualUseAndUnlockGrantsFifoHead() {		final AtomicLong clock = new AtomicLong(1000);		final MmtrPointAuthority a = authority(clock);
 		a.lock(0, 0, 0, VIA);
 		assertTrue(a.isLocked(0, 0, 0, VIA), "point parked by the operator");
 		assertEquals(MmtrPointAuthority.Result.QUEUED, a.request(0, 0, 0, VIA, "task1", 0, 2000), "auto request queues behind the operator lock");
