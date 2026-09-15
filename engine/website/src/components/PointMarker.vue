@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Point} from "@/domain/Point";
-import {DECAL_KINDS, decalPlacement, decalTransform, mapScale, pixelOffset, scaled} from "@/domain/mapElements";
-import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specPxToWorld} from "@/domain/mapElements";
+import {useUnitsPerPx} from "@/views/mapContext";
 
 /*
  * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
@@ -21,11 +21,10 @@ import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
 const LEADER_PX = DECAL_KINDS.turnoutLeader;
 
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
-const zoomRatio = useZoomRatio();
 /** 菱形边长：**规格值 × 倍率**（6× 时为 8 px）。 */
-const diamondPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
+const diamondPx = computed(() => specPxToWorld(DECAL_KINDS.icon, unitsPerPx.value));
 /** 引线长度同理跟着倍率走。 */
-const leaderPx = computed(() => scaled(LEADER_PX, zoomRatio.value));
+const leaderPx = computed(() => specPxToWorld(LEADER_PX, unitsPerPx.value));
 
 /**
  * 菱形挂靠方向：**右下方**（屏幕对角）。
@@ -36,17 +35,17 @@ const leaderPx = computed(() => scaled(LEADER_PX, zoomRatio.value));
  */
 const DIAGONAL = {x: Math.SQRT1_2, y: Math.SQRT1_2};
 
-/** 相对锚点的固定像素偏移（诊断/测试要读它）。 */
 /**
- * 反向缩放（与节点、灯同一套机制）：父层已被相机缩放，这里乘回去 ⇒ 菱形屏幕尺寸恒定。
+ * **不反向缩放**：道岔菱形与轨道共用一个相机比例（`notes/165`）—— 全览时 16 px 偏移、8 px 菱形，
+ * 之后跟着地图一起放大。
  */
-const counterScale = computed(() => mapScale(zoomRatio.value));
-/** 视口像素 → 世界单位（父层承担相机，标记的 left/top 是世界坐标）。 */
-const worldPerPx = useWorldPerPx();
-/** 相对锚点的偏移（**世界单位**）：方向来自屏幕对角、距离是屏幕像素规格。 */
-const offsetWorld = computed(() => pixelOffset(DIAGONAL, scaled(DECAL_KINDS.turnoutOffset, zoomRatio.value) * worldPerPx.value));
-/** 反向缩放层内部用的偏移（**屏幕像素**）：`left/top` 写在 `.hit` 上，而它在反向缩放层里。 */
-const offsetScreenPx = computed(() => pixelOffset(DIAGONAL, scaled(DECAL_KINDS.turnoutOffset, zoomRatio.value)));
+const counterScale = computed(() => 1);
+/** 规格像素 → 世界单位的那个**唯一常量**（取景校准一次）。 */
+const unitsPerPx = useUnitsPerPx();
+/** 相对锚点的偏移（**世界单位**）：方向来自屏幕对角、距离是规格（全览 16 px）。 */
+const offsetWorld = computed(() => pixelOffset(DIAGONAL, specPxToWorld(DECAL_KINDS.turnoutOffset, unitsPerPx.value)));
+/** 菱形与引线的定位用同一个偏移（都在世界坐标里）。 */
+const offsetScreenPx = offsetWorld;
 
 /** 贴片锚点：道岔的世界坐标 → 屏幕 + 固定像素偏移。 */
 const placement = computed(() => decalPlacement(props.point.planeX, props.point.planeY, offsetWorld.value));

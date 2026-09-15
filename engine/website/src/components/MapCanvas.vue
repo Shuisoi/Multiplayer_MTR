@@ -405,6 +405,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 		class="map"
 		:class="{dragging: view.dragging.value, picking: selectedSignal !== null}"
 		:data-zoom-ratio="view.zoomRatio.value.toFixed(4)"
+		:data-world-px-scale="camera.scale"
 		@pointerdown="view.onPointerDown"
 		@pointerdown.capture="onBackgroundDown"
 		@pointermove="view.onPointerMove"
@@ -509,6 +510,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			<div class="layer" :style="{transform: cameraTransform}">
 				<SignalLayer
 					:signals="signals"
+					:camera="camera"
 					:hovered-key="hoveredSignalKey"
 					:selected-key="selectedSignal?.key ?? ''"
 					@hover="hoveredSignalKey = $event"

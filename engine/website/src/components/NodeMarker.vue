@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, watch} from "vue";
 import {Node} from "@/domain/Node";
-import {DECAL_KINDS, decalTransform, mapScale, scaled} from "@/domain/mapElements";
-import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, decalTransform} from "@/domain/mapElements";
+import {useUnitsPerPx} from "@/views/mapContext";
 
 /*
  * 一个节点（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -45,18 +45,26 @@ const emit = defineEmits<{
  * 要恢复分档就在规格表里加"按度数取尺寸"的规则，而不是回到组件里写死。</p>
  */
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
-const zoomRatio = useZoomRatio();
 /**
- * **视口像素 → 世界单位**（标记层与 SVG 层同一套口径，见 `useWorldPerPx`）。
+ * **视口像素 → 世界单位**（标记层与 SVG 层同一套口径，见 `useUnitsPerPx`）。
  *
  * <p>外层的父容器承担相机的"平移 + 缩放"，所以这个标记的 `left/top` 是**世界坐标**；
  * 而圆点半径是屏幕像素规格，要乘这个因子折成世界单位。</p>
  */
-const worldPerPx = useWorldPerPx();
-/** 节点圆点半径（**世界单位**）：屏幕上 {@code 规格 × 倍率 / 6} 像素（6× 时 3.6 px）。 */
-const radius = computed(() => scaled(DECAL_KINDS.nodeDot, zoomRatio.value) * worldPerPx.value);
-/** 内层的**反向缩放**：父容器已经缩放了，这里乘回去，于是圆点屏幕尺寸恒定。 */
-const counterScale = computed(() => mapScale(zoomRatio.value));
+const unitsPerPx = useUnitsPerPx();
+/**
+ * 节点圆点半径（**世界单位**）：换算只有一处（`specPxToWorld` 的同一式）——
+ * 世界单位 = 规格 ÷ 相机比例，于是屏幕上恒为**规格值**（全览口径）。
+ */
+const radius = computed(() => DECAL_KINDS.nodeDot * unitsPerPx.value);
+/**
+ * **贴片不反向缩放**：图形跟着地图、与轨道同一个相机比例（`notes/165` 的口径）。
+ *
+ * <p>曾经这里是 `scale(倍率/6)`（把图标做成"屏幕固定大小"），于是 6× 时 8 px、全览时只有 1.3 px ——
+ * 那正是用户 2026-09-15 说的"图标的缩放率根本不对"。地图上就没有"屏幕固定大小"这回事：
+ * 所有东西一起缩放，缩放的是相机。</p>
+ */
+const counterScale = computed(() => 1);
 
 /** 贴片锚点：节点的**世界坐标**（节点不需要偏移，所以没有第二项）。 */
 const rootTransform = computed(() => decalTransform({x: props.node.planeX, y: props.node.planeZ}));

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type {Camera} from "@/domain/camera";
 import type {Signal} from "@/domain/Signal";
 import SignalMarker from "./SignalMarker.vue";
 
@@ -12,6 +13,8 @@ import SignalMarker from "./SignalMarker.vue";
 
 defineProps<{
 	signals: readonly Signal[];
+	/** 当前相机：只用来做尺寸换算（见 SignalMarker）。 */
+	camera: Camera;
 	hoveredKey: string;
 	/** 正在改绑定的那盏灯（点选绑定）：它会被强调出来。 */
 	selectedKey: string;
@@ -30,6 +33,7 @@ const emit = defineEmits<{
 		v-for="signal in signals"
 		:key="signal.key"
 		:signal="signal"
+		:camera="camera"
 		:hovered="hoveredKey === signal.key"
 		:selected="selectedKey === signal.key"
 		@hover="emit('hover', $event)"

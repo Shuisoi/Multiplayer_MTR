@@ -24,7 +24,6 @@
  * 现在**所有**元素都乘同一个 {@code mapScale}，不可能再混。</p>
  */
 
-import type {Camera} from "./camera";
 
 /** 规格尺寸的基准缩放倍率：在这个倍率下，规格表里的像素值就是屏幕像素值。 */
 export const REFERENCE_ZOOM = 6;
@@ -165,35 +164,44 @@ export function scaled(specPx: number, zoomRatio: number): number {
 }
 
 /**
- * **规格像素 → 世界单位**的换算（设了 `viewBox` 的 SVG 里，线宽与半径的单位是世界单位）。
+ * **规格像素 → 世界单位**：整套系统里**唯一**的一处尺寸换算。
  *
- * <p>口径（用户 2026-09-15 定死，见 commit `fa18932`）：**6× 时等于规格值，其余按倍率线性缩放**。
- * 于是屏幕像素 = {@code 规格 × 倍率 / 6}，而"屏幕像素 ÷ 相机比例"就是世界单位：</p>
+ * <h2>一个元素只需要一个数</h2>
+ * <p>每个元素在 {@link DECAL_KINDS} 里有一个"**全览（1×）时屏幕上的像素**"规格值。
+ * 把它换成世界单位只需要乘这一个常量：</p>
  * <pre>
- *   世界单位 = 规格 × 倍率 / REFERENCE_ZOOM / 相机比例
+ *   世界单位 = 规格 × unitsPerPx        （unitsPerPx 由取景校准一次，见下）
  * </pre>
+ * <p>之后**不要**在每个元素上再乘倍率、也不要再除相机比例：相机已经由外层承担
+ * （SVG 的 `viewBox`、标记层的 `.layer`），所以"跟着缩放"是**自动的** —— 世界尺寸是常量，
+ * 相机推近时它按比例变大。这就是"整幅地图一起缩放"这句话的全部实现。</p>
  *
- * <p>代入 SVG 的映射（一个世界单位 = 相机比例个视口像素）后，屏幕宽度正好回到
- * {@code 规格 × 倍率 / 6} —— 与重构前**逐值一致**，所以这次重构只换坐标系、不换口径。
- * 实测：1× 时轨道线屏幕 0.667 px、6.15× 时 4.10 px（与重构前相同）。</p>
+ * <h2>为什么要显式记下 `unitsPerPx`</h2>
+ * <p>它是"1 个屏幕像素等于多少世界单位"，取值来自取景（世界跨度 ÷ 视口跨度），
+ * 在整张图的生命周期里是**常量**。曾经在这一步除的是**当前**相机比例 —— 那会把缩放正好抵消掉，
+ * 于是屏幕尺寸恒定（实测 1× 与 5.35× 下都量到 8 px），那是"屏幕固定大小"，不是地图。
+ * 这一条是反复改动的根源，所以在这里写死口径，并由 `viewbox.test.ts` 钉住。</p>
  *
- * <p><b>为什么不能少乘 REFERENCE_ZOOM</b>：倍率是"相对取景"的，而"6×"是另一件事
- * （取景基准与 6 之间没有数学关系）。少乘它会让 1× 时的线宽大 6 倍（实测过：24 px 的轨）。
- * 也不能多乘它 —— 这两种错法都出现过一次，所以这里把三段各自的意思写死。</p>
+ * <h2>为什么不是"6× 时等于规格值"</h2>
+ * <p>那个口径让全览时的图标只有 1.44 px、轨道线 0.67 px —— 用户 2026-09-15 的原话是
+ * "**图标的缩放率根本不对**"。基准改成全览之后，全览时图标正好 8 px、轨道线 4 px。</p>
  *
- * @param specPx    规格像素值（{@link REFERENCE_ZOOM} 下的屏幕像素）
- * @param zoomRatio 当前倍率（1 = 正好取景；相机层注入）
- * @param viewScale 当前相机比例（{@link Camera.scale}：一个视口像素对应多少世界单位）
+ * @param specPx     规格像素值（**全览时**的屏幕像素）
+ * @param unitsPerPx 1 个屏幕像素等于多少世界单位（取景时校准一次的常量）
  */
-export function specPxToWorld(specPx: number, zoomRatio: number, viewScale: number): number {
-	const zoom = zoomRatio > 0 ? zoomRatio : 1;
-	const scale = viewScale > 0 ? viewScale : 1;
-	return (specPx * zoom) / REFERENCE_ZOOM / scale;
+export function specPxToWorld(specPx: number, unitsPerPx: number): number {
+	return specPx * (unitsPerPx > 0 ? unitsPerPx : 1);
 }
 
-/** 规格像素 → 屏幕像素（`viewBox` 时代的口径：6× 时等于规格值，其余按倍率）。 */
+/**
+ * 规格像素 → 屏幕像素：**= 规格 × 倍率**（倍率由相机层给，1 = 正好取景）。
+ *
+ * <p>这里**没有 `REFERENCE_ZOOM` 这个中间量**：规格的基准已经定为"全览（1×）"，
+ * 所以全览时屏幕尺寸就是规格值、推近一倍就翻倍。中间再夹一个 6 会让两处口径互相打架
+ * （踩过：`screenPxOfSpec(8, 1)` 算成 1.33，而全览实测是 8 px）。</p>
+ */
 export function screenPxOfSpec(specPx: number, zoomRatio: number): number {
-	return (specPx * (zoomRatio > 0 ? zoomRatio : 1)) / REFERENCE_ZOOM;
+	return specPx * (zoomRatio > 0 ? zoomRatio : 1);
 }
 
 /**

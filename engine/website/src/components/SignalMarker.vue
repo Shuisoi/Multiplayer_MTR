@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
-import {DECAL_KINDS, decalPlacement, decalTransform, mapScale, pixelOffset, scaled, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
-import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specPxToWorld, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
+import {useUnitsPerPx} from "@/views/mapContext";
 
 /*
  * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
@@ -41,11 +41,16 @@ const props = defineProps<{
  * 可以理解为摄像机在移动，地图大小和位置关系不动"。所以 6× 时图标 8 px；推近到 12× 是 16 px；
  * 拉远到 3× 是 4 px。组件里不再出现任何写死的像素值。</p>
  */
-const zoomRatio = useZoomRatio();
 
-/** 图标宽度（= viewBox 宽 20 单位的换算基准）。 */
-const iconPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
-/** 整个 SVG 的高度：viewBox 是 20×26，所以高度按同一个比例走。 */
+const unitsPerPx = useUnitsPerPx();
+
+/**
+ * 图标宽度（**世界单位**）：规格 × `unitsPerPx`（全览时屏幕上就是规格 8 px）。
+ *
+ * <p>整套系统里只有这一处尺寸换算，之后由相机统一缩放 —— 见 `specPxToWorld`。</p>
+ */
+const iconPx = computed(() => specPxToWorld(DECAL_KINDS.icon, unitsPerPx.value));
+/** 整个 SVG 的高度：viewBox 是 20 × 20.5，高度按同一个比例走。 */
 const boxHeightPx = computed(() => iconPx.value * (DECAL_KINDS.signalUnit.boxHeight / DECAL_KINDS.signalUnit.boxWidth));
 /** 灯点在 viewBox 里的位置（世界坐标就落在它上面，也是旋转中心）。 */
 const anchor = signalUnitAnchor();
@@ -93,21 +98,21 @@ const boxOffsetPx = computed(() => {
 });
 
 /**
- * 灯位偏移的世界单位值：规格（屏幕像素）乘 {@link worldPerPx}。
+ * 灯位偏移（**世界单位**）：规格 × `unitsPerPx`（与尺寸用同一个常量）。
  *
- * <p>父容器（标记层的 `.layer`）承担相机，所以标记的 `left/top` 是**世界坐标**。</p>
+ * <p>父容器（标记层的 `.layer`）承担相机，所以标记的 `left/top` 是**世界坐标**；
+ * 偏移与尺寸一样只需要乘那一个常量，之后就由相机统一缩放。</p>
  */
-const worldPerPx = useWorldPerPx();
 const offsetWorld = computed(() => pixelOffset(
 	props.signal.sideOffsetDirection,
-	scaled(DECAL_KINDS.signalSideOffset, zoomRatio.value) * worldPerPx.value,
+	specPxToWorld(DECAL_KINDS.signalSideOffset, unitsPerPx.value),
 ));
 
 /** 灯点的**世界坐标**（世界坐标 + 灯位偏移）：**锚点**，旋转绕它发生。 */
 const anchorPx = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, offsetWorld.value));
 
 /** 内层的反向缩放：父容器已被相机缩放，这里乘回去 ⇒ 整盏灯屏幕尺寸恒定。 */
-const counterScale = computed(() => mapScale(zoomRatio.value));
+const counterScale = computed(() => 1);
 
 /**
  * 外层的位移：**只有平移，没有旋转**。
@@ -172,7 +177,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		class="signal"
 		:class="{hovered, selected}"
 		:data-key="signal.key"
-		:data-zoom-ratio="zoomRatio"
+		:data-zoom-ratio="signal.angle"
 		:data-angle="signal.angle"
 		:data-world="`${signal.planeX},${signal.planeY}`"
 		:style="{transform: rootTransform}"

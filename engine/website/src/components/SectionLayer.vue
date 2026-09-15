@@ -5,8 +5,8 @@ import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
 import {railSpanWorldPath, type StraightLookup} from "@/domain/railPath";
 import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
-import {useZoomRatio} from "@/views/mapContext";
 import {DECAL_KINDS, specPxToWorld} from "@/domain/mapElements";
+import {useUnitsPerPx} from "@/views/mapContext";
 
 /*
  * 区间图（用户 2026-09-15 定的规格）。
@@ -50,10 +50,9 @@ import {DECAL_KINDS, specPxToWorld} from "@/domain/mapElements";
  * <p>规格像素 → 世界单位的换算只有一处、也是唯一真源 {@link specPxToWorld}
  * （{@code 规格 × 6 / 倍率 / 视口比例}）。于是这里**不再有"规格 × 倍率"那套补丁**。</p>
  */
-const zoomRatio = useZoomRatio();
-const viewScale = computed(() => (props.camera.scale > 0 ? props.camera.scale : 1));
+const unitsPerPx = useUnitsPerPx();
 
-const stripeWidthPx = computed(() => specPxToWorld(DECAL_KINDS.stripeWidth, zoomRatio.value, viewScale.value));
+const stripeWidthPx = computed(() => specPxToWorld(DECAL_KINDS.stripeWidth, unitsPerPx.value));
 /**
  * 状态条相对线心**中心**的法向偏移（条中心落在第 1–2 px 的**中心** = 1.5 px）。
  *
@@ -61,8 +60,8 @@ const stripeWidthPx = computed(() => specPxToWorld(DECAL_KINDS.stripeWidth, zoom
  * 它写在线心的哪一侧由方向决定（见 `bands`），所以两侧的条各自落在"第 1–2 px"与"第 4–5 px" ——
  * 这正是"三根线"的读法（`stripeNear`/`stripeFar` 与线心中心对称，所以两侧用哪个偏移是一样的）。</p>
  */
-const stripeOffsetPx = computed(() => specPxToWorld(DECAL_KINDS.stripeNear, zoomRatio.value, viewScale.value));
-const baseWidthPx = computed(() => specPxToWorld(DECAL_KINDS.sectionBaseWidth, zoomRatio.value, viewScale.value));
+const stripeOffsetPx = computed(() => specPxToWorld(DECAL_KINDS.stripeNear, unitsPerPx.value));
+const baseWidthPx = computed(() => specPxToWorld(DECAL_KINDS.sectionBaseWidth, unitsPerPx.value));
 /**
  * 端点圆点的半径（**画布坐标单位**，与 `cx/cy` 同一套）：直接就是规格值。
  *
@@ -70,7 +69,7 @@ const baseWidthPx = computed(() => specPxToWorld(DECAL_KINDS.sectionBaseWidth, z
  * 画布坐标 × 倍率 = 屏幕像素（6× 时正好相等），所以半径 0.5 就是**屏幕上直径 1 px @6×**。
  * 曾经把它再按 `× 6 / 倍率` 换一次，量出来是 6 px（差了 6.7 倍，见 `check-web-section-three-lines`）。</p>
  */
-const endpointDotRadiusUnits = computed(() => specPxToWorld(DECAL_KINDS.endpointDot, zoomRatio.value, viewScale.value));
+const endpointDotRadiusUnits = computed(() => specPxToWorld(DECAL_KINDS.endpointDot, unitsPerPx.value));
 /** 选中时放大的量（画布单位）：给一点视觉反馈，但不改变常态尺寸。 */
 const endpointDotSelectedExtra = computed(() => DECAL_KINDS.endpointDot);
 

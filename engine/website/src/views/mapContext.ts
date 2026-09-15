@@ -1,7 +1,6 @@
 import {computed, inject, provide} from "vue";
 import type {ComputedRef, InjectionKey, Ref} from "vue";
 import type {Camera} from "@/domain/camera";
-import {REFERENCE_ZOOM} from "@/domain/mapElements";
 
 /*
  * ============================ 地图上下文（跨层注入） ============================
@@ -78,22 +77,20 @@ export function useBaseScale(): Ref<number> {
 }
 
 /**
- * **视口像素 → 世界单位**的换算（HTML 标记层用）。
+ * **规格像素 → 世界单位**的那个常量（`unitsPerPx` = 1 屏幕像素等于多少世界单位）。
  *
- * <p>标记层现在与 SVG 层**同一套坐标**（世界坐标）：外层容器承担相机的"平移 + 缩放"，
- * 于是标记的位置直接写世界坐标。但标记里的**尺寸与偏移是屏幕像素**（用户口径：6× 时 8 px），
- * 所以要用这个因子把它们折成世界单位。</p>
+ * <p>它由**取景**校准一次：取景时"世界跨度 ÷ 视口跨度"就是它。之后整张图的尺寸都用它换算，
+ * 于是**所有元素共用一处换算**，而"跟着相机缩放"是自动的（相机由外层承担）。</p>
  *
- * <p>口径与 SVG 层**同一式**（`mapElements.specPxToWorld`）：{@code 规格 × 倍率 / 6 / 相机比例}，
- * 屏幕上就是 {@code 规格 × 倍率 / 6} 像素。两处若不同源，同一张图上的线宽与图标就会脱层。</p>
+ * <p><b>不要**改成"1 / 当前相机比例"**：那会把缩放正好抵消掉 ⇒ 屏幕尺寸恒定
+ * （实测过 1× 与 5.35× 都量到 8 px），那是"屏幕固定大小"，不是地图。这条踩过好几次，
+ * 所以名字与注释都写死。</b></p>
  */
-export function useWorldPerPx(): ComputedRef<number> {
-	const camera = useCamera();
-	const ratio = useZoomRatio();
+export function useUnitsPerPx(): ComputedRef<number> {
+	const baseScale = useBaseScale();
 	return computed(() => {
-		const scale = camera.value.scale > 0 ? camera.value.scale : 1;
-		const zoom = ratio.value > 0 ? ratio.value : 1;
-		return zoom / REFERENCE_ZOOM / scale;
+		const scale = baseScale.value;
+		return scale > 0 ? 1 / scale : 1;
 	});
 }
 
