@@ -12,7 +12,8 @@
 		"test:bands": "node --experimental-strip-types --test scripts/section-bands.test.ts",
 		"test:elements": "node --experimental-strip-types --test scripts/map-elements.test.ts",
 		"test:signal": "node --experimental-strip-types --test scripts/signal-overlap.test.ts",
-		"test": "npm run test:plan && npm run test:bands && npm run test:elements && npm run test:signal"
+    "test:viewbox": "node --experimental-strip-types --test scripts/viewbox.test.ts",
+		"test": "npm run test:plan && npm run test:bands && npm run test:elements && npm run test:signal && npm run test:viewbox"
 	},
 	"dependencies": {
 		"naive-ui": "^2.42.0",

@@ -26,6 +26,19 @@ const CAMERA: InjectionKey<Ref<Camera>> = Symbol("mmtr-camera");
  */
 const ZOOM_RATIO: InjectionKey<Ref<number>> = Symbol("mmtr-zoom-ratio");
 
+/**
+ * **取景基准比例**的注入键（= `Camera.scale` 在 1× 时的值）。
+ *
+ * <p>用途只有一个：把"屏幕像素"的规格折算成**世界单位**。设了 `viewBox` 之后，线宽的单位是世界单位，
+ * 而规格是"6× 时 6 px、并随倍率缩放"，两者之间的换算需要"1× 时的比例"：
+ * {@code 世界宽度 = 规格 × 6 / 倍率 / 基准比例}。</p>
+ *
+ * <p>为什么不让各层自己拿 `Camera.scale` 顶替：那个值是"当前视口像素/世界单位"，
+ * 按它折算等于把线宽做成**屏幕固定**（1× 时 4 px 会变成 8.6 世界单位 = 17 格宽的轨，实测过）。
+ * 基准比例是"最后一次取景得到的比例"，只有持有相机的那一层知道，所以它跟着相机一起注入。</p>
+ */
+const BASE_SCALE: InjectionKey<Ref<number>> = Symbol("mmtr-base-scale");
+
 /*
  * ============================ 为什么注入键不导出 ============================
  *
@@ -44,9 +57,23 @@ const ZOOM_RATIO: InjectionKey<Ref<number>> = Symbol("mmtr-zoom-ratio");
  */
 
 /** 把地图上下文交给子层。只在画布组件的 `setup()` 里调一次。 */
-export function provideMapContext(camera: Ref<Camera>, zoomRatio: Ref<number>): void {
+export function provideMapContext(camera: Ref<Camera>, zoomRatio: Ref<number>, baseScale: Ref<number>): void {
 	provide(CAMERA, camera);
 	provide(ZOOM_RATIO, zoomRatio);
+	provide(BASE_SCALE, baseScale);
+}
+
+/**
+ * 读**取景基准比例**（1× 时的"视口像素/世界单位"）。
+ *
+ * <p>**必须在 `setup()` 里调用**，理由与 {@link useZoomRatio} 同。</p>
+ */
+export function useBaseScale(): Ref<number> {
+	const injected = inject(BASE_SCALE, undefined);
+	if (injected === undefined) {
+		throw new Error("useBaseScale() 必须在 provideMapContext() 的子树内、且必须在 setup() 里调用");
+	}
+	return injected;
 }
 
 /**

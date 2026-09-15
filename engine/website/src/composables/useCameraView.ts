@@ -288,6 +288,12 @@ export function useCameraView(options: {
 		 * 一个是"缩放到某处"的动作，一个是"现在多大"的读数。</p>
 		 */
 		zoomRatio: computed(() => zoomRatio(options.camera.value, baseScale.value)),
+		/**
+		 * 取景基准比例（1× 时的"视口像素/世界单位"）。
+		 *
+		 * <p>给渲染层把"屏幕像素"的规格折算成世界单位用（见 `mapContext.ts#useBaseScale`）。</p>
+		 */
+		baseScale,
 		viewport,
 		fit,
 		fitRegion,

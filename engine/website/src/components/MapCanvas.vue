@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch} from "vue";
 import {useCameraView} from "@/composables/useCameraView";
-import {boundsOf} from "@/domain/camera";
+import {boundsOf, viewBoxOf} from "@/domain/camera";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import type {Rail} from "@/domain/Rail";
@@ -114,7 +114,22 @@ const view = useCameraView({host, camera, content});
  * 子层只能通过 `useCamera()` / `useZoomRatio()` 读，且必须在 setup 里读 ——
  * 这样"把 inject 塞进 computed"那种静默降级的写法在类型上就写不出来（见 `mapContext.ts` 的说明）。</p>
  */
-provideMapContext(camera, view.zoomRatio);
+provideMapContext(camera, view.zoomRatio, view.baseScale);
+
+/**
+ * **渲染层唯一的坐标出口**：相机 → SVG `viewBox`。
+ *
+ * <p>于是这一层 SVG 里所有坐标（轨道、区间）**直接用世界坐标**，相机只改这一个属性 ——
+ * 不再有"每个元素各自把世界坐标投影成屏幕像素"这一步。固定的屏幕尺寸（线宽、1 px 端点）
+ * 由"规格 ÷ 比例"折算成世界单位，换算只在本层与其子层各一处。</p>
+ *
+ * <p>{@code preserveAspectRatio="none"}：viewBox 的世界宽高就是按视口尺寸与比例算出来的
+ * （见 `camera.ts#viewBoxOf`），两边本来同比例；设成 `none` 是为了掐掉浏览器那套
+ * "等比 + 居中"的第二套对账（历史文档里 `meet` 与实际系数差 35 倍那次就是它引起的）。</p>
+ */
+const viewBox = computed(() => viewBoxOf(camera.value, {width: view.width.value, height: view.height.value}));
+
+
 
 /** 悬停中的节点 key（信息卡）。 */
 const hoveredKey = ref("");
@@ -391,7 +406,20 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			`pickable` 只在"选中了某盏灯、正在改绑定"时为真：那时候选轨要能点，
 			所以这一层临时接管指针事件（`.hit` 只让描边本身可命中，空白处仍然穿透给画布拖动）。
 		-->
-		<svg class="rails" :class="{pickable: selectedSignal !== null}">
+		<!--
+			这一层 SVG 就是**相机**：`viewBox` 由相机算出来（`camera.ts#viewBoxOf`），
+			所以里面所有坐标（轨道、区间）都是**世界坐标**，不再经过任何手写投影。
+			`data-world-px-scale` 是"一个世界单位 = 多少个屏幕像素"（= 相机比例），
+			供检查脚本把世界单位的线宽换算成屏幕像素后再断言 —— 让页面自己报出这个比例，
+			比让每个脚本各自用 `box.width / viewBox.width` 猜一遍可靠。
+		-->
+		<svg
+			class="rails"
+			:class="{pickable: selectedSignal !== null}"
+			:viewBox="viewBox"
+			:data-world-px-scale="camera.scale"
+			preserveAspectRatio="none"
+		>
 			<!-- 路线图：切到区间图时整层不渲染（用户规格："路线图直接隐身"） -->
 			<RailLayer
 				v-if="showRoute !== false"

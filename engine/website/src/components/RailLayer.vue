@@ -2,12 +2,12 @@
 import {computed, ref, watch} from "vue";
 import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
-import {buildStraightDirections, railScreenPath, straightLookup} from "@/domain/railPath";
-import {DECAL_KINDS, mapScale} from "@/domain/mapElements";
 import {useZoomRatio} from "@/views/mapContext";
+import {buildStraightDirections, railWorldPath, straightLookup} from "@/domain/railPath";
+import {DECAL_KINDS, specPxToWorld} from "@/domain/mapElements";
 
 /*
- * 轨道层：把引擎给的每条轨画出来（SVG，**屏幕坐标**）。
+ * 轨道层：把引擎给的每条轨画出来（SVG，**世界坐标**；相机由外层 SVG 的 `viewBox` 承担）。
  *
  * <p><b>线型规则（用户要求）：x 或 z 任一相同 → 直线，其余 → 曲线。</b>
  * 判断用世界坐标（`Rail.isAxisAligned`），不用屏幕坐标——屏幕坐标会随缩放取整，
@@ -53,22 +53,17 @@ const emit = defineEmits<{
 /** 悬停中的轨（hex）：候选轨上加一点反馈，让人知道"这条能点"。 */
 const hoveredRail = ref("");
 
-/** 缩放倍率（画布注入；拿不到按 1 算）。**必须在 setup 里读**，理由见 `useZoomRatio`。 */
-const zoomRatio = useZoomRatio();
-
 /**
- * **本图层所有像素量共用的因子**：把规格值（见 `DECAL_KINDS`）换算到当前屏幕。
+ * 本图层的线宽（**世界单位**：这一层画在设了 `viewBox` 的 SVG 里，相机由 viewBox 承担）。
  *
- * <p>用户 2026-09-15 的要求是"**所有**地图元素都有类似效果，不是单单几个图标" ——
- * 轨道线宽、护套、命中区与图标、菱形、区间带全都乘**同一个因子**，于是相机推近时整张图一起长，
- * 而不是线条不动、图标在飘（那正是"没做到类似摄像机在地图上"的观感来源）。</p>
+ * <p>换算只有一处、也是唯一真源 {@link specPxToWorld}：{@code 规格 × 6 / 倍率 / 视口比例}。
+ * 于是这里**不再有 `sizeFactor`（倍率/6）那套补丁** —— 那是手写投影时代的产物：当时坐标本身就是
+ * 屏幕像素，线宽也得跟着乘同一个因子才不至于与坐标脱节。</p>
  */
-const sizeFactor = computed(() => mapScale(zoomRatio.value));
-
-/** 本图层各处的**实际**屏幕像素（规格 × 因子）。样式表用这几个值，所以线宽自然跟着倍率走。 */
-const railWidthPx = computed(() => `${DECAL_KINDS.railWidth * sizeFactor.value}px`);
-const railShadowWidthPx = computed(() => `${DECAL_KINDS.railShadowWidth * sizeFactor.value}px`);
-const railHitWidthPx = computed(() => `${DECAL_KINDS.railHitWidth * sizeFactor.value}px`);
+const zoomRatio = useZoomRatio();
+const railWidthPx = computed(() => `${specPxToWorld(DECAL_KINDS.railWidth, zoomRatio.value, props.camera.scale)}`);
+const railShadowWidthPx = computed(() => `${specPxToWorld(DECAL_KINDS.railShadowWidth, zoomRatio.value, props.camera.scale)}`);
+const railHitWidthPx = computed(() => `${specPxToWorld(DECAL_KINDS.railHitWidth, zoomRatio.value, props.camera.scale)}`);
 
 /** 这一层现在能不能点轨（有候选才有意义）。 */
 const pickable = computed(() => props.candidateRails !== undefined && props.candidateRails.length > 0);
@@ -137,7 +132,7 @@ const drawn = computed(() => {
 		 */
 		// 整根轨的画法在 domain/railPath.ts：区间层截同一根轨的一段时走**同一个**函数，
 		// 所以轨道线与它上面的区间带必然重合（用户 2026-09-15 的要求）。
-		const path = railScreenPath(rail, props.camera, straightLookup(straightDirections.value));
+		const path = railWorldPath(rail, straightLookup(straightDirections.value));
 		if (path === "") {
 			continue;
 		}
@@ -261,7 +256,7 @@ watch(drawn, items => {
 	stroke-linecap: round;
 }
 
-/* 本体：**4 px 纯白**（用户规格；随倍率缩放，见 sizeFactor）。所有状态在下面按类覆盖。 */
+/* 本体：**4 px 纯白**（用户规格；以世界单位给出，见 `railWidthPx`）。所有状态在下面按类覆盖。 */
 .rail {
 	fill: none;
 	stroke: #ffffff;

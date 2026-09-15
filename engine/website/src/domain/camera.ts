@@ -41,15 +41,41 @@ export interface Rect {
 /**
  * 摄像机状态（纯数据，可被 Vue 追踪）。
  *
- * <p>刻意做成纯对象：这样它既能放在 `ref` 里整块替换，也能放进 `reactive` 里被 watch，
- * 而且任何组件都能独立算出屏幕坐标，不需要别人把结果喂给它。</p>
+ * <h2>渲染层怎么用它：只出**一个** viewBox</h2>
+ * <p>{@link Camera} 的 `originX/originY/scale` 与 SVG 的 `viewBox` 是**同一件事**：</p>
+ * <pre>
+ *   viewBox = "originX  originY  width/scale  height/scale"
+ * </pre>
+ * <p>于是**所有图层的坐标直接用世界坐标**，相机只改这一个属性 —— 不再有"每个元素把世界坐标投影成
+ * 屏幕坐标"这一步（那一步曾经散在 5 个图层与 4 个标记组件里，是位置/旋转/缩放三类缺陷的共同来源）。</p>
+ *
+ * <p>`scale` 的物理含义因此统一成"**一个视口像素对应多少世界单位**"（= 世界单位到视口的比例），
+ * 这个含义同时适用于视图层（指针/滚轮：那里的坐标本来就是视口像素），
+ * 所以 `panBy` / `zoomAt` / `centerOn` 三处数学**一个字都不用改**。</p>
  */
 export interface Camera {
 	/** 世界坐标下，视口左上角对应的点。 */
 	readonly originX: number;
 	readonly originY: number;
-	/** 一个世界单位占多少屏幕像素（必须 &gt; 0）。 */
+	/** 世界单位 → 视口像素的比例（必须 &gt; 0）。 */
 	readonly scale: number;
+}
+
+/**
+ * 摄像机 → SVG `viewBox`（**渲染层唯一的坐标出口**）。
+ *
+ * <p>以视口像素为单位给出宽高（`hostWidth/hostHeight`），再按比例折回世界单位：
+ * `宽 = 视口宽 / scale`。于是世界点 `(x, y)` 恰好落在视口的 `((x − originX) × scale, …)` 处 ——
+ * 与 {@link worldToScreen} 同一式，也就是"世界不动、动的是相机"这句话的实现。</p>
+ *
+ * <p>`host` 尺寸无效（还没量出来）时给一个 1×1 的退化解，不返回空串 —— 空 `viewBox` 会让 SVG
+ * 退回"元素像素 = 用户单位"，那样画面会突然跳到 1:1（实测过的现象）。</p>
+ */
+export function viewBoxOf(camera: Camera, host: {width: number; height: number}): string {
+	const scale = camera.scale > 0 ? camera.scale : 1;
+	const width = host.width > 0 ? host.width / scale : 1;
+	const height = host.height > 0 ? host.height / scale : 1;
+	return `${camera.originX} ${camera.originY} ${width} ${height}`;
 }
 
 /** 取景留白：四周各留多少**屏幕像素**（口径见 `fitView` 的注释）。 */

@@ -218,6 +218,18 @@
     极差 0.0164 px，折角与 `headingOf(角)` 一致度 1.000，外层带 rotate 的 0 盏。
     量法三个坑也记下了：`getScreenCTM` 不是文档坐标、量圆的前要先关 `drop-shadow`、箭头要比相对旋转中心。
 
+  - **164 = 坐标系重构（一）：viewBox 当相机**：用户说「绘图系统就是一坨，有没有什么框架可用」——
+    结论是**不引框架、改坐标系**，因为病根是"世界坐标被蒸发掉了"：路径在渲染时就算成屏幕像素，
+    于是 54 处各自乘倍率；`REFERENCE_ZOOM` 把"固定屏幕大小"与"一切都随相机缩放"混成一件事；
+    旋转中心与锚点各算各的（信号灯那一串缺陷全出在这里）。
+    本阶段：`camera.ts#viewBoxOf` 出一个 `viewBox` 字符串代替所有手写投影，`railPath.ts` 的路径点
+    直接就是世界坐标（几何本来就全在世界坐标里算，只把最后那次投影换成恒等），线宽统一走
+    `specPxToWorld(规格, 倍率, 相机比例)`。**口径不变**：屏幕像素 = 规格 × 倍率 / 6 ——
+    页面上逐值对账（1× 与 5.35× 下轨道 0.667/3.567、线心 1.000/5.350、状态条 0.333/1.783、
+    端点 0.167/0.892 px，与重构前相同）；viewBox 映射与 `worldToScreen` 一致到 **2×10⁻⁶ px**；
+    新增 `scripts/viewbox.test.ts`（6 条，含"声明式 viewBox 与指针用的 worldToScreen 必须同一个映射"、
+    "specPxToWorld × 相机比例 == screenPxOfSpec"）。三根线等页面检查全通过。
+    **下一阶段**：HTML 标记层（节点/灯/道岔）仍用 `decalPlacement` 手写投影，待统一。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。

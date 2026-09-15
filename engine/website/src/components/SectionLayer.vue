@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import {computed} from "vue";
-import type {Camera} from "@/domain/camera";
 import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
 import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
-import {railSpanPath, type StraightLookup} from "@/domain/railPath";
+import {railSpanWorldPath, type StraightLookup} from "@/domain/railPath";
+import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
-import {DECAL_KINDS, scaled} from "@/domain/mapElements";
 import {useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, specPxToWorld} from "@/domain/mapElements";
 
 /*
  * 区间图（用户 2026-09-15 定的规格）。
@@ -44,9 +44,16 @@ import {useZoomRatio} from "@/views/mapContext";
  * （`domain/mapElements.ts#DECAL_KINDS`），并且都**乘当前倍率** —— 口径是"世界不动、动的是摄像机"，
  * 所以规格值（6× 下 6 px 线心、2 px 状态条）要跟着倍率一起变。
  */
-/** 缩放倍率（画布注入；拿不到按 1 算）。**必须在 setup 里读**，理由见 `useZoomRatio`。 */
+/**
+ * 本层的尺寸（**世界单位**）：这一层画在设了 `viewBox` 的 SVG 里，相机由 viewBox 承担。
+ *
+ * <p>规格像素 → 世界单位的换算只有一处、也是唯一真源 {@link specPxToWorld}
+ * （{@code 规格 × 6 / 倍率 / 视口比例}）。于是这里**不再有"规格 × 倍率"那套补丁**。</p>
+ */
 const zoomRatio = useZoomRatio();
-const stripeWidthPx = computed(() => scaled(DECAL_KINDS.stripeWidth, zoomRatio.value));
+const viewScale = computed(() => (props.camera.scale > 0 ? props.camera.scale : 1));
+
+const stripeWidthPx = computed(() => specPxToWorld(DECAL_KINDS.stripeWidth, zoomRatio.value, viewScale.value));
 /**
  * 状态条相对线心**中心**的法向偏移（条中心落在第 1–2 px 的**中心** = 1.5 px）。
  *
@@ -54,8 +61,8 @@ const stripeWidthPx = computed(() => scaled(DECAL_KINDS.stripeWidth, zoomRatio.v
  * 它写在线心的哪一侧由方向决定（见 `bands`），所以两侧的条各自落在"第 1–2 px"与"第 4–5 px" ——
  * 这正是"三根线"的读法（`stripeNear`/`stripeFar` 与线心中心对称，所以两侧用哪个偏移是一样的）。</p>
  */
-const stripeOffsetPx = computed(() => scaled(DECAL_KINDS.stripeNear, zoomRatio.value));
-const baseWidthPx = computed(() => scaled(DECAL_KINDS.sectionBaseWidth, zoomRatio.value));
+const stripeOffsetPx = computed(() => specPxToWorld(DECAL_KINDS.stripeNear, zoomRatio.value, viewScale.value));
+const baseWidthPx = computed(() => specPxToWorld(DECAL_KINDS.sectionBaseWidth, zoomRatio.value, viewScale.value));
 /**
  * 端点圆点的半径（**画布坐标单位**，与 `cx/cy` 同一套）：直接就是规格值。
  *
@@ -63,7 +70,7 @@ const baseWidthPx = computed(() => scaled(DECAL_KINDS.sectionBaseWidth, zoomRati
  * 画布坐标 × 倍率 = 屏幕像素（6× 时正好相等），所以半径 0.5 就是**屏幕上直径 1 px @6×**。
  * 曾经把它再按 `× 6 / 倍率` 换一次，量出来是 6 px（差了 6.7 倍，见 `check-web-section-three-lines`）。</p>
  */
-const endpointDotRadiusUnits = computed(() => DECAL_KINDS.endpointDot);
+const endpointDotRadiusUnits = computed(() => specPxToWorld(DECAL_KINDS.endpointDot, zoomRatio.value, viewScale.value));
 /** 选中时放大的量（画布单位）：给一点视觉反馈，但不改变常态尺寸。 */
 const endpointDotSelectedExtra = computed(() => DECAL_KINDS.endpointDot);
 
@@ -111,13 +118,15 @@ const props = defineProps<{
 	sections: readonly Section[];
 	/** 要画出 6 px 线心的那些轨（区间按弧窗切它们的形状）。 */
 	rails: readonly Rail[];
-	camera: Camera;
+
 	/** 选中的区间 id：加宽并置顶。 */
 	selectedSection?: string;
 	/** 轨 hex → 轨实体（按弧窗切片时要用）。 */
 	railByHex?: ReadonlyMap<string, Rail>;
 	/** 节点 → 该节点上直线轨的方向（与路线图同一份，曲线端点切线要用）。 */
 	straightLookup?: StraightLookup;
+	/** 当前相机：**只用来做尺寸换算**（位置一点不用它 —— 相机由外层 viewBox 承担）。 */
+	camera: Camera;
 	/** 轨 hex → 轨道线颜色（保留：区间图默认不用它，但选中态之类仍可能需要）。 */
 	railColorByHex?: ReadonlyMap<string, string>;
 }>();
@@ -178,7 +187,7 @@ const bands = computed(() => {
 			if (rail === undefined) {
 				return;
 			}
-			const path = railSpanPath(rail, span.from, span.to, props.camera, straight());
+			const path = railSpanWorldPath(rail, span.from, span.to, straight());
 			if (path === "") {
 				return;
 			}
@@ -216,7 +225,7 @@ const baseLines = computed(() => {
 			continue;
 		}
 		// 整根轨：两端点弧长就是 0 与轨长（`railSpanPath` 内部按弧长比例切片）
-		const path = railSpanPath(rail2, 0, railLengthOf(rail2), props.camera, straight());
+		const path = railSpanWorldPath(rail2, 0, railLengthOf(rail2), straight());
 		if (path !== "") {
 			out.push({key: rail.hex, d: path});
 		}
@@ -261,7 +270,7 @@ const endpointDots = computed(() => {
 			if (rail === undefined) {
 				continue;
 			}
-			const path = railSpanPath(rail, span.from, span.to, props.camera, straight());
+			const path = railSpanWorldPath(rail, span.from, span.to, straight());
 			if (path === "") {
 				continue;
 			}

@@ -165,6 +165,38 @@ export function scaled(specPx: number, zoomRatio: number): number {
 }
 
 /**
+ * **规格像素 → 世界单位**的换算（设了 `viewBox` 的 SVG 里，线宽与半径的单位是世界单位）。
+ *
+ * <p>口径（用户 2026-09-15 定死，见 commit `fa18932`）：**6× 时等于规格值，其余按倍率线性缩放**。
+ * 于是屏幕像素 = {@code 规格 × 倍率 / 6}，而"屏幕像素 ÷ 相机比例"就是世界单位：</p>
+ * <pre>
+ *   世界单位 = 规格 × 倍率 / REFERENCE_ZOOM / 相机比例
+ * </pre>
+ *
+ * <p>代入 SVG 的映射（一个世界单位 = 相机比例个视口像素）后，屏幕宽度正好回到
+ * {@code 规格 × 倍率 / 6} —— 与重构前**逐值一致**，所以这次重构只换坐标系、不换口径。
+ * 实测：1× 时轨道线屏幕 0.667 px、6.15× 时 4.10 px（与重构前相同）。</p>
+ *
+ * <p><b>为什么不能少乘 REFERENCE_ZOOM</b>：倍率是"相对取景"的，而"6×"是另一件事
+ * （取景基准与 6 之间没有数学关系）。少乘它会让 1× 时的线宽大 6 倍（实测过：24 px 的轨）。
+ * 也不能多乘它 —— 这两种错法都出现过一次，所以这里把三段各自的意思写死。</p>
+ *
+ * @param specPx    规格像素值（{@link REFERENCE_ZOOM} 下的屏幕像素）
+ * @param zoomRatio 当前倍率（1 = 正好取景；相机层注入）
+ * @param viewScale 当前相机比例（{@link Camera.scale}：一个视口像素对应多少世界单位）
+ */
+export function specPxToWorld(specPx: number, zoomRatio: number, viewScale: number): number {
+	const zoom = zoomRatio > 0 ? zoomRatio : 1;
+	const scale = viewScale > 0 ? viewScale : 1;
+	return (specPx * zoom) / REFERENCE_ZOOM / scale;
+}
+
+/** 规格像素 → 屏幕像素（`viewBox` 时代的口径：6× 时等于规格值，其余按倍率）。 */
+export function screenPxOfSpec(specPx: number, zoomRatio: number): number {
+	return (specPx * (zoomRatio > 0 ? zoomRatio : 1)) / REFERENCE_ZOOM;
+}
+
+/**
  * **每一层都要用的那个因子**：把"图上任何一个像素量"从规格换算到当前屏幕。
  *
  * <p>存在的理由（用户 2026-09-15 的要求："这个是需要所有地图元素都有类似效果的，不是单单几个图标"）：

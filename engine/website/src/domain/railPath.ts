@@ -12,8 +12,8 @@
  * 因为它们本来就是同一条线的两段。</p>
  */
 
-import {worldToScreen, type Camera} from "@/domain/camera";
-import {linePath, railCurvePath, type PlanePoint} from "@/domain/railGeometry";
+import type {PlanePoint} from "@/domain/railGeometry";
+import {linePath, railCurvePath} from "@/domain/railGeometry";
 import type {Rail} from "@/domain/Rail";
 
 /** 一根轨的两个端点键（引擎的节点键就是 `x,y,z`）。 */
@@ -60,22 +60,25 @@ export function straightLookup(directions: ReadonlyMap<string, PlanePoint>): Str
 }
 
 /**
- * 一根轨**整根**画出来的 SVG 路径（屏幕坐标）。
+ * 一根轨**整根**画出来的 SVG 路径（**世界坐标**：相机由 viewBox 承担，这里不再投影）。
  *
  * <p>线型规则（用户要求）：同一轴（x 或 z 相同）→ 两端点直线；斜向 → 简化曲线，端点切线取自引擎采样的
  * 真实轨道。所有阈值都在**世界平面**里判，不随缩放变（见 `railGeometry.railCurvePath` 的说明）。</p>
  */
-export function railScreenPath(rail: Rail, camera: Camera, straight: StraightLookup): string {
+export function railWorldPath(rail: Rail, straight: StraightLookup): string {
 	const from = {x: rail.planeX1, y: rail.planeY1};
 	const to = {x: rail.planeX2, y: rail.planeY2};
 	if (rail.isAxisAligned) {
-		return linePath(worldToScreen(camera, from.x, from.y), worldToScreen(camera, to.x, to.y));
+		return linePath(from, to);
 	}
-	return curvePath(rail, from, to, rail.path.map(point => ({x: point.x, y: point.z})), camera, straight);
+	return curvePath(rail, from, to, rail.path.map(point => ({x: point.x, y: point.z})), straight);
 }
 
 /**
- * 一根轨上**一段弧窗**画出来的 SVG 路径（屏幕坐标）。
+ * 一根轨上**一段弧窗**画出来的 SVG 路径（**世界坐标**）。
+ *
+ * <p><b>坐标已是世界坐标</b>（这个文件不再做投影）：画在设了 `viewBox` 的 SVG 里，相机由 viewBox 承担，
+ * 所以路径点直接就是世界坐标 —— 见 `MapCanvas` 的 `viewBox` 与 `docs/` 里"坐标系"那一节。</p>
  *
  * <p>做法：把引擎给的轨采样点按弧长**切**到 `[arcFrom, arcTo]`（两端补精确端点），再把这段喂给
  * **同一个** `railCurvePath` —— 所以它与整根轨那条线在重叠处必然重合。</p>
@@ -84,9 +87,9 @@ export function railScreenPath(rail: Rail, camera: Camera, straight: StraightLoo
  * `i / (n-1) × 轨长`。区间给的 `from`/`to` 就是沿轨弧长，按比例取下标即可。
  * 端点落在两个采样点之间时**线性插值**补出来，免得带子比轨短一截。</p>
  */
-export function railSpanPath(rail: Rail, arcFrom: number, arcTo: number, camera: Camera, straight: StraightLookup): string {
+export function railSpanWorldPath(rail: Rail, arcFrom: number, arcTo: number, straight: StraightLookup): string {
 	const samples = rail.path.map(point => ({x: point.x, y: point.z}));
-	const project = (point: PlanePoint) => worldToScreen(camera, point.x, point.y);
+	const project = (point: PlanePoint) => point;
 	if (samples.length < 2) {
 		// 引擎没给形状：退回两端点直线（与轨道层的兜底一致）
 		return linePath(project(interpolateEndpoints(rail, arcFrom)), project(interpolateEndpoints(rail, arcTo)));
@@ -107,7 +110,7 @@ export function railSpanPath(rail: Rail, arcFrom: number, arcTo: number, camera:
 	const ordered = arcTo >= arcFrom ? inner : [...inner].reverse();
 	const from = sampleAtArc(samples, total, arcFrom);
 	const to = sampleAtArc(samples, total, arcTo);
-	return curvePath(rail, from, to, [from, ...ordered, to], camera, straight);
+	return curvePath(rail, from, to, [from, ...ordered, to], straight);
 }
 
 /**
@@ -146,12 +149,12 @@ function railLength(rail: Rail, samples: readonly PlanePoint[]): number {
 }
 
 /** 共用的曲线构造：与轨道层完全同一条实现。 */
-function curvePath(rail: Rail, from: PlanePoint, to: PlanePoint, points: readonly PlanePoint[], camera: Camera, straight: StraightLookup): string {
+function curvePath(rail: Rail, from: PlanePoint, to: PlanePoint, points: readonly PlanePoint[], straight: StraightLookup): string {
 	return railCurvePath(
 		from,
 		to,
 		points,
-		point => worldToScreen(camera, point.x, point.y),
+		point => point,
 		straight,
 		railNodeKeys(rail),
 	);
