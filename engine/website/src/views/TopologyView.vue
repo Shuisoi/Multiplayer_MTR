@@ -55,12 +55,17 @@ const points = ref<Point[]>([]);
  */
 const sections = ref<Section[]>([]);
 /**
- * 区间图层要不要画（默认**画**，用户 2026-09-15 要求加一个显示/隐藏按钮）。
+ * 当前看哪张图（用户 2026-09-15 定的规格：**两张图，不是一个图层开关**）。
  *
- * <p>隐藏时传空数组给画布，而不是在组件里判一个 `visible` 标志：不画就是不画，
- * 省掉整轮投影与 DOM 节点（实测 101 个区间 → 322 条 path）。</p>
+ * <ul>
+ *   <li>{@code route} = 路线图：**4 px 纯白**线 + 轨道节点圆点，回答"世界上有哪些轨、怎么连"。</li>
+ *   <li>{@code section} = 区间图：在**同一位置**画 **6 px 线**，线的两侧各 2 px 用来表示区间，节点隐身，
+ *       改用圆点表示**区间端点**。</li>
+ * </ul>
+ *
+ * <p>所以切到区间图时路线图**直接隐身**（不是叠在上面）：两张图共用同一套几何，切换的是"看结构"还是"看闭塞"。</p>
  */
-const showSections = ref(true);
+const view = ref<"route" | "section">("route");
 /** 取数状态：loading / ready / error，界面按它显示不同提示。 */
 const status = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
@@ -661,7 +666,8 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 			:signals="signals"
 			:points="displayPoints"
 			:rail-ends="railEndsByHex"
-			:sections="showSections ? sections : []"
+			:sections="view === 'section' ? sections : []"
+			:show-route="view === 'route'"
 			:rail-color-by-hex="railColorByHex"
 			:rail-by-hex="railByHex"
 			:straight-lookup="straightForCurves"
@@ -732,17 +738,24 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 			</span>
 			<button class="action" type="button" @click="canvas?.focusPoints()">看道岔</button>
 			<button class="action" type="button" @click="canvas?.focusSignals()">看信号灯</button>
-			<!-- 区间图层开关：区间带压在轨道上，需要看裸轨或者觉得太花时可以关掉 -->
+			<!-- 两张图：路线图（结构） / 区间图（闭塞）。切过去时另一张**完全隐身** -->
 			<button
 				class="action"
-				:class="{ active: showSections }"
+				:class="{ active: view === 'route' }"
 				type="button"
-				:title="showSections
-					? `隐藏区间图层（现在画了 ${sections.length} 个区间）`
-					: `显示区间图层（按方向画成色带，颜色取自轨道线；共 ${sections.length} 个区间）`"
-				@click="showSections = !showSections"
+				title="路线图：4 px 纯白线 + 轨道节点。看世界上有哪些轨、怎么连"
+				@click="view = 'route'"
 			>
-				区间 {{ showSections ? "显示中" : "已隐藏" }}
+				路线图
+			</button>
+			<button
+				class="action"
+				:class="{ active: view === 'section' }"
+				type="button"
+				:title="`区间图：同一位置 6 px 线，两侧 2 px 表示区间（红=占用 / 黄=空闲 / 虚线黄=其他），圆点=区间端点。共 ${sections.length} 个区间`"
+				@click="view = 'section'"
+			>
+				区间图
 			</button>
 			<button class="action" type="button" @click="loadWithScan">重新读取</button>
 			<!-- 自动刷新：默认关。开着的时候按拍重读灯与道岔，屏幕上的 aspect 才跟得上车走 -->

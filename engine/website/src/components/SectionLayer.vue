@@ -1,207 +1,284 @@
 <script setup lang="ts">
 import {computed} from "vue";
-import {type Camera} from "@/domain/camera";
+import type {Camera} from "@/domain/camera";
 import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
 import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
 import {railSpanPath, type StraightLookup} from "@/domain/railPath";
 import type {Rail} from "@/domain/Rail";
-import {SECTION_OCCUPIED_COLOR} from "@/domain/railColors";
 
 /*
- * 区间层（方案 B）：**沿轨法向偏移的"方向带"**。
+ * 区间图（用户 2026-09-15 定的规格）。
  *
- * <h3>为什么是两条带</h3>
- * <p>区间是"某一行车方向下的一段路"，不是"一段轨"。双向线路上同一根轨的南行与北行**各有一个区间**，
- * 所以一根轨上同时存在两段互相独立的区间 —— 把它们画在同一条线上就分不开了。方案 B 的做法：
- * 把同一个方向的所有区间沿轨的**法向**偏移一段固定距离，于是两个方向自然成两条并排的带，
- * 每条带再被**它自己方向的灯**切成一段一段。这正是现实里双向区间的样子
- * （分界点两架背靠背的灯，各管一个方向）。</p>
+ * <h3>画法（规格原文）</h3>
+ * <p>"当切换至区间图时，路线图直接隐身。在原来的路线图位置画 6px 线，线的第 1-2px、4-5px 用来表示区间，
+ * 轨道节点也隐身，圆点用来表示区间端点。"</p>
  *
- * <h3>为什么偏移量按方向定，而不是按"第几条"定</h3>
- * <p>按出现顺序编号（第一条偏移 +5、第二条 −5）会让**同一根轨上同方向的多个区间**分到两条带上
- * （现场实测有一根轨被 5 个区间覆盖），看图的人会以为它们是两个方向。按**方向**定偏移则天然自洽：
- * 南行永远在法向一侧、北行永远在另一侧，重叠的区间落回同一条带并**叠色**，一眼看出"这里区间重叠"。</p>
+ * <pre>
+ *   ────────────────────────────  ← 6 px 白线（占轨道原来的位置）
+ *   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  ← 第 1–2 px：一个方向的区间
+ *   ────────────────────────────      （中间 2 px 留白 = 线心）
+ *   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  ← 第 4–5 px：另一个方向的区间
+ * </pre>
  *
- * <h3>几何从哪来</h3>
- * <p>折线点由**引擎采样**（`spans[].points`，世界坐标），这里只做"投影到屏幕 + 法向偏移"，
- * 不重算轨的弧长与形态 —— 引擎是几何的唯一真源（与轨道层同一条规矩）。</p>
+ * <p>于是"两根并排的股道"看起来就是两条（都是 6 px，一点不糊），而每一条自己身上有两道 2 px 的状态色 ——
+ * 这个空间尺度远小于 8 m 的股道间距，所以永远不会串到邻轨上去（第一版 5 px 宽带糊掉的就是这个原因）。</p>
+ *
+ * <h3>颜色（规格原文）</h3>
+ * <p>"因为有区间端点，所以区间颜色只需要有红，黄，虚线黄颜色即可。"</p>
+ * <ul>
+ *   <li><b>红</b> = 占用（有人）</li>
+ *   <li><b>黄</b> = 空闲（没人）</li>
+ *   <li><b>虚线黄</b> = 其他（被道岔切断 / 走不到 / 没入口灯等异常情形）</li>
+ * </ul>
+ *
+ * <h3>几何</h3>
+ * <p>线本身用**网页画轨道线的同一套几何**（`domain/railPath.ts`），所以区间与轨道位置必然一致；
+ * 状态条则是把那条线按法向偏移 1.5 px / 4.5 px 得到的。实现上走 `offsetSvgPath`：它把路径按法向逐点偏移，
+ * 于是**一条 2 px 宽、偏移 1.5 px 的线**恰好覆盖第 1–2 px，偏移 4.5 px 的覆盖第 4–5 px。</p>
  */
+
+/*
+ * 线心位置 = **6 px**（用户规格），样式表里写死；状态条的偏移见 STRIPE_* 常量。
+ */
+/** 两条状态条的中心偏移（用户规格：第 1–2 px 与第 4–5 px ⇒ 中心在 ±1.5 / ±4.5）。 */
+const STRIPE_OFFSET_PX = 4.5;
+const STRIPE_NEAR_OFFSET_PX = 1.5;
+/** 状态条宽度（用户规格：各 2 px）。 */
+const STRIPE_WIDTH_PX = 2;
+
+/** 三种状态色（用户规格）。线心与端点的颜色也从这几个常量走，样式表里只留线宽。 */
+const COLOR_OCCUPIED = "#e5484d";   // 红 = 占用
+const COLOR_FREE = "#e8c547";       // 黄 = 空闲
+const COLOR_ANOMALY = "#e8c547";    // 虚线黄 = 其他（同一个黄，靠 stroke-dasharray 区分）
 
 const props = defineProps<{
 	sections: readonly Section[];
+	/** 要画出 6 px 线心的那些轨（区间按弧窗切它们的形状）。 */
+	rails: readonly Rail[];
 	camera: Camera;
-	/** 选中的区间 id：加粗并置顶。 */
+	/** 选中的区间 id：加宽并置顶。 */
 	selectedSection?: string;
-	/**
-	 * 轨 hex → 轨道线颜色（`domain/railColors.ts`）。**区间带用轨道的颜色**。
-	 *
-	 * <p>用户 2026-09-15 的要求："区间颜色从目前 web 生成的线派生，别独立生成了"。
-	 * 区间本来就是"某段轨上的一个弧窗"，它画出来的颜色必须与那段轨一样，否则同一段路在屏幕上是两种颜色，
-	 * 看图的人会以为它们是两样东西。</p>
-	 *
-	 * <p>缺省回退到灰色（找不到那根轨时），而不是另起一套配色。</p>
-	 */
-	railColorByHex?: ReadonlyMap<string, string>;
-	/**
-	 * 轨 hex → 轨实体：区间带要**用网页自己画那条轨线的同一套几何**（用户 2026-09-15 的要求）。
-	 * 所以这里需要轨本身（端点、采样点），不只是颜色。
-	 */
+	/** 轨 hex → 轨实体（按弧窗切片时要用）。 */
 	railByHex?: ReadonlyMap<string, Rail>;
-	/**
-	 * "该节点上的直线轨方向"查表（`domain/railPath.ts#straightLookup`）。
-	 *
-	 * <p>必须与轨道层**同一份**：曲线端点的切线正是靠它做到"与相邻直线轨共线"，
-	 * 用不同的一份就会让带子与轨线在节点处错开。</p>
-	 */
+	/** 节点 → 该节点上直线轨的方向（与路线图同一份，曲线端点切线要用）。 */
 	straightLookup?: StraightLookup;
+	/** 轨 hex → 轨道线颜色（保留：区间图默认不用它，但选中态之类仍可能需要）。 */
+	railColorByHex?: ReadonlyMap<string, string>;
 }>();
 
-/** 缺省查表：没有直线方向可用（全部按采样点估切向）。 */
 const NO_STRAIGHT: StraightLookup = () => null;
+const straight = () => props.straightLookup ?? NO_STRAIGHT;
 
-/** 找不到轨色时的回退（与轨道层最慢那一档同色，而不是新造一个颜色）。 */
-const FALLBACK_RAIL_COLOR = "#4e585f";
-
-/**
- * 轨 hex 的另一种端点写法（两段各三个 int 换个顺序）。
- *
- * <p>为什么需要它：引擎的轨 hex **是无向**的（`A→B` 与 `B→A` 是同一根轨），而区间里的 span
- * 与拓扑里的轨**不保证用同一种写法**。实测现场：区间 `-10,-59,-154` 的那一段写的 hex，
- * 在拓扑里是**反过来的**那一种 —— 于是网页拿它查不到颜色，那一条带就掉进了回退灰，
- * 与它脚下那根轨的颜色对不上（用户看到的"区间和线路不一样"里就有这一处）。</p>
- *
- * <p>判据：把 hex 按 `-` 切成 6 段（两根端点 × x,y,z），交换前 3 段与后 3 段。</p>
- */
+/** 轨 hex 的另一种端点写法（无向 id；区间与拓扑的写法不保证一致，见 notes）。 */
 function altHex(hex: string): string {
 	const parts = hex.split("-");
 	return parts.length === 6 ? [...parts.slice(3), ...parts.slice(0, 3)].join("-") : hex;
 }
 
-/** 取轨色：先按原写法查，再按反向写法查，最后回退。 */
-function railColorOf(hex: string): string {
-	const map = props.railColorByHex;
-	if (map === undefined) {
-		return FALLBACK_RAIL_COLOR;
+/** 取轨：先按原写法、再按反向写法。 */
+function railOf(hex: string): Rail | undefined {
+	return props.railByHex?.get(hex) ?? props.railByHex?.get(altHex(hex));
+}
+
+/** 区间状态：红 / 黄 / 虚线黄（用户规格的三种）。 */
+function stateOf(section: Section): "occupied" | "free" | "anomaly" {
+	if (section.occupied) {
+		return "occupied";
 	}
-	const direct = map.get(hex);
-	if (direct !== undefined) {
-		return direct;
+	/*
+	 * "其他"（虚线黄）：这条区间**当前不是一条能走通的进路** ——
+	 * 没有出口灯（走不到下一段/撞在道岔禁行侧），或者链没接上下一个区间。
+	 * 判据都在引擎已经发出来的字段里，不在前端猜几何。
+	 */
+	if (section.exitSignal === "" || section.next === "") {
+		return "anomaly";
 	}
-	return map.get(altHex(hex)) ?? FALLBACK_RAIL_COLOR;
+	return "free";
 }
 
 /**
- * 法向偏移基准量（屏幕像素）。
+ * 一段区间的线（6 px 线心 + 两条 2 px 状态条）。
  *
- * <h3>为什么必须是"小到不超过相邻走廊间距的一半"</h3>
- * <p>这台相机的世界→屏幕比例是**变的**（整图 fits 到视口）：实测本站场走廊在屏幕上只隔 **约 8 px**，
- * 而平行股道在世界上隔 8 m —— 也就是这个缩放下 **1 m ≈ 1 px**。所以任何按"固定像素"给的带宽
- * 都可能大过走廊间距：第一版把带画成 **5 px 粗**，于是相邻股道的带互相叠上，
- * 整片站场糊成一条（用户 2026-09-15："完全混乱显示了"）。</p>
- *
- * <p>现在的口径：带是**细线**（1.2–2.2 px），偏移只有 2 px —— 在实测缩放下约等于 2 m，
- * 远小于 8 m 的走廊间距，所以两条方向带只在**自己那根轨**两侧，不会盖到邻轨上去。</p>
+ * <p>线心与状态条都来自**同一条路径**（`railSpanPath` 按弧窗切出来的那段轨），
+ * 状态条只是把它按法向偏移 —— 所以三者永远平行、永远贴在轨道位置上。</p>
  */
-const BAND_OFFSET_PX = 2.0;
-
-/** 两个方向都没有区间时这一层什么都不画，省掉整轮投影。 */
-const hasSections = computed(() => props.sections.length > 0);
-
-/**
- * 一段区间的折线 → 偏移后的 SVG 路径。
- *
- * <p><b>用的是网页自己画那条轨线的同一套几何</b>（`domain/railPath.ts` 的 `railSpanPath`）：
- * 取那根轨、按这段的弧窗切片、走同一个 `railCurvePath`。所以区间带与它脚下的轨道线**必然重合**
- * —— 这正是用户 2026-09-15 指出的问题："路线图是 web 自行绘制的曲线，区间图是游戏中读取的曲线，
- * 二者并不重合；既然都是按节点划分区间，那么区间图也使用 web 绘制的图像"。</p>
- *
- * <p>偏移量与颜色仍按方向/占用给（区间带要能看出两个方向，也要看得出占用）。</p>
- */
-function bandPath(span: SectionSpan, side: number): string {
-	const rail = props.railByHex?.get(span.hex) ?? props.railByHex?.get(altHex(span.hex));
-	if (rail === undefined) {
-		return "";
-	}
-	const path = railSpanPath(rail, span.from, span.to, props.camera, props.straightLookup ?? NO_STRAIGHT);
-	if (path === "") {
-		return "";
-	}
-	// 用浏览器自己把路径按法向偏移，比在这里解 SVG 路径可靠（弧线也要跟着偏移）
-	return offsetSvgPath(path, side * BAND_OFFSET_PX);
-}
-
-/** 每个区间每一段的画线数据。颜色取自**它所在那根轨**的颜色；占用转红（状态，不是配色）。 */
 const bands = computed(() => {
 	const result: {
 		key: string;
-		d: string;
+		base: string;
+		side: string;
 		color: string;
-		occupied: boolean;
+		dashed: boolean;
 		section: string;
-		label: string;
+		state: string;
 		selected: boolean;
 	}[] = [];
-	// 同侧的第几个区间（颜色跟轨道一样，重复的区间就重合画，不再往邻轨上推）
-	const stackBySide = new Map<number, number>();
 	for (const section of props.sections) {
-		/*
-		 * 旧引擎（还没部署 notes/156）发的区间没有 `direction`：那时这一层画不了，
-		 * 但**不能因此让整页挂掉** —— 跳过它，别的图层照常。
-		 */
 		if (!hasDirection(section)) {
 			continue;
 		}
+		const state = stateOf(section);
+		const color = state === "occupied" ? COLOR_OCCUPIED : state === "anomaly" ? COLOR_ANOMALY : COLOR_FREE;
+		// 方向决定状态条画在哪一侧（"第 1–2 px"还是"第 4–5 px"）—— 与路线图两侧的语义一致
 		const side = sideOfDirection(section.direction.angle);
-		stackBySide.set(side, (stackBySide.get(side) ?? 0) + 1);
-		section.spans.forEach((span, index) => {
-			const d = bandPath(span, side);
-			if (d === "") {
+		const offset = (side > 0 ? 1 : -1) * STRIPE_OFFSET_PX;
+		const nearOffset = (side > 0 ? 1 : -1) * STRIPE_NEAR_OFFSET_PX;
+		const selected = props.selectedSection === section.id;
+		section.spans.forEach((span: SectionSpan, index: number) => {
+			const rail = railOf(span.hex);
+			if (rail === undefined) {
+				return;
+			}
+			const path = railSpanPath(rail, span.from, span.to, props.camera, straight());
+			if (path === "") {
 				return;
 			}
 			result.push({
 				key: `${section.id}#${index}`,
-				d,
-				// **与轨道层同一个颜色**（用户要求：从 web 生成的线派生；hex 两种写法都认）
-				color: railColorOf(span.hex),
-				occupied: section.occupied,
+				base: path,
+				side: offsetSvgPath(path, offset),
+				color,
+				dashed: state === "anomaly",
 				section: section.id,
-				label: section.direction.label,
-				selected: props.selectedSection === section.id,
+				state,
+				selected,
+			});
+			// 另一侧画一条**同样的**状态条（近心那条）：两根轨并排时两侧都看得出状态
+			result.push({
+				key: `${section.id}#${index}-near`,
+				base: "",
+				side: offsetSvgPath(path, nearOffset),
+				color,
+				dashed: state === "anomaly",
+				section: section.id,
+				state,
+				selected,
 			});
 		});
 	}
-	// 选中的最后画（压在最上层）
-	return result.sort((a, b) => Number(a.selected) - Number(b.selected));
+	return result;
 });
+
+/** 线心：每根轨一条 6 px 白线（区间图里它就是"原来的路线图位置"）。 */
+const baseLines = computed(() => {
+	const out: {key: string; d: string}[] = [];
+	// 只用区间覆盖到的轨来画线心：区间图讲的是"区间覆盖到的地方"，没有区间的轨不画（用户规格：区间图）
+	const covered = new Set<string>();
+	for (const section of props.sections) {
+		for (const span of section.spans) {
+			covered.add(span.hex);
+			covered.add(altHex(span.hex));
+		}
+	}
+	for (const rail of props.rails) {
+		if (!covered.has(rail.hex)) {
+			continue;
+		}
+		const rail2 = railOf(rail.hex);
+		if (rail2 === undefined) {
+			continue;
+		}
+		// 整根轨：两端点弧长就是 0 与轨长（`railSpanPath` 内部按弧长比例切片）
+		const path = railSpanPath(rail2, 0, railLengthOf(rail2), props.camera, straight());
+		if (path !== "") {
+			out.push({key: rail.hex, d: path});
+		}
+	}
+	return out;
+});
+
+/** 轨的世界长度（端点距离，足够用来表示"整根轨"）。 */
+function railLengthOf(rail: Rail): number {
+	return Math.hypot(rail.planeX2 - rail.planeX1, rail.planeY2 - rail.planeY1);
+}
+
+/** 区间端点（圆点）：每个区间两端的平面坐标。 */
+const endpointDots = computed(() => {
+	const dots: {key: string; x: number; y: number; color: string; selected: boolean}[] = [];
+	for (const section of props.sections) {
+		if (!hasDirection(section) || section.spans.length === 0) {
+			continue;
+		}
+		const state = stateOf(section);
+		const color = state === "occupied" ? COLOR_OCCUPIED : state === "anomaly" ? COLOR_ANOMALY : COLOR_FREE;
+		const first = section.spans[0]!;
+		const last = section.spans[section.spans.length - 1]!;
+		for (const [suffix, span, atEnd] of [["a", first, false], ["b", last, true]] as const) {
+			const rail = railOf(span.hex);
+			if (rail === undefined) {
+				continue;
+			}
+			const point = atEnd ? screenAt(rail, span.to) : screenAt(rail, span.from);
+			if (point === null) {
+				continue;
+			}
+			dots.push({key: `${section.id}#${suffix}`, x: point.x, y: point.y, color, selected: props.selectedSection === section.id});
+		}
+	}
+	return dots;
+});
+
+/** 轨上某个弧长处的屏幕坐标（端点圆点用）。 */
+function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
+	const path = railSpanPath(rail, arcM, arcM, props.camera, straight());
+	const match = /(-?[\d.]+) (-?[\d.]+)/.exec(path);
+	return match === null ? null : {x: Number(match[1]), y: Number(match[2])};
+}
 </script>
 
 <template>
-	<g v-if="hasSections" class="section-layer">
+	<g class="section-layer">
+		<!-- 线心：6 px 白线，占轨道原来的位置（"在原来的路线图位置画 6px 线"） -->
+		<path v-for="line in baseLines" :key="`base-${line.key}`" class="base" :d="line.d"/>
 		<!--
-			**只画一条细线**（每段一条），不再画 5 px 的半透明"宽带"。
-			理由见 BAND_OFFSET_PX 的说明：这台相机的比例是变的，固定像素的宽带宽过走廊间距时，
-			相邻股道的带会互相叠上，整片站场糊成一条（第一版就是这样"完全混乱"的）。
-			`<path>` 在 SVG 里不能真正偏移（`transform` 会跟着缩放），所以偏移量已在 bandPath 里算进坐标。
+			状态条：每条 2 px，法向偏移 ±1.5 / ±4.5 ⇒ 落在线的第 1–2 px 与第 4–5 px。
+			`<path>` 在 SVG 里不能真正偏移（transform 会跟着缩放），所以偏移已在 offsetSvgPath 里算进坐标。
 		-->
 		<path
 			v-for="band in bands"
-			:key="band.key"
-			class="band-line"
-			:d="band.d"
-			:stroke="band.occupied ? SECTION_OCCUPIED_COLOR : band.color"
-			:stroke-width="band.selected ? 2.4 : 1.6"
+			:key="band.side"
+			class="stripe"
+			:d="band.side"
+			:stroke="band.color"
+			:stroke-width="band.selected ? STRIPE_WIDTH_PX + 1 : STRIPE_WIDTH_PX"
+			:stroke-dasharray="band.dashed ? '4 3' : undefined"
 			:data-section="band.section"
-			:data-direction="band.label"
-			:data-occupied="band.occupied ? '1' : '0'"
+			:data-state="band.state"
+		/>
+		<!-- 区间端点（圆点）—— 轨道节点在区间图里隐身，用这些点代替 -->
+		<circle
+			v-for="dot in endpointDots"
+			:key="dot.key"
+			class="endpoint"
+			:cx="dot.x"
+			:cy="dot.y"
+			:r="dot.selected ? 4 : 3"
+			:fill="dot.color"
 		/>
 	</g>
 </template>
 
 <style scoped>
-.section-layer .band-line {
+.section-layer .base {
 	fill: none;
+	stroke: #ffffff;
+	stroke-width: 6px;
 	stroke-linecap: round;
 	stroke-linejoin: round;
+	pointer-events: none;
+}
+
+.section-layer .stripe {
+	fill: none;
+	stroke-linecap: butt;
+	stroke-linejoin: round;
+	pointer-events: none;
+}
+
+/* 端点圆点：加一圈暗边，压在密集处也数得清 */
+.section-layer .endpoint {
+	stroke: #10161c;
+	stroke-width: 1;
 	pointer-events: none;
 }
 </style>

@@ -74,6 +74,13 @@ const props = defineProps<{
 	straightLookup?: StraightLookup;
 	/** 选中的区间 id（信息卡联动）。 */
 	selectedSection?: string;
+	/**
+	 * 画不画**路线图**（4 px 纯白轨线 + 轨道节点）。
+	 *
+	 * <p>2026-09-15 用户定的规格：路线图与区间图是**两张图**，切到区间图时路线图**直接隐身** ——
+	 * 不叠、不半透明，就是不在场。区间图在**同一位置**画 6 px 线，占轨道原来的位置。</p>
+	 */
+	showRoute?: boolean;
 }>();
 
 const host = useTemplateRef<HTMLElement>("host");
@@ -376,7 +383,9 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			所以这一层临时接管指针事件（`.hit` 只让描边本身可命中，空白处仍然穿透给画布拖动）。
 		-->
 		<svg class="rails" :class="{pickable: selectedSignal !== null}">
+			<!-- 路线图：切到区间图时整层不渲染（用户规格："路线图直接隐身"） -->
 			<RailLayer
+				v-if="showRoute !== false"
 				:rails="rails"
 				:camera="camera"
 				:hover-key="hoveredKey"
@@ -388,11 +397,12 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 				@pick-rail="onPickRail"
 			/>
 			<!--
-				区间层：**在轨道层之后**渲染，所以两条方向带压在轨的上面（看得见）。
-				它整层 `pointer-events: none`，不抢画布拖动与轨的点选。
+				区间图：在**轨道原来的位置**画 6 px 线，两侧 2 px 表示区间。
+				它自带那条 6 px 白线（不用轨道层），所以两张图真的互相独立。
 			-->
 			<SectionLayer
 				:sections="sections ?? []"
+				:rails="rails"
 				:camera="camera"
 				:selected-section="selectedSection ?? ''"
 				:rail-color-by-hex="railColorByHex"
@@ -402,7 +412,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 		</svg>
 
 		<!-- 节点层：普通 HTML。这一层整体不吃事件，只有节点自己吃。 -->
-		<div class="nodes">
+		<div v-if="showRoute !== false" class="nodes">
 			<NodeLayer
 				:nodes="nodes"
 				:camera="camera"
