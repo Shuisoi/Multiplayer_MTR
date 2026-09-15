@@ -46,6 +46,34 @@ const props = defineProps<{
 const FALLBACK_RAIL_COLOR = "#4e585f";
 
 /**
+ * 轨 hex 的另一种端点写法（两段各三个 int 换个顺序）。
+ *
+ * <p>为什么需要它：引擎的轨 hex **是无向**的（`A→B` 与 `B→A` 是同一根轨），而区间里的 span
+ * 与拓扑里的轨**不保证用同一种写法**。实测现场：区间 `-10,-59,-154` 的那一段写的 hex，
+ * 在拓扑里是**反过来的**那一种 —— 于是网页拿它查不到颜色，那一条带就掉进了回退灰，
+ * 与它脚下那根轨的颜色对不上（用户看到的"区间和线路不一样"里就有这一处）。</p>
+ *
+ * <p>判据：把 hex 按 `-` 切成 6 段（两根端点 × x,y,z），交换前 3 段与后 3 段。</p>
+ */
+function altHex(hex: string): string {
+	const parts = hex.split("-");
+	return parts.length === 6 ? [...parts.slice(3), ...parts.slice(0, 3)].join("-") : hex;
+}
+
+/** 取轨色：先按原写法查，再按反向写法查，最后回退。 */
+function railColorOf(hex: string): string {
+	const map = props.railColorByHex;
+	if (map === undefined) {
+		return FALLBACK_RAIL_COLOR;
+	}
+	const direct = map.get(hex);
+	if (direct !== undefined) {
+		return direct;
+	}
+	return map.get(altHex(hex)) ?? FALLBACK_RAIL_COLOR;
+}
+
+/**
  * 法向偏移基准量（屏幕像素）。
  *
  * <h3>为什么必须是"小到不超过相邻走廊间距的一半"</h3>
@@ -107,8 +135,8 @@ const bands = computed(() => {
 			result.push({
 				key: `${section.id}#${index}`,
 				d,
-				// **与轨道层同一个颜色**（用户要求：从 web 生成的线派生）
-				color: props.railColorByHex?.get(span.hex) ?? FALLBACK_RAIL_COLOR,
+				// **与轨道层同一个颜色**（用户要求：从 web 生成的线派生；hex 两种写法都认）
+				color: railColorOf(span.hex),
 				occupied: section.occupied,
 				section: section.id,
 				label: section.direction.label,
