@@ -56,7 +56,16 @@ const stripeWidthPx = computed(() => scaled(DECAL_KINDS.stripeWidth, zoomRatio.v
  */
 const stripeOffsetPx = computed(() => scaled(DECAL_KINDS.stripeNear, zoomRatio.value));
 const baseWidthPx = computed(() => scaled(DECAL_KINDS.sectionBaseWidth, zoomRatio.value));
-const endpointDotPx = computed(() => scaled(DECAL_KINDS.endpointDot, zoomRatio.value));
+/**
+ * 端点圆点的半径（**画布坐标单位**，与 `cx/cy` 同一套）：直接就是规格值。
+ *
+ * <p>`r` 与 `cx/cy` 必须是同一套单位 —— 这一层的坐标是"世界 → 画布坐标"，
+ * 画布坐标 × 倍率 = 屏幕像素（6× 时正好相等），所以半径 0.5 就是**屏幕上直径 1 px @6×**。
+ * 曾经把它再按 `× 6 / 倍率` 换一次，量出来是 6 px（差了 6.7 倍，见 `check-web-section-three-lines`）。</p>
+ */
+const endpointDotRadiusUnits = computed(() => DECAL_KINDS.endpointDot);
+/** 选中时放大的量（画布单位）：给一点视觉反馈，但不改变常态尺寸。 */
+const endpointDotSelectedExtra = computed(() => DECAL_KINDS.endpointDot);
 
 /**
  * 状态条的颜色 = **这条区间的入口信号灯显示的灯色**（用户 2026-09-15 定的规格）。
@@ -281,6 +290,7 @@ function endPointOf(path: string, atEnd: boolean): {x: number; y: number} | null
 	<!--
 		规格值挂成 data 属性：检查脚本（`sandbox/check-web-section-three-lines.ps1`）直接读它们，
 		而不是把"规格是多少"再抄一遍 —— 抄一遍就会出现"规格改了、检查还在按旧值判"。
+		`data-endpoint-dot-radius` 是**半径**（画布坐标单位）：屏幕上直径 = 2r × 倍率。
 	-->
 	<g
 		class="section-layer"
@@ -288,6 +298,7 @@ function endPointOf(path: string, atEnd: boolean): {x: number; y: number} | null
 		:data-stripe-width="DECAL_KINDS.stripeWidth"
 		:data-stripe-near="DECAL_KINDS.stripeNear"
 		:data-stripe-far="DECAL_KINDS.stripeFar"
+		:data-endpoint-dot-radius="DECAL_KINDS.endpointDot"
 	>
 		<!-- 线心：6 px 白线，占轨道原来的位置（"在原来的路线图位置画 6px 线"） -->
 		<path v-for="line in baseLines" :key="`base-${line.key}`" class="base" :d="line.d"/>
@@ -311,6 +322,7 @@ function endPointOf(path: string, atEnd: boolean): {x: number; y: number} | null
 			区间端点（圆点）—— 轨道节点在区间图里隐身，用这些点代替。
 			**不带颜色**（用户 2026-09-15："端点无需颜色，因为双向的区间不同"）：
 			端点只表示"区间到这里为止"，它落在哪条状态条上（哪一侧）已经说明属于哪个方向。
+			**直径 1 px**（同一轮："点的大小也改为 1px"）；`r` 是画布单位，所以由 `endpointDotRadiusUnits` 换算。
 		-->
 		<circle
 			v-for="dot in endpointDots"
@@ -318,7 +330,8 @@ function endPointOf(path: string, atEnd: boolean): {x: number; y: number} | null
 			class="endpoint"
 			:cx="dot.x"
 			:cy="dot.y"
-			:r="dot.selected ? endpointDotPx + 1 : endpointDotPx"
+			:r="dot.selected ? endpointDotRadiusUnits + endpointDotSelectedExtra : endpointDotRadiusUnits"
+			:style="{'--dot-r': `${endpointDotRadiusUnits}`}"
 		/>
 	</g>
 </template>
@@ -341,13 +354,15 @@ function endPointOf(path: string, atEnd: boolean): {x: number; y: number} | null
 }
 
 /*
- * 端点圆点：**固定白色**（不留颜色，见 `endpointDots` 的说明），加一圈暗边，
- * 压在密集处或压在彩色的状态条上也数得清。
+ * 端点圆点：**固定白色**（不留颜色，见 `endpointDots` 的说明）、**直径 1 px @6×**。
+ *
+ * 描边按"半径的 0.4 倍"派生而不是写死像素：`r` 已经是画布单位，写死像素会让描边
+ * 在缩放时相对圆点变粗（1 px 的点加 1 px 描边就只剩描边了）。
  */
 .section-layer .endpoint {
 	fill: var(--fg);
 	stroke: #10161c;
-	stroke-width: 1;
+	stroke-width: calc(var(--dot-r) * 0.4);
 	pointer-events: none;
 }
 </style>

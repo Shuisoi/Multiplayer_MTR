@@ -26,6 +26,16 @@ test("规格尺寸的基准是 6×：那里规格值就是屏幕值", () => {
 	assert.equal(REFERENCE_ZOOM, 6, "基准倍率 6×");
 	assert.equal(mapScale(REFERENCE_ZOOM), 1, "6× ⇒ 倍率换算为 1");
 	assert.equal(scaled(DECAL_KINDS.icon, REFERENCE_ZOOM), 8, "6× 时图标正好 8 px（用户规格）");
+	/*
+	 * 区间端点圆点：用户 2026-09-15 的规格是"点的大小也改为 1px"（屏幕上直径）。
+	 * `endpointDot` 是**半径**、单位是画布坐标（这一层 6× 时画布坐标 = 屏幕像素），
+	 * 所以 6× 时直径 = 2 × 0.5 = 1 px。
+	 */
+	assert.equal(DECAL_KINDS.endpointDot, 0.5, "端点圆点半径 0.5 ⇒ 6× 时直径 1 px");
+	assert.equal(DECAL_KINDS.endpointDot * 2 * mapScale(REFERENCE_ZOOM), 1, "6× 时端点直径正好 1 px");
+	// 它必须比线心细得多，否则会盖住线心/状态条
+	assert.equal(DECAL_KINDS.endpointDot * 2 < DECAL_KINDS.sectionBaseWidth, true,
+		"端点直径 1 px 必须明显小于线心 6 px");
 });
 
 test("尺寸跟着倍率变（世界不动、动的是摄像机）", () => {
