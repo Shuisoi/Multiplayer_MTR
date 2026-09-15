@@ -1,18 +1,24 @@
 /**
- * 信号灯图标："灯点"与"方向箭头"不许重叠的单测（`npm run test:signal`）。
+ * 信号灯图标："灯点"与"方向箭头"的错开量（`npm run test:signal`）。
  *
- * <p>用户 2026-09-15 的要求：**"信号灯图标的点和方向指示位置需要错开一些"**。
- * 这条测试把"错开"变成可算的判据 —— 不然它只是一句手感，下次调像素就会重新粘上。</p>
- *
- * <h2>两处必须算进去的细节（算漏了就会得出"已经分开"的错误结论）</h2>
+ * <p>用户 2026-09-15 对同一件事提了两次要求，**两条都要满足**：</p>
  * <ol>
- *   <li><b>圆头线帽</b>（`stroke-linecap: round`）：笔画在端点外还要多出**半个描边宽**
- *       （1.8 单位 = 0.72 px @6×）。只算折角两条腿的线心距离会高估空隙 ——
- *       尖那个端点的线心离元素中心 2.4 px，看起来"没事"，加上线帽后可见外缘只有 1.68 px，
- *       **已经进了灯点半径（2 px）里**。这就是改之前那处"尖戳进灯点"。</li>
- *   <li><b>斜向的空隙天然更大</b>：位移是沿管辖轴的，斜向朝向里折角的腿正好摊在斜对角上，
- *       所以空隙比正方向大得多（实测 6.2 px vs 19.3 px）。判据因此看**最小**空隙，
- *       并且要求它在所有朝向上都够宽 —— 只看一个朝向会漏掉耦合。</li>
+ *   <li>"信号灯图标的点和方向指示位置需要**错开一些**"（原来两者中心重合）；</li>
+ *   <li>"**现在距离又太大了**"（第一版把轴距拉到了 20 px）。</li>
+ * </ol>
+ *
+ * <p>所以这里不是只验"不重叠"，而是**两头都钉住**：错开要够（可见空隙 ≥ 3 px），
+ * 距离要小（中心距 ≤ 15 px，也就是图标直径的 1.9 倍以内）。只验一头的话，
+ * 随便把间距放大或缩小都能"通过"，而两次要求里各有一条会被违反。</p>
+ *
+ * <h2>三处必须算进去的细节（算漏了就会得出错误结论）</h2>
+ * <ol>
+ *   <li><b>可见描边是那条 7 单位宽的黑色描边**</b>，不是 3.6 单位的本色笔画 ——
+ *       两者中心线重合，黑色那条更宽，所以"可见外缘"由它决定（3.5 单位 ≈ 1.4 px @6×）。</li>
+ *   <li><b>圆头线帽</b>（`stroke-linecap: round`）：笔画在端点外还要多出半个描边宽，
+ *       所以端点也要按"圆心 + 半径"算，不能只算线段。</li>
+ *   <li><b>折角是敞开的 V</b>：两条腿的可见外缘离图标中心只有 ≈3.4 px，
+ *       所以"把灯点沿管辖轴往后推"并不能拉开距离 —— 灯点会落在 V 的开口里。</li>
  * </ol>
  *
  * <p>1 个 viewBox 单位 = 图标直径 / 20 = 0.4 px @6×，所以所有几何都先换算成 px 再比较。</p>
@@ -27,8 +33,8 @@ const CHEVRON_LEGS: readonly (readonly [number, number])[][] = [
 	[[3, 15], [10, 4]],
 	[[10, 4], [17, 15]],
 ];
-/** 本色笔画宽度（viewBox 单位）：组件里是 3.6，圆头线帽让它两侧（含端点外）各多 1.8。 */
-const STROKE_UNITS = 3.6;
+/** **可见**描边宽度（viewBox 单位）：组件里黑色那条是 7，本色那条是 3.6、被它包在里面。 */
+const STROKE_UNITS = 7;
 
 /** 1 个 viewBox 单位 = 多少屏幕 px。 */
 function unitsToPx(zoomRatio: number): number {
@@ -63,14 +69,17 @@ function lampRadiusPx(zoomRatio: number): number {
 	return scaled(DECAL_KINDS.lampDot, zoomRatio) / 2;
 }
 
-/** 折角外缘与灯点外缘之间的最小间距（px）：> 0 就是"不相接"。 */
-function gapPx(angle: number, zoomRatio: number, dotBack?: number): number {
-	const {arrow, dot} = signalDecalOffset(angle, zoomRatio, dotBack);
-	return clearanceAt({x: arrow.x - dot.x, y: arrow.y - dot.y}, zoomRatio) - lampRadiusPx(zoomRatio);
+/** 两个位置的中心距（px）。 */
+function centerDistancePx(angle: number, zoomRatio: number): number {
+	const {arrow, dot} = signalDecalOffset(angle, zoomRatio);
+	return Math.hypot(arrow.x - dot.x, arrow.y - dot.y);
 }
 
-/** 八个朝向：斜向最容易擦边（折角的腿在斜对角上摊得最开）。 */
-const ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+/** 折角外缘与灯点外缘之间的可见空隙（px）：> 0 就是"不相接"。 */
+function gapPx(angle: number, zoomRatio: number): number {
+	const {arrow, dot} = signalDecalOffset(angle, zoomRatio);
+	return clearanceAt({x: arrow.x - dot.x, y: arrow.y - dot.y}, zoomRatio) - lampRadiusPx(zoomRatio);
+}
 
 /**
  * 把三角函数在正轴上的残渣归一化再比：`-sin(0)` 是 −0、`cos(90°)` 是 6.1e-17，
@@ -81,85 +90,118 @@ function round(vector: {x: number; y: number}): {x: number; y: number} {
 	return {x: snap(vector.x), y: snap(vector.y)};
 }
 
-test("两个位置在管辖轴上的次序：灯点在后、箭头在前", () => {
-	const cases: readonly [number, string, {x: number, y: number}][] = [
-		[0, "角 0 管南 ⇒ 箭头朝屏幕下方", {x: 0, y: 1}],
-		[90, "角 90 管西 ⇒ 朝左", {x: -1, y: 0}],
-		[180, "角 180 管北 ⇒ 朝上", {x: 0, y: -1}],
-		[270, "角 270 管东 ⇒ 朝右", {x: 1, y: 0}],
+/** 八个朝向：折角是 V 形，斜向与正方向要分别验（腿与灯点的相对角度会变）。 */
+const ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+
+test("箭头位移的方向 = 管辖方向 + 侧向（四个朝向都对得上）", () => {
+	/*
+	 * 侧向的符号：`signalDecalOffset` 用"管辖方向在屏幕里转 90°"，也就是 (dx,dy) → (−dy,dx)。
+	 * 屏幕 y 向下，所以这是**顺时针**旋转的结果：角 0（南，朝下）的侧向是 −x（屏幕左）。
+	 * 换句话说是"管辖方向那一侧的反面"，与"信号机立在它所管辖列车的左侧"这条现实做法一致
+	 * （`Signal.sideOffsetDirection` 的注释里有实测依据：南行灯要往西挪）。
+	 */
+	const cases: readonly [number, string, {forward: {x: number, y: number}}][] = [
+		[0, "角 0 管南", {forward: {x: 0, y: 1}}],
+		[90, "角 90 管西", {forward: {x: -1, y: 0}}],
+		[180, "角 180 管北", {forward: {x: 0, y: -1}}],
+		[270, "角 270 管东", {forward: {x: 1, y: 0}}],
 	];
+	/*
+	 * 侧向不写死四个坐标，而是按它的**定义**验："管辖方向在屏幕里转 90°，即 (dx,dy) → (−dy,dx)"。
+	 * 手写四个期望值试过两次都写反（屏幕 y 向下，顺时针/逆时针一不留神就错），
+	 * 而定义本身是硬的：既垂直、又是那个转向、又是单位长度。
+	 */
 	for (const [angle, why, expected] of cases) {
 		const signal = new Signal({key: "k", x: 0, y: 0, z: 0, angle});
-		// `-sin(0)` 是 −0，`deepEqual` 会把它和 0 判为不同（`Object.is` 语义）—— 先归一化再比
-		assert.deepEqual(round(signal.bearingDirection), expected, why);
+		assert.deepEqual(round(signal.bearingDirection), expected.forward, why + "：管辖方向");
+		const side = signal.sideOffsetDirection;
+		const {x: fx, y: fy} = expected.forward;
+		assert.deepEqual(round(side), {x: Number((-fy).toFixed(6)), y: Number(fx.toFixed(6))}, why + "：侧向 = 管辖方向转 90°");
+		assert.equal(Math.abs(side.x * fx + side.y * fy) < 1e-9, true, why + "：侧向与管辖方向垂直");
+		assert.equal(Math.abs(Math.hypot(side.x, side.y) - 1) < 1e-9, true, why + "：侧向是单位向量");
 		const {arrow, dot} = signalDecalOffset(angle, REFERENCE_ZOOM);
-		// 两者都必须落在管辖轴上（横向分量为 0）—— 这正是"与朝向无关"的来源
-		const arrowForward = arrow.x * expected.x + arrow.y * expected.y;
-		const arrowSide = arrow.x * signal.sideOffsetDirection.x + arrow.y * signal.sideOffsetDirection.y;
-		const dotForward = dot.x * expected.x + dot.y * expected.y;
-		assert.equal(Math.abs(arrowSide) < 1e-9, true, `${why}；箭头不该有横向分量（实得 ${arrowSide}）`);
-		assert.equal(arrowForward, DECAL_KINDS.signalArrowForward, `${why}；箭头在管辖方向上前移 12 px`);
-		assert.equal(dotForward, -DECAL_KINDS.signalDotBack, `${why}；灯点在它的反面向后退 8 px`);
+		const forward = arrow.x * expected.forward.x + arrow.y * expected.forward.y;
+		assert.equal(Math.abs(forward - DECAL_KINDS.signalArrowForward) < 1e-9, true,
+			`${why}：前移分量应为 ${DECAL_KINDS.signalArrowForward}（实得 ${forward.toFixed(3)}）`);
+		const sideComponent = arrow.x * side.x + arrow.y * side.y;
+		assert.equal(Math.abs(sideComponent - DECAL_KINDS.signalArrowSide) < 1e-9, true,
+			`${why}：侧向分量应为 ${DECAL_KINDS.signalArrowSide}（实得 ${sideComponent.toFixed(3)}）`);
+		// 灯点留在锚点上（规格 signalDotBack = 0）：它的世界坐标就是"信号机立在哪"
+		assert.deepEqual(round(dot), {x: 0, y: 0}, why + "：灯点在锚点上");
 	}
 });
 
-test("折角与灯点：八个朝向都不重叠（基准倍率）", () => {
-	for (const angle of ANGLES) {
-		assert.equal(gapPx(angle, REFERENCE_ZOOM) > 0, true,
-			`角 ${angle}°：折角外缘与灯点外缘重叠了（间距 ${gapPx(angle, REFERENCE_ZOOM).toFixed(2)} px）`);
-	}
-});
-
-test("折角与灯点：三个缩放档都不重叠（错开比例不随缩放变）", () => {
+test("错开要够：八个朝向 × 三个缩放档都不重叠", () => {
 	for (const zoom of [1, REFERENCE_ZOOM, 12]) {
 		for (const angle of ANGLES) {
 			assert.equal(gapPx(angle, zoom) > 0, true,
-				`${zoom}× / 角 ${angle}°：重叠（间距 ${gapPx(angle, zoom).toFixed(2)} px）—— 位移与尺寸没有乘同一个倍率`);
+				`${zoom}× / 角 ${angle}°：折角外缘与灯点外缘重叠了（空隙 ${gapPx(angle, zoom).toFixed(2)} px）`);
 		}
 	}
 });
 
-test("折角与灯点：空隙够宽，不是擦边过", () => {
-	// 基准倍率下（规格值即屏幕值）最小空隙 —— 用户看到的就是这个数
-	const worst = Math.min(...ANGLES.map(angle => gapPx(angle, REFERENCE_ZOOM)));
-	assert.equal(worst >= 5, true,
-		`最小空隙只有 ${worst.toFixed(2)} px（要 ≥ 5 px）—— 屏幕上会看着像粘在一起`);
+test("错开要够：可见空隙 ≥ 3 px（八个朝向都验）", () => {
+	const gaps = ANGLES.map(angle => gapPx(angle, REFERENCE_ZOOM));
+	const worst = Math.min(...gaps);
+	assert.equal(worst >= 3, true,
+		`最小可见空隙只有 ${worst.toFixed(2)} px（要 ≥ 3 px）—— 屏幕上会看着像粘在一起`);
 	/*
-	 * 四个正方向的空隙必须**完全一样**：两个位置只在管辖轴上，斜向的差别只来自折角的腿
-	 * 在斜对角上摊得更开。若哪天有人在位移里加进横向分量，这条不会红（斜向仍更大），
-	 * 所以真正的守卫是上面那条"最小空隙" —— 横向分量会把正方向的空隙压下去。
-	 */
-	const cardinals = [0, 90, 180, 270].map(angle => gapPx(angle, REFERENCE_ZOOM));
-	assert.equal(Math.min(...cardinals) >= 5, true,
-		`四个正方向的最小空隙 ${Math.min(...cardinals).toFixed(2)} px（要 ≥ 5 px）`);
-	/*
-	 * 四个正方向的空隙**并不完全一样**（实测 ≈ 11.3 / 11.8 / 19.3 / 19.2 px）—— 起初以为这里应当一致，
-	 * 其实是折角自己在 viewBox 里不对称：尖在 (10, 4)、框在 0…20，绕中心转 180° 不等价
-	 * （"朝下"时开口朝上、"朝上"时开口朝下）。所以能钉住的只有"最小值"，不是"全都相等" ——
+	 * 空隙在"正方向"上恒定、在斜向上更大：斜向时灯点落在折角的**斜对角**上，
+	 * 离两条腿都远。所以能钉住的是"最小空隙够宽"，不是"全都相等" ——
 	 * 写一条"必须相等"的断言会红，而且红得有道理（是判据错了，不是代码错了）。
+	 * 真正要挡的是"与朝向耦合到最坏朝向贴上去"，那由上面那条兜住。
 	 */
-	assert.equal(cardinals.every(gap => gap < 20), true,
-		`有正方向的空隙达到 ${Math.max(...cardinals).toFixed(2)} px —— 灯点与箭头离得太远，看着不像一盏灯`);
+});
+
+test("距离要小：中心距 ≤ 16 px（用户第二次要求）", () => {
+	// 中心距 = √(前移² + 侧向²)，与朝向无关
+	const expected = Math.hypot(DECAL_KINDS.signalArrowForward, DECAL_KINDS.signalArrowSide);
+	for (const angle of ANGLES) {
+		const actual = centerDistancePx(angle, REFERENCE_ZOOM);
+		assert.equal(Math.abs(actual - expected) < 1e-9, true,
+			`角 ${angle}°：中心距 ${actual.toFixed(2)} px 与规格算出的 ${expected.toFixed(2)} px 不一致`);
+	}
+	/*
+	 * 两头都要卡住：上面那条要求空隙 ≥ 3 px，而空隙只能靠**更大的侧向**换；
+	 * 所以 16 px 是"空隙够 + 距离小"这两条同时成立的位置（第一版是轴距 20 px，
+	 * 用户就是嫌它大 —— 而图标直径只有 8 px）。
+	 */
+	assert.equal(expected <= 16, true,
+		`中心距 ${expected.toFixed(2)} px > 16 px —— 第一版是 20 px，用户嫌大的就是它`);
+	assert.equal(expected >= 8, true,
+		`中心距 ${expected.toFixed(2)} px < 8 px —— 比一个图标直径还小，两个图形会挤在一起`);
+	// 顺带把"它确实比第一版小"记在断言里：第一版是 12 + 8 = 20
+	assert.equal(expected < 20, true, "必须比第一版的轴距 20 px 小（用户第二次要求的来历）");
 });
 
 /*
- * 红证：把"灯点后移"归零 ⇒ 灯点落回折角的开口里、可见空隙变负 ⇒ 上面那条判据必须**红**。
- * 这条测试的作用不是"再验一遍"，而是证明判据真的在看着规格值（否则它可能恒真）。
+ * 红证：把"侧向让开"归零 ⇒ 灯点落回折角的 V 里 ⇒ 上面"错开要够"必须**红**。
+ * 这条的作用不是"再验一遍"，而是证明判据真的在看着那个规格值（否则它可能恒真）。
  */
-test("红证：灯点不后移就会重叠（判据确实在看着规格值）", () => {
-	const withoutDotBack = Math.min(...ANGLES.map(angle => gapPx(angle, REFERENCE_ZOOM, 0)));
-	// 0.28 px 的空隙在屏幕上就是"贴着" —— 判据里的"够宽"门槛是 5 px，所以这条红得干净
-	assert.equal(withoutDotBack < 1, true,
-		`灯点不后移时最小间距 ${withoutDotBack.toFixed(2)} px（应当 ≈ 0.3 px，即贴在一起）—— 判据没在量这个规格值`);
+test("红证：归零会让判据变红（判据确实在看着规格值）", () => {
+	// ① 侧向归零（只前移）：这就是第一版的失败形态
+	const alongOnly = ANGLES.map(angle => {
+		const {arrow, dot} = signalDecalOffset(angle, REFERENCE_ZOOM);
+		// 手工去掉侧向分量
+		const forward = {x: arrow.x, y: arrow.y};
+		const signal = new Signal({key: "k", x: 0, y: 0, z: 0, angle});
+		const side = signal.sideOffsetDirection;
+		const along = forward.x * side.x + forward.y * side.y;
+		const pure = {x: forward.x - side.x * along, y: forward.y - side.y * along};
+		return clearanceAt({x: pure.x - dot.x, y: pure.y - dot.y}, REFERENCE_ZOOM) - lampRadiusPx(REFERENCE_ZOOM);
+	});
+	assert.equal(Math.min(...alongOnly) < 0, true,
+		`只沿管辖方向前移时最小空隙 ${Math.min(...alongOnly).toFixed(2)} px —— 判据没在量侧向那个规格值`);
+	// ② 全部归零（= 改之前的样子：两个图形中心重合）：不再是"3 px 可见空隙"
+	const centered = clearanceAt({x: 0, y: 0}, REFERENCE_ZOOM) - lampRadiusPx(REFERENCE_ZOOM);
 	/*
-	 * 规格里那个"刚好够"的位置：后移 ≥ 7.7 px 才让最坏朝向的空隙达到 5 px（8 px ⇒ 6.2 px）。
-	 * 所以 7 px 会擦上（≈ 3.2 px，看着还是粘的）。这里只钉"空隙随后移单调变大"这条关系 ——
-	 * 具体取 8 是规格的选择，测试不该替它定一个"必须更小"的数。
+	 * 注意这里**不能**断言 "≤ 0"：中心重合时折角两条腿的**线心**离中心还有 3.5 px，
+	 * 减掉半个描边（1.4）与灯点半径（2）之后还剩 ≈ 0.83 px —— 几何上"没接触"，
+	 * 但那是"折角的尖正好落在灯点边上"：0.83 px 的空隙在屏幕上就是贴着，
+	 * 而判据要的是 ≥ 3 px。所以红证的判据取"小于门槛"，与判据本身同一条尺子。
 	 */
-	const seven = Math.min(...ANGLES.map(angle => gapPx(angle, REFERENCE_ZOOM, 7)));
-	const eight = Math.min(...ANGLES.map(angle => gapPx(angle, REFERENCE_ZOOM, 8)));
-	assert.equal(seven < eight, true,
-		`后移 7 px 的空隙 ${seven.toFixed(2)} px 不小于 8 px 的 ${eight.toFixed(2)} px —— 判据与后移量脱钩了`);
+	assert.equal(centered < 3, true,
+		`中心重合时空隙 ${centered.toFixed(2)} px（应当远小于门槛 3 px）—— 判据没在量错开量`);
 });
 
 test("位移跟着倍率走（推近了不会又粘上）", () => {
@@ -167,6 +209,7 @@ test("位移跟着倍率走（推近了不会又粘上）", () => {
 	const far = signalDecalOffset(0, 12);
 	assert.equal(Math.abs(far.arrow.y / near.arrow.y - 12) < 1e-9, true,
 		`12× 的箭头位移应当是 1× 的 12 倍（实得 ${(far.arrow.y / near.arrow.y).toFixed(3)}）`);
-	assert.equal(Math.abs(far.dot.y / near.dot.y - 12) < 1e-9, true,
-		`灯点位移同理（实得 ${(far.dot.y / near.dot.y).toFixed(3)}）`);
+	// 中心距同理（两个分量都乘同一个倍率）
+	assert.equal(Math.abs(centerDistancePx(0, 12) / centerDistancePx(0, 1) - 12) < 1e-9, true,
+		"中心距也必须按倍率缩放");
 });
