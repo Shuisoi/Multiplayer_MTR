@@ -220,37 +220,60 @@ function railLengthOf(rail: Rail): number {
 	return Math.hypot(rail.planeX2 - rail.planeX1, rail.planeY2 - rail.planeY1);
 }
 
-/** 区间端点（圆点）：每个区间两端的平面坐标。 */
+/**
+ * 区间端点（圆点）。
+ *
+ * <h3>两条用户规格（2026-09-15）</h3>
+ * <ol>
+ *   <li><b>端点无需颜色</b> —— 双向的两个区间颜色本来就不同，端点再上色反而把"哪段属于谁"搅乱
+ *       （一个节点上两条区间各有一个端点，两色并排会看着像第三个东西）。所以端点统一用**白**色，
+ *       它只表示"区间到这里为止"。</li>
+ *   <li><b>点要落在区间的状态条上，不是线心上</b> —— 端点是"这条区间的端点"，
+ *       而区间画在法向偏移 1.5 px 的那条细线上（见 `bands`）。所以端点的坐标直接从
+ *       **那条已经偏移好的条**上取（`d` 的首/末点），而不是从线心取再自己加偏移 ——
+ *       自己加偏移会在弯道处与条的真实端点错开（条的偏移是按折线逐段算的）。</li>
+ * </ol>
+ */
 const endpointDots = computed(() => {
-	const dots: {key: string; x: number; y: number; color: string; selected: boolean}[] = [];
+	const dots: {key: string; x: number; y: number; selected: boolean}[] = [];
 	for (const section of props.sections) {
 		if (!hasDirection(section) || section.spans.length === 0) {
 			continue;
 		}
-		// 端点圆点也用**该区间入口灯的颜色**，于是"灯什么色、这一段就是什么色"在图上处处一致
-		const {color} = stripeOf(section);
-		const first = section.spans[0]!;
-		const last = section.spans[section.spans.length - 1]!;
-		for (const [suffix, span, atEnd] of [["a", first, false], ["b", last, true]] as const) {
+		// 这一区间的条：与 `bands` 同一套算法、同一个 key 规则（每个 span 恰好一条）
+		const side = sideOfDirection(section.direction.angle);
+		const offset = (side > 0 ? 1 : -1) * stripeOffsetPx.value;
+		for (const [suffix, index, atEnd] of [["a", 0, false], ["b", section.spans.length - 1, true]] as const) {
+			const span = section.spans[index];
+			if (span === undefined) {
+				continue;
+			}
 			const rail = railOf(span.hex);
 			if (rail === undefined) {
 				continue;
 			}
-			const point = atEnd ? screenAt(rail, span.to) : screenAt(rail, span.from);
+			const path = railSpanPath(rail, span.from, span.to, props.camera, straight());
+			if (path === "") {
+				continue;
+			}
+			const point = endPointOf(offsetSvgPath(path, offset), atEnd);
 			if (point === null) {
 				continue;
 			}
-			dots.push({key: `${section.id}#${suffix}`, x: point.x, y: point.y, color, selected: props.selectedSection === section.id});
+			dots.push({key: `${section.id}#${suffix}`, x: point.x, y: point.y, selected: props.selectedSection === section.id});
 		}
 	}
 	return dots;
 });
 
-/** 轨上某个弧长处的屏幕坐标（端点圆点用）。 */
-function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
-	const path = railSpanPath(rail, arcM, arcM, props.camera, straight());
-	const match = /(-?[\d.]+) (-?[\d.]+)/.exec(path);
-	return match === null ? null : {x: Number(match[1]), y: Number(match[2])};
+/** 一条路径的首点或末点（屏幕坐标）：`d` 里的第一个/最后一个 `x y`。 */
+function endPointOf(path: string, atEnd: boolean): {x: number; y: number} | null {
+	const numbers = path.match(/-?[\d.]+/g);
+	if (numbers === null || numbers.length < 4) {
+		return null;
+	}
+	const index = atEnd ? numbers.length - 2 : 0;
+	return {x: Number(numbers[index]), y: Number(numbers[index + 1])};
 }
 </script>
 
@@ -284,7 +307,11 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 			:data-section="band.section"
 			:data-state="band.state"
 		/>
-		<!-- 区间端点（圆点）—— 轨道节点在区间图里隐身，用这些点代替 -->
+		<!--
+			区间端点（圆点）—— 轨道节点在区间图里隐身，用这些点代替。
+			**不带颜色**（用户 2026-09-15："端点无需颜色，因为双向的区间不同"）：
+			端点只表示"区间到这里为止"，它落在哪条状态条上（哪一侧）已经说明属于哪个方向。
+		-->
 		<circle
 			v-for="dot in endpointDots"
 			:key="dot.key"
@@ -292,7 +319,6 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 			:cx="dot.x"
 			:cy="dot.y"
 			:r="dot.selected ? endpointDotPx + 1 : endpointDotPx"
-			:fill="dot.color"
 		/>
 	</g>
 </template>
@@ -314,8 +340,12 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 	pointer-events: none;
 }
 
-/* 端点圆点：加一圈暗边，压在密集处也数得清 */
+/*
+ * 端点圆点：**固定白色**（不留颜色，见 `endpointDots` 的说明），加一圈暗边，
+ * 压在密集处或压在彩色的状态条上也数得清。
+ */
 .section-layer .endpoint {
+	fill: var(--fg);
 	stroke: #10161c;
 	stroke-width: 1;
 	pointer-events: none;
