@@ -32,8 +32,16 @@ $target = Join-Path $mmtr 'game\libs\Transport-Simulation-Core-0.0.1.jar'
 
 # 判据用"进程还在不在"，不用"8888 应不应答"：半个 jar 的状态下 8888 照样应答（实测），
 # 而进程在不在是唯一的硬事实。
+#
+# 必须限定 `dli.env=server`（2026-09-15 实测，退出码 2 误报）：
+#   客户端和开发服务端都是 fabric devlaunch 出来的，命令行里**都有** `-Dfabric.dli.config`，
+#   只有 `-Dfabric.dli.env` 区分得开（客户端 `client`，服务端 `server`）。
+#   原先只匹配 `dli.config`，于是"玩家开着客户端"就被当成"服务端还在跑"，部署被无理由拒绝。
+#   客户端读的是同一个 `game\libs` 里的 jar，但它不是"正在被覆盖的那个类加载器"吗？
+#   —— 是，所以客户端在跑时**也确实有风险**；但那不是本脚本要拦的对象（服务端才是 8888 的宿主），
+#   误报比漏报更贵：玩家永远开着客户端，等于脚本永远不可用。客户端要换 jar，重开客户端即可。
 $running = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-	Where-Object { $_.CommandLine -match 'fabric\.dli\.config' }
+	Where-Object { $_.CommandLine -match 'fabric\.dli\.config' -and $_.CommandLine -match 'fabric\.dli\.env=server' }
 if ($running -and -not $Force) {
 	Write-Output "服务端仍在运行（PID $($running.ProcessId -join ',')）—— 现在覆盖 jar 会把类加载器读坏。"
 	Write-Output "先停：在游戏里执行 server stop，或等启动器那一轮结束。"

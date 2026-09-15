@@ -92,7 +92,17 @@ public final class MmtrPlanTasks {
 			// 停站作业：开门—停站—关门（起点站不停：车本来就在那儿）
 			if (i > 0 && stop.dwellMillis() > 0) {
 				seq++;
-				tasks.add(stamp(new StationServiceTask(taskId(line, working, seq), stop.platformId, stop.departureMillis, stop.dwellMillis()), stop.departureMillis));
+				/*
+				 * **计划时刻取"到站"，不是"发车"**（notes/155 §8 现场）。
+				 *
+				 * <p>取发车时刻的后果现场量得出来：到站那一刻这一趟还不许派（{@code earliestMs} = 发车时刻），
+				 * 车先干等一个停留；等到点把站台作业挂上去，执行器再按计划停第二个停留 ——
+				 * **每站多花整整一个停留**（30 秒），十站一趟就是 5 分钟，第二趟就冲破
+				 * {@code LATE_GRACE_MILLIS}（10 分钟）而开始"跳过不停"（用户报的"只停前两站"正是这样来的）。</p>
+				 *
+				 * <p>与本类统一口径一致（"计划时刻 = 这一步该开始的时刻"）：站台作业**开始于到站**。</p>
+				 */
+				tasks.add(stamp(new StationServiceTask(taskId(line, working, seq), stop.platformId, stop.arrivalMillis, stop.dwellMillis()), stop.arrivalMillis));
 			}
 		}
 		// 终点处理（§5.2 三态；环线继续跑，不加）

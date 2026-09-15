@@ -135,6 +135,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * exactly at the target, opens the doors if requested, and holds until a NEW control is applied.
 	 */
 	private double mmtrMotionStopTargetM = -1;
+	/**
+	 * **停车锚点**（notes/155 现场）：停车点所在的那根轨 + 它在轨内的比例（0 = 车头进入这轨的那一端，
+	 * 1 = 远端）。空 = 没有锚点，退回"只按 {@link #mmtrMotionStopTargetM} 累计里程"的老口径。
+	 *
+	 * <p>为什么要它：累计里程是"自臂那一刻的位置 + 算出来的进路长度"，而进路长度会变（让位后重规划、
+	 * 岔位换了、绕了另一条）—— 实测同一根站台轨两次自臂给出 1298 m / 1375 m 两个停车点，
+	 * 车于是穿过站台又开了 77 m。锚点是世界里的位置，重算多少遍都不动。</p>
+	 */
+	private String mmtrMotionStopRailHex = "";
+	private double mmtrMotionStopFraction = -1;
 	private boolean mmtrMotionStoppedAtTarget;
 	private boolean mmtrMotionStopOpenDoors;
 	/**
@@ -314,6 +324,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private long mmtrTurnoutYieldUntilMillis;
 	/** 当前任务的动作**做过了没有**（换端这类原地动作一次任务只做一次）。 */
 	private boolean mmtrTaskActionDone;
+	/** 站台作业这次**已经开始停站了没有**（用来只打一次"开门停站"的日志；门可能是进站时就开着的）。 */
+	private boolean mmtrStationServiceAnnounced;
 
 	public Vehicle(VehicleExtraData vehicleExtraData, @Nullable Siding siding, TransportMode transportMode, Data data) {
 		super(transportMode, data);
@@ -402,6 +414,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public boolean setMmtrMission(@Nullable MmtrMission mission) {
 		// 换了任务就重新开始记"动作做过了没有"（notes/150）
 		mmtrTaskActionDone = false;
+		mmtrStationServiceAnnounced = false;
 		if (mission == null) {
 			mmtrMission = null;
 			return true;
@@ -558,7 +571,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				break;
 			case AT_TARGET:
 				// Complete after a dwell at the target while stationary (passengers board/alight).
-				if (!isMoving() && data.getCurrentMillis() - mmtrMissionTargetArrivedMillis >= MMTR_MISSION_DWELL_MILLIS) {
+				/*
+				 * notes/155：站台作业按**计划给的停留**，不是引擎默认那几秒 —— 否则"停留 30s"
+				 * 这条配置等于没有（车到站闪一下就走的根就在这里）。
+				 *
+				 * 而**不带停站作业的任务**（`DRIVE_TO_PLATFORM` 那类）到站就该算完成：它的语义就是
+				 * "到站停稳"（见 {@code DriveToPlatformTask} 的类注释），停留是**下一步**的活。
+				 * 修前一律给 5 秒默认停留，于是每一站都白停 5 秒 —— 十站一趟就是 50 秒，
+				 * 计划里的到达/发车时刻被整体推后，越跑越晚。
+				 */
+				final org.mtr.core.mmtr.task.MmtrTask targetTask = mission.getTask();
+				final long targetDwell = targetTask == null ? MMTR_MISSION_DWELL_MILLIS
+					: (targetTask instanceof final org.mtr.core.mmtr.task.StationServiceTask targetService
+						? targetService.effectiveDwellMillis(MMTR_MISSION_DWELL_MILLIS) : 0L);
+				if (!isMoving() && data.getCurrentMillis() - mmtrMissionTargetArrivedMillis >= targetDwell) {
 					mission.complete();
 				}
 				break;
@@ -573,6 +599,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrPlayerRoutePublished = false;   // T4: 任务结束，玩家任务的自臂闩一并清掉
 			mmtrMotionAuto = false;
 			mmtrMotionStopTargetM = -1;
+			mmtrMotionStopRailHex = "";         // 锚点跟着目标一起清（陈旧的锚点会"校正"出幽灵停车点）
+			mmtrMotionStopFraction = -1;
 			mmtrMotionStoppedAtTarget = false;
 			mmtrMotionStopOpenDoors = false;
 			mmtrMotionArrivalControlSeq = -1;
@@ -624,14 +652,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		 * 而计划里的换端步骤本来就没有目标 ⇒ 交路一到终点就停住（notes/150）。
 		 */
 		if (mission.isInPlace()) {
-			if (mission.getState() == MmtrMission.State.ASSIGNED) {
-				mission.dispatch();
+			/*
+			 * 原地动作里**唯一有前提**的一种：站台作业要求"车真的停在这个站台上"（notes/155）。
+			 *
+			 * 没有这条的话，"原地"就等于"在哪儿都开门"：上一步进站被撤活、车还卡在半路时，
+			 * 下一步的站台作业会在半路上开一次门、停 30 秒、报"本站服务完成"—— 比不停更坏。
+			 * 不在站台上就**落到下面的正常规划路**，照常开一趟过去（到了还是这个任务的停留）。
+			 */
+			if (!(mission.getTask() instanceof org.mtr.core.mmtr.task.StationServiceTask)
+				|| mmtrStandsOnRail(simulator, mission.getTargetSidingId())) {
+				if (mission.getState() == MmtrMission.State.ASSIGNED) {
+					mission.dispatch();
+				}
+				if (mission.getState() == MmtrMission.State.DISPATCHED && speed <= 1e-9) {
+					mission.atTarget();
+					mmtrMissionTargetArrivedMillis = data.getCurrentMillis();
+				}
+				return;
 			}
-			if (mission.getState() == MmtrMission.State.DISPATCHED && speed <= 1e-9) {
-				mission.atTarget();
-				mmtrMissionTargetArrivedMillis = data.getCurrentMillis();
-			}
-			return;
 		}
 		if (targetSidingId == 0) {
 			mission.fail("motion missions need an explicit target platform/siding id");
@@ -731,8 +769,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrTurnoutYieldUntilMillis = 0;
 		if (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT) {
 			setMmtrMotionAuto(true);
-			setMmtrMotionStopTarget(plan.stopCumulativeM, mission.getKind() == MmtrMission.Kind.PASSENGER);
-			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m");
+			setMmtrMotionStopTarget(plan.stopCumulativeM, plan.stopRailHex, plan.stopFraction, mission.getKind() == MmtrMission.Kind.PASSENGER);
+			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m"
+				+ (plan.stopRailHex.isEmpty() ? "" : "（锚点 " + plan.stopRailHex.substring(0, 8) + " × " + Math.round(plan.stopFraction * 100.0) / 100.0 + "）"));
 		} else {
 			// T4: 玩家执行 —— **只发布进路与授权，不接管油门**。司机自己开，联锁替他设进路/扳道岔/给信号；
 			// 引擎只观测（位置、门、停车点），到点由任务状态机照常推进。
@@ -745,14 +784,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * 停着不动的车：手里还按着道岔就**让位**（notes/149 第二轮现场）。
+	 * 本车是不是**正踩在这条轨上**（按 id 找站台/股道的轨，见 {@code MmtrRunPlanner.findSavedRailRail}）。
 	 *
-	 * <p>它停着 = 它现在不用那处道岔；而道岔只有一个位置，按着不放就会把要过岔的车堵死。
-	 * 让它退出来、静默一会儿（同 {@link org.mtr.core.mmtr.point.MmtrPointAuthority#MMTR_TURNOUT_YIELD_MILLIS}），
-	 * 自己的进路也随之作废、下一 tick 重新规划（位置已经不是它的了，旧计划不能再用）。</p>
-	 *
-	 * <p>与"自臂失败时的让位"共用同一套计时与阈值：判据统一为"等/停了够久 + 不在让位窗口里"。</p>
+	 * <p>用途（notes/155）：站台作业开门的**前提**。不判这一条，"原地"就退化成"在哪儿都开门"。</p>
 	 */
+	private boolean mmtrStandsOnRail(Simulator simulator, long railOrSidingId) {
+		if (railOrSidingId == 0 || mmtrMotionWalker == null) {
+			return false;
+		}
+		final Rail rail = org.mtr.core.mmtr.MmtrRunPlanner.findSavedRailRail(simulator, railOrSidingId);
+		return rail != null && rail.getHexId().equals(mmtrMotionWalker.railHex());
+	}
+
 	/**
 	 * **原地动作**的执行者：到点停稳之后，按任务类型动手（目前只有换端）。
 	 *
@@ -766,7 +809,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * 并让任务重新自臂 —— 不清闩的话车会在同一站反复换端。</p>
 	 */
 	private void mmtrRunInPlaceTaskAction(MmtrMission mission) {
-		if (isClientside || mission == null || mission.isTerminal() || mmtrTaskActionDone) {
+		if (isClientside || mission == null || mission.isTerminal()) {
 			return;
 		}
 		final org.mtr.core.mmtr.task.MmtrTask task = mission.getTask();
@@ -776,7 +819,41 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (speed > 1e-9) {
 			return;   // 还没停稳（换端本来就只能在停稳时做）
 		}
+		/*
+		 * 闩的语义是"**这个任务的动作已经完成**"，所以它必须挡在**动作开始之后**，不能挡在方法入口：
+		 * 第一版把 `mmtrTaskActionDone` 放进入口那个 if，站台作业的"停够关门"那条分支就永远不可达 ——
+		 * 开门那一 tick 把闩置上，之后每 tick 都在入口返回（**实测现场效果一致**，因为任务到点完成时
+		 * tick 里还有一次关门的兜底，但代码里那行是死的，读代码的人会以为门是"这条分支关的"）。
+		 */
+		if (mmtrTaskActionDone) {
+			return;
+		}
 		switch (task.kind()) {
+			/*
+			 * **站台作业**（notes/155）：计划里的"停留 30s"原来**没有任何地方读**，站台作业形同虚设 ——
+			 * 车到站只是"开往站台"那一步到点停了一下、下一步立刻派出去，现场看起来就是"站台不停"。
+			 * 现在到点停稳就**开门 → 按计划停留 → 关门**；时长取"计划给的"与"引擎默认"的大者。
+			 *
+			 * 判"门已经开了没"用的是**门自己的状态**（`mmtrDoorsOpen`），不是闩 —— 闩只在**关门**时置上：
+			 * 开着门的那几十秒里本方法每 tick 都要再进来一次，才有机会关门。
+			 */
+			case STATION_SERVICE -> {
+				final long dwell = task instanceof final org.mtr.core.mmtr.task.StationServiceTask service
+					? service.effectiveDwellMillis(MMTR_MISSION_DWELL_MILLIS) : MMTR_MISSION_DWELL_MILLIS;
+				if (!mmtrStationServiceAnnounced) {
+					mmtrStationServiceAnnounced = true;
+					if (!vehicleExtraData.mmtrDoorsOpen()) {
+						vehicleExtraData.openDoors();   // 进站时已经开着的（客运任务自开）就不重复开
+					}
+					System.out.println("[MMTR-PLAN] 执行任务动作：站台开门停站 → 车 " + getId()
+						+ "（" + task.taskId + "，计划停留 " + (dwell / 1000) + "s）");
+				} else if (data.getCurrentMillis() - mmtrMissionTargetArrivedMillis >= dwell) {
+					vehicleExtraData.closeDoors();   // 停够就关门（任务随后由 tick 正常完成）
+					mmtrTaskActionDone = true;
+					System.out.println("[MMTR-PLAN] 执行任务动作：站台停够关门 → 车 " + getId()
+						+ "（" + task.taskId + "，停了 " + (dwell / 1000) + "s）");
+				}
+			}
 			case CHANGE_ENDS -> {
 				if (changeEndsMmtrMotion()) {
 					mmtrTaskActionDone = true;
@@ -793,6 +870,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * 停着不动的车：手里还按着道岔就**让位**（notes/149 第二轮现场）。
+	 *
+	 * <p>它停着 = 它现在不用那处道岔；而道岔只有一个位置，按着不放就会把要过岔的车堵死。
+	 * 让它退出来、静默一会儿（同 {@link org.mtr.core.mmtr.point.MmtrPointAuthority#MMTR_TURNOUT_YIELD_MILLIS}），
+	 * 自己的进路也随之作废、下一 tick 重新规划（位置已经不是它的了，旧计划不能再用）。</p>
+	 *
+	 * <p>与"自臂失败时的让位"共用同一套计时与阈值：判据统一为"等/停了够久 + 不在让位窗口里"。</p>
+	 */
 	private void mmtrYieldTurnoutsWhenStuck(Simulator simulator) {
 		final long now = System.currentTimeMillis();
 		if (isMoving()) {
@@ -1483,6 +1569,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// once that stop moves past the head / disappears - auto runs then resume to their target and
 		// manual drivers regain traction.
 		mmtrBlockStopM = computeMmtrBlockStopM(vehiclePositions);
+		/*
+		 * 停车锚点校正（notes/155）：车头一进入锚点那根轨，就把"估算的停车里程"换成**量出来的** ——
+		 * 锚点在脚下这根轨上，剩余里程 = 轨长×比例 − 当前偏移，与进路怎么绕无关。
+		 * 这一步必须在**本 tick 推进之前**做，否则跨过站台那一 tick 用的还是估算值。
+		 */
+		mmtrResolveStopAnchor();
 		// 尽头换向: while a planned dead-end flip is still pending, the dead end itself is a brake
 		// target (the train must come to rest there before changing ends); it leaves the brake set
 		// the moment the flip has happened, so the run accelerates away toward the real stop target.
@@ -1683,7 +1775,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 
 		if (brakeTargetActive && !mmtrMotionStoppedAtTarget) {
-			final double remaining = brakeTargetM - mmtrMotionWalker.distanceM();
+			double remaining = brakeTargetM - mmtrMotionWalker.distanceM();
+			/*
+			 * 有锚点、且车头已经在锚点那根轨上时，**以锚点为准**算"还剩多少"（notes/155）：
+			 * 累计里程是算出来的（会偏），锚点是量出来的。少了这一句，累计里程偏长时车会冲过停车点，
+			 * 偏短时又会提前停死（然后在站台外干等）。
+			 */
+			final double toAnchorM = mmtrRemainingToStopAnchor();
+			if (toAnchorM < Double.MAX_VALUE) {
+				remaining = Math.min(remaining, toAnchorM);
+			}
 			if (remaining <= 1e-6) {
 				integratedDistance = 0;
 				speed = 0;
@@ -1720,7 +1821,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				refreshMmtrMotionLegs();
 			}
 			final double consumed = railProgress - before;
-			if (stopTargetActive && railProgress >= mmtrMotionStopTargetM - 1e-6) {
+			/*
+			 * 到位判据（notes/155）：**累计里程到了 或 锚点到了**。
+			 *
+			 * <p>锚点那一句是关键：累计里程是估的（"当时的位置 + 算出来的进路长度"）——
+			 * 估长了车会冲过站台（现场 1298 m 的目标把车带到 1375 m），估短了车会提前停死。
+			 * 锚点是"车头在哪根轨、轨上多深"，没有估算成分，所以停得准；
+			 * 锚点轨上的硬夹紧（见下面的 remaining 计算）保证车头不会越过它。</p>
+			 */
+			final boolean reachedStop = railProgress >= mmtrMotionStopTargetM - 1e-6 || mmtrReachedStopAnchor();
+			if (stopTargetActive && reachedStop) {
 				speed = 0;
 				mmtrMotionArriveAtStopTarget();
 			} else if (mmtrBlockStopM < Double.MAX_VALUE / 2 && railProgress >= mmtrBlockStopM - 1e-6) {
@@ -1747,7 +1857,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				org.mtr.core.mmtr.MmtrTrace.log("[MMTR-DRV] motion seg=" + mmtrMotionWalker.railHex() + " offset=" + Math.round(mmtrMotionWalker.offsetM() * 100.0) / 100.0 + " dist=" + Math.round(consumed * 1000.0) / 1000.0 + " speed=" + speed);
 			}
 		} else if (speed == 0 && brakeTargetActive && brakeTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
-			if (stopTargetActive && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6) {
+			final boolean stopTargetConsumed = stopTargetActive && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() <= 1e-6;
+			if (stopTargetConsumed && !mmtrMotionStopRailHex.isEmpty() && !mmtrReachedStopAnchor() && !mmtrBlockedWaiting) {
+				/*
+				 * **锚点没到、累计里程却说到了**（notes/155）：里程是估的，估短了车就提前停死在半路
+				 * （站台外十几米）。不许在这儿干等 —— 放掉停车目标与 auto，任务下一 tick 会用当前位置
+				 * 重新自臂，重算一条到锚点的进路。
+				 */
+				System.out.println("[MMTR-DRV] 停车里程估短了（车停在 " + Math.round(mmtrMotionWalker.distanceM())
+					+ "m，锚点在 " + mmtrMotionStopRailHex + " 上）—— 放掉目标重新规划");				mmtrMotionAuto = false;
+				mmtrMotionStopTargetM = -1;
+				mmtrMotionStopRailHex = "";
+				mmtrMotionStopFraction = -1;
+				mmtrMotionStoppedAtTarget = false;
+			} else if (stopTargetConsumed) {
 				mmtrMotionArriveAtStopTarget();
 			} else if (!mmtrBlockedWaiting) {
 				// Already resting exactly at the block stop (e.g. the advance was clamped to zero
@@ -1913,11 +2036,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * (free run). Only meaningful while {@link #isMmtrMotion()}.
 	 */
 	public void setMmtrMotionStopTarget(double cumulativeDistanceM, boolean openDoors) {
+		setMmtrMotionStopTarget(cumulativeDistanceM, "", -1, openDoors);
+	}
+
+	/**
+	 * 带**停车锚点**的自臂（notes/155）：除了累计里程（刹车的粗略目标），还给出"停在哪根轨、轨上多深处"。
+	 *
+	 * <p>到位判据以锚点为准（见 {@link #mmtrReachedStopAnchor()}）：累计里程算偏了也不会停错地方 ——
+	 * 停偏了现场就是"车冲过站台才开门"。{@code stopRailHex} 为空时退回只按累计里程的老口径
+	 * （既有调用点/用例不受影响）。</p>
+	 */
+	public void setMmtrMotionStopTarget(double cumulativeDistanceM, String stopRailHex, double stopFraction, boolean openDoors) {
 		if (isClientside || mmtrMotionWalker == null) {
 			return;
 		}
 		final boolean wasStoppedAtTarget = mmtrMotionStoppedAtTarget;
 		mmtrMotionStopTargetM = cumulativeDistanceM;
+		mmtrMotionStopRailHex = stopRailHex == null ? "" : stopRailHex;
+		mmtrMotionStopFraction = stopFraction;
 		mmtrMotionStopOpenDoors = openDoors;
 		mmtrMotionStoppedAtTarget = false;
 		mmtrMotionArrivalControlSeq = -1;
@@ -1929,6 +2065,66 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			vehicleExtraData.closeDoors();
 			System.out.println("[MMTR-DRV] motion auto-departing to next stop target " + Math.round(cumulativeDistanceM * 100.0) / 100.0 + "m");
 		}
+	}
+
+	/**
+	 * 车头是不是**已经站在停车锚点上**（notes/155）：在锚点那根轨上，且轨内偏移到了锚点比例处。
+	 *
+	 * <p>没有锚点时恒 false（调用方退回累计里程判据）。判据只看"车头在哪、走了多深"——
+	 * 与进路怎么绕、累计里程估得准不准**无关**，所以重规划不会把停车点挪走。</p>
+	 *
+	 * <p><b>先看还有没有停车目标</b>：目标被清掉（任务完成/换端/收回）之后锚点会留在字段里，
+	 * 那种"陈旧的锚点"绝不能再说话 —— 现场实测它会每 tick 把已经清掉的目标又"校正"回一个停车点
+	 * （日志刷屏，而且等于凭空给车派了个停车目标）。</p>
+	 */
+	private boolean mmtrReachedStopAnchor() {
+		if (mmtrMotionStopTargetM < 0 || mmtrMotionStopRailHex.isEmpty() || mmtrMotionStopFraction < 0 || mmtrMotionWalker == null) {
+			return false;
+		}
+		if (!mmtrMotionStopRailHex.equals(mmtrMotionWalker.railHex())) {
+			return false;
+		}
+		final double anchorOffset = mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM();
+		return mmtrMotionWalker.offsetM() >= anchorOffset - 1e-6;
+	}
+
+	/** @return 当前这次自臂有没有停车锚点（诊断用；空 = 只按累计里程）。 */
+	public boolean hasMmtrMotionStopAnchor() {
+		return !mmtrMotionStopRailHex.isEmpty() && mmtrMotionStopFraction >= 0;
+	}
+
+	/** 车头在这根轨上时，到停车锚点还有多少米（不在锚点轨上返回 {@code Double.MAX_VALUE}）。 */	private double mmtrRemainingToStopAnchor() {
+		if (mmtrMotionStopTargetM < 0 || mmtrMotionStopRailHex.isEmpty() || mmtrMotionStopFraction < 0 || mmtrMotionWalker == null
+			|| !mmtrMotionStopRailHex.equals(mmtrMotionWalker.railHex())) {
+			return Double.MAX_VALUE;
+		}
+		return mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+	}
+
+	/**
+	 * 车头已经站在锚点那根轨上时，把停车目标换成**量出来的**累计里程（notes/155）。
+	 *
+	 * <p>自臂时给的累计里程 = "当时的位置 + 算出来的进路长度"，与真实走行差多少全看那次估算；
+	 * 而锚点（哪根轨、轨上多深）一旦脚踩上去就是精确的：{@code 本轨起点累计里程 = 当前累计 − 当前偏移}，
+	 * 加上"轨长 × 比例"就是锚点的累计里程。换过之后到位判据仍然是那一句
+	 * {@code railProgress >= 目标}，但目标已经不再带估算误差。</p>
+	 */
+	private void mmtrResolveStopAnchor() {
+		if (mmtrMotionStopTargetM < 0 || mmtrMotionStopRailHex.isEmpty() || mmtrMotionStopFraction < 0 || mmtrMotionWalker == null
+			|| !mmtrMotionStopRailHex.equals(mmtrMotionWalker.railHex())) {
+			return;
+		}
+		final double exactM = mmtrMotionWalker.distanceM() - mmtrMotionWalker.offsetM()
+			+ mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM();
+		if (exactM <= mmtrMotionWalker.distanceM() + 1e-9 || Math.abs(exactM - mmtrMotionStopTargetM) <= 1e-9) {
+			return;   // 已经过了锚点，或本来就一样：不动
+		}
+		System.out.println("[MMTR-DRV] 停车点按锚点校正 " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0
+			+ "m → " + Math.round(exactM * 100.0) / 100.0 + "m（在 " + mmtrMotionStopRailHex + " 上，比例 "
+			+ Math.round(mmtrMotionStopFraction * 100.0) / 100.0 + "）");
+		mmtrMotionStopTargetM = exactM;
+		mmtrRunStopTarget = exactM;
+		vehicleExtraData.mmtrMarkSyncDirty();
 	}
 
 	/** @return true when the vehicle is stopped exactly at its armed motion stop target. */

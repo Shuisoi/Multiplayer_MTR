@@ -151,8 +151,7 @@ public final class MmtrMotionStopTargetTests {
 	}
 
 	@Test
-	public void secondStopTargetCanBeArmedWhileRunning() {
-		final Net n = new Net();
+	public void secondStopTargetCanBeArmedWhileRunning() {		final Net n = new Net();
 		final Vehicle v = n.spawn();
 		v.setMmtrMotionStopTarget(n.targetM, false);
 		boardDriver(n, v, 3);
@@ -185,5 +184,56 @@ public final class MmtrMotionStopTargetTests {
 		assertEquals(secondTarget, v.getRailProgress(), 0.05, "second stop position exact");
 		assertTrue(v.getRailProgress() <= secondTarget + 1e-3, "no overshoot on the second stop");
 		assertTrue(v.vehicleExtraData.getDoorMultiplier() > 0, "second stop opens doors");
+	}
+
+	/**
+	 * **停车点按"锚点"落地，不按估算里程**（notes/155 现场）。
+	 *
+	 * <p>现场读数：同一根站台轨，两次自臂给出 1298 m 与 1375 m 两个停车点（累计里程是"当时的位置 +
+	 * 算出来的进路长度"，进路一变就漂），车于是穿过站台又往前开 77 m 才开门 —— 用户看到的就是
+	 * "3 站以后不停站"。修法：除了累计里程（只当刹车目标），再给一个**锚点**（停在哪根轨、轨上多深）；
+	 * 车头一进那根轨就把目标校正成量出来的值，估算偏多少都不影响停车位置。</p>
+	 *
+	 * <p>红证：把 {@code Vehicle#mmtrResolveStopAnchor()} 去掉（或让锚点不参与），
+	 * 车会一路开到估算的 {@code targetM + 40} 才停，本用例第一段立刻红。</p>
+	 */
+	@Test
+	public void thePlatformAnchorWinsOverACumulativeEstimateThatRunsLong() {
+		final Net n = new Net();
+		final Vehicle v = n.spawn();
+		final double anchorOffsetM = 18.0;
+		final double anchorFraction = anchorOffsetM / n.platformRail.railMath.getLength();
+		// 估算值比锚点长 40 m：现场"重规划后停车点漂到站台外"就是这一种
+		v.setMmtrMotionStopTarget(n.targetM + 40.0, n.platformRail.getHexId(), anchorFraction, true);
+		boardDriver(n, v, 3);
+
+		boolean arrived = false;
+		for (int i = 0; i < 3000 && !arrived; i++) {
+			n.drive(null);
+			arrived = v.isMmtrMotionStoppedAtTarget();
+		}
+		assertTrue(arrived, "必须到点停车：progress=" + v.getRailProgress() + " 锚点=" + n.targetM);
+		assertEquals(n.targetM, v.getRailProgress(), 0.05, "锚点说了算 —— 停在站台轨内 18 m 处，不是估算的 +40 m");
+		assertTrue(v.getRailProgress() <= n.targetM + 0.05, "不许冲过锚点");
+		assertEquals(n.platformRail.getHexId(), v.getMmtrMotionWalker().railHex(), "停在站台轨上（不是站台外的那根轨）");
+		assertEquals(anchorOffsetM, v.getMmtrMotionWalker().offsetM(), 0.05, "车头恰好停在锚点的深度上");
+		assertTrue(v.vehicleExtraData.getDoorMultiplier() > 0, "到点开门");
+	}
+
+	/**
+	 * **清掉停车目标时，锚点也要跟着清**（notes/155 现场实测的一个坑）。
+	 *
+	 * <p>任务一结束（到位/换端/收回）就会把 {@code mmtrMotionStopTargetM} 置 -1，锚点若留在字段里，
+	 * "锚点校正"会每 tick 把已经清掉的目标又写回一个停车点 —— 日志刷屏，而且等于**凭空给车派了个停车目标**。
+	 * 现在两处都防：清目标的入口一起清锚点，锚点判据本身也先看"还有没有目标"。</p>
+	 */
+	@Test
+	public void clearingTheStopTargetAlsoClearsTheAnchor() {
+		final Net n = new Net();
+		final Vehicle v = n.spawn();
+		v.setMmtrMotionStopTarget(n.targetM, n.platformRail.getHexId(), 0.3, true);
+		assertTrue(v.hasMmtrMotionStopAnchor(), "给锚点之后应当在");
+		v.setMmtrMotionStopTarget(-1, false);
+		assertTrue(!v.hasMmtrMotionStopAnchor(), "清目标必须把锚点一起清（否则会校正出幽灵停车点）");
 	}
 }

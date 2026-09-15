@@ -716,8 +716,18 @@ public final class SystemMapServlet extends ServletBase {
 					if (nextRailHex != null) {
 						final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section> sections =
 							simulator.mmtrDirectionalBlocks.sectionsOfRail(nextRailHex);
-						if (!sections.isEmpty()) {
-							final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section section = sections.get(0);
+						/*
+						 * **同一根轨属于两个方向的区间** —— 报出来的必须是"本车这个方向"的那一个
+						 * （notes/155 §10 的读数陷阱）。
+						 *
+						 * 原来直接取 {@code sections.get(0)}：一列车明明在向前跑，运营台上却可能显示
+						 * 反向那个区间（在这一版世界里，反向区间是 562 m 长的巨块），于是"六台车的下一区间
+						 * 是同一个"这种结论**根本是读数造成的**。判据用区间自己记的走向
+						 * （{@code RailSpan#matchesHeading}），与授权链同口径。
+						 */
+						final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section section =
+							sectionMatchingTravel(sections, walker, nextRailHex);
+						if (section != null) {
 							train.addProperty("nextSection", section.id);
 							// 排除本车之后还占着吗 —— 这一问才是"前方真有车/邻车"的证据
 							train.addProperty("nextSectionOccupiedByOthers",
@@ -729,6 +739,8 @@ public final class SystemMapServlet extends ServletBase {
 								occupants.add(String.valueOf(occupant));
 							}
 							train.add("nextSectionOccupants", occupants);
+						} else {
+							train.addProperty("nextSection", "");
 						}
 					}
 				}
@@ -838,6 +850,40 @@ public final class SystemMapServlet extends ServletBase {
 		root.add("routeMirror", mmtrRouteMirrorJson(simulator));
 		root.add("points", new com.google.gson.JsonArray());
 		return root;
+	}
+
+	/**
+	 * **本车这个方向的那个区间**（notes/155 §10）：同一根轨属于两个方向的区间，报"下一区间"时必须分方向。
+	 *
+	 * <p>判据是区间自己记的走向（{@code RailSpan#matchesHeading}），与授权链（{@code sectionAt} /
+	 * {@code sectionBoundaryAheadM}）同一口径：先按本车的行进方向（从入口节点指向前方节点）取；
+	 * 取不到（例如两节点的连线退化成一点）再退回"这根轨上的第一个区间"，至少不空。</p>
+	 */
+	private static org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.@Nullable Section sectionMatchingTravel(
+		it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section> sections,
+		org.mtr.core.mmtr.segment.MmtrMotionPosition walker, String railHex) {
+		if (sections.isEmpty()) {
+			return null;
+		}
+		final org.mtr.core.data.Position from = walker.enteredFromPosition();
+		final org.mtr.core.data.Position to = walker.aheadNode();
+		if (from != null && to != null) {
+			final double dx = to.getX() - from.getX();
+			final double dz = to.getZ() - from.getZ();
+			final double norm = Math.sqrt(dx * dx + dz * dz);
+			if (norm > 1e-6) {
+				final double headingX = dx / norm;
+				final double headingZ = dz / norm;
+				for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section section : sections) {
+					for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : section.spans) {
+						if (span.railHex.equals(railHex) && span.matchesHeading(headingX, headingZ)) {
+							return section;
+						}
+					}
+				}
+			}
+		}
+		return sections.get(0);
 	}
 
 	/** The rail→next-rail narrowing map and the PENDING entry rails, exactly as mirrored to clients. */

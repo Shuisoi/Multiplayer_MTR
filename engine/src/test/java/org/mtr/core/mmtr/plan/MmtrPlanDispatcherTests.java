@@ -405,8 +405,65 @@ public final class MmtrPlanDispatcherTests {
 		assertEquals(9101L, world.dispatchedTo.get(world.dispatchedTo.size() - 1), "还是这辆车");
 	}
 
-	// ---------------------------------------------------------------- 一辆车跑一整趟
+	/**
+	 * **已经在跑的这一趟，不许半路丢下**（notes/155 现场）。
+	 *
+	 * <p>用户报的是"车只停第一站和第二站，别的站不停"。查下来有一段就在这里：一趟车晚点太多之后，
+	 * 这一趟的**时间窗**过完了，于是"迟到不补跑"把**剩下的每一站逐步跳过** —— 车从当时的位置直接
+	 * 跳去终点换端，一路开过剩下的站。计划上"每一步都派了"，现场看起来就是"不停"。</p>
+	 *
+	 * <p>判据：这一趟**已经有步真的派出去过** ⇒ 车已经在服务中 ⇒ 剩下的步必须跑完（晚点就晚点）。
+	 * 一趟"一步都没派过、窗口已过"的车照旧整趟跳过（半路开机就是这种，那不叫丢站）。</p>
+	 *
+	 * <p>红证：把最后的 {@code return !theTripIsAlreadyUnderWay(...)} 换回
+	 * {@code return true}（只按窗口判）⇒ 本用例在 {@code skippedSteps} 那一行红。</p>
+	 */
+	@Test
+	public void aTripThatIsAlreadyUnderWayIsNotAbandonedMidRun() {
+		final MmtrLine line = longLine();
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, longPattern(), fleet(1), TIMES);
+		final MmtrPlanDispatcher d = new MmtrPlanDispatcher(line, diagram);
+		final FakeWorld world = new FakeWorld(9201L);
+		world.autoComplete = false;
 
+		// 06:55 出库、07:00 从起点站发车（那一趟的起点）
+		d.tick(H07 - 5 * MIN, world);
+		world.complete(9201L);
+		d.tick(H07, world);
+		world.complete(9201L);
+
+		// 07:05 到第二站 —— 从这一刻起"这一趟已经在跑了"
+		final MmtrTask toSecondStop = d.states.get(0).nextTask();
+		assertNotNull(toSecondStop);
+		assertEquals(H07 + LEG, toSecondStop.dueMs, "计划到第二站（一段 4 分钟）");
+		d.tick(toSecondStop.dueMs, world);
+		world.complete(9201L);
+
+		// 这一趟的窗口（到终点处理完）：
+		final MmtrDiagram.Entry trip = diagram.workings.get(0).entries.stream()
+			.filter(entry -> entry.kind == MmtrDiagram.Entry.Kind.TRIP).findFirst().orElseThrow();
+		assertTrue(trip.endMillis < H07 + 45 * MIN, "一趟 29 分钟：07:45 早已过了它的窗口");
+
+		// 车在路上趴到 07:45（这一趟的窗口早过完、每一步都迟到超过宽限）。
+		// 但它已经在跑这一趟 ⇒ 剩下的站必须照停，一步都不许跳。
+		final int skippedBefore = d.skippedSteps;
+		int remaining = 0;
+		while (true) {
+			final MmtrTask next = d.states.get(0).nextTask();
+			if (next == null || next.dueMs > trip.endMillis) {
+				break;   // 这一趟跑完了（后面那趟没跑过的，跳过是对的）
+			}
+			remaining++;
+			d.tick(H07 + 45 * MIN, world);
+			assertEquals(skippedBefore, d.skippedSteps, "已经在跑的这一趟，剩下的步一步都不许跳：" + next.taskId + "（" + next.kind() + "）");
+			assertTrue(world.dispatched.get(world.dispatched.size() - 1).startsWith(next.kind().name()),
+				"最后派出去的就是这一步：" + next.taskId);
+			world.complete(9201L);
+		}
+		assertTrue(remaining > 3, "这一趟剩下的步不止一步（否则这条用例没测到什么）：" + remaining);
+	}
+
+	// ---------------------------------------------------------------- 一辆车跑一整趟
 	/**
 	 * **一趟车由同一辆车跑完**（装机实测抓出来的缺陷）。
 	 *

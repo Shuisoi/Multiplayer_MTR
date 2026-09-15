@@ -70,8 +70,16 @@ public final class MmtrPlanDispatcher {
 		public long vehicleId;
 		/** 已经派出去、**还在等它跑完**的那一步的任务 id（空 = 手空着，可以派下一步）。 */
 		public String awaitingTaskId = "";
-		/** 上一次尝试派发的那一步的计划时刻（诊断用）。 */
+		/** 上次尝试派发那一步的计划时刻（诊断用）。 */
 		public long lastAttemptMillis;
+		/**
+		 * 被**跳过**（迟到不补跑）的步下标。
+		 *
+		 * <p>为什么要单独记：{@code dispatchedSteps} 把"派出去"和"跳过"一起算（都是"处理过了"），
+		 * 而"这趟车已经在跑"这条判据必须只认**真的派出去过的**那些步 —— 否则一趟"整趟被跳过"的班
+		 * 会被自己的跳过记录当成"已经在跑"，剩下的步就跟着被派出去（那等于补跑一整趟）。</p>
+		 */
+		public final it.unimi.dsi.fastutil.ints.IntOpenHashSet skippedIndexes = new it.unimi.dsi.fastutil.ints.IntOpenHashSet();
 
 		WorkingState(String consistId, ObjectArrayList<MmtrTask> tasks) {
 			this.consistId = consistId;
@@ -189,7 +197,39 @@ public final class MmtrPlanDispatcher {
 				containing = entry;
 			}
 		}
-		return containing == null || dayTimeMillis > containing.endMillis;
+		if (containing == null) {
+			return true;
+		}
+		if (dayTimeMillis <= containing.endMillis) {
+			return false;   // 窗口还没过完：这一步是活的，晚几分钟也照派
+		}
+		/*
+		 * **已经在跑的这一趟，不许半路丢下**（notes/155 现场）。
+		 *
+		 * <p>只按"窗口过没过完"判会有一个恶劣后果：一趟车跑了一半、晚点太多导致这一趟的窗口过完，
+		 * 那**剩下的每一站都会被逐步跳过** —— 车从当前位置直接"跳"到终点去换端。
+		 * 现场读数正是这样：用户报"车只停第一站和第二站，别的站不停"（前面的停站被跳过之后，
+		 * 车一路开过剩下的站，看起来就是"不停"）。</p>
+		 *
+		 * <p>判据：**这一趟的步已经有派出去过的**（不只是被跳过）⇒ 这趟车已经在服务中 ⇒ 必须跑完。
+		 * 反过来，一趟"一步都还没派过、窗口已过"的车（半路开机就是这种）照旧整趟跳过 —— 那不叫丢站，
+		 * 那叫这班车今天不成立。</p>
+		 */
+		return !theTripIsAlreadyUnderWay(state, containing);
+	}
+
+	/** 这一条目里**已经有步真的派出去过**（排除了"被跳过"的那些）。 */
+	private static boolean theTripIsAlreadyUnderWay(WorkingState state, MmtrDiagram.Entry entry) {
+		for (int i = 0; i < state.dispatchedSteps && i < state.tasks.size(); i++) {
+			if (state.skippedIndexes.contains(i)) {
+				continue;   // 跳过的步不算"这趟车已经在跑"
+			}
+			final long due = state.tasks.get(i).dueMs;
+			if (due >= entry.startMillis && due <= entry.endMillis) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private MmtrDiagram.@Nullable Working workingOf(String consistId) {
@@ -404,6 +444,7 @@ public final class MmtrPlanDispatcher {
 				// 过时了，而且**这一趟的窗口已经过完**：不补跑（设计 §7「过去不可改」），跳过继续看下一步。
 				// 窗口还在的步不走这条路 —— 那是"同一趟的下一步"，跳了就等于这趟车不停那一站
 				// （见 theTripWindowIsOver；玩家接管后归还就是这种情形）。
+				state.skippedIndexes.add(state.dispatchedSteps);   // 记下来：跳过 ≠ 派出去过（见 skippedIndexes）
 				state.dispatchedSteps++;
 				skippedSteps++;
 				continue;

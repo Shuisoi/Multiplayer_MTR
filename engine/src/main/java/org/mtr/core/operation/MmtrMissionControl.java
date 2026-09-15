@@ -99,7 +99,7 @@ public final class MmtrMissionControl implements SerializedDataBase {
 					// forks are granted (nothing auto-elects around a busy point).
 					if (vehicle.armMmtrPointRun(simulator, motionPlan)) {
 						vehicle.setMmtrMotionAuto(true);
-						vehicle.setMmtrMotionStopTarget(motionPlan.stopCumulativeM, parsedKind == MmtrMission.Kind.PASSENGER);
+						vehicle.setMmtrMotionStopTarget(motionPlan.stopCumulativeM, motionPlan.stopRailHex, motionPlan.stopFraction, parsedKind == MmtrMission.Kind.PASSENGER);
 						System.out.println("[MMTR-MSG] motion mission " + parsedKind + " armed to rail " + motionPlan.targetRailHex + " stop @" + Math.round(motionPlan.stopCumulativeM) + "m");
 					} else {
 						// Stay assigned and unarmed (stop target untouched so the self-arm condition stays

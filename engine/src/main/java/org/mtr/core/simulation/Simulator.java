@@ -1202,6 +1202,8 @@ public class Simulator extends Data implements Utilities {
 	 * again on the next restart (explicit reset).
 	 */
 	public void mmtrClearAllVehicles() {
+		// 车没了，它们在进路/道岔/调车授权上的痕迹由 Siding#clearVehicles 一起放掉
+		// （notes/155 §11：不清就留下"幽灵持有者"，把整条咽喉按死）。
 		sidings.forEach(Siding::clearVehicles);
 		sidings.forEach(siding -> {
 			siding.setVehicleCars(new ObjectArrayList<>());
@@ -1209,6 +1211,18 @@ public class Simulator extends Data implements Utilities {
 			siding.mmtrSessionSpawned = false;
 		});
 		System.out.println("[MMTR-MFST] cleared all vehicles + templates on " + dimension);
+	}
+
+	/**
+	 * 一辆车**离开世界**时把它在外面的持有全部放掉：进路 + 道岔（进向持有/排队/物理位置）+ 调车授权。
+	 *
+	 * <p>三样东西都是**按持有者 id 跨 tick 存活**的，车主没了它们不会自己消失 —— 于是留下
+	 * "幽灵持有者"把咽喉锁死（notes/155 §11）。删除、清车、淘汰车都必须走这一句。</p>
+	 */
+	public void mmtrReleaseVehicleClaims(long vehicleId) {
+		mmtrRoutes.release(vehicleId);
+		mmtrPointAuthority.releaseAll("v" + vehicleId);
+		mmtrShuntAuthorities.revoke(vehicleId);
 	}
 
 	private Object[] mmtrLinesCache; // {signature, lines}
@@ -2230,9 +2244,7 @@ public class Simulator extends Data implements Utilities {
 			if (siding.removeVehicleById(vehicleId)) {
 				// A deleted train must not leave a stale route / turnout hold behind: the signal layer
 				// would keep showing its route as set over rails nothing runs on any more.
-				mmtrRoutes.release(vehicleId);
-				mmtrPointAuthority.releaseAll("v" + vehicleId);
-				mmtrShuntAuthorities.revoke(vehicleId);
+				mmtrReleaseVehicleClaims(vehicleId);
 				return true;
 			}
 		}

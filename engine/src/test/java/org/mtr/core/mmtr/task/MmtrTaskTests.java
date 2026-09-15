@@ -112,6 +112,27 @@ public final class MmtrTaskTests {
 		assertTrue(new DriveToPlatformTask("d2", 1234, DUE).dispatchable(), "有目标的照常派");
 	}
 
+	/**
+	 * **站台作业该停多久**（notes/155）：计划给的停留与引擎默认取大者。
+	 *
+	 * <p>现场问题：计划里的"停留 30 秒"**全引擎没有任何地方读**（{@code dwellMs} 只被写、被打日志），
+	 * 于是站台作业形同虚设 —— 车到站只是"开往站台"那一步到点停了一下、下一步立刻派出去，
+	 * 看起来就是"站台不停"。这条判据把"计划说了算"钉住。</p>
+	 *
+	 * <p>红证：把 {@code effectiveDwellMillis} 改成恒返回引擎默认 ⇒ 第一段红。</p>
+	 */
+	@Test
+	public void thePlannedDwellWinsOverTheEngineDefault() {
+		final StationServiceTask planned = new StationServiceTask("s1", 2001, DUE, 30_000);
+		assertEquals(30_000, planned.effectiveDwellMillis(5_000), "计划说停 30 秒就停 30 秒");
+
+		final StationServiceTask withoutPlannedDwell = new StationServiceTask("s2", 2002, DUE, 0);
+		assertEquals(5_000, withoutPlannedDwell.effectiveDwellMillis(5_000), "计划没给停留 ⇒ 用引擎默认");
+
+		final StationServiceTask shorterThanDefault = new StationServiceTask("s3", 2003, DUE, 1_000);
+		assertEquals(5_000, shorterThanDefault.effectiveDwellMillis(5_000), "计划比默认还短 ⇒ 取默认（别把门开一下就走）");
+	}
+
 	@Test
 	public void everyConcreteTaskDescribesItself() {
 		for (final MmtrTask task : new MmtrTask[]{

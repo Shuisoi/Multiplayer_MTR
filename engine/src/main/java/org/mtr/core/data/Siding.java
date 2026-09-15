@@ -234,6 +234,12 @@ public final class Siding extends SidingSchema implements Utilities {
 	}
 
 	public void clearVehicles() {
+		// 车没了，外面的持有（进路/道岔位置与排队/调车授权）必须一起放（notes/155 §11 幽灵持有者）。
+		if (data instanceof final org.mtr.core.simulation.Simulator simulator) {
+			for (final Vehicle vehicle : vehicleIdMap.values()) {
+				simulator.mmtrReleaseVehicleClaims(vehicle.getId());
+			}
+		}
 		vehicleIdMap.clear();
 	}
 
@@ -345,7 +351,16 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 
 		if (!trainsToRemove.isEmpty()) {
-			trainsToRemove.forEach(vehicle -> vehicleIdMap.remove(vehicle.getId()));
+			trainsToRemove.forEach(vehicle -> {
+				vehicleIdMap.remove(vehicle.getId());
+				/*
+				 * 被淘汰的车也要**把外面的持有放掉**（notes/155 §11）：进路、道岔位置与排队、调车授权
+				 * 都是按持有者 id 跨 tick 存活的，车主没了它们不会自己消失 —— 幽灵持有者会把咽喉锁死。
+				 */
+				if (data instanceof final org.mtr.core.simulation.Simulator simulator) {
+					simulator.mmtrReleaseVehicleClaims(vehicle.getId());
+				}
+			});
 		}
 	}
 

@@ -48,6 +48,19 @@ public final class MmtrRunPlanner {
 		public double stopCumulativeM = -1;
 		public String targetRailHex = "";
 		/**
+		 * **站台锚点**：停车点所在的那根轨 + 它在轨内的比例（0 = 本方向的轨起点，1 = 远端）。
+		 *
+		 * <p>为什么光有 {@link #stopCumulativeM} 不够（notes/155 现场实测）：累计里程 = "自臂那一刻的位置 +
+		 * **算出来的**进路长度"。算出来的东西会变 —— 让位后重规划、岔位换了、进路绕了一条 ——
+		 * 同一个站台的停车点就跟着漂：实测同一根站台轨两次自臂给出 <b>1298 m 与 1375 m</b> 两个停车点，
+		 * 车于是穿过站台又往前开了 77 m 才开门（用户看到的就是"3 站以后不停站"）。</p>
+		 *
+		 * <p>锚点是**世界里的一个位置**（哪根轨、轨上多深处），重算多少遍都不动；累计里程退化成
+		 * "刹车的粗略目标"，到位判据改用锚点。</p>
+		 */
+		public String stopRailHex = "";
+		public double stopFraction = -1;
+		/**
 		 * 尽头换向 (terminal flip): absolute walker distance at which the run reaches the dead end
 		 * of {@link #flipRailHex} - the vehicle stops there and changes ends (换端) before the plan
 		 * continues to {@link #stopCumulativeM}. {@code -1} = the plan needs no flip.
@@ -339,6 +352,8 @@ public final class MmtrRunPlanner {
 			travelledM += i == orderedRails.size() - 1 ? orderedRails.get(i).railMath.getLength() * clamp : orderedRails.get(i).railMath.getLength();
 		}
 		plan.stopCumulativeM = walker.distanceM() + travelledM;
+		plan.stopRailHex = targetRailHex;
+		plan.stopFraction = clamp;
 		if (flipAtM > 0) {
 			plan.flipCumulativeM = flipAtM;
 			final int flipRailIndex = orderedReversed.indexOf(true);
@@ -478,7 +493,10 @@ public final class MmtrRunPlanner {
 			}
 			plannedM += rail.railMath.getLength();
 		}
-		plan.stopCumulativeM = walker.distanceM() + plannedM - (1.0 - Math.max(0.0, Math.min(1.0, stopFraction))) * target.railMath.getLength();
+		final double forwardClamp = Math.max(0.0, Math.min(1.0, stopFraction));
+		plan.stopCumulativeM = walker.distanceM() + plannedM - (1.0 - forwardClamp) * target.railMath.getLength();
+		plan.stopRailHex = targetRailHex;
+		plan.stopFraction = forwardClamp;
 		if (plan.stopCumulativeM <= walker.distanceM() + 1e-6) {
 			plan.reason = "stop would lie at or behind the vehicle position";
 			return plan;
@@ -680,6 +698,8 @@ public final class MmtrRunPlanner {
 			return plan;
 		}
 		plan.stopCumulativeM = stopAbs;
+		plan.stopRailHex = targetRailHex;
+		plan.stopFraction = clamp;
 		plan.flipCumulativeM = flipAtM;
 		plan.flipRailHex = flipRail.getHexId();
 

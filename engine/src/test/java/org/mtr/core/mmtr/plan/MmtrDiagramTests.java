@@ -3,6 +3,8 @@ package org.mtr.core.mmtr.plan;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.job.MmtrCarSpec;
+import org.mtr.core.mmtr.task.MmtrTask;
+import org.mtr.core.mmtr.task.StationServiceTask;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -264,5 +266,67 @@ public final class MmtrDiagramTests {
 		assertTrue(diagram.scheduledWorkings().isEmpty());
 		assertNotNull(diagram.capacityProblem);
 		assertEquals(0, diagram.totalTripCount());
+	}
+
+	// ---------------------------------------------------------------- ⑤ 逐步展开：每一步从"它最早能开始"算起
+
+	/**
+	 * ⑤ **站台作业的计划时刻是"到站"，不是"发车"**（notes/155 现场）。
+	 *
+	 * <p>修前 `MmtrPlanTasks` 把站台作业的计划时刻写成了 {@code stop.departureMillis}。后果现场量得出来：
+	 * 车到站的那一刻这一趟还不许派（{@code earliestMs} 是发车时刻），于是先干等一个停留；
+	 * 等到点挂上去，执行器再按计划停一个停留 —— **每站多花整整一个停留**。
+	 * 十站一趟多 5 分钟，第二趟就冲破 {@code LATE_GRACE_MILLIS}（10 分钟）开始"跳过不停"，
+	 * 现场的观感就是用户报的"只停前两站"。</p>
+	 *
+	 * <p>红证：把那句改回 {@code stop.departureMillis} ⇒ 本用例第一段的 {@code assertEquals} 红。</p>
+	 */
+	@Test
+	public void everyPlanStepIsStampedWithWhenItCanStart() {
+		final MmtrLine line = line();
+		final MmtrDiagram diagram = MmtrDiagram.generate(line, pattern(), fleet(N, 1), TIMES);
+		final MmtrDiagram.Working first = diagram.scheduledWorkings().get(0);
+		final MmtrServicePlan.StopTime secondStop = first.trips().get(0).stopTimes.get(1);
+		boolean checked = false;
+		for (final MmtrTask task : MmtrPlanTasks.expand(line, first)) {
+			if (task instanceof final StationServiceTask service && service.targetRef == secondStop.platformId) {
+				assertEquals(secondStop.arrivalMillis, service.earliestMs, "站台作业从**到站**那一刻开始算，不是发车时刻");
+				assertEquals(secondStop.dwellMillis(), service.dwellMs, "停留照计划给的值");
+				checked = true;
+				break;
+			}
+		}
+		assertTrue(checked, "第一趟第二站必须有站台作业");
+	}
+
+	/**
+	 * ⑤ 续：**每一步的计划时刻不早于上一步最早能结束的时刻**（"区间很短、停留很长"的线最容易踩）。
+	 *
+	 * <p>这条判据是通用的：站台作业的"最早能结束"就是 `计划时刻 + 停留`，其余步骤本身不占时间。
+	 * 拿现场那种形状再走一遍（区间 10 秒 < 停留 30 秒）—— 修前站台作业按发车时刻起算，
+	 * 下一步的计划时刻会落在"本站停留还没结束"的时候，这条立刻红。</p>
+	 *
+	 * <p>红证：把 {@code MmtrPlanTasks} 里站台作业的时刻改回 {@code stop.departureMillis} ⇒ 本用例红。</p>
+	 */
+	@Test
+	public void noStepIsPlannedBeforeThePreviousOneCanFinish() {
+		final MmtrLine line = line();
+		// 现场形状：区间比停留还短
+		final MmtrDiagram dense = MmtrDiagram.generate(line, pattern(), fleet(N, 1), MmtrTravelTimes.uniform(10_000, 30_000));
+		int services = 0;
+		for (final MmtrDiagram.Working working : dense.scheduledWorkings()) {
+			long previousEnd = Long.MIN_VALUE;
+			for (final MmtrTask task : MmtrPlanTasks.expand(line, working)) {
+				assertTrue(task.earliestMs >= previousEnd, working.consistId + " " + task.taskId + "（" + task.kind()
+					+ "）计划 " + MmtrPattern.hhmm(task.earliestMs) + "，而上一步最早也要到 " + MmtrPattern.hhmm(previousEnd) + " 才结束");
+				if (task instanceof final StationServiceTask service) {
+					services++;
+					previousEnd = task.earliestMs + service.dwellMs;
+				} else {
+					previousEnd = task.earliestMs;
+				}
+			}
+		}
+		assertTrue(services > 0, "这条线的交路里必须有站台作业");
 	}
 }
