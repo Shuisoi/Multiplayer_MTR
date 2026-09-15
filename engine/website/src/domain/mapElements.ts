@@ -228,12 +228,16 @@ export interface DecalPlacement {
 export function decalPlacement(
 	worldX: number,
 	worldY: number,
-	camera: Camera,
-	offsetPx?: {x: number; y: number},
+	offset?: {x: number; y: number},
 ): DecalPlacement {
+	/*
+	 * **现在只是"世界坐标 + 偏移"，不再乘相机**。相机由外层承担（SVG 的 `viewBox`、
+	 * 标记层的 `.layer` 变换），于是"位置"这件事只有一处换算 —— 世界坐标本身。
+	 * 这是坐标系重构（notes/164）里最关键的一刀：以前这里乘相机，等于每个元素各自投影一次。
+	 */
 	return {
-		x: (worldX - camera.originX) * camera.scale + (offsetPx?.x ?? 0),
-		y: (worldY - camera.originY) * camera.scale + (offsetPx?.y ?? 0),
+		x: worldX + (offset?.x ?? 0),
+		y: worldY + (offset?.y ?? 0),
 	};
 }
 

@@ -1,6 +1,7 @@
-import {inject, provide} from "vue";
-import type {InjectionKey, Ref} from "vue";
+import {computed, inject, provide} from "vue";
+import type {ComputedRef, InjectionKey, Ref} from "vue";
 import type {Camera} from "@/domain/camera";
+import {REFERENCE_ZOOM} from "@/domain/mapElements";
 
 /*
  * ============================ 地图上下文（跨层注入） ============================
@@ -74,6 +75,26 @@ export function useBaseScale(): Ref<number> {
 		throw new Error("useBaseScale() 必须在 provideMapContext() 的子树内、且必须在 setup() 里调用");
 	}
 	return injected;
+}
+
+/**
+ * **视口像素 → 世界单位**的换算（HTML 标记层用）。
+ *
+ * <p>标记层现在与 SVG 层**同一套坐标**（世界坐标）：外层容器承担相机的"平移 + 缩放"，
+ * 于是标记的位置直接写世界坐标。但标记里的**尺寸与偏移是屏幕像素**（用户口径：6× 时 8 px），
+ * 所以要用这个因子把它们折成世界单位。</p>
+ *
+ * <p>口径与 SVG 层**同一式**（`mapElements.specPxToWorld`）：{@code 规格 × 倍率 / 6 / 相机比例}，
+ * 屏幕上就是 {@code 规格 × 倍率 / 6} 像素。两处若不同源，同一张图上的线宽与图标就会脱层。</p>
+ */
+export function useWorldPerPx(): ComputedRef<number> {
+	const camera = useCamera();
+	const ratio = useZoomRatio();
+	return computed(() => {
+		const scale = camera.value.scale > 0 ? camera.value.scale : 1;
+		const zoom = ratio.value > 0 ? ratio.value : 1;
+		return zoom / REFERENCE_ZOOM / scale;
+	});
 }
 
 /**

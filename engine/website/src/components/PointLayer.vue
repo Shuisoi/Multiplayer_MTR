@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import type {Camera} from "@/domain/camera";
 import type {Point} from "@/domain/Point";
 import PointMarker from "./PointMarker.vue";
 
 /*
  * 道岔层：把引擎给出的道岔摆出来，并允许点开换开通位。
  *
- * <p>这一层**不再自己算屏幕坐标**：位置由标记组件按统一模型（`domain/mapElements.ts`）算 ——
- * 世界坐标 + 固定像素偏移。以前在这里 `worldToScreen`、在标记里再加偏移，等于"位置"有两个来源。</p>
+ * <p>这一层**不做任何坐标运算**：相机由 `MapCanvas` 的 `.layer`（translate + scale）承担，
+ * 标记的 `left/top` 直接写世界坐标。</p>
  *
  * <p>层序上这一层在信号灯层**之下**（见 MapCanvas 的模板顺序）：道岔菱形按固定像素偏移挂在节点
  * 右下方，那个距离本身就够到邻节点，所以难免会压到别人家的灯点 —— 让灯在上面，保证"灯永远点得到"。
@@ -16,7 +15,6 @@ import PointMarker from "./PointMarker.vue";
 
 defineProps<{
 	points: readonly Point[];
-	camera: Camera;
 	/** 轨 hex → 两端坐标（道岔卡片写"接的是哪条轨"用，见 MapCanvas 的说明）。 */
 	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
 	hoveredKey: string;
@@ -40,7 +38,6 @@ const emit = defineEmits<{
 		v-for="point in points"
 		:key="point.key"
 		:point="point"
-		:camera="camera"
 		:rail-ends="railEnds"
 		:hovered="hoveredKey === point.key"
 		:expanded="expandedKey === point.key"

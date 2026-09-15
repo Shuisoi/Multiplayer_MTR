@@ -62,16 +62,19 @@ test("偏移的方向来自世界语义、距离同样跟着倍率", () => {
 		"12× 时偏移 20 px —— 与尺寸同步变化，所以相对位置不会漂");
 });
 
-test("锚点随相机变；同一倍率下『世界坐标 + 缩放后偏移』是自洽的", () => {
+test("锚点现在就是『世界坐标 + 偏移』（相机已由外层承担）", () => {
+	/*
+	 * 坐标系重构（`notes/164`）之后 `decalPlacement` **不再碰相机**：相机由 SVG 的 `viewBox`
+	 * 与标记层的 `.layer` 变换承担，于是"位置"只有一处换算 —— 世界坐标本身。
+	 * 旧断言（"锚点随相机比例变"）钉的是被删掉的那套行为，所以这条跟着改。
+	 */
 	const offset = pixelOffset({x: 0, y: -1}, scaled(DECAL_KINDS.signalSideOffset, 6));
-	const near = decalPlacement(100, 50, camera(1, 0, 0), offset);
-	const far = decalPlacement(100, 50, camera(0.5, 0, 0), offset);
-	// 相机比例变了 ⇒ 锚点位置变；偏移是同一个值（因为倍率没变）——
-	// 所以"位置"和"偏移"是两件独立的事，这正是不必再把它们混起来算的原因
-	assert.deepEqual(near, {x: 100, y: 40}, "scale=1 时锚点 (100,50) + 偏移 (0,-10)");
-	assert.deepEqual(far, {x: 50, y: 15}, "scale=0.5 时锚点 (50,25) + 同一个偏移 (0,-10)");
-	assert.deepEqual({x: near.x - 100, y: near.y - 50}, {x: far.x - 50, y: far.y - 25},
-		"两次偏移相同（倍率相同）；相机比例只影响锚点");
+	const near = decalPlacement(100, 50, offset);
+	assert.deepEqual(near, {x: 100, y: 40}, "世界坐标 (100,50) + 偏移 (0,-10) —— 不再乘相机");
+	// 与相机无关：换任何相机都是同一个结果（这正是"世界坐标是唯一真源"）
+	assert.deepEqual(decalPlacement(100, 50, offset), near, "同一个世界坐标永远得到同一个锚点");
+	// 省略偏移就是世界坐标本身
+	assert.deepEqual(decalPlacement(100, 50), {x: 100, y: 50}, "没有偏移时锚点 = 世界坐标");
 });
 
 test("位移与旋转写在同一个 transform 里", () => {

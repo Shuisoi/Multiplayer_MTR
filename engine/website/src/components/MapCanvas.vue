@@ -129,6 +129,23 @@ provideMapContext(camera, view.zoomRatio, view.baseScale);
  */
 const viewBox = computed(() => viewBoxOf(camera.value, {width: view.width.value, height: view.height.value}));
 
+/**
+ * **HTML 标记层的相机变换**：与 SVG 的 `viewBox` 是**同一个映射**（`translate(-origin × k)` 后 `scale(k)`）。
+ *
+ * <p>于是标记的 `left/top` 可以直接写**世界坐标**，与 SVG 层同一套；标记内部要"屏幕固定大小"的部分
+ * 各自用 `scale(倍率/6)` 反缩放（`useWorldPerPx` 的反向）。这样位置、旋转、尺寸三件事各归一处：</p>
+ * <ul>
+ *   <li>位置：世界坐标（这一层负责）；</li>
+ *   <li>旋转：`rotate(角)` 写在标记自己的 `transform` 里 —— 标记是零尺寸元素，
+ *       `transform-origin` 默认就是它的锚点，**旋转中心天然正确**（手写投影时代要靠算）；</li>
+ *   <li>尺寸：内层 `scale(倍率/6)` —— 屏幕上恒为"规格 × 倍率 / 6"像素，与 SVG 层同一口径。</li>
+ * </ul>
+ */
+const cameraTransform = computed(() => {
+	const k = camera.value.scale > 0 ? camera.value.scale : 1;
+	return `translate(${-camera.value.originX * k}px, ${-camera.value.originY * k}px) scale(${k})`;
+});
+
 
 
 /** 悬停中的节点 key（信息卡）。 */
@@ -450,17 +467,18 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 
 		<!-- 节点层：普通 HTML。这一层整体不吃事件，只有节点自己吃。 -->
 		<div v-if="showRoute !== false" class="nodes">
-			<NodeLayer
-				:nodes="nodes"
-				:camera="camera"
-				:hovered-key="hoveredKey"
-				:menu-key="menuKey"
-				:selected-key="selectedKey"
-				@hover="onHover"
-				@toggle-menu="onToggleMenu"
-				@close-menu="onCloseMenu"
-				@action="onAction"
-			/>
+			<div class="layer" :style="{transform: cameraTransform}">
+				<NodeLayer
+					:nodes="nodes"
+					:hovered-key="hoveredKey"
+					:menu-key="menuKey"
+					:selected-key="selectedKey"
+					@hover="onHover"
+					@toggle-menu="onToggleMenu"
+					@close-menu="onCloseMenu"
+					@action="onAction"
+				/>
+			</div>
 		</div>
 
 		<!--
@@ -471,32 +489,34 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 			顺序上先渲染道岔、再渲染灯，就得到这个优先级。
 		-->
 		<div class="points">
-			<PointLayer
-				:points="points"
-				:camera="camera"
-				:rail-ends="railEnds"
-				:hovered-key="hoveredPointKey"
-				:expanded-key="expandedPointKey"
-				:selected-key="selectedPointKey"
-				:picking="selectedSignal !== null"
-				@hover="hoveredPointKey = $event"
-				@toggle="onTogglePoint"
-				@pick-leg="onPickPointLeg"
-			/>
+			<div class="layer" :style="{transform: cameraTransform}">
+				<PointLayer
+					:points="points"
+					:rail-ends="railEnds"
+					:hovered-key="hoveredPointKey"
+					:expanded-key="expandedPointKey"
+					:selected-key="selectedPointKey"
+					:picking="selectedSignal !== null"
+					@hover="hoveredPointKey = $event"
+					@toggle="onTogglePoint"
+					@pick-leg="onPickPointLeg"
+				/>
+			</div>
 		</div>
 
 		<!-- 信号灯层：在道岔层**之后**渲染，所以压在道岔上面（见上）。 -->
 		<div class="signals">
-			<SignalLayer
-				:signals="signals"
-				:camera="camera"
-				:hovered-key="hoveredSignalKey"
-				:selected-key="selectedSignal?.key ?? ''"
-				@hover="hoveredSignalKey = $event"
-				@pick="onPickSignal"
-				@copy="emit('signalCopy', $event)"
-				@why="emit('signalWhy', $event)"
-			/>
+			<div class="layer" :style="{transform: cameraTransform}">
+				<SignalLayer
+					:signals="signals"
+					:hovered-key="hoveredSignalKey"
+					:selected-key="selectedSignal?.key ?? ''"
+					@hover="hoveredSignalKey = $event"
+					@pick="onPickSignal"
+					@copy="emit('signalCopy', $event)"
+					@why="emit('signalWhy', $event)"
+				/>
+			</div>
 		</div>
 
 		<slot/>
@@ -561,6 +581,25 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 .nodes {
 	position: absolute;
 	inset: 0;
+	pointer-events: none;
+}
+
+/*
+ * 标记层的**相机内层**：承担 SVG 那套 `viewBox` 映射（平移 + 缩放）。
+ *
+ * <p>`transform-origin: 0 0` 是必须的：默认的 `50% 50%` 会让缩放绕容器中心发生，
+ * 于是"世界坐标"就又对不上了（这正是手写投影时代反复出错的那类事）。
+ * 内层尺寸是 0 —— 它只是个坐标系，子元素自己绝对定位。</p>
+ */
+.nodes .layer,
+.signals .layer,
+.points .layer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 0;
+	height: 0;
+	transform-origin: 0 0;
 	pointer-events: none;
 }
 

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
-import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
-import {useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, decalPlacement, decalTransform, mapScale, pixelOffset, scaled, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
+import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
@@ -30,7 +29,6 @@ import {useZoomRatio} from "@/views/mapContext";
 const props = defineProps<{
 	signal: Signal;
 	/** 当前相机：位置由它算（组件不接收屏幕坐标，"位置"只有一个来源）。 */
-	camera: Camera;
 	hovered: boolean;
 	/** 正在改这盏灯的绑定（点选绑定）：加一圈强调环。 */
 	selected?: boolean;
@@ -95,17 +93,21 @@ const boxOffsetPx = computed(() => {
 });
 
 /**
- * 灯位偏移：**只表示"灯在轨道的哪一侧"**，方向来自世界语义（司机的左手侧），距离 = 规格 × 倍率。
+ * 灯位偏移的世界单位值：规格（屏幕像素）乘 {@link worldPerPx}。
  *
- * <p>它**不**参与"灯点与折角的错开" —— 那件事在 SVG 内部就做完了（见上）。</p>
+ * <p>父容器（标记层的 `.layer`）承担相机，所以标记的 `left/top` 是**世界坐标**。</p>
  */
-const offsetPx = computed(() => pixelOffset(
+const worldPerPx = useWorldPerPx();
+const offsetWorld = computed(() => pixelOffset(
 	props.signal.sideOffsetDirection,
-	scaled(DECAL_KINDS.signalSideOffset, zoomRatio.value),
+	scaled(DECAL_KINDS.signalSideOffset, zoomRatio.value) * worldPerPx.value,
 ));
 
-/** 灯点在屏幕上的位置（世界坐标 → 屏幕 + 灯位偏移）：**锚点**，旋转绕它发生。 */
-const anchorPx = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value));
+/** 灯点的**世界坐标**（世界坐标 + 灯位偏移）：**锚点**，旋转绕它发生。 */
+const anchorPx = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, offsetWorld.value));
+
+/** 内层的反向缩放：父容器已被相机缩放，这里乘回去 ⇒ 整盏灯屏幕尺寸恒定。 */
+const counterScale = computed(() => mapScale(zoomRatio.value));
 
 /**
  * 外层的位移：**只有平移，没有旋转**。
@@ -172,6 +174,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		:data-key="signal.key"
 		:data-zoom-ratio="zoomRatio"
 		:data-angle="signal.angle"
+		:data-world="`${signal.planeX},${signal.planeY}`"
 		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
@@ -192,7 +195,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 				:width="iconPx"
 				:height="boxHeightPx"
 				:viewBox="`0 0 ${DECAL_KINDS.signalUnit.boxWidth} ${DECAL_KINDS.signalUnit.boxHeight}`"
-				:style="{'--box-x': `${boxOffsetPx.x}px`, '--box-y': `${boxOffsetPx.y}px`}"
+				:style="{'--box-x': `${boxOffsetPx.x}px`, '--box-y': `${boxOffsetPx.y}px`, transform: `scale(${counterScale})`}"
 			>
 			<!--
 				折角：一个 `^`，尖朝组的上方。整组会被旋转到管辖方向，所以它指向管辖方向。

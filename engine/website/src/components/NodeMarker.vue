@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, watch} from "vue";
 import {Node} from "@/domain/Node";
-import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform, scaled} from "@/domain/mapElements";
-import {useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, decalTransform, mapScale, scaled} from "@/domain/mapElements";
+import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个节点（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -26,8 +25,6 @@ import {useZoomRatio} from "@/views/mapContext";
 
 const props = defineProps<{
 	node: Node;
-	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，"位置"只有一个来源）。 */
-	camera: Camera;
 	hovered: boolean;
 	menuOpen: boolean;
 	selected: boolean;
@@ -49,14 +46,20 @@ const emit = defineEmits<{
  */
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
 const zoomRatio = useZoomRatio();
-/** 节点圆点半径：**规格值 × 倍率**（6× 时 3.6 px）。 */
-const radius = computed(() => scaled(DECAL_KINDS.nodeDot, zoomRatio.value));
+/**
+ * **视口像素 → 世界单位**（标记层与 SVG 层同一套口径，见 `useWorldPerPx`）。
+ *
+ * <p>外层的父容器承担相机的"平移 + 缩放"，所以这个标记的 `left/top` 是**世界坐标**；
+ * 而圆点半径是屏幕像素规格，要乘这个因子折成世界单位。</p>
+ */
+const worldPerPx = useWorldPerPx();
+/** 节点圆点半径（**世界单位**）：屏幕上 {@code 规格 × 倍率 / 6} 像素（6× 时 3.6 px）。 */
+const radius = computed(() => scaled(DECAL_KINDS.nodeDot, zoomRatio.value) * worldPerPx.value);
+/** 内层的**反向缩放**：父容器已经缩放了，这里乘回去，于是圆点屏幕尺寸恒定。 */
+const counterScale = computed(() => mapScale(zoomRatio.value));
 
-/** 贴片锚点：节点的世界坐标 → 屏幕（节点不需要偏移，所以第二个参数省略）。 */
-const placement = computed(() => decalPlacement(props.node.planeX, props.node.planeZ, props.camera));
-
-/** 外层的位移（贴片锚点）。 */
-const rootTransform = computed(() => decalTransform(placement.value));
+/** 贴片锚点：节点的**世界坐标**（节点不需要偏移，所以没有第二项）。 */
+const rootTransform = computed(() => decalTransform({x: props.node.planeX, y: props.node.planeZ}));
 
 /** 高亮状态：悬停 / 菜单打开 / 被选中，都画强调色边。 */
 const active = computed(() => props.hovered || props.menuOpen || props.selected);
@@ -167,6 +170,7 @@ watch(() => props.menuOpen, open => {
 		class="node"
 		:class="{active, fork: node.isFork}"
 		:data-key="node.key"
+		:data-world="`${node.planeX},${node.planeZ}`"
 		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', node.key)"
 		@pointerleave="emit('hover', '')"
@@ -174,8 +178,14 @@ watch(() => props.menuOpen, open => {
 		@pointerup="onPointerUp"
 		@pointercancel="onPointerCancel"
 	>
-		<!-- 圆点：纯 CSS 画。半径用 CSS 变量传下去，保持"只有一处定义尺寸"。 -->
-		<div class="dot" :style="{'--r': `${radius}px`}"/>
+		<!--
+			圆点：纯 CSS 画。半径用 CSS 变量传下去，保持"只有一处定义尺寸"。
+			外面那层 `span.body` 是**反向缩放**：父容器已被相机缩放，这里乘回去，
+			于是圆点在屏幕上的大小恒为"规格 × 倍率 / 6"像素（世界坐标时代之前是 decal 自己算的）。
+		-->
+		<span class="body" :style="{transform: `scale(${counterScale})`}">
+			<div class="dot" :style="{'--r': `${radius}px`}"/>
+		</span>
 
 		<!-- 悬停信息卡：菜单打开时让位，避免两层卡片叠在一起 -->
 		<div v-if="hovered && !menuOpen" class="card">
@@ -231,6 +241,21 @@ watch(() => props.menuOpen, open => {
 	height: 0;
 	pointer-events: auto;
 	cursor: pointer;
+}
+
+/*
+ * 反向缩放的容器：父容器（标记层）已被相机缩放了，这里乘回去。
+ *
+ * <p>零尺寸、定在锚点上 —— 所以反缩放绕锚点发生，圆点中心不会跑（这也是"锚点在中心"
+ * 这条机制的关键：定在角上的反缩放会把内容推走）。</p>
+ */
+.body {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 0;
+	height: 0;
+	transform-origin: 0 0;
 }
 
 /*

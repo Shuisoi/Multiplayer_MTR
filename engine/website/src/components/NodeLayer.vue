@@ -1,20 +1,17 @@
 <script setup lang="ts">
-import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import NodeMarker from "./NodeMarker.vue";
 
 /*
- * 节点层：把节点摆到屏幕坐标上。
+ * 节点层：把节点摆到**世界坐标**上。
  *
- * <p>每个节点就是一个**绝对定位的 HTML 元素**，用 `transform: translate(...)` 移动。
- * 位置由 `worldToScreen()` 从世界坐标直接算出，没有中间坐标系、没有反向缩放。
- * 因为节点尺寸是屏幕像素（见 NodeMarker），缩放只影响它落在哪里，不影响它多大——
- * 这正是"节点像地图上的标注"该有的行为。</p>
+ * <p>相机由 `MapCanvas` 的 `.layer`（`translate + scale`）承担，所以这一层只转发数据：
+ * 每个节点就是一个**绝对定位的 HTML 元素**，位置直接是它的世界坐标。尺寸（屏幕像素）
+ * 由 `NodeMarker` 内部反向缩放得到 —— 位置、尺寸各归一处，这一层不再做任何坐标运算。</p>
  */
 
 defineProps<{
 	nodes: readonly Node[];
-	camera: Camera;
 	hoveredKey: string;
 	menuKey: string;
 	selectedKey: string;
@@ -33,7 +30,6 @@ const emit = defineEmits<{
 		v-for="node in nodes"
 		:key="node.key"
 		:node="node"
-		:camera="camera"
 		:hovered="hoveredKey === node.key"
 		:menu-open="menuKey === node.key"
 		:selected="selectedKey === node.key"

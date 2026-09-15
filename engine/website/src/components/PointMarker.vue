@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Point} from "@/domain/Point";
-import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled} from "@/domain/mapElements";
-import {useZoomRatio} from "@/views/mapContext";
+import {DECAL_KINDS, decalPlacement, decalTransform, mapScale, pixelOffset, scaled} from "@/domain/mapElements";
+import {useWorldPerPx, useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
@@ -38,17 +37,25 @@ const leaderPx = computed(() => scaled(LEADER_PX, zoomRatio.value));
 const DIAGONAL = {x: Math.SQRT1_2, y: Math.SQRT1_2};
 
 /** 相对锚点的固定像素偏移（诊断/测试要读它）。 */
-const offsetPx = computed(() => pixelOffset(DIAGONAL, scaled(DECAL_KINDS.turnoutOffset, zoomRatio.value)));
+/**
+ * 反向缩放（与节点、灯同一套机制）：父层已被相机缩放，这里乘回去 ⇒ 菱形屏幕尺寸恒定。
+ */
+const counterScale = computed(() => mapScale(zoomRatio.value));
+/** 视口像素 → 世界单位（父层承担相机，标记的 left/top 是世界坐标）。 */
+const worldPerPx = useWorldPerPx();
+/** 相对锚点的偏移（**世界单位**）：方向来自屏幕对角、距离是屏幕像素规格。 */
+const offsetWorld = computed(() => pixelOffset(DIAGONAL, scaled(DECAL_KINDS.turnoutOffset, zoomRatio.value) * worldPerPx.value));
+/** 反向缩放层内部用的偏移（**屏幕像素**）：`left/top` 写在 `.hit` 上，而它在反向缩放层里。 */
+const offsetScreenPx = computed(() => pixelOffset(DIAGONAL, scaled(DECAL_KINDS.turnoutOffset, zoomRatio.value)));
 
 /** 贴片锚点：道岔的世界坐标 → 屏幕 + 固定像素偏移。 */
-const placement = computed(() => decalPlacement(props.point.planeX, props.point.planeY, props.camera, offsetPx.value));
+const placement = computed(() => decalPlacement(props.point.planeX, props.point.planeY, offsetWorld.value));
 
 const rootTransform = computed(() => decalTransform(placement.value));
 
 const props = defineProps<{
 	point: Point;
 	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，避免"位置"有两个来源）。 */
-	camera: Camera;
 	/** 轨 hex → 两端坐标：把"接哪条轨"说成坐标（用户按坐标认轨）。 */
 	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
 	hovered: boolean;
@@ -157,6 +164,7 @@ const facts = computed(() => [
 		class="point"
 		:class="{hovered, expanded, selected, 'is-default': isDefault, locked: point.locked}"
 		:data-key="point.key"
+		:data-world="`${point.planeX},${point.planeY}`"
 		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', point.key)"
 		@pointerleave="emit('hover', '')"
@@ -177,7 +185,7 @@ const facts = computed(() => [
 			里面的数字 = 当前开通的腿序号。
 			外面那层 `.hit` 是点击靶，整体偏在节点右下方（偏移量按"不许与灯点相接"算出来，见样式说明）。
 		-->
-		<div class="hit" :style="{'--d': `${diamondPx}px`}">
+		<div class="hit" :style="{'--d': `${diamondPx}px`, transform: `scale(${counterScale})`}">
 			<div class="diamond">
 				<span class="leg-number">{{ markerNumber }}</span>
 			</div>
@@ -319,8 +327,8 @@ const facts = computed(() => [
 	 * 尺寸是 {@code var(--d)}（与菱形同一边长），两者与菱形**同一个倍率**，
 	 * 所以上面那段"最坏情况仍有 ≈2.3px 空隙"的推导在任意倍率下都成立（它本来就是比例的）。</p>
 	 */
-	left: v-bind('`${offsetPx.x}px`');
-	top: v-bind('`${offsetPx.y}px`');
+	left: v-bind('`${offsetScreenPx.x}px`');
+	top: v-bind('`${offsetScreenPx.y}px`');
 	width: var(--d);
 	height: var(--d);
 	display: flex;
