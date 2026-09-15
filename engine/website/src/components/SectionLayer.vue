@@ -57,30 +57,29 @@ const STRIPE_WIDTH_PX = 2;
  *   <tr><td>{@code RED}</td><td>红实线</td><td>危险：前方区间被占（或没有进路）</td></tr>
  *   <tr><td>{@code SINGLE_YELLOW}</td><td>黄实线</td><td>单黄：下一段要停</td></tr>
  *   <tr><td>{@code DOUBLE_YELLOW}</td><td><b>黄虚线</b></td><td>双黄：前方两段之内有情况</td></tr>
- *   <tr><td>{@code GREEN}</td><td>黄实线</td><td>绿灯：畅通</td></tr>
+ *   <tr><td>{@code GREEN}</td><td>绿实线</td><td>绿灯：畅通</td></tr>
  * </table>
  *
- * <p><b>按用户规格只用三种颜色</b>（红 / 黄 / 虚线黄），所以绿灯与单黄都落在"黄实线"上 ——
- * 这一点是有意合并的（用户："因为区间端点，所以区间颜色只需要有红，黄，虚线黄颜色即可"）。
- * 要区分绿与单黄的话得再加一色，那要用户点头。</p>
- *
- * <p>灯色的色值沿用信号灯层那一套（`SignalMarker.stateColor`），这样同一盏灯在两张图上颜色一致。</p>
+ * <p>色值直接沿用信号灯层那一套（`SignalMarker.stateColor`），所以同一盏灯在两张图上颜色一致；
+ * 四种 aspect 四种画法，一一对应，没有合并。</p>
  */
-const COLOR_RED = "#ef4444";        // RED（与信号灯的红同色）
-const COLOR_YELLOW = "#f59e0b";     // SINGLE_YELLOW / GREEN（黄）
+const COLOR_RED = "#ef4444";          // RED
+const COLOR_SINGLE_YELLOW = "#f59e0b"; // SINGLE_YELLOW
+const COLOR_DOUBLE_YELLOW = "#eab308"; // DOUBLE_YELLOW（虚线）
+const COLOR_GREEN = "#22c55e";         // GREEN
 
-/** 区间 → 该画成什么（颜色 + 是否虚线）。 */
+/** 区间 → 该画成什么（颜色 + 是否虚线），逐 aspect 一一对应。 */
 function stripeOf(section: Section): {color: string; dashed: boolean; state: string} {
 	switch (section.aspect) {
 		case "RED":
 			return {color: COLOR_RED, dashed: false, state: "red"};
+		case "SINGLE_YELLOW":
+			return {color: COLOR_SINGLE_YELLOW, dashed: false, state: "single-yellow"};
 		case "DOUBLE_YELLOW":
 			// 用户规格里的"虚线黄"就是它
-			return {color: COLOR_YELLOW, dashed: true, state: "double-yellow"};
-		case "SINGLE_YELLOW":
-			return {color: COLOR_YELLOW, dashed: false, state: "single-yellow"};
+			return {color: COLOR_DOUBLE_YELLOW, dashed: true, state: "double-yellow"};
 		case "GREEN":
-			return {color: COLOR_YELLOW, dashed: false, state: "green"};
+			return {color: COLOR_GREEN, dashed: false, state: "green"};
 		default:
 			// 引擎没给 aspect（例如灯没接进闭塞层）：灰，不猜
 			return {color: "#6b7280", dashed: false, state: "unknown"};
