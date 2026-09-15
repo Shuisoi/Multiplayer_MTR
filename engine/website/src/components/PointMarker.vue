@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import {computed, inject} from "vue";
+import {computed} from "vue";
 import type {Point} from "@/domain/Point";
-import {ICON_SCALE} from "@/views/mapContext";
+import {MARKER_ICON_PX} from "@/views/mapContext";
 
 /*
  * 一个道岔（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -10,20 +10,16 @@ import {ICON_SCALE} from "@/views/mapContext";
  * **能怎么改**（点开后的腿按钮）。腿的序号与分类都来自引擎（`MmtrPoint.computeOrderedLegs`
  * 的排序：直通→左→右→其它），界面不自己按几何重排——两边各排一遍必然出现"界面说左、引擎走右"。</p>
  *
- * <p>为什么默认就画得这么显眼：道岔是**唯一需要人管**的东西（灯是自动出颜色的，道岔要有人定开通位）。
- * 世界里有四十来个道岔，藏在小圆点里就等于没有。</p>
+ * <p>为什么形状是菱形：它和节点圆点、灯点在同一张图上一眼分得开（道岔是"要人管的东西"，
+ * 形状本身就应当不同）。</p>
  *
- * <p><b>图标尺寸随缩放一起缩</b>（用户 2026-09-15）：菱形与引线原本是固定 23/34 px 的屏幕像素，
- * 地图缩小、站场全览时它们相对世界越来越大，四十来个道岔挤成一片。现在按 {@link ICON_SCALE} 缩放。</p>
+ * <p><b>尺寸固定 8 px</b>（用户 2026-09-15 的规格，与信号灯同一个值）：地图标注不随缩放变，
+ * 但必须足够小 —— 早先是 23 px 的菱形 + 34 px 引线，全览站场时四十来个道岔挤成一片；
+ * 8 px 之后密度问题自然消失。</p>
  */
 
-/**
- * 图标缩放比（画布注入；拿不到时按 1 = 不缩）。
- *
- * <p>与位移写在**同一个 transform** 里：`translate(...) scale(...)` 保证"先定位、再以自身中心缩放"。
- * 分开写两个 transform 会互相覆盖。</p>
- */
-const iconScale = computed(() => inject(ICON_SCALE, undefined)?.value ?? 1);
+/** 引线长度：菱形偏移 16px，所以这条线画到 16px 见方（CSS 里 width/height 与它一致）。 */
+const LEADER_PX = 16;
 
 const props = defineProps<{
 	point: Point;
@@ -137,28 +133,28 @@ const facts = computed(() => [
 		class="point"
 		:class="{hovered, expanded, selected, 'is-default': isDefault, locked: point.locked}"
 		:data-key="point.key"
-		:data-icon-scale="iconScale"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px) scale(${iconScale})`}"
+		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
 		@pointerenter="emit('hover', point.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="onPointerDown"
 	>
 		<!--
-			一条细连线把菱形系回它所属的节点：偏移 26px 之后，世界图里节点很密，
+			一条细连线把菱形系回它所属的节点：菱形偏移出去之后，世界图里节点很密，
 			没有这条线用户认不出这个菱形挂在哪个节点上。
 		-->
-		<svg class="leader" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
-			<line x1="2" y1="2" x2="32" y2="32" stroke="#f59e0b" stroke-width="1.2" stroke-opacity="0.5"/>
+		<svg class="leader" :width="LEADER_PX" :height="LEADER_PX" :viewBox="`0 0 ${LEADER_PX} ${LEADER_PX}`" aria-hidden="true">
+			<line x1="3" y1="3" :x2="LEADER_PX - 3" :y2="LEADER_PX - 3" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.5"/>
 		</svg>
 
 		<!--
-			菱形：四边等长的方块旋转 45°。用菱形而不是圆点，是为了和节点圆点、灯点在同一张图上
-			一眼分得开（道岔是"要人管的东西"，形状本身就应当不同）。
+			菱形：四边等长的方块旋转 45°，边长 = 图标直径（8 px，与信号灯同一个值，见
+			`views/mapContext.ts#MARKER_ICON_PX`）。用菱形而不是圆点，是为了和节点圆点、灯点
+			在同一张图上一眼分得开（道岔是"要人管的东西"，形状本身就应当不同）。
 			里面的数字 = 当前开通的腿序号。
-			外面那层 `.hit` 是点击靶（比菱形大一圈，但整体偏在节点右下方，见样式里的说明）。
+			外面那层 `.hit` 是点击靶，整体偏在节点右下方（偏移量按"不许与灯点相接"算出来，见样式说明）。
 		-->
 		<div class="hit">
-			<div class="diamond">
+			<div class="diamond" :style="{width: `${MARKER_ICON_PX}px`, height: `${MARKER_ICON_PX}px`}">
 				<span class="leg-number">{{ markerNumber }}</span>
 			</div>
 
@@ -277,27 +273,24 @@ const facts = computed(() => [
 /*
  * 菱形与它的命中区。
  *
- * <h3>偏移 34px 是**算出来的下限**，不是手感</h3>
+ * <h3>偏移 16px 是**算出来的下限**，不是手感（尺寸改 8px 后重算过）</h3>
  * <p>道岔节点上常常**同时立着一盏信号灯**（信号机就放在道岔旁），道岔层又在灯层之上，
- * 所以两个矩形必须**在几何上不可能相接**。两侧的数字：</p>
+ * 所以两个矩形必须**在几何上不可能相接**。两侧的数字（按 8 px 图标重算）：</p>
  * <ul>
- *   <li>灯点：圆点 7px + 悬停环，实测命中半径 ≈ 8px（直径 16px）；</li>
- *   <li>道岔菱形：16px 方块转 45°，**外接框是 23px**（关键尺寸不是 16），半宽 11.5px。</li>
+ *   <li>灯：圆点 4px + 悬停环，实测命中半径 ≈ 8px（直径 16px 是**灯**那一侧的尺寸，没变）；</li>
+ *   <li>道岔菱形：8px 方块转 45°，**外接框是 11.3px**（关键尺寸不是 8），半宽 5.7px。</li>
  * </ul>
  * <p>最坏情况是"道岔节点与立着灯的节点相距 1px"（实测就有这种，两个点中心几乎重合）：
- * 菱形至少要从自己中心退 11.5px，加上灯那 16px 的直径，偏移必须 ≥ 11.5 + 16 + 余量。
- * 取 34px，最坏情况下两者之间仍留 6.5px。</p>
- *
- * <p>实测过的四个偏移都会漏：5px（切到灯点 2px）、12px（2px 缝）、18px（仍有 2 个叠上）、
- * 28px（1px 缝）。现象一律是 `elementsFromPoint` 在灯点上返回 `diamond` 而不是 `lamp` ——
- * "悬停灯位不出信息卡"。这种差几像素的遮挡看截图看不出来，只能按矩形相不相交来定。</p>
+ * 菱形至少要从自己中心退 5.7px，加上灯那一侧的 16px，再留一点余量 ⇒ 取 <b>16px</b>。
+ * 于是最坏情况下两者之间仍有 {@code 16 − 5.7 − 8 ≈ 2.3px} 的空隙，矩形不相接
+ * （34px 那版的余量是 6.5px，现在更紧，但**仍然为正** —— 要更大余量就把这个值一起调大）。</p>
  */
 .hit {
 	position: absolute;
-	left: 34px;
-	top: 34px;
-	width: 23px;
-	height: 23px;
+	left: 16px;
+	top: 16px;
+	width: 8px;
+	height: 8px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -307,33 +300,33 @@ const facts = computed(() => [
 /*
  * 一条细连线：把菱形系回它所属的节点。
  *
- * <p>偏移到 34px 之后，菱形纯靠位置已经认不出它属于哪个节点（世界图里节点很密），
- * 这条线是"它挂在这个节点上"的唯一凭据 —— 没有它，用户点到的可能是旁边那个道岔。</p>
+ * <p>菱形偏移出去之后，纯靠位置已经认不出它属于哪个节点（世界图里节点很密），
+ * 这条线是"它挂在这个节点上"的唯一凭据。</p>
  */
 .leader {
 	position: absolute;
 	left: 3px;
 	top: 3px;
-	width: 34px;
-	height: 34px;
+	width: 16px;
+	height: 16px;
 	overflow: visible;
 	pointer-events: none;
 }
 
 /*
- * 菱形：14×14 的方块旋转 45°，加一圈暗描边（暗底上任何颜色都看得清）。
+ * 菱形：8×8 的方块旋转 45°（= 图标直径，与信号灯同一个值），加一圈暗描边。
  * 默认开通位用琥珀色（"需要人管"），已锁闭用红色。
  */
 .diamond {
-	width: 16px;
-	height: 16px;
+	width: 8px;
+	height: 8px;
 	transform: rotate(45deg);
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	background: #f59e0b;
-	box-shadow: 0 0 0 1.5px #000000, 0 0 8px rgba(245, 158, 11, 0.55);
-	border-radius: 2px;
+	box-shadow: 0 0 0 1px #000000, 0 0 6px rgba(245, 158, 11, 0.55);
+	border-radius: 1px;
 	pointer-events: auto;
 	cursor: pointer;
 }
@@ -343,11 +336,16 @@ const facts = computed(() => [
 	pointer-events: auto;
 }
 
-/* 里面的数字要转回来，否则跟着菱形一起歪 */
+/*
+ * 里面的数字要转回来，否则跟着菱形一起歪。
+ *
+ * <p>字号 6px：菱形对角线只有 11.3px，一行数字放得下但不宽裕 —— 详情在悬停卡片里，
+ * 这里只要"能看出开通位是几"。</p>
+ */
 .leg-number {
 	transform: rotate(-45deg);
 	font-family: var(--font-value);
-	font-size: 10px;
+	font-size: 6px;
 	font-weight: 700;
 	line-height: 1;
 	color: #1a1204;

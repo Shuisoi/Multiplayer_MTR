@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import {computed, inject} from "vue";
+import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
-import {ICON_SCALE} from "@/views/mapContext";
+import {MARKER_ICON_PX} from "@/views/mapContext";
 
 /*
  * 一个信号灯（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -12,9 +12,10 @@ import {ICON_SCALE} from "@/views/mapContext";
  * <p>为什么用 HTML 而不是 SVG：和节点层同一理由。信号灯是"地图标注"，放进 SVG 就要再面对一次
  * viewBox 缩放（旧版踩过，见 camera.ts）。</p>
  *
- * <p><b>图标尺寸随缩放一起缩</b>（用户 2026-09-15 报的问题）：图标原本是固定 20 px 的屏幕像素，
- * 位置随相机走而尺寸不变 —— 把地图缩小、站场全览时，几十盏灯相对世界越来越大，挤成一片把轨与区间
- * 都遮住。现在按 {@link ICON_SCALE}（画布注入）缩放，下限保证还点得中。</p>
+ * <p><b>尺寸固定 8 px</b>（用户 2026-09-15 的规格）：地图标注是"一眼看出在哪、什么状态"的东西，
+ * 一屏有几十盏灯，所以它不随缩放变 —— 但必须**足够小**。早先是 20 px，全览站场时挤成一片、
+ * 把轨与区间都遮住；8 px 之后密度问题自然消失。尺寸定义在 `views/mapContext.ts#MARKER_ICON_PX`，
+ * 与道岔菱形共用同一个值。</p>
  */
 
 const props = defineProps<{
@@ -26,13 +27,8 @@ const props = defineProps<{
 	selected?: boolean;
 }>();
 
-/**
- * 图标缩放比（画布注入；拿不到时按 1 = 不缩）。
- *
- * <p>缩放与位移写在**同一个 transform** 里：CSS 的两个分开放会互相覆盖，
- * 而 `translate(...) scale(...)` 的顺序保证"先定位、再以自身中心为原点缩放"。</p>
- */
-const iconScale = computed(() => inject(ICON_SCALE, undefined)?.value ?? 1);
+/** 图标直径（固定 px）。 */
+const ICON_PX = MARKER_ICON_PX;
 
 
 const emit = defineEmits<{
@@ -79,8 +75,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		class="signal"
 		:class="{hovered, selected}"
 		:data-key="signal.key"
-		:data-icon-scale="iconScale"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px) scale(${iconScale})`}"
+		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="emit('pick', signal.key)"
@@ -88,17 +83,17 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		<!--
 			方向：一个 `^` 形状的折角符号，按朝向角旋转（基准朝上 = 北）。
 
-			<p>为什么不用文字 `^`：实测 15px 字号下 DIN 的 `^` 字形只有约 2–3 像素高
-			（元素框 8×15，字形在顶部一点点），加上旋转中心正好落在灯点上，整个符号被灯点盖住 ——
-			等于看不见（用户就是这么反馈的："显示信号灯方向的在哪？"）。
-			现在用 SVG 画同一个折角形状：形状就是用户要的 `^`，但线条长度/粗细/描边都可控，
-			13×16 的框里能实实在在画出来。</p>
+			用 SVG 画折角（而不是文字 `^`）：形状一样，但线条长度/粗细/描边都可控 ——
+			实测字号下 DIN 的 `^` 字形只占元素框顶部一点点，旋转后被灯点盖住，等于看不见。
+
+			**尺寸 = 图标直径（8 px）**：与地图上其他标注（道岔菱形）同一个大小，
+			见 `views/mapContext.ts#MARKER_ICON_PX`。viewBox 保持不变，所以笔画的相对比例也不变。
 		-->
 		<svg
 			class="arrow"
 			:style="{transform: `translate(-50%, calc(-50% - var(--arrow-offset))) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
-			width="20"
-			height="20"
+			:width="ICON_PX"
+			:height="ICON_PX"
 			viewBox="0 0 20 20"
 		>
 			<!-- 先描一条比底色暗的粗线做"描边"，再画本色：暗底上任何颜色都能看清 -->
@@ -173,31 +168,38 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	position: absolute;
 	left: 0;
 	top: 0;
-	--arrow-offset: 12px;
+	/*
+	 * 箭头挂在灯点**上方**一点点：8 px 的图标下取 5 px（原来是 20 px 图标配 12 px）。
+	 * translate 与 transform-origin 必须用同一个偏移量，否则旋转中心落在箭头外、一扫就飘。
+	 */
+	--arrow-offset: 5px;
 	transform: translate(-50%, calc(-50% - var(--arrow-offset)));
 	transform-origin: 50% calc(50% + var(--arrow-offset));
 	pointer-events: none;
 	filter: drop-shadow(0 0 1.5px #000000);
 }
 
-/* 灯位：3.5px 的小圆点，加一圈暗描边在暗底上更清晰 */
+/*
+ * 灯位：4 px 的小圆点（原 7 px）。它必须比 8 px 的箭头小一圈，否则箭头被自己压住、
+ * "方向"这件事又白做了；暗描边 + 一点外发光保证 4 px 在暗底上仍然看得见。
+ */
 .lamp {
 	position: absolute;
-	left: -3.5px;
-	top: -3.5px;
-	width: 7px;
-	height: 7px;
+	left: -2px;
+	top: -2px;
+	width: 4px;
+	height: 4px;
 	border-radius: 50%;
-	box-shadow: 0 0 0 1.5px #000000, 0 0 6px currentColor;
+	box-shadow: 0 0 0 1px #000000, 0 0 5px currentColor;
 }
 
 .signal.hovered .lamp {
-	box-shadow: 0 0 0 1.5px #000000, 0 0 0 3.5px rgba(255, 255, 255, 0.35);
+	box-shadow: 0 0 0 1px #000000, 0 0 0 2.5px rgba(255, 255, 255, 0.45);
 }
 
 /* 正在改绑定的灯：加一圈强调色环（比悬停更醒目，且不会因为指针离开而消失） */
 .signal.selected .lamp {
-	box-shadow: 0 0 0 1.5px #000000, 0 0 0 3.5px var(--accent), 0 0 12px var(--accent);
+	box-shadow: 0 0 0 1px #000000, 0 0 0 2.5px var(--accent), 0 0 10px var(--accent);
 }
 
 .signal {
