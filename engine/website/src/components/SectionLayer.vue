@@ -47,8 +47,14 @@ import {useZoomRatio} from "@/views/mapContext";
 /** 缩放倍率（画布注入；拿不到按 1 算）。**必须在 setup 里读**，理由见 `useZoomRatio`。 */
 const zoomRatio = useZoomRatio();
 const stripeWidthPx = computed(() => scaled(DECAL_KINDS.stripeWidth, zoomRatio.value));
-const stripeNearPx = computed(() => scaled(DECAL_KINDS.stripeNear, zoomRatio.value));
-const stripeFarPx = computed(() => scaled(DECAL_KINDS.stripeFar, zoomRatio.value));
+/**
+ * 状态条相对线心**中心**的法向偏移（条中心落在第 1–2 px 的**中心** = 1.5 px）。
+ *
+ * <p>用 `stripeNear`（= 1.5 px）而不是 `stripeFar`（= 4.5 px）：每个方向的区间只画**一条**，
+ * 它写在线心的哪一侧由方向决定（见 `bands`），所以两侧的条各自落在"第 1–2 px"与"第 4–5 px" ——
+ * 这正是"三根线"的读法（`stripeNear`/`stripeFar` 与线心中心对称，所以两侧用哪个偏移是一样的）。</p>
+ */
+const stripeOffsetPx = computed(() => scaled(DECAL_KINDS.stripeNear, zoomRatio.value));
 const baseWidthPx = computed(() => scaled(DECAL_KINDS.sectionBaseWidth, zoomRatio.value));
 const endpointDotPx = computed(() => scaled(DECAL_KINDS.endpointDot, zoomRatio.value));
 
@@ -124,7 +130,16 @@ function railOf(hex: string): Rail | undefined {
 /** 区间状态：红 / 黄 / 虚线黄（用户规格的三种）。 */
 
 /**
- * 一段区间的线（6 px 线心 + 两条 2 px 状态条）。
+ * 一段区间的**线**（状态条）：每个方向的区间只画**一条** 2 px 条。
+ *
+ * <h3>为什么只画一条（用户 2026-09-15 纠正）</h3>
+ * <p>规格是"**绘图只有三根线**"：6 px 线心 + 第 1–2 px + 第 4–5 px。
+ * 上一版给每个方向的区间画了**两条**（远心 + 近心，理由是"两根轨并排时两侧都看得出状态"），
+ * 于是双向轨道上就成了 **5 根**（线心 + 2 个方向 × 2 条）—— 用户一眼就看了出来。</p>
+ *
+ * <p>正确的读法是：**线心的两侧各是一个方向**。方向为"侧向正"的区间写在第 1–2 px，
+ * 方向为"侧向负"的写在第 4–5 px（`sideOfDirection` 按法向的符号分侧）；
+ * 线心本身只画一次（整根轨，见 `baseLines`）。</p>
  *
  * <p>线心与状态条都来自**同一条路径**（`railSpanPath` 按弧窗切出来的那段轨），
  * 状态条只是把它按法向偏移 —— 所以三者永远平行、永远贴在轨道位置上。</p>
@@ -132,7 +147,6 @@ function railOf(hex: string): Rail | undefined {
 const bands = computed(() => {
 	const result: {
 		key: string;
-		base: string;
 		side: string;
 		color: string;
 		dashed: boolean;
@@ -146,10 +160,9 @@ const bands = computed(() => {
 		}
 		// 颜色与实线/虚线**直接来自信号灯的 aspect**（用户："是信号灯颜色"）
 		const {color, dashed, state} = stripeOf(section);
-		// 方向决定状态条画在哪一侧（"第 1–2 px"还是"第 4–5 px"）—— 与路线图两侧的语义一致
+		// 方向决定状态条画在**哪一侧**（"第 1–2 px"还是"第 4–5 px"）
 		const side = sideOfDirection(section.direction.angle);
-		const offset = (side > 0 ? 1 : -1) * stripeFarPx.value;
-		const nearOffset = (side > 0 ? 1 : -1) * stripeNearPx.value;
+		const offset = (side > 0 ? 1 : -1) * stripeOffsetPx.value;
 		const selected = props.selectedSection === section.id;
 		section.spans.forEach((span: SectionSpan, index: number) => {
 			const rail = railOf(span.hex);
@@ -162,19 +175,7 @@ const bands = computed(() => {
 			}
 			result.push({
 				key: `${section.id}#${index}`,
-				base: path,
 				side: offsetSvgPath(path, offset),
-				color,
-				dashed,
-				section: section.id,
-				state,
-				selected,
-			});
-			// 另一侧画一条**同样的**状态条（近心那条）：两根轨并排时两侧都看得出状态
-			result.push({
-				key: `${section.id}#${index}-near`,
-				base: "",
-				side: offsetSvgPath(path, nearOffset),
 				color,
 				dashed,
 				section: section.id,
@@ -254,16 +255,27 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 </script>
 
 <template>
-	<g class="section-layer">
+	<!--
+		规格值挂成 data 属性：检查脚本（`sandbox/check-web-section-three-lines.ps1`）直接读它们，
+		而不是把"规格是多少"再抄一遍 —— 抄一遍就会出现"规格改了、检查还在按旧值判"。
+	-->
+	<g
+		class="section-layer"
+		:data-core-width="DECAL_KINDS.sectionBaseWidth"
+		:data-stripe-width="DECAL_KINDS.stripeWidth"
+		:data-stripe-near="DECAL_KINDS.stripeNear"
+		:data-stripe-far="DECAL_KINDS.stripeFar"
+	>
 		<!-- 线心：6 px 白线，占轨道原来的位置（"在原来的路线图位置画 6px 线"） -->
 		<path v-for="line in baseLines" :key="`base-${line.key}`" class="base" :d="line.d"/>
 		<!--
-			状态条：每条 2 px，法向偏移 ±1.5 / ±4.5 ⇒ 落在线的第 1–2 px 与第 4–5 px。
+			状态条：每条 2 px，法向偏移 ±2（近心那条）⇒ 落在 6 px 线心的第 1–2 px 或第 4–5 px。
+			**每个方向的区间只画一条**：线心的两侧各是一个方向（用户规格："绘图只有三根线"）。
 			`<path>` 在 SVG 里不能真正偏移（transform 会跟着缩放），所以偏移已在 offsetSvgPath 里算进坐标。
 		-->
 		<path
 			v-for="band in bands"
-			:key="band.side"
+			:key="band.key"
 			class="stripe"
 			:d="band.side"
 			:stroke="band.color"

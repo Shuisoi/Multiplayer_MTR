@@ -70,20 +70,25 @@ test("位移与旋转写在同一个 transform 里", () => {
 		"要转时必须与位移同一个 transform（分开写会互相覆盖）");
 });
 
-test("区间状态条的像素规格：两条 2 px 落在 6 px 线心里", () => {
+test("区间状态条的像素规格：两条 2 px 落在 6 px 线心中（第 1–2 / 第 4–5 px）", () => {
 	const {stripeWidth, stripeNear, stripeFar, sectionBaseWidth} = DECAL_KINDS;
 	assert.equal(sectionBaseWidth, 6, "线心 6 px（用户规格）");
 	assert.equal(stripeWidth, 2, "状态条 2 px（用户规格）");
-	// 线心中心为 0，横跨 −3 … +3；两条 2px 条的中心在 ±2 与 ±5
-	assert.equal(stripeNear, 2);
-	assert.equal(stripeFar, 5);
+	/*
+	 * 用户规格（2026-09-15 最后一次纠正）："一根 6px 的线，1-2、4-5 是用于显示轨道区间的，
+	 * 也就是说绘图只有三根线"。要让 2 px 的条**占**第 1–2 px 与第 4–5 px，
+	 * 条中心就落在 1.5 与 4.5（条宽 2 ⇒ 覆盖 0.5–2.5 与 3.5–5.5）。
+	 */
+	assert.equal(stripeNear, 1.5);
+	assert.equal(stripeFar, 4.5);
 	const near = [stripeNear - stripeWidth / 2, stripeNear + stripeWidth / 2];
 	const far = [stripeFar - stripeWidth / 2, stripeFar + stripeWidth / 2];
-	assert.deepEqual(near, [1, 3], "近心条覆盖 1–3 px");
-	assert.deepEqual(far, [4, 6], "远心条覆盖 4–6 px");
-	assert.equal(far[1] <= sectionBaseWidth, true, "远心条外缘正好是 6 px 线心的边缘（不溢出）");
-	assert.equal(near[1] < far[0], true, "两条之间留 1 px 缝，不会糊成一条 4 px 宽带");
-	// 反例：1.5 / 4.5 会让外缘到 5.5 px 的外侧——超出线心半边 3 px
-	assert.equal(4.5 + stripeWidth / 2 > sectionBaseWidth / 2, true,
-		"偏移取 1.5/4.5 会溢出线心（所以规格是 2/5）");
+	assert.deepEqual(near, [0.5, 2.5], "内侧条覆盖 0.5–2.5 px");
+	assert.deepEqual(far, [3.5, 5.5], "外侧条覆盖 3.5–5.5 px");
+	assert.equal(far[1] <= sectionBaseWidth, true, "外侧条的最外缘仍落在 6 px 线心内（4.5 + 1 = 5.5 ≤ 6）");
+	assert.equal(near[1] < far[0], true, "两条之间留 1 px 缝（2.5 → 3.5），不会糊成一条 4 px 宽带");
+	// 反例：取 2 / 5（覆盖 1–3 与 4–6）时外侧那条的外缘**正好压在线心边缘**上（没有余量）
+	assert.equal(5 + stripeWidth / 2 <= sectionBaseWidth, true,
+		"偏移取 5 时外缘正好到 6 px（压在线心边缘）—— 所以规格是 1.5/4.5，留 0.5 px 余量");
+	assert.equal(4.5 + stripeWidth / 2 <= sectionBaseWidth, true, "规格 4.5 时外缘 5.5 px，仍在线心内");
 });
