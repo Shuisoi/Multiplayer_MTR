@@ -7,6 +7,8 @@ import type {Rail} from "@/domain/Rail";
 import type {Signal} from "@/domain/Signal";
 import type {Point} from "@/domain/Point";
 import type {Section} from "@/domain/Section";
+import type {Rail as RailEntity} from "@/domain/Rail";
+import type {StraightLookup} from "@/domain/railPath";
 import {CAMERA} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
 import SectionLayer from "./SectionLayer.vue";
@@ -66,6 +68,10 @@ const props = defineProps<{
 	 * <p>用户 2026-09-15："区间颜色从目前 web 生成的线派生，别独立生成了"。</p>
 	 */
 	railColorByHex?: ReadonlyMap<string, string>;
+	/** 轨 hex → 轨实体：区间带用**网页画轨道线的同一套几何**切片（用户要求）。 */
+	railByHex?: ReadonlyMap<string, RailEntity>;
+	/** 节点 → 该节点上直线轨的方向（与轨道层同一份，供曲线端点切线使用）。 */
+	straightLookup?: StraightLookup;
 	/** 选中的区间 id（信息卡联动）。 */
 	selectedSection?: string;
 }>();
@@ -390,6 +396,8 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 				:camera="camera"
 				:selected-section="selectedSection ?? ''"
 				:rail-color-by-hex="railColorByHex"
+				:rail-by-hex="railByHex"
+				:straight-lookup="straightLookup"
 			/>
 		</svg>
 

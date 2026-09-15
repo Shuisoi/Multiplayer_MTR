@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {computed, ref, watch} from "vue";
-import {worldToScreen, type Camera} from "@/domain/camera";
+import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
-import {linePath, railCurvePath, type PlanePoint} from "@/domain/railGeometry";
+import {buildStraightDirections, railScreenPath, straightLookup} from "@/domain/railPath";
 import {speedBandColor} from "@/domain/railColors";
 
 /*
@@ -115,27 +115,7 @@ function endpointKey(rail: Rail, index: 1 | 2): string {
  * 只有直线轨参与：曲线轨的端点切向由它自己的采样点估（见 `railCurvePath` 的说明——
  * 用节点上所有轨的弦向做统一切向那条路实测是退步，会把曲线拉直）。</p>
  */
-const straightDirections = computed(() => {
-	const map = new Map<string, PlanePoint>();
-	for (const rail of props.rails) {
-		if (!rail.isAxisAligned) {
-			continue;
-		}
-		const dx = rail.planeX2 - rail.planeX1;
-		const dy = rail.planeY2 - rail.planeY1;
-		const length = Math.hypot(dx, dy);
-		if (!(length > 1e-9)) {
-			continue;
-		}
-		const direction = {x: dx / length, y: dy / length};
-		map.set(`${rail.x1},${rail.y1},${rail.z1}`, direction);
-		// 同一节点上可能有多条直线轨（岔口），记第一条即可，`align` 会按本轨流向来对齐
-		if (!map.has(`${rail.x2},${rail.y2},${rail.z2}`)) {
-			map.set(`${rail.x2},${rail.y2},${rail.z2}`, direction);
-		}
-	}
-	return map;
-});
+const straightDirections = computed(() => buildStraightDirections(props.rails));
 
 /** 一条轨画出来需要的全部信息（屏幕坐标 + 线型 + 样式）。 */
 const drawn = computed(() => {
@@ -159,20 +139,9 @@ const drawn = computed(() => {
 		 * 必须在缩放无关的尺度上判断，否则线型会随缩放变化（实测整图比例只有 ~0.1px/世界单位时，
 		 * 93 条曲线有 74 条被"屏幕上看不出来"这个理由压成了直线）。
 		 */
-		const from = {x: rail.planeX1, y: rail.planeY1};
-		const to = {x: rail.planeX2, y: rail.planeY2};
-		const project = (point: PlanePoint) => worldToScreen(props.camera, point.x, point.y);
-		const path = rail.isAxisAligned
-			? linePath(project(from), project(to))
-			: railCurvePath(
-				from,
-				to,
-				rail.path.map(point => ({x: point.x, y: point.z})),
-				project,
-				// 节点键直接用引擎的 `x,y,z`（不能从平面坐标反推，那样会丢掉 y 与符号）
-				node => straightDirections.value.get(node) ?? null,
-				[`${rail.x1},${rail.y1},${rail.z1}`, `${rail.x2},${rail.y2},${rail.z2}`],
-			);
+		// 整根轨的画法在 domain/railPath.ts：区间层截同一根轨的一段时走**同一个**函数，
+		// 所以轨道线与它上面的区间带必然重合（用户 2026-09-15 的要求）。
+		const path = railScreenPath(rail, props.camera, straightLookup(straightDirections.value));
 		if (path === "") {
 			continue;
 		}

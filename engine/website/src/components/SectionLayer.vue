@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import {computed} from "vue";
-import {worldToScreen, type Camera} from "@/domain/camera";
+import {type Camera} from "@/domain/camera";
 import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
-import {offsetPath, sideOfDirection} from "@/domain/sectionBands";
+import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
+import {railSpanPath, type StraightLookup} from "@/domain/railPath";
+import type {Rail} from "@/domain/Rail";
 import {SECTION_OCCUPIED_COLOR} from "@/domain/railColors";
 
 /*
@@ -40,7 +42,22 @@ const props = defineProps<{
 	 * <p>缺省回退到灰色（找不到那根轨时），而不是另起一套配色。</p>
 	 */
 	railColorByHex?: ReadonlyMap<string, string>;
+	/**
+	 * 轨 hex → 轨实体：区间带要**用网页自己画那条轨线的同一套几何**（用户 2026-09-15 的要求）。
+	 * 所以这里需要轨本身（端点、采样点），不只是颜色。
+	 */
+	railByHex?: ReadonlyMap<string, Rail>;
+	/**
+	 * "该节点上的直线轨方向"查表（`domain/railPath.ts#straightLookup`）。
+	 *
+	 * <p>必须与轨道层**同一份**：曲线端点的切线正是靠它做到"与相邻直线轨共线"，
+	 * 用不同的一份就会让带子与轨线在节点处错开。</p>
+	 */
+	straightLookup?: StraightLookup;
 }>();
+
+/** 缺省查表：没有直线方向可用（全部按采样点估切向）。 */
+const NO_STRAIGHT: StraightLookup = () => null;
 
 /** 找不到轨色时的回退（与轨道层最慢那一档同色，而不是新造一个颜色）。 */
 const FALLBACK_RAIL_COLOR = "#4e585f";
@@ -93,15 +110,24 @@ const hasSections = computed(() => props.sections.length > 0);
 /**
  * 一段区间的折线 → 偏移后的 SVG 路径。
  *
- * <p>只按**方向**偏移（两个方向各占轨的一侧）。同一侧要是压着多个区间，就让它们**重合**：
- * 颜色本来就取轨道的颜色，再按序错开只会把带推到邻轨上去（第一版就是这么糊掉的）。</p>
+ * <p><b>用的是网页自己画那条轨线的同一套几何</b>（`domain/railPath.ts` 的 `railSpanPath`）：
+ * 取那根轨、按这段的弧窗切片、走同一个 `railCurvePath`。所以区间带与它脚下的轨道线**必然重合**
+ * —— 这正是用户 2026-09-15 指出的问题："路线图是 web 自行绘制的曲线，区间图是游戏中读取的曲线，
+ * 二者并不重合；既然都是按节点划分区间，那么区间图也使用 web 绘制的图像"。</p>
+ *
+ * <p>偏移量与颜色仍按方向/占用给（区间带要能看出两个方向，也要看得出占用）。</p>
  */
 function bandPath(span: SectionSpan, side: number): string {
-	const projected = [];
-	for (let i = 0; i + 1 < span.points.length; i += 2) {
-		projected.push(worldToScreen(props.camera, span.points[i]!, span.points[i + 1]!));
+	const rail = props.railByHex?.get(span.hex) ?? props.railByHex?.get(altHex(span.hex));
+	if (rail === undefined) {
+		return "";
 	}
-	return offsetPath(projected, side * BAND_OFFSET_PX);
+	const path = railSpanPath(rail, span.from, span.to, props.camera, props.straightLookup ?? NO_STRAIGHT);
+	if (path === "") {
+		return "";
+	}
+	// 用浏览器自己把路径按法向偏移，比在这里解 SVG 路径可靠（弧线也要跟着偏移）
+	return offsetSvgPath(path, side * BAND_OFFSET_PX);
 }
 
 /** 每个区间每一段的画线数据。颜色取自**它所在那根轨**的颜色；占用转红（状态，不是配色）。 */

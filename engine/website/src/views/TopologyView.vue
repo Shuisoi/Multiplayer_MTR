@@ -13,6 +13,7 @@ import {commandCoords, readableCoords} from "@/domain/coords";
 import {sendToConsole} from "@/domain/consoleBridge";
 import {fetchPoints, fetchSections, fetchSignals, fetchTopology, scanSignals, setPointBranch} from "@/api/topology";
 import {speedBandColor} from "@/domain/railColors";
+import {buildStraightDirections, straightLookup} from "@/domain/railPath";
 import {toggleSignalRail} from "@/api/commands";
 import type {Camera} from "@/domain/camera";
 
@@ -326,6 +327,22 @@ const railColorByHex = computed(() => {
 	}
 	return map;
 });
+
+/** 轨 hex → 轨实体（区间带按**网页画轨道线的同一套几何**切片时要用）。 */
+const railByHex = computed(() => {
+	const map = new Map<string, Rail>();
+	for (const rail of rails.value) {
+		map.set(rail.hex, rail);
+	}
+	return map;
+});
+
+/**
+ * "该节点上的直线轨方向"查表 —— 与**轨道层同一份**（曲线端点切线靠它才能与相邻直线轨共线）。
+ * 同时交给 MapCanvas：轨道层与区间层必须查同一张表，否则带子会在节点处与轨线错开。
+ */
+const straightDirections = computed(() => buildStraightDirections(rails.value));
+const straightForCurves = computed(() => straightLookup(straightDirections.value));
 
 /** 轨 hex → 两端坐标（画"这一位接的是哪条轨"用：用户读坐标，不读 hex）。 */
 const railEndsByHex = computed(() => {
@@ -646,6 +663,8 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 			:rail-ends="railEndsByHex"
 			:sections="showSections ? sections : []"
 			:rail-color-by-hex="railColorByHex"
+			:rail-by-hex="railByHex"
+			:straight-lookup="straightForCurves"
 			@action="onAction"
 			@camera="onCamera"
 			@shapes="shapeCount = $event"
