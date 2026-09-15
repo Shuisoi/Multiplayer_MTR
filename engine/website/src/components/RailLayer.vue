@@ -3,6 +3,7 @@ import {computed, ref, watch} from "vue";
 import {worldToScreen, type Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
 import {linePath, railCurvePath, type PlanePoint} from "@/domain/railGeometry";
+import {speedBandColor} from "@/domain/railColors";
 
 /*
  * 轨道层：把引擎给的每条轨画出来（SVG，**屏幕坐标**）。
@@ -74,21 +75,15 @@ function onRailPick(hex: string, bound: boolean) {
 	}
 }
 
-/** 限速 → 颜色（速度越高越亮）。高限速干线在暗底上自然浮起来。 */
+/**
+ * 限速 → 颜色（速度越高越亮）。高限速干线在暗底上自然浮起来。
+ *
+ * <p><b>这是"轨道画成什么颜色"的唯一真源</b>：区间层直接把色带颜色从这里取（见
+ * `domain/railColors.ts` 与用户 2026-09-15 的要求"区间颜色从 web 生成的线派生，别独立生成"）。
+ * 所以改这几个色值会同时改变轨道层与区间层 —— 它们本来就该是同一个颜色。</p>
+ */
 function speedColor(speed: number): string {
-	if (speed >= 300) {
-		return "#8b9aab";
-	}
-	if (speed >= 200) {
-		return "#75839a";
-	}
-	if (speed >= 160) {
-		return "#616e80";
-	}
-	if (speed >= 80) {
-		return "#4e585f";
-	}
-	return "#414a50";
+	return speedBandColor(speed);
 }
 
 /** 限速 → 线宽（屏幕像素）。 */

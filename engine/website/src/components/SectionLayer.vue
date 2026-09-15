@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import {worldToScreen, type Camera} from "@/domain/camera";
-import {directionColor, hasDirection, type Section, type SectionSpan} from "@/domain/Section";
+import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
 import {offsetPath, sideOfDirection} from "@/domain/sectionBands";
+import {SECTION_OCCUPIED_COLOR} from "@/domain/railColors";
 
 /*
  * 区间层（方案 B）：**沿轨法向偏移的"方向带"**。
@@ -29,10 +30,25 @@ const props = defineProps<{
 	camera: Camera;
 	/** 选中的区间 id：加粗并置顶。 */
 	selectedSection?: string;
+	/**
+	 * 轨 hex → 轨道线颜色（`domain/railColors.ts`）。**区间带用轨道的颜色**。
+	 *
+	 * <p>用户 2026-09-15 的要求："区间颜色从目前 web 生成的线派生，别独立生成了"。
+	 * 区间本来就是"某段轨上的一个弧窗"，它画出来的颜色必须与那段轨一样，否则同一段路在屏幕上是两种颜色，
+	 * 看图的人会以为它们是两样东西。</p>
+	 *
+	 * <p>缺省回退到灰色（找不到那根轨时），而不是另起一套配色。</p>
+	 */
+	railColorByHex?: ReadonlyMap<string, string>;
 }>();
 
-/** 法向偏移量（屏幕像素）。正负各一侧，两个方向各占一条带。 */
+/** 找不到轨色时的回退（与轨道层最慢那一档同色，而不是新造一个颜色）。 */
+const FALLBACK_RAIL_COLOR = "#4e585f";
+
+/** 法向偏移基准量（屏幕像素）。方向决定正负，重叠的区间再按序号微微错开。 */
 const BAND_OFFSET_PX = 2.6;
+/** 同一侧上多个区间之间的错开量：颜色与轨道相同，只能靠**位置**分开。 */
+const BAND_STACK_PX = 2.2;
 
 /** 两个方向都没有区间时这一层什么都不画，省掉整轮投影。 */
 const hasSections = computed(() => props.sections.length > 0);
@@ -40,18 +56,18 @@ const hasSections = computed(() => props.sections.length > 0);
 /**
  * 一段区间的折线 → 偏移后的 SVG 路径。
  *
- * <p>这里只做两件事：投影到屏幕、按方向求偏移量。偏移的几何本身在 `domain/sectionBands.ts`
- * （纯函数、有单测），因为这个组件渲染不了也测不了。</p>
+ * <p>法向偏移 = 方向决定正负（两个方向各占一条带） + 同侧第 {@code stackIndex} 个区间再错开一点
+ * （颜色与轨道相同，重叠时只能靠位置分开）。</p>
  */
-function bandPath(span: SectionSpan, side: number): string {
+function bandPath(span: SectionSpan, side: number, stackIndex: number): string {
 	const projected = [];
 	for (let i = 0; i + 1 < span.points.length; i += 2) {
 		projected.push(worldToScreen(props.camera, span.points[i]!, span.points[i + 1]!));
 	}
-	return offsetPath(projected, side * BAND_OFFSET_PX);
+	return offsetPath(projected, side * (BAND_OFFSET_PX + stackIndex * BAND_STACK_PX));
 }
 
-/** 每个区间每一段的画线数据。区间之间按方向错开，重叠的区间叠色。 */
+/** 每个区间每一段的画线数据。颜色取自**它所在那根轨**的颜色；占用转红（状态，不是配色）。 */
 const bands = computed(() => {
 	const result: {
 		key: string;
@@ -62,6 +78,8 @@ const bands = computed(() => {
 		label: string;
 		selected: boolean;
 	}[] = [];
+	// 同侧的第几个区间（颜色都跟轨道一样，靠错位分开）
+	const stackBySide = new Map<number, number>();
 	for (const section of props.sections) {
 		/*
 		 * 旧引擎（还没部署 notes/156）发的区间没有 `direction`：那时这一层画不了，
@@ -71,16 +89,18 @@ const bands = computed(() => {
 			continue;
 		}
 		const side = sideOfDirection(section.direction.angle);
-		const color = directionColor(section.direction.angle);
+		const stackIndex = stackBySide.get(side) ?? 0;
+		stackBySide.set(side, stackIndex + 1);
 		section.spans.forEach((span, index) => {
-			const d = bandPath(span, side);
+			const d = bandPath(span, side, stackIndex);
 			if (d === "") {
 				return;
 			}
 			result.push({
 				key: `${section.id}#${index}`,
 				d,
-				color,
+				// **与轨道层同一个颜色**（用户要求：从 web 生成的线派生）
+				color: props.railColorByHex?.get(span.hex) ?? FALLBACK_RAIL_COLOR,
 				occupied: section.occupied,
 				section: section.id,
 				label: section.direction.label,
@@ -105,7 +125,7 @@ const bands = computed(() => {
 			:key="`${band.key}-band`"
 			class="band"
 			:d="band.d"
-			:stroke="band.occupied ? '#d9534f' : band.color"
+			:stroke="band.occupied ? SECTION_OCCUPIED_COLOR : band.color"
 			:stroke-width="band.selected ? 7 : 5"
 			:stroke-opacity="band.selected ? 0.5 : 0.28"
 			:data-section="band.section"
@@ -116,7 +136,7 @@ const bands = computed(() => {
 			:key="`${band.key}-line`"
 			class="band-line"
 			:d="band.d"
-			:stroke="band.occupied ? '#ff7b74' : band.color"
+			:stroke="band.occupied ? SECTION_OCCUPIED_COLOR : band.color"
 			:stroke-width="band.selected ? 2.6 : 1.6"
 			:data-section="band.section"
 			:data-direction="band.label"

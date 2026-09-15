@@ -12,6 +12,7 @@ import {copyText, describeEnvironment} from "@/domain/clipboard";
 import {commandCoords, readableCoords} from "@/domain/coords";
 import {sendToConsole} from "@/domain/consoleBridge";
 import {fetchPoints, fetchSections, fetchSignals, fetchTopology, scanSignals, setPointBranch} from "@/api/topology";
+import {speedBandColor} from "@/domain/railColors";
 import {toggleSignalRail} from "@/api/commands";
 import type {Camera} from "@/domain/camera";
 
@@ -52,6 +53,13 @@ const points = ref<Point[]>([]);
  * 所以灯的登记表一变，区间就会跟着变 —— 分两次取会让画面出现"灯新、区间旧"的半份状态。</p>
  */
 const sections = ref<Section[]>([]);
+/**
+ * 区间图层要不要画（默认**画**，用户 2026-09-15 要求加一个显示/隐藏按钮）。
+ *
+ * <p>隐藏时传空数组给画布，而不是在组件里判一个 `visible` 标志：不画就是不画，
+ * 省掉整轮投影与 DOM 节点（实测 101 个区间 → 322 条 path）。</p>
+ */
+const showSections = ref(true);
 /** 取数状态：loading / ready / error，界面按它显示不同提示。 */
 const status = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
@@ -302,6 +310,21 @@ const displayNodes = computed(() => {
 		degree: node.degree,
 		neighbors: node.neighbours.map(neighbour => ({x: neighbour.x, y: neighbour.y, z: neighbour.z, rail: neighbour.rail})),
 	}, index));
+});
+
+/**
+ * 轨 hex → **轨道线的颜色**（限速分档，与轨道层同一份约定）。
+ *
+ * <p>区间带用这个颜色，而不是自己一套"按方向配色"（用户 2026-09-15 的要求）：
+ * 区间是轨上的一段弧窗，画出来必须与那段轨同色。</p>
+ */
+const railColorByHex = computed(() => {
+	const map = new Map<string, string>();
+	for (const rail of rails.value) {
+		// 两个方向的限速取较大者：轨道层画的是这一条轨，颜色该由它自己的限速定
+		map.set(rail.hex, speedBandColor(Math.max(rail.speedLimitKmh1, rail.speedLimitKmh2)));
+	}
+	return map;
 });
 
 /** 轨 hex → 两端坐标（画"这一位接的是哪条轨"用：用户读坐标，不读 hex）。 */
@@ -621,7 +644,8 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 			:signals="signals"
 			:points="displayPoints"
 			:rail-ends="railEndsByHex"
-			:sections="sections"
+			:sections="showSections ? sections : []"
+			:rail-color-by-hex="railColorByHex"
 			@action="onAction"
 			@camera="onCamera"
 			@shapes="shapeCount = $event"
@@ -689,6 +713,18 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 			</span>
 			<button class="action" type="button" @click="canvas?.focusPoints()">看道岔</button>
 			<button class="action" type="button" @click="canvas?.focusSignals()">看信号灯</button>
+			<!-- 区间图层开关：区间带压在轨道上，需要看裸轨或者觉得太花时可以关掉 -->
+			<button
+				class="action"
+				:class="{ active: showSections }"
+				type="button"
+				:title="showSections
+					? `隐藏区间图层（现在画了 ${sections.length} 个区间）`
+					: `显示区间图层（按方向画成色带，颜色取自轨道线；共 ${sections.length} 个区间）`"
+				@click="showSections = !showSections"
+			>
+				区间 {{ showSections ? "显示中" : "已隐藏" }}
+			</button>
 			<button class="action" type="button" @click="loadWithScan">重新读取</button>
 			<!-- 自动刷新：默认关。开着的时候按拍重读灯与道岔，屏幕上的 aspect 才跟得上车走 -->
 			<button

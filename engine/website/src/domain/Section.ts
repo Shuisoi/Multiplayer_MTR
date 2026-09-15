@@ -92,23 +92,6 @@ export function hasDirection(section: Section): boolean {
 	return typeof (section as {direction?: unknown}).direction === "object" && section.direction !== null;
 }
 
-/** 方向上色（方案 B：两个方向各一条带，颜色必须一眼分得开）。 */
-export function directionColor(angle: number): string {
-	// 归一到 [0,360) 后取最近的 90°，避免浮点误差把 179.9 判成东行
-	const normalized = ((angle % 360) + 360) % 360;
-	const quadrant = Math.round(normalized / 90) * 90 % 360;
-	switch (quadrant) {
-		case 0:
-			return "#4a9ee8";      // 南行（+z）
-		case 90:
-			return "#d98b3a";      // 西行（−x）
-		case 180:
-			return "#5cc08a";      // 北行（−z）
-		default:
-			return "#b47ad9";      // 东行（+x）
-	}
-}
-
 /** 方向角 → 单位向量（与引擎 `headingOf` 同一套数：`(-sin, cos)`）。 */
 export function directionHeading(angle: number): {x: number; z: number} {
 	const radians = (angle * Math.PI) / 180;

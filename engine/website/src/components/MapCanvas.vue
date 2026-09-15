@@ -60,6 +60,12 @@ const props = defineProps<{
 	 * 轨道层画的是整根轨，区间画的是轨上的一段弧窗，两者取的点本来就不同。</p>
 	 */
 	sections?: readonly Section[];
+	/**
+	 * 轨 hex → 轨道线颜色（`domain/railColors.ts`）：区间带的颜色**从轨道线派生**。
+	 *
+	 * <p>用户 2026-09-15："区间颜色从目前 web 生成的线派生，别独立生成了"。</p>
+	 */
+	railColorByHex?: ReadonlyMap<string, string>;
 	/** 选中的区间 id（信息卡联动）。 */
 	selectedSection?: string;
 }>();
@@ -383,6 +389,7 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 				:sections="sections ?? []"
 				:camera="camera"
 				:selected-section="selectedSection ?? ''"
+				:rail-color-by-hex="railColorByHex"
 			/>
 		</svg>
 
