@@ -37,7 +37,7 @@ export const REFERENCE_ZOOM = 6;
 export const DECAL_KINDS = {
 	/** 图标类（信号灯、道岔菱形）：8 px @6×（用户规格）。 */
 	icon: 8,
-	/** 灯点（灯图标下面那个圆）：必须**小于**图标，否则方向箭头被自己盖住。 */
+	/** 灯点（信号灯那个表示状态的圆点）：必须**小于**图标，否则方向箭头被自己盖住。 */
 	lampDot: 4,
 	/** 区间端点圆点：比图标小一点，免得盖住线心。 */
 	endpointDot: 5,
@@ -45,6 +45,30 @@ export const DECAL_KINDS = {
 	nodeDot: 3.6,
 	/** 灯相对节点的横向偏移（用户规格："固定在节点左右的 10px"，同样以 6× 为基准）。 */
 	signalSideOffset: 10,
+	/**
+	 * **方向箭头相对锚点的前移量**（规格 12 px @6×，方向 = 管辖方向）。
+	 *
+	 * <p>用户 2026-09-15："信号灯图标的点和方向指示位置需要错开一些"。原来两者画在**同一个锚点**上，
+	 * 箭头折角的尖正好戳进灯点（实测：尖的可见外缘离元素中心只有 ≈1.7 px，而灯点半径 2 px）；
+	 * 现在箭头沿**管辖方向**前移这么多、灯点退到后面，两者各占一处。</p>
+	 *
+	 * <p>数值是**算出来的**（见 `signalDecalOffset` 与 `signal-overlap.test.ts`）：
+	 * 与 {@link signalDotBack} 合计的"轴距"= 20 px，最坏朝向（0°/90°/180°/270°）的可见空隙是 ≈ 6.2 px。
+	 * 取 8 px 那版只剩 ≈ 0.3 px —— 尖的可见外缘正好擦在灯点外缘上（实测 −0.10 px）。</p>
+	 */
+	signalArrowForward: 12,
+	/**
+	 * **灯点相对锚点的后移量**（规格 8 px @6×）。
+	 *
+	 * <p>与 {@link signalArrowForward} 一起把两个位置沿管辖轴分开：灯点退 8 px、箭头进 12 px，
+	 * 中心相距 20 px @6×。合起来整组贴片仍挂在"节点旁 10 px"那个锚点上（锚点本身没变）。</p>
+	 *
+	 * <p><b>为什么用"轴距"而不是横向让开</b>：横向让开量在**管辖方向**上是有分量的，
+	 * 会把箭头往回推 —— 实测横向 3 px 时角 270° 只剩 2.6 px 空隙，而角 45° 有 14.3 px
+	 * （极差 11.7 px，看起来就是"有的灯错开了、有的还粘着"）。只沿轴拉开则与朝向无关：
+	 * 每个朝向最坏的那个方向量到的空隙完全一样，不用逐个调参。</p>
+	 */
+	signalDotBack: 8,
 	/** 道岔菱形相对节点的偏移：≥ 菱形外接框半宽 + 灯命中半径 + 余量，见 PointMarker 的推导。 */
 	turnoutOffset: 16,
 	/** 道岔引线长度。 */
@@ -163,5 +187,45 @@ export function decalTransform(placement: DecalPlacement, rotationDeg = 0): stri
  */
 export function pixelOffset(direction: {x: number; y: number}, distancePx: number): {x: number; y: number} {
 	return {x: direction.x * distancePx, y: direction.y * distancePx};
+}
+
+/**
+ * 信号灯这一**组贴片**的位移（屏幕向量，x 向右 y 向下）：**灯点**与**方向箭头**各一个。
+ *
+ * <h2>为什么两个位置都由这一个函数给</h2>
+ * <p>用户 2026-09-15："信号灯图标的点和方向指示位置需要错开一些"。错开量一旦拆成"组件里算一点、
+ * 测试里再算一遍"，两边就会各自漂移 —— 而"错开"这件事的判据（两个图形不许相接）**只能**在同一个
+ * 坐标系里量。所以两个偏移成对返回，组件照抄、测试直接量。</p>
+ *
+ * <h2>为什么是"沿管辖轴一前一后"</h2>
+ * <p>先试过"箭头前移 + 横向让开"，不行：横向让开量在**管辖方向**上是有分量的（角 270° 时它把箭头
+ * 往回推），于是不同朝向的空隙差到 11.7 px —— 表现就是"有的灯错开了、有的还粘着"。
+ * 两个位置都只沿**管辖轴**铺开时，与朝向无关：任一朝向里"最坏的那个方向"量到的空隙完全一样
+ * （`signal-overlap.test.ts` 用八个朝向钉住这一点）。</p>
+ *
+ * <h2>顺管辖方向看是"灯点 → 箭头"</h2>
+ * <p>这不是随便定的顺序：管辖方向就是"司机迎着灯面开过来"的那一侧，
+ * 与"信号机立在它所管区间的人口处"同向 —— 图上于是读作"状态（在哪）→ 管哪边"。</p>
+ *
+ * @param angle     信号灯朝向角（MTR 约定：南=0、西=90、北=180、东=270）
+ * @param zoomRatio 当前缩放倍率（{@link REFERENCE_ZOOM} 下规格值即屏幕值）
+ * @param dotBack   灯点后移量（px @基准倍率）；默认取规格表的值。测试要能传 0 来**红证**
+ *                  "灯点不后移就会重叠"，所以这个参数不能砍掉
+ */
+export function signalDecalOffset(
+	angle: number,
+	zoomRatio: number,
+	dotBack: number = DECAL_KINDS.signalDotBack,
+): {arrow: {x: number; y: number}; dot: {x: number; y: number}} {
+	const radians = (angle * Math.PI) / 180;
+	// 管辖方向的屏幕向量（与引擎 headingOf 同式，屏幕 y 就是世界 z）
+	const fx = -Math.sin(radians);
+	const fy = Math.cos(radians);
+	const forward = scaled(DECAL_KINDS.signalArrowForward, zoomRatio);
+	const back = scaled(dotBack, zoomRatio);
+	return {
+		arrow: {x: fx * forward, y: fy * forward},
+		dot: {x: -fx * back, y: -fy * back},
+	};
 }
 
