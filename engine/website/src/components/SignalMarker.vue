@@ -1,34 +1,54 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
-import {MARKER_ICON_PX} from "@/views/mapContext";
+import type {Camera} from "@/domain/camera";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset} from "@/domain/mapElements";
 
 /*
- * 一个信号灯（普通 HTML 元素，绝对定位在屏幕坐标上）。
+ * 一个信号灯（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
  *
- * <p>显示三件事：**状态**（颜色）、**方向**（箭头 `^`）、**在哪**（位置由调用方给）。
- * 方向和状态都是引擎给的（`Signal.angle` / `Signal.state`），这里只做映射。</p>
+ * <p>三件事：**状态**（颜色）、**方向**（箭头 `^`）、**在哪**（由本组件按统一模型算）。</p>
  *
- * <p>为什么用 HTML 而不是 SVG：和节点层同一理由。信号灯是"地图标注"，放进 SVG 就要再面对一次
- * viewBox 缩放（旧版踩过，见 camera.ts）。</p>
+ * <p>为什么用 HTML 而不是 SVG：和节点层同一理由。贴片放进 SVG 就要再面对一次 viewBox 缩放
+ * （旧版踩过，见 camera.ts）。</p>
  *
- * <p><b>尺寸固定 8 px</b>（用户 2026-09-15 的规格）：地图标注是"一眼看出在哪、什么状态"的东西，
- * 一屏有几十盏灯，所以它不随缩放变 —— 但必须**足够小**。早先是 20 px，全览站场时挤成一片、
- * 把轨与区间都遮住；8 px 之后密度问题自然消失。尺寸定义在 `views/mapContext.ts#MARKER_ICON_PX`，
- * 与道岔菱形共用同一个值。</p>
+ * <p>尺寸与偏移**全部来自 `domain/mapElements.ts`**：贴片 8 px、灯点 4 px、相对节点横向 10 px。
+ * 本组件不再自己定任何像素值 —— 那正是"每加一种元素就重写一遍逻辑、并且写出缩放时相对节点滑走"
+ * 的根源。</p>
  */
 
 const props = defineProps<{
 	signal: Signal;
-	/** 视口内屏幕坐标（CSS 像素，信号灯中心）。 */
-	screen: {x: number; y: number};
+	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，避免"位置"有两个来源）。 */
+	camera: Camera;
 	hovered: boolean;
 	/** 正在改这盏灯的绑定（点选绑定）：加一圈强调环。 */
 	selected?: boolean;
 }>();
 
-/** 图标直径（固定 px）。 */
-const ICON_PX = MARKER_ICON_PX;
+/**
+ * 这个贴片的一切尺寸/位置都由 `domain/mapElements.ts` 决定（**唯一真源**）。
+ *
+ * <p>组件里不再出现"这几个像素是我算的"这类判断 —— 那正是以前每加一种元素就要重写一遍、
+ * 并且写出"缩放时相对节点滑走"那类缺陷的原因。</p>
+ */
+const ICON_PX = DECAL_KINDS.icon;
+const LAMP_DOT_PX = DECAL_KINDS.lampDot;
+const LAMP_DOT_HALF = LAMP_DOT_PX / 2;
+
+/**
+ * 贴片锚点：灯的世界坐标 → 屏幕，再加**固定像素**的横向偏移。
+ *
+ * <p>偏移方向由 {@link Signal.sideOffsetDirection} 给（管辖方向那一侧的反面，实测世界数据对得上），
+ * 距离来自规格表（10 px）。因为距离是屏幕像素、且不参与相机变换，**缩放时它与节点的相对位置不变**。</p>
+ */
+const placement = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value));
+
+/** 相对锚点的固定像素偏移（测试与诊断要读它）。 */
+const offsetPx = computed(() => pixelOffset(props.signal.sideOffsetDirection, DECAL_KINDS.signalSideOffset));
+
+/** 外层的位移（贴片锚点）。 */
+const rootTransform = computed(() => decalTransform(placement.value));
 
 
 const emit = defineEmits<{
@@ -75,7 +95,8 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		class="signal"
 		:class="{hovered, selected}"
 		:data-key="signal.key"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
+		:data-side-offset="`${Math.round(offsetPx.x)},${Math.round(offsetPx.y)}`"
+		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="emit('pick', signal.key)"
@@ -87,11 +108,11 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 			实测字号下 DIN 的 `^` 字形只占元素框顶部一点点，旋转后被灯点盖住，等于看不见。
 
 			**尺寸 = 图标直径（8 px）**：与地图上其他标注（道岔菱形）同一个大小，
-			见 `views/mapContext.ts#MARKER_ICON_PX`。viewBox 保持不变，所以笔画的相对比例也不变。
+			见 `domain/mapElements.ts#DECAL_KINDS`。viewBox 保持不变，所以笔画的相对比例也不变。
 		-->
 		<svg
 			class="arrow"
-			:style="{transform: `translate(-50%, calc(-50% - var(--arrow-offset))) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
+			:style="{transform: `translate(-50%, -50%) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
 			:width="ICON_PX"
 			:height="ICON_PX"
 			viewBox="0 0 20 20"
@@ -169,26 +190,29 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	left: 0;
 	top: 0;
 	/*
-	 * 箭头挂在灯点**上方**一点点：8 px 的图标下取 5 px（原来是 20 px 图标配 12 px）。
-	 * translate 与 transform-origin 必须用同一个偏移量，否则旋转中心落在箭头外、一扫就飘。
+	 * 箭头就画在灯点**正中**（不再往上浮固定像素）。
+	 *
+	 * <p>原来是"往上浮 5 px"：那个偏移相对**节点**是随缩放变化的（灯点像素不动、但用户眼的参照物
+	 * ——节点与轨道——在动），看起来就是"灯相对节点滑走"（用户 2026-09-15 报的现象）。
+	 * 现在整个图标（灯点 + 旋转到管辖方向的箭头）作为一个整体，只按**固定 10 px 的横向偏移**
+	 * 挂在节点旁边（见 `markerOffset`），所以缩放时它与节点的相对位置**不变**。</p>
 	 */
-	--arrow-offset: 5px;
-	transform: translate(-50%, calc(-50% - var(--arrow-offset)));
-	transform-origin: 50% calc(50% + var(--arrow-offset));
+	transform: translate(-50%, -50%);
+	transform-origin: 50% 50%;
 	pointer-events: none;
 	filter: drop-shadow(0 0 1.5px #000000);
 }
 
 /*
- * 灯位：4 px 的小圆点（原 7 px）。它必须比 8 px 的箭头小一圈，否则箭头被自己压住、
- * "方向"这件事又白做了；暗描边 + 一点外发光保证 4 px 在暗底上仍然看得见。
+ * 灯位圆点：直径与位置都来自规格表（`DECAL_KINDS.lampDot` = 4 px），所以 CSS 里不写死数字。
+ * 它必须比 8 px 的方向箭头小一圈，否则箭头被自己压住、"方向"这件事又白做了。
  */
 .lamp {
 	position: absolute;
-	left: -2px;
-	top: -2px;
-	width: 4px;
-	height: 4px;
+	left: v-bind('`${-LAMP_DOT_HALF}px`');
+	top: v-bind('`${-LAMP_DOT_HALF}px`');
+	width: v-bind('`${LAMP_DOT_PX}px`');
+	height: v-bind('`${LAMP_DOT_PX}px`');
 	border-radius: 50%;
 	box-shadow: 0 0 0 1px #000000, 0 0 5px currentColor;
 }
@@ -313,3 +337,4 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	border-color: var(--accent);
 }
 </style>
+

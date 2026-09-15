@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {worldToScreen, type Camera} from "@/domain/camera";
+import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import NodeMarker from "./NodeMarker.vue";
 
@@ -33,7 +33,7 @@ const emit = defineEmits<{
 		v-for="node in nodes"
 		:key="node.key"
 		:node="node"
-		:screen="worldToScreen(camera, node.planeX, node.planeZ)"
+		:camera="camera"
 		:hovered="hoveredKey === node.key"
 		:menu-open="menuKey === node.key"
 		:selected="selectedKey === node.key"
@@ -43,3 +43,4 @@ const emit = defineEmits<{
 		@action="emit('action', $event)"
 	/>
 </template>
+

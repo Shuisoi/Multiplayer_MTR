@@ -1,30 +1,46 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Point} from "@/domain/Point";
-import {MARKER_ICON_PX} from "@/views/mapContext";
+import type {Camera} from "@/domain/camera";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset} from "@/domain/mapElements";
 
 /*
- * 一个道岔（普通 HTML 元素，绝对定位在屏幕坐标上）。
+ * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
  *
- * <p>显示三件事：**在哪**（位置由调用方给）、**现在开通哪条腿**（菱形里那个数字）、
- * **能怎么改**（点开后的腿按钮）。腿的序号与分类都来自引擎（`MmtrPoint.computeOrderedLegs`
- * 的排序：直通→左→右→其它），界面不自己按几何重排——两边各排一遍必然出现"界面说左、引擎走右"。</p>
+ * <p>三件事：**在哪**、**现在开通哪条腿**（菱形里那个数字）、**能怎么改**（点开后的腿按钮）。
+ * 腿的序号与分类都来自引擎（`Point.computeOrderedLegs` 的排序：直通→左→右→其它），
+ * 界面不自己按几何重排——两边各排一遍必然出现"界面说左、引擎走右"。</p>
  *
  * <p>为什么形状是菱形：它和节点圆点、灯点在同一张图上一眼分得开（道岔是"要人管的东西"，
  * 形状本身就应当不同）。</p>
  *
- * <p><b>尺寸固定 8 px</b>（用户 2026-09-15 的规格，与信号灯同一个值）：地图标注不随缩放变，
- * 但必须足够小 —— 早先是 23 px 的菱形 + 34 px 引线，全览站场时四十来个道岔挤成一片；
- * 8 px 之后密度问题自然消失。</p>
+ * <p>尺寸与偏移**全部来自 `domain/mapElements.ts`**（贴片 8 px、偏移 16 px、引线 16 px），
+ * 本组件不再自己定像素值。</p>
  */
 
-/** 引线长度：菱形偏移 16px，所以这条线画到 16px 见方（CSS 里 width/height 与它一致）。 */
-const LEADER_PX = 16;
+const LEADER_PX = DECAL_KINDS.turnoutLeader;
+
+/**
+ * 菱形挂靠方向：**右下方**（屏幕对角）。
+ *
+ * <p>为什么挂出去而不是画在节点上：道岔节点上常常同时立着一盏信号灯（信号机就放在道岔旁），
+ * 而道岔层在灯层之上 —— 菱形压在灯点上就点不到灯了。偏移距离由规格表给（{@code turnoutOffset}），
+ * 那个值是**算出来的下限**（菱形外接框半宽 + 灯的命中半径 + 余量），见样式里的说明。</p>
+ */
+const DIAGONAL = {x: Math.SQRT1_2, y: Math.SQRT1_2};
+
+/** 相对锚点的固定像素偏移（诊断/测试要读它）。 */
+const offsetPx = computed(() => pixelOffset(DIAGONAL, DECAL_KINDS.turnoutOffset));
+
+/** 贴片锚点：道岔的世界坐标 → 屏幕 + 固定像素偏移。 */
+const placement = computed(() => decalPlacement(props.point.planeX, props.point.planeY, props.camera, offsetPx.value));
+
+const rootTransform = computed(() => decalTransform(placement.value));
 
 const props = defineProps<{
 	point: Point;
-	/** 视口内屏幕坐标（CSS 像素，道岔中心）。 */
-	screen: {x: number; y: number};
+	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，避免"位置"有两个来源）。 */
+	camera: Camera;
 	/** 轨 hex → 两端坐标：把"接哪条轨"说成坐标（用户按坐标认轨）。 */
 	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
 	hovered: boolean;
@@ -133,7 +149,7 @@ const facts = computed(() => [
 		class="point"
 		:class="{hovered, expanded, selected, 'is-default': isDefault, locked: point.locked}"
 		:data-key="point.key"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
+		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', point.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="onPointerDown"
@@ -148,13 +164,13 @@ const facts = computed(() => [
 
 		<!--
 			菱形：四边等长的方块旋转 45°，边长 = 图标直径（8 px，与信号灯同一个值，见
-			`views/mapContext.ts#MARKER_ICON_PX`）。用菱形而不是圆点，是为了和节点圆点、灯点
+			`domain/mapElements.ts#DECAL_KINDS`）。用菱形而不是圆点，是为了和节点圆点、灯点
 			在同一张图上一眼分得开（道岔是"要人管的东西"，形状本身就应当不同）。
 			里面的数字 = 当前开通的腿序号。
 			外面那层 `.hit` 是点击靶，整体偏在节点右下方（偏移量按"不许与灯点相接"算出来，见样式说明）。
 		-->
 		<div class="hit">
-			<div class="diamond" :style="{width: `${MARKER_ICON_PX}px`, height: `${MARKER_ICON_PX}px`}">
+			<div class="diamond" :style="{width: `${DECAL_KINDS.icon}px`, height: `${DECAL_KINDS.icon}px`}">
 				<span class="leg-number">{{ markerNumber }}</span>
 			</div>
 
@@ -613,3 +629,4 @@ const facts = computed(() => [
 	color: var(--fg-faint);
 }
 </style>
+

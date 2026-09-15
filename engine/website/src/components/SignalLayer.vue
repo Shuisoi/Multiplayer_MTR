@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import {worldToScreen, type Camera} from "@/domain/camera";
+import type {Camera} from "@/domain/camera";
 import type {Signal} from "@/domain/Signal";
 import SignalMarker from "./SignalMarker.vue";
 
 /*
- * 信号灯层：把带灯的节点摆到屏幕坐标上。
+ * 信号灯层：把每盏灯摆出来。
  *
- * <p>每个信号灯是一个绝对定位的 HTML 元素（与节点层同一套做法）：位置由 `worldToScreen()` 从世界坐标
- * 直接算出，尺寸是屏幕像素，缩放只影响它落在哪里。悬停出信息卡（状态 / 朝向 / 灯位 / 模式 / 是否接入闭塞层）。</p>
+ * <p>这一层**不再自己算屏幕坐标**：位置由标记组件按统一模型（`domain/mapElements.ts`）算 ——
+ * 世界坐标 + 固定像素偏移。以前在这一层 `worldToScreen`、在标记里再加偏移，等于"位置"有两个来源，
+ * 而两者用的尺子不同就会写出"缩放时相对节点滑走"那类缺陷。</p>
  */
 
 defineProps<{
@@ -31,7 +32,7 @@ const emit = defineEmits<{
 		v-for="signal in signals"
 		:key="signal.key"
 		:signal="signal"
-		:screen="worldToScreen(camera, signal.planeX, signal.planeY)"
+		:camera="camera"
 		:hovered="hoveredKey === signal.key"
 		:selected="selectedKey === signal.key"
 		@hover="emit('hover', $event)"

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, watch} from "vue";
 import {Node} from "@/domain/Node";
+import type {Camera} from "@/domain/camera";
+import {DECAL_KINDS, decalPlacement, decalTransform} from "@/domain/mapElements";
 
 /*
  * 一个节点（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -23,8 +25,8 @@ import {Node} from "@/domain/Node";
 
 const props = defineProps<{
 	node: Node;
-	/** 视口内屏幕坐标（CSS 像素，节点中心）。 */
-	screen: {x: number; y: number};
+	/** 当前相机：贴片位置由它算（组件自己不接收屏幕坐标，"位置"只有一个来源）。 */
+	camera: Camera;
 	hovered: boolean;
 	menuOpen: boolean;
 	selected: boolean;
@@ -37,8 +39,20 @@ const emit = defineEmits<{
 	(e: "action", payload: {node: Node; action: string}): void;
 }>();
 
-/** 节点半径（CSS 像素）：端点细、通过点中等、道岔粗。 */
-const radius = computed(() => (props.node.degree <= 1 ? 3.5 : (props.node.degree === 2 ? 4.5 : 6)));
+/**
+ * 节点圆点半径（CSS 像素）：来自**规格表**（`DECAL_KINDS.nodeDot`），不再在这里写死数字。
+ *
+ * <p>注意旧实现按度数分三档（端点 3.5 / 通过 4.5 / 道岔 6）。这一版先统一到规格表那一档 ——
+ * "形状表达类型"已经由别的元素承担（灯是箭头、道岔是菱形），节点本身统一大小反而更整齐；
+ * 要恢复分档就在规格表里加"按度数取尺寸"的规则，而不是回到组件里写死。</p>
+ */
+const radius = DECAL_KINDS.nodeDot;
+
+/** 贴片锚点：节点的世界坐标 → 屏幕（节点不需要偏移，所以第二个参数省略）。 */
+const placement = computed(() => decalPlacement(props.node.planeX, props.node.planeZ, props.camera));
+
+/** 外层的位移（贴片锚点）。 */
+const rootTransform = computed(() => decalTransform(placement.value));
 
 /** 高亮状态：悬停 / 菜单打开 / 被选中，都画强调色边。 */
 const active = computed(() => props.hovered || props.menuOpen || props.selected);
@@ -149,7 +163,7 @@ watch(() => props.menuOpen, open => {
 		class="node"
 		:class="{active, fork: node.isFork}"
 		:data-key="node.key"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
+		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', node.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown="onPointerDown"
@@ -390,3 +404,4 @@ watch(() => props.menuOpen, open => {
 	font-family: var(--font-value);
 }
 </style>
+

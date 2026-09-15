@@ -5,6 +5,7 @@ import {hasDirection, type Section, type SectionSpan} from "@/domain/Section";
 import {offsetSvgPath, sideOfDirection} from "@/domain/sectionBands";
 import {railSpanPath, type StraightLookup} from "@/domain/railPath";
 import type {Rail} from "@/domain/Rail";
+import {DECAL_KINDS} from "@/domain/mapElements";
 
 /*
  * 区间图（用户 2026-09-15 定的规格）。
@@ -38,13 +39,15 @@ import type {Rail} from "@/domain/Rail";
  */
 
 /*
- * 线心位置 = **6 px**（用户规格），样式表里写死；状态条的偏移见 STRIPE_* 常量。
+ * 线心的 6 px 与状态条的宽度/偏移都来自**规格表** `domain/mapElements.ts#DECAL_KINDS`，
+ * 组件里不再写死像素值（那正是"每加一种元素就重写一遍"的根源）。
  */
-/** 两条状态条的中心偏移（用户规格：第 1–2 px 与第 4–5 px ⇒ 中心在 ±1.5 / ±4.5）。 */
-const STRIPE_OFFSET_PX = 4.5;
-const STRIPE_NEAR_OFFSET_PX = 1.5;
-/** 状态条宽度（用户规格：各 2 px）。 */
-const STRIPE_WIDTH_PX = 2;
+const STRIPE_WIDTH_PX = DECAL_KINDS.stripeWidth;
+const STRIPE_NEAR_OFFSET_PX = DECAL_KINDS.stripeNear;
+const STRIPE_OFFSET_PX = DECAL_KINDS.stripeFar;
+const BASE_WIDTH_PX = DECAL_KINDS.sectionBaseWidth;
+/** 区间端点圆点半径（规格表）。 */
+const ENDPOINT_DOT_PX = DECAL_KINDS.endpointDot;
 
 /**
  * 状态条的颜色 = **这条区间的入口信号灯显示的灯色**（用户 2026-09-15 定的规格）。
@@ -273,7 +276,7 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 			class="endpoint"
 			:cx="dot.x"
 			:cy="dot.y"
-			:r="dot.selected ? 4 : 3"
+			:r="dot.selected ? ENDPOINT_DOT_PX + 1 : ENDPOINT_DOT_PX"
 			:fill="dot.color"
 		/>
 	</g>
@@ -283,7 +286,7 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 .section-layer .base {
 	fill: none;
 	stroke: #ffffff;
-	stroke-width: 6px;
+	stroke-width: v-bind('`${BASE_WIDTH_PX}px`');
 	stroke-linecap: round;
 	stroke-linejoin: round;
 	pointer-events: none;
@@ -303,3 +306,5 @@ function screenAt(rail: Rail, arcM: number): {x: number; y: number} | null {
 	pointer-events: none;
 }
 </style>
+
+

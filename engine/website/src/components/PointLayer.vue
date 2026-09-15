@@ -1,18 +1,17 @@
 <script setup lang="ts">
-import {worldToScreen, type Camera} from "@/domain/camera";
+import type {Camera} from "@/domain/camera";
 import type {Point} from "@/domain/Point";
 import PointMarker from "./PointMarker.vue";
 
 /*
- * 道岔层：把引擎给出的道岔摆到屏幕坐标上，并允许点开换开通位。
+ * 道岔层：把引擎给出的道岔摆出来，并允许点开换开通位。
  *
- * <p>与节点层/信号灯层同一套做法：每个道岔是一个绝对定位的 HTML 元素，位置由 `worldToScreen()`
- * 从世界坐标直接算出，尺寸是屏幕像素。</p>
+ * <p>这一层**不再自己算屏幕坐标**：位置由标记组件按统一模型（`domain/mapElements.ts`）算 ——
+ * 世界坐标 + 固定像素偏移。以前在这里 `worldToScreen`、在标记里再加偏移，等于"位置"有两个来源。</p>
  *
- * <p>层序上这一层在信号灯层**之下**（见 MapCanvas 的模板顺序）：道岔菱形按 34px 偏移挂在节点
- * 右下角，那个距离本身就够到邻节点，所以难免会压到别人家的灯点 —— 让灯在上面，
- * 保证"灯永远点得到"，道岔在自己没被压住的地方照旧可点。改绑定期间更进一步：`picking` 为真时
- * 道岔干脆不响应点击（那一刻用户要点的是灯与轨）。</p>
+ * <p>层序上这一层在信号灯层**之下**（见 MapCanvas 的模板顺序）：道岔菱形按固定像素偏移挂在节点
+ * 右下方，那个距离本身就够到邻节点，所以难免会压到别人家的灯点 —— 让灯在上面，保证"灯永远点得到"。
+ * 改绑定期间更进一步：`picking` 为真时道岔干脆不响应点击（那一刻用户要点的是灯与轨）。</p>
  */
 
 defineProps<{
@@ -41,7 +40,7 @@ const emit = defineEmits<{
 		v-for="point in points"
 		:key="point.key"
 		:point="point"
-		:screen="worldToScreen(camera, point.planeX, point.planeY)"
+		:camera="camera"
 		:rail-ends="railEnds"
 		:hovered="hoveredKey === point.key"
 		:expanded="expandedKey === point.key"
@@ -52,3 +51,4 @@ const emit = defineEmits<{
 		@pick-leg="emit('pickLeg', $event)"
 	/>
 </template>
+
