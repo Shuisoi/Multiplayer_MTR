@@ -987,6 +987,43 @@ public final class MmtrDirectionalBlockServiceTests {
 	}
 
 	/**
+	 * **走行不许掉头**（notes/159）：区间是"某方向的一段路"，走到线路尽头（方向反过来）就结束。
+	 *
+	 * <p>这条钉的是那个 628 m 巨块的真因：区间从一条走廊一路走到底，在尽头的 U 弯处**跟着钢轨的物理
+	 * 连接转了过去**，于是沿对面走廊往回走，把对手方向的整条走廊收进了自己的区间。</p>
+	 *
+	 * <p>夹具是一个"发夹"：南行段 (0,0,0)→(0,0,100)，10 m 的连接段横过去，再一条回程段
+	 * (10,0,100)→(10,0,0) **朝北**。灯站在南行段北端朝南 ⇒ 走行向南 100 m 到 (0,0,100)，
+	 * 连接段（朝东，与本方向垂直）**必须放行**，然后面对朝北的回程段 —— 那与基准方向（南）相反
+	 * ⇒ **到此为止**。</p>
+	 *
+	 * <p>红证：把 {@code MMTR_REVERSAL_DOT} 那条判据去掉（或改成永不触发），这个区间就会继续吃下回程段，
+	 * 长度变成 210 m、段数变成 3 —— 正是巨块的成因。</p>
+	 */
+	@Test
+	public void theWalkNeverTurnsBackDownTheLine() {
+		final Rail southbound = rail(new Position(0, 0, 0), new Position(0, 0, 100));
+		final Rail connector = rail(new Position(0, 0, 100), new Position(10, 0, 100));
+		final Rail northbound = rail(new Position(10, 0, 100), new Position(10, 0, 0));
+		final Simulator simulator = sim("build/mmtr-dirblock-reversal", southbound, connector, northbound);
+		// 灯站在南行段北端、朝南（角 0 = +z = 南）：它开的区间朝南走
+		final String lamp = addLamp(simulator, southbound, 0, SOUTH);
+		final MmtrDirectionalBlockService service = new MmtrDirectionalBlockService(simulator);
+
+		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(lamp);
+		assertNotNull(section, "朝南的灯开出朝南的区间");
+		assertEquals(2, section.spans.size(),
+			"南行段 + 那 10 m 连接段（垂直，属正常行车）；**回程段不许收进来**");
+		assertEquals(110, section.lengthM(), 2.0, "长度到此为止，不是 210 m");
+		assertTrue(section.endsAtDeadEnd, "结束原因是走到尽头（方向反了），不是因为撞上另一盏灯");
+
+		final MmtrDirectionalBlockService.RailSpan last = section.spans.get(section.spans.size() - 1);
+		assertFalse(last.railHex.equals(northbound.getHexId()), "回程段不在本区间里");
+		assertEquals(section, service.sectionAt(southbound.getHexId(), 50, 0, 1), "南行段上朝南走落在本区间");
+		assertNull(service.sectionAt(northbound.getHexId(), 50, 0, -1), "回程段上没有朝北的区间（那一侧的灯还没立）");
+	}
+
+	/**
 	 * 灯只守它**面朝**的那一侧（用户："反向没放灯啊"）。同一根 200 m 轨上两盏朝向相反的灯 ⇒
 	 * 两个区间，车**已经走过**的那一段属于它身后那盏灯。
 	 */

@@ -108,6 +108,14 @@ public final class MmtrDirectionalBlockService {
 	private static final double MAX_SECTION_LENGTH_M = 4000;
 	/** Two block boundaries closer than this on one rail are the same boundary (sampled arcs wobble). */
 	private static final double MIN_BLOCK_PIECE_M = 0.05;
+	/**
+	 * "走行掉头"的判据门槛：续段在本区间**基准方向**上的投影低于此值 = 已经转过头了（notes/159 §1）。
+	 *
+	 * <p>-0.5 落在实测数据的空档里：正常区间最低只到 +0.15（尖角股道，属于正常的急弯），
+	 * 掉头区间一路掉到 −1.0。取负值（而不是 0）是为了**放行直角转弯**——直角转弯的投影是浮点意义上的 0
+	 * （实测 4.4e-16），拿 0 当门槛会把"岔线走到节点后继续走主线"也判成掉头。</p>
+	 */
+	private static final double MMTR_REVERSAL_DOT = -0.5;
 
 	/*
 	 * ---------------------------------------------------------------- 绑定关系挂在「节点」上
@@ -2631,7 +2639,7 @@ public final class MmtrDirectionalBlockService {
 		final Position exitNode = forward ? farNode(firstRail, true) : farNode(firstRail, false);
 		final ObjectOpenHashSet<String> pathRails = new ObjectOpenHashSet<>();
 		pathRails.add(firstHex);
-		walk(section, firstHex, exitNode, headingX, headingZ, 1, pathRails);
+		walk(section, firstHex, exitNode, headingX, headingZ, 1, pathRails, true, headingX, headingZ);
 		return section;
 	}
 
@@ -2874,7 +2882,7 @@ public final class MmtrDirectionalBlockService {
 	 * world's exit lamps then protected one of six parallel stabling roads (notes/107 §4).</p>
 	 */
 	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount, ObjectOpenHashSet<String> pathRails) {
-		walk(section, cameFromHex, node, headingX, headingZ, railCount, pathRails, true);
+		walk(section, cameFromHex, node, headingX, headingZ, railCount, pathRails, true, headingX, headingZ);
 	}
 
 	/**
@@ -2885,7 +2893,7 @@ public final class MmtrDirectionalBlockService {
 	 * 它沿途撞到禁行侧**不许**把整段判成"没有进路"，否则一盏看着直通正线的灯会永远红
 	 * （用户 2026-09-14 现场报的就是这个）。</p>
 	 */
-	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount, ObjectOpenHashSet<String> pathRails, boolean reachableRoute) {
+	private void walk(Section section, String cameFromHex, @Nullable Position node, double headingX, double headingZ, int railCount, ObjectOpenHashSet<String> pathRails, boolean reachableRoute, double sectionHeadingX, double sectionHeadingZ) {
 		if (node == null) {
 			section.endsAtDeadEnd = true;
 			section.endReason = "轨的远端找不到节点（拓扑缺端点）";
@@ -3050,6 +3058,43 @@ public final class MmtrDirectionalBlockService {
 				continue;
 			}
 
+			/*
+			 * **走行不许掉头**（notes/159；用户裁定 ①"区间是某方向的一段路"）。
+			 *
+			 * <p>这一条是那个 628 m 巨块的**真因**（notes/155 §15 记的现场）：区间从南行走廊一路走到底，
+			 * 在尽头的 U 弯处**跟着钢轨的物理连接转了过去**，于是沿北行走廊往回走，把对手方向的整条
+			 * 走廊收进了自己的区间 —— 现场读数把整条咽喉并成一块，站台上的车把全线同方向的车全按红。</p>
+			 *
+			 * <p>判据：续段的走向如果**已经与"本区间的方向"相反**（相对**本区间基准方向**的点积为负），
+			 * 它就不是"这个方向的一段路"，走行到此为止。</p>
+			 *
+			 * <p><b>为什么与"基准方向"比，而不是与"当前走向"比</b>：U 弯不是一步转过来的 —— 它由好几根
+			 * 缓弯轨拼成，每一步相对**当前**走向都只是小转角（点积仍为正）。只有把每一步都拿来跟**区间
+			 * 出发时的方向**比，掉头才会显形。实测（notes/159 §1）：101 个区间里 88 个的带符号投影从未
+			 * 低于 +1.0（一直朝前），9 个掉到 −1.0（真掉头），另 2 个最低只到 +0.15（尖角股道，没走回头）。
+			 * 中间是空的 —— 所以"点积是否为负"就分开了，不需要调参。</p>
+			 *
+			 * <p><b>为什么只对"唯一续段"生效</b>：岔口是**多腿**，那里的走向可以合法地拐回来
+			 * （尖角/渡线/岔股），而用户 2026-09-10 的裁定是"一盏灯守整个咽喉"—— 那几条腿的轨
+			 * **必须留在本区间里**（岔股上可能停着扳岔之前就进来的车）。实测把这层豁免去掉，
+			 * {@code theBranchOfAShallowCrossoverIsGuardedWithoutTurningTheLampRed} 立刻红。
+			 * 所以：节点只有一条可续轨时才是"沿线继续走"，这时才谈得上掉头；多腿一律照旧全走。</p>
+			 *
+			 * <p><b>直角转弯必须放行，所以不能拿 0 当门槛。</b>判据是"续段在基准方向上的投影"，
+			 * 而直角转弯（例如岔线向南出、过节点后转上向东的主线）的投影**正好是 0，而且是浮点意义上的 0**
+			 * （实测该夹具算出 {@code 4.4e-16}）。所以门槛取一个**明显为负**的值：实测世界的数据在 0 附近
+			 * 是空的（正常区间最低 +0.15，掉头区间 −1.0），这个门槛落在两者之间且两边都留足余量。</p>
+			 */
+			final double walkForward = sectionHeadingX * spanHeadingX + sectionHeadingZ * spanHeadingZ;
+			if (walkForward < MMTR_REVERSAL_DOT && legs.size() <= 1) {
+				if (reachableRoute) {
+					section.endsAtDeadEnd = true;
+					section.endReason = "走到线路尽头（这里方向反了：续段的走向已经指回来路，走行不许掉头 —— 区间是"
+						+ "某方向的一段路，掉头点就是本区间的终点）";
+				}
+				continue;
+			}
+
 			if (Math.abs(toArc - arcOfNode) > 1e-6) {
 				// A lamp standing MID-RAIL is a boundary too: end the section on it instead of walking past.
 				final MidRailLamp midRail = nearestLampOnSpan(next, arcOfNode, toArc, forward, spanHeadingX, spanHeadingZ, section.entrySignalKey);
@@ -3067,7 +3112,7 @@ public final class MmtrDirectionalBlockService {
 			anyLegHandled = true;
 			final ObjectOpenHashSet<String> branchPath = new ObjectOpenHashSet<>(pathRails);
 			branchPath.add(nextHex);
-			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath, reachable);
+			walk(section, nextHex, forward ? farNode(next, true) : farNode(next, false), spanHeadingX, spanHeadingZ, railCount + 1, branchPath, reachable, sectionHeadingX, sectionHeadingZ);
 		}
 		if (!anyLegHandled) {
 			section.endsAtDeadEnd = true;
