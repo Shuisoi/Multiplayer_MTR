@@ -43,12 +43,19 @@ const radius = computed(() => (props.node.degree <= 1 ? 3.5 : (props.node.degree
 /** 高亮状态：悬停 / 菜单打开 / 被选中，都画强调色边。 */
 const active = computed(() => props.hovered || props.menuOpen || props.selected);
 
-/** 所属区间文案。 */
+/**
+ * 覆盖这个节点的区间文案（**可能多个**：双向线路上南行、北行各一个）。
+ *
+ * <p>原来是"所属区间"（单值）。引擎已不再给唯一归属——区间是某方向的一段路，一个节点被两个方向的
+ * 区间同时覆盖是常态（现场实测被覆盖的 96 根轨里 62 根多归属），所以这里如实列出全部。</p>
+ */
 const blockText = computed(() => {
-	if (!props.node.block) {
-		return "未知（引擎未给出）";
+	if (props.node.sections.length === 0) {
+		return "无区间覆盖（这一段没有灯）";
 	}
-	return props.node.isUnguardedBlock ? `无灯区间 ${props.node.blockShort}` : props.node.block;
+	return props.node.isMultiSection
+		? `${props.node.sections.length} 个区间：${props.node.blockText}`
+		: props.node.blockText;
 });
 
 /** 相邻轨列表（悬停卡里一行一条）。 */

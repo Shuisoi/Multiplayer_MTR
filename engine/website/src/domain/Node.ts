@@ -24,9 +24,16 @@ export interface RawTopologyNode {
 	readonly y: number;
 	readonly z: number;
 	readonly degree?: number;
-	readonly block?: string;
 	readonly neighbors?: readonly {x: number; y: number; z: number; rail: string}[];
 }
+
+/**
+ * 节点 → 覆盖它的区间 id（**可能多个**）。
+ *
+ * <p>由视图层从 `mmtr-sections` 的 spans 推出来（节点是轨的端点，所以按"轨 + 端点弧"就能对上），
+ * 因为引擎已经不再给"节点归属"了 —— 区间是某方向的一段路，一个节点被两个方向的区间同时覆盖是常态。</p>
+ */
+export type SectionIndex = ReadonlyMap<string, readonly string[]>;
 
 /** 节点在极简平面图里的形状分类（按度数）。 */
 export type NodeKind = "end" | "through" | "fork" | "crossing";
@@ -36,11 +43,15 @@ export class Node {
 	readonly y: number;
 	readonly z: number;
 	readonly degree: number;
-	/** 所属区间 id：有灯区间是灯键，无灯区间是 `无灯#<轨>@<弧>`；空串表示引擎没给出。 */
-	readonly block: string;
+	/**
+	 * 覆盖这个节点的区间 id（**可能多个**：双向线路上南行、北行各一个）。
+	 *
+	 * <p>空数组 = 没有任何区间覆盖它（这一段没有灯管到）。</p>
+	 */
+	readonly sections: readonly string[];
 	readonly neighbours: readonly NodeNeighbour[];
 
-	constructor(raw: RawTopologyNode) {
+	constructor(raw: RawTopologyNode, sectionIndex?: SectionIndex) {
 		this.x = raw.x;
 		this.y = raw.y;
 		this.z = raw.z;
@@ -51,7 +62,7 @@ export class Node {
 			rail: neighbour.rail,
 		}));
 		this.degree = raw.degree ?? this.neighbours.length;
-		this.block = raw.block ?? "";
+		this.sections = sectionIndex?.get(`${raw.x},${raw.y},${raw.z}`) ?? [];
 	}
 
 	/** 稳定唯一键（与引擎 `positionsToRail` 的键一致，三道岔接口也用它）。 */
@@ -107,31 +118,35 @@ export class Node {
 		return this.degree >= 3;
 	}
 
-	/** 有灯区间返回灯键，无灯区间返回"无灯"，空串返回"未知"。 */
+	/**
+	 * 覆盖这个节点的区间：0 个 → "无区间"，1 个 → 那个 id，多个 → 用 ` + ` 连起来。
+	 *
+	 * <p>取代旧的单值 `blockText`。多值不是异常：双向线路上同一根轨的两个方向的区间都覆盖它，
+	 * 所以界面上必须能一眼看出"这一格同时属于两个方向"。</p>
+	 */
 	get blockText(): string {
-		if (!this.block) {
-			return "未知";
+		if (this.sections.length === 0) {
+			return "无区间";
 		}
-		return this.isUnguardedBlock ? "无灯区间" : this.block;
+		return this.sections.join(" + ");
 	}
 
-	get isUnguardedBlock(): boolean {
-		return this.block.startsWith("无灯#");
+	/** 是否有多个区间覆盖（双向运行的位置）。 */
+	get isMultiSection(): boolean {
+		return this.sections.length > 1;
 	}
 
-	/** 无灯区间的短写法：`无灯#轨hex@弧` → `无灯#轨片段@弧`。 */
+	/** 短写法：轨 hex 只留后 8 位（节点 id 本身就是短坐标，不必再截）。 */
 	get blockShort(): string {
-		if (!this.block) {
+		if (this.sections.length === 0) {
 			return "—";
 		}
-		if (!this.isUnguardedBlock) {
-			return this.block;
-		}
-		const rail = this.block.slice(this.block.indexOf("#") + 1);
-		const at = rail.lastIndexOf("@");
-		const hex = at > 0 ? rail.slice(0, at) : rail;
-		const arc = at > 0 ? rail.slice(at) : "";
-		return `无灯#${Node.shortHex(hex)}${arc}`;
+		return this.sections
+			.map(section => {
+				const at = section.lastIndexOf("#");
+				return at > 0 ? section.slice(0, at) : section;
+			})
+			.join(" + ");
 	}
 
 	/** 与某个邻居之间的世界距离（米）。 */

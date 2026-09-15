@@ -6,8 +6,10 @@ import type {Node} from "@/domain/Node";
 import type {Rail} from "@/domain/Rail";
 import type {Signal} from "@/domain/Signal";
 import type {Point} from "@/domain/Point";
+import type {Section} from "@/domain/Section";
 import {CAMERA} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
+import SectionLayer from "./SectionLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
 import SignalLayer from "./SignalLayer.vue";
 import PointLayer from "./PointLayer.vue";
@@ -50,6 +52,16 @@ const props = defineProps<{
 	 * 只给 hex 前 12 位等于没说清它是哪一根。</p>
 	 */
 	railEnds?: ReadonlyMap<string, {x1: number; z1: number; x2: number; z2: number}>;
+	/**
+	 * 区间层（方案 B：沿轨法向偏移的**方向带**）。
+	 *
+	 * <p>缺省是空数组 = 不画这一层（旧行为不变）。区间是"某方向的一段路"，一个区间跨多根轨，
+	 * 所以由 {@link SectionLayer} 自己按 span 的采样点投影，**不**复用轨道层的路径：
+	 * 轨道层画的是整根轨，区间画的是轨上的一段弧窗，两者取的点本来就不同。</p>
+	 */
+	sections?: readonly Section[];
+	/** 选中的区间 id（信息卡联动）。 */
+	selectedSection?: string;
 }>();
 
 const host = useTemplateRef<HTMLElement>("host");
@@ -362,6 +374,15 @@ if (typeof window !== "undefined" && window.location.search.includes("cameraDebu
 				:connected-rail="connectedRailHex"
 				@shapes="emit('shapes', $event)"
 				@pick-rail="onPickRail"
+			/>
+			<!--
+				区间层：**在轨道层之后**渲染，所以两条方向带压在轨的上面（看得见）。
+				它整层 `pointer-events: none`，不抢画布拖动与轨的点选。
+			-->
+			<SectionLayer
+				:sections="sections ?? []"
+				:camera="camera"
+				:selected-section="selectedSection ?? ''"
 			/>
 		</svg>
 

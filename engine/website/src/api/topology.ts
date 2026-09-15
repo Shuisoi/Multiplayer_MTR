@@ -3,6 +3,7 @@ import {Node, type RawTopologyNode} from "@/domain/Node";
 import {Rail, type RawRail} from "@/domain/Rail";
 import {Signal, type RawSignal} from "@/domain/Signal";
 import {Point, type RawPoint} from "@/domain/Point";
+import type {RailMembership, RawSectionsResponse, Section} from "@/domain/Section";
 
 /**
  * 轨道层拓扑：`/mtr/api/map/mmtr-topology`。
@@ -34,6 +35,28 @@ export async function fetchTopology(): Promise<{nodes: Node[]; rails: Rail[]}> {
 export async function fetchSignals(): Promise<Signal[]> {
 	const data = await requestJson<{signals: readonly RawSignal[]}>("map/mmtr-signals");
 	return (data.signals ?? []).map(raw => new Signal(raw));
+}
+
+/**
+ * 区间层：`/mtr/api/map/mmtr-sections`（**按方向划分的区间**，notes/156）。
+ *
+ * <p>这是网页"区间图层"的唯一数据来源。它一次给两样东西：</p>
+ * <ul>
+ *   <li>`sections` —— 每个区间（= 一盏灯开的那段路，带**方向**、入口/出口灯、每段的采样点）；</li>
+ *   <li>`byRail` —— **一个点属于哪几个区间**的多值索引（双向线路上同一段弧会同时属于南行与北行，
+ *       现场实测 96 根被覆盖的轨里 62 根是多归属）。</li>
+ * </ul>
+ *
+ * <p>旧的 `blocks`（水闸区间）与节点 `block`（唯一归属）字段已经不再发送：区间是某方向的一段路，
+ * "一个节点归一个区间"在双向线路上必然错，那一层已按用户裁定删除。</p>
+ */
+export async function fetchSections(): Promise<{sections: Section[]; byRail: RailMembership[]; railCount: number}> {
+	const data = await requestJson<RawSectionsResponse>("map/mmtr-sections");
+	return {
+		sections: [...(data.sections ?? [])],
+		byRail: [...(data.byRail ?? [])],
+		railCount: data.railCount ?? 0,
+	};
 }
 
 /**

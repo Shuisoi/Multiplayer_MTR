@@ -7,10 +7,11 @@ import {Node} from "@/domain/Node";
 import {Rail} from "@/domain/Rail";
 import {Signal} from "@/domain/Signal";
 import {Point} from "@/domain/Point";
+import type {Section} from "@/domain/Section";
 import {copyText, describeEnvironment} from "@/domain/clipboard";
 import {commandCoords, readableCoords} from "@/domain/coords";
 import {sendToConsole} from "@/domain/consoleBridge";
-import {fetchPoints, fetchSignals, fetchTopology, scanSignals, setPointBranch} from "@/api/topology";
+import {fetchPoints, fetchSections, fetchSignals, fetchTopology, scanSignals, setPointBranch} from "@/api/topology";
 import {toggleSignalRail} from "@/api/commands";
 import type {Camera} from "@/domain/camera";
 
@@ -44,20 +45,83 @@ const signals = ref<Signal[]>([]);
  * 所以这一层不是"可选的调试信息"，是操作入口，必须与节点/轨/灯一起取。
  */
 const points = ref<Point[]>([]);
+/**
+ * 区间层（按方向划分的区间，notes/156）。
+ *
+ * <p>与节点/轨/灯/道岔一起取：区间层画的是"每盏灯开的那段路 + 它属于哪个方向"，而它是由**灯**推出来的，
+ * 所以灯的登记表一变，区间就会跟着变 —— 分两次取会让画面出现"灯新、区间旧"的半份状态。</p>
+ */
+const sections = ref<Section[]>([]);
 /** 取数状态：loading / ready / error，界面按它显示不同提示。 */
 const status = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
+
+/**
+ * 节点 → 覆盖它的区间（**可能多个**）。
+ *
+ * <p>引擎不再给"节点归属"了（区间是某方向的一段路，一个节点被两个方向的区间同时覆盖是常态，
+ * 现场实测被覆盖的 96 根轨里 62 根是多归属）。所以这里由 **spans 推**：节点是轨的端点，
+ * 所以"某区间的某一段落在某根轨上、且弧窗贴到端点"就意味着那个区间覆盖这个节点。</p>
+ */
+const sectionIndex = computed(() => {
+	// 区间 → 它覆盖的轨（hex → 该区间在这些轨上的那些段）
+	const spansByRail = new Map<string, {section: string; points: readonly number[]}[]>();
+	for (const section of sections.value) {
+		for (const span of section.spans) {
+			const list = spansByRail.get(span.hex);
+			const entry = {section: section.id, points: span.points};
+			if (list === undefined) {
+				spansByRail.set(span.hex, [entry]);
+			} else {
+				list.push(entry);
+			}
+		}
+	}
+	/*
+	 * 判据与引擎"灯贴着节点就算守这个节点"同一条口径：**空间容差**，不比弧长。
+	 *
+	 * <p>为什么要空间而不是弧：网页拿不到轨的弧长（`Rail` 只给两端坐标与采样点），而引擎本身就是
+	 * 按"灯与节点的距离 ≤ 4 m"判的。这里用区间那一段的**采样点**里离节点最近的一个点来判，
+	 * 阈值取 3 m（引擎的 4 m 减去端点取整的余量）。</p>
+	 */
+	const NODE_TOLERANCE_M = 3;
+	const index = new Map<string, string[]>();
+	for (const node of nodes.value) {
+		const found: string[] = [];
+		for (const neighbour of node.neighbours) {
+			for (const span of spansByRail.get(neighbour.rail) ?? []) {
+				for (let i = 0; i + 1 < span.points.length; i += 2) {
+					if (Math.hypot(span.points[i]! - node.x, span.points[i + 1]! - node.z) <= NODE_TOLERANCE_M) {
+						if (!found.includes(span.section)) {
+							found.push(span.section);
+						}
+						break;
+					}
+				}
+			}
+		}
+		found.sort();
+		index.set(node.key, found);
+	}
+	return index;
+});
 
 async function load() {
 	status.value = "loading";
 	errorText.value = "";
 	try {
-		// 三个 feed 一起取：它们描述同一个世界的三层（轨/节点、灯、道岔），分开 await 只会让画面出现半份数据
-		const [topology, lamps, switches] = await Promise.all([fetchTopology(), fetchSignals(), fetchPoints()]);
+		// 四个 feed 一起取：它们描述同一个世界的四层（轨/节点、灯、道岔、区间），分开 await 只会让画面出现半份数据
+		const [topology, lamps, switches, sectionFeed] = await Promise.all([
+			fetchTopology(),
+			fetchSignals(),
+			fetchPoints(),
+			fetchSections(),
+		]);
 		nodes.value = topology.nodes;
 		rails.value = topology.rails;
 		signals.value = lamps;
 		points.value = switches;
+		sections.value = sectionFeed.sections;
 		status.value = "ready";
 	} catch (error) {
 		status.value = "error";
@@ -220,6 +284,24 @@ const displayPoints = computed(() => {
 		out.push(list.find(point => point.isStemRow) ?? list[0]!);
 	}
 	return out;
+});
+
+/**
+ * 交给画布的节点：**带上"覆盖它的区间"**。
+ *
+ * <p>为什么要在这里重建实体：区间索引是从 `mmtr-sections` 推出来的，而节点是在 `fetchTopology()`
+ * 里造的（那时还没有区间数据）。重建一次（137 个节点）比让 `Node` 变成可变对象干净得多 ——
+ * 实体一旦可变，"这份节点的区间是哪一次取的"就说不清了。</p>
+ */
+const displayNodes = computed(() => {
+	const index = sectionIndex.value;
+	return nodes.value.map(node => new Node({
+		x: node.x,
+		y: node.y,
+		z: node.z,
+		degree: node.degree,
+		neighbors: node.neighbours.map(neighbour => ({x: neighbour.x, y: neighbour.y, z: neighbour.z, rail: neighbour.rail})),
+	}, index));
 });
 
 /** 轨 hex → 两端坐标（画"这一位接的是哪条轨"用：用户读坐标，不读 hex）。 */
@@ -496,12 +578,16 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 		case "block":
 			detail.value = {
 				open: true,
-				title: `节点 ${node.coords} · 所属区间`,
+				title: `节点 ${node.coords} · 覆盖它的区间`,
 				text: [
-					`区间 id：${node.block || "（引擎未给出）"}`,
-					`类型：${node.isUnguardedBlock ? "无灯区间（无人看守）" : "有灯区间"}`,
+					node.sections.length === 0
+						? "区间：无（这一段没有灯照到）"
+						: `区间（${node.sections.length} 个）：\n${node.sections.map(section => `  · ${section}`).join("\n")}`,
+					node.isMultiSection
+						? "说明：**多个区间覆盖同一个节点是正常的** —— 区间按行车方向划分，双向线路上同一根轨的南行、北行各有一个区间。"
+						: "说明：这个节点只被一个方向的区间覆盖。",
 					"",
-					"（下一步接 blocks 诊断输出：届时这里显示该节点所属区间的出口信号灯与占用状态。）",
+					"（区间层按方向画成两条带：南行/北行各一条。要看某条区间的入口灯、出口灯与占用，看画面上的色带或 `query sections` 指令。）",
 				].join("\n"),
 			};
 			break;
@@ -530,11 +616,12 @@ async function onAction({node, action}: {node: Node; action: string}) {	switch (
 	<div class="wrap">
 		<MapCanvas
 			ref="canvas"
-			:nodes="nodes"
+			:nodes="displayNodes"
 			:rails="rails"
 			:signals="signals"
 			:points="displayPoints"
 			:rail-ends="railEndsByHex"
+			:sections="sections"
 			@action="onAction"
 			@camera="onCamera"
 			@shapes="shapeCount = $event"
