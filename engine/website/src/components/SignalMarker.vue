@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import {computed} from "vue";
+import {computed, inject} from "vue";
 import type {Signal} from "@/domain/Signal";
+import {ICON_SCALE} from "@/views/mapContext";
 
 /*
  * 一个信号灯（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -8,8 +9,12 @@ import type {Signal} from "@/domain/Signal";
  * <p>显示三件事：**状态**（颜色）、**方向**（箭头 `^`）、**在哪**（位置由调用方给）。
  * 方向和状态都是引擎给的（`Signal.angle` / `Signal.state`），这里只做映射。</p>
  *
- * <p>为什么用 HTML 而不是 SVG：和节点层同一理由。信号灯是"地图标注"，大小固定、永远清晰，
- * 缩放只改它落在哪里。放进 SVG 就要再面对一次 viewBox 缩放（旧版踩过，见 camera.ts）。</p>
+ * <p>为什么用 HTML 而不是 SVG：和节点层同一理由。信号灯是"地图标注"，放进 SVG 就要再面对一次
+ * viewBox 缩放（旧版踩过，见 camera.ts）。</p>
+ *
+ * <p><b>图标尺寸随缩放一起缩</b>（用户 2026-09-15 报的问题）：图标原本是固定 20 px 的屏幕像素，
+ * 位置随相机走而尺寸不变 —— 把地图缩小、站场全览时，几十盏灯相对世界越来越大，挤成一片把轨与区间
+ * 都遮住。现在按 {@link ICON_SCALE}（画布注入）缩放，下限保证还点得中。</p>
  */
 
 const props = defineProps<{
@@ -20,6 +25,15 @@ const props = defineProps<{
 	/** 正在改这盏灯的绑定（点选绑定）：加一圈强调环。 */
 	selected?: boolean;
 }>();
+
+/**
+ * 图标缩放比（画布注入；拿不到时按 1 = 不缩）。
+ *
+ * <p>缩放与位移写在**同一个 transform** 里：CSS 的两个分开放会互相覆盖，
+ * 而 `translate(...) scale(...)` 的顺序保证"先定位、再以自身中心为原点缩放"。</p>
+ */
+const iconScale = computed(() => inject(ICON_SCALE, undefined)?.value ?? 1);
+
 
 const emit = defineEmits<{
 	(e: "hover", key: string): void;
@@ -65,7 +79,8 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		class="signal"
 		:class="{hovered, selected}"
 		:data-key="signal.key"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
+		:data-icon-scale="iconScale"
+		:style="{transform: `translate(${screen.x}px, ${screen.y}px) scale(${iconScale})`}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="emit('pick', signal.key)"

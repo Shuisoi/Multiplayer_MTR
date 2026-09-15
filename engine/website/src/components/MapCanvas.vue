@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, provide, ref, useTemplateRef, watch} from "vue";import {useCameraView} from "@/composables/useCameraView";
-import {boundsOf} from "@/domain/camera";
+import {boundsOf, iconScale} from "@/domain/camera";
 import type {Camera} from "@/domain/camera";
 import type {Node} from "@/domain/Node";
 import type {Rail} from "@/domain/Rail";
@@ -9,7 +9,7 @@ import type {Point} from "@/domain/Point";
 import type {Section} from "@/domain/Section";
 import type {Rail as RailEntity} from "@/domain/Rail";
 import type {StraightLookup} from "@/domain/railPath";
-import {CAMERA} from "@/views/mapContext";
+import {CAMERA, ICON_SCALE} from "@/views/mapContext";
 import RailLayer from "./RailLayer.vue";
 import SectionLayer from "./SectionLayer.vue";
 import NodeLayer from "./NodeLayer.vue";
@@ -107,6 +107,11 @@ const content = computed(() => boundsOf([
 
 const view = useCameraView({host, camera, content});
 provide(CAMERA, camera);
+/**
+ * 图标缩放比：随"相对取景基准的倍率"缩（全览时图标也跟着小下去），下限见 `ICON_MIN_SCALE`。
+ * 上限 1 = 放大时图标不变大（免得挡住轨道与区间带）。详见 `domain/camera.ts#iconScale`。
+ */
+provide(ICON_SCALE, computed(() => iconScale(view.zoomRatio.value)));
 
 /** 悬停中的节点 key（信息卡）。 */
 const hoveredKey = ref("");

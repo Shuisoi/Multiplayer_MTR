@@ -78,6 +78,33 @@ export function zoomRatio(camera: Camera, baseScale: number): number {
 }
 
 /**
+ * 图标（信号灯 / 道岔菱形）随缩放的比例。
+ *
+ * <h3>为什么图标要跟着缩放</h3>
+ * <p>图标是**屏幕像素**画出来的（灯 20 px、菱形 23 px），位置随相机走、尺寸却不变。于是把地图缩小
+ * （或全览）时，图标相对世界越来越大 —— 站场里几十盏灯挤成一片、把轨和区间全遮住
+ * （用户 2026-09-15："信号灯和道岔的图标在缩小时不会一起跟着缩小"）。</p>
+ *
+ * <h3>为什么要有下限</h3>
+ * <p>完全按比例缩会在全览时把图标缩成几个像素、点都点不中。所以取
+ * {@code max(floor, ratio^damping)}：上限 1（放大时图标不变大，免得挡住轨道），
+ * 下限 {@link ICON_MIN_SCALE}（缩小时不至于消失）。</p>
+ *
+ * @param ratio {@link zoomRatio} 的结果（1 = 正好取景）
+ */
+export function iconScale(ratio: number): number {
+	if (!(ratio > 0)) {
+		return 1;
+	}
+	// 阻尼：比线性缩放温和一点，缩小到 1/10 时图标约缩到 1/3
+	const damped = Math.pow(ratio, 0.55);
+	return clamp(damped, ICON_MIN_SCALE, 1);
+}
+
+/** 图标能缩到的最小比例（再小就点不中了）。 */
+export const ICON_MIN_SCALE = 0.34;
+
+/**
  * 取景：让整个内容框完整落进视口，四周留白，并居中。
  *
  * <p>这就是"世界→屏幕"的初始化，也是唯一一处把内容尺寸和视口尺寸放在一起算的地方。

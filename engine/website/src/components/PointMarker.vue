@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import {computed} from "vue";
+import {computed, inject} from "vue";
 import type {Point} from "@/domain/Point";
+import {ICON_SCALE} from "@/views/mapContext";
 
 /*
  * 一个道岔（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -11,7 +12,18 @@ import type {Point} from "@/domain/Point";
  *
  * <p>为什么默认就画得这么显眼：道岔是**唯一需要人管**的东西（灯是自动出颜色的，道岔要有人定开通位）。
  * 世界里有四十来个道岔，藏在小圆点里就等于没有。</p>
+ *
+ * <p><b>图标尺寸随缩放一起缩</b>（用户 2026-09-15）：菱形与引线原本是固定 23/34 px 的屏幕像素，
+ * 地图缩小、站场全览时它们相对世界越来越大，四十来个道岔挤成一片。现在按 {@link ICON_SCALE} 缩放。</p>
  */
+
+/**
+ * 图标缩放比（画布注入；拿不到时按 1 = 不缩）。
+ *
+ * <p>与位移写在**同一个 transform** 里：`translate(...) scale(...)` 保证"先定位、再以自身中心缩放"。
+ * 分开写两个 transform 会互相覆盖。</p>
+ */
+const iconScale = computed(() => inject(ICON_SCALE, undefined)?.value ?? 1);
 
 const props = defineProps<{
 	point: Point;
@@ -125,7 +137,8 @@ const facts = computed(() => [
 		class="point"
 		:class="{hovered, expanded, selected, 'is-default': isDefault, locked: point.locked}"
 		:data-key="point.key"
-		:style="{transform: `translate(${screen.x}px, ${screen.y}px)`}"
+		:data-icon-scale="iconScale"
+		:style="{transform: `translate(${screen.x}px, ${screen.y}px) scale(${iconScale})`}"
 		@pointerenter="emit('hover', point.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="onPointerDown"
