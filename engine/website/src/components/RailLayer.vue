@@ -3,7 +3,6 @@ import {computed, ref, watch} from "vue";
 import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
 import {buildStraightDirections, railScreenPath, straightLookup} from "@/domain/railPath";
-import {speedBandColor} from "@/domain/railColors";
 
 /*
  * 轨道层：把引擎给的每条轨画出来（SVG，**屏幕坐标**）。
@@ -75,33 +74,13 @@ function onRailPick(hex: string, bound: boolean) {
 	}
 }
 
-/**
- * 限速 → 颜色（速度越高越亮）。高限速干线在暗底上自然浮起来。
+/*
+ * 限速不再参与画法（用户 2026-09-15 定的规格：路线图 = 4 px 纯白线）。
  *
- * <p><b>这是"轨道画成什么颜色"的唯一真源</b>：区间层直接把色带颜色从这里取（见
- * `domain/railColors.ts` 与用户 2026-09-15 的要求"区间颜色从 web 生成的线派生，别独立生成"）。
- * 所以改这几个色值会同时改变轨道层与区间层 —— 它们本来就该是同一个颜色。</p>
+ * 旧版按限速分 5 个灰阶 + 5 档线宽。取消的理由：路线图要回答的是**结构**（有哪些轨、怎么连），
+ * 而暗底上的 5 个相近灰阶既没把结构说清楚，又把"颜色"这个通道占住了 —— 颜色现在留给区间层与状态
+ * （绑定绿、候选虚线、道岔琥珀、悬停/选中）。样式全部在 <style> 里按类给，不再走内联。
  */
-function speedColor(speed: number): string {
-	return speedBandColor(speed);
-}
-
-/** 限速 → 线宽（屏幕像素）。 */
-function speedWidth(speed: number): number {
-	if (speed >= 300) {
-		return 2.4;
-	}
-	if (speed >= 200) {
-		return 2.1;
-	}
-	if (speed >= 160) {
-		return 1.8;
-	}
-	if (speed >= 80) {
-		return 1.5;
-	}
-	return 1.3;
-}
 
 /** 轨的第 n 个端点对应的节点 key（引擎的节点键就是 `x,y,z`）。 */
 function endpointKey(rail: Rail, index: 1 | 2): string {
@@ -117,15 +96,13 @@ function endpointKey(rail: Rail, index: 1 | 2): string {
  */
 const straightDirections = computed(() => buildStraightDirections(props.rails));
 
-/** 一条轨画出来需要的全部信息（屏幕坐标 + 线型 + 样式）。 */
+/** 一条轨画出来需要的全部信息（屏幕坐标 + 线型 + 状态）。样式（颜色/线宽）一律由 <style> 按类给。 */
 const drawn = computed(() => {
 	const result: {
 		hex: string;
 		d: string;
 		/** 这条轨**实际**画成了曲线（path 里带 C）。斜向轨也可能因为真实轨道共线而画成直线。 */
 		isCurve: boolean;
-		color: string;
-		width: number;
 		highlight: "none" | "hover" | "select" | "bound" | "candidate" | "connected";
 	}[] = [];
 
@@ -178,14 +155,18 @@ const drawn = computed(() => {
 			 * 否则"读数 41、实际 40"这种差异会一直误导排查（实测被它带偏过一轮）。
 			 */
 			isCurve: path.includes("C"),
-			color: speedColor(rail.speedLimitKmh),
-			width: speedWidth(rail.speedLimitKmh),
 			highlight,
 		});
 	}
 
-	// 慢的轨先画、快的后画：交叉处"更重要的轨"压在上面，视觉层级自然。
-	return result.sort((left, right) => left.width - right.width);
+	/*
+	 * 画序：**有状态的轨后画**（压在纯白本体之上），因为它们的颜色/线宽是覆盖上去的，
+	 * 被后面画的普通轨盖住就看不见了。同类之间保持稳定顺序（hex），避免每次重算都抖。
+	 */
+	return result.sort((left, right) => {
+		const rank = (item: {highlight: string}) => (item.highlight === "none" ? 0 : 1);
+		return rank(left) - rank(right) || left.hex.localeCompare(right.hex);
+	});
 });
 
 /** 实际画出来的直线 / 曲线条数，上报给 HUD。 */
@@ -217,8 +198,6 @@ watch(drawn, items => {
 			:class="[item.highlight, {pickable: pickable && (item.highlight === 'candidate' || item.highlight === 'bound')}]"
 			:data-hex="item.hex"
 			:d="item.d"
-			:stroke="item.highlight === 'none' ? item.color : undefined"
-			:stroke-width="item.highlight === 'none' ? item.width : item.width + 0.6"
 			@pointerenter="hoveredRail = item.hex"
 			@pointerleave="hoveredRail = ''"
 			@pointerdown.stop="onRailPick(item.hex, item.highlight === 'bound')"
@@ -242,23 +221,36 @@ watch(drawn, items => {
 
 <style scoped>
 /*
- * 护套：比本体宽约 3px 的暗色描边。颜色用纯黑而不是半透明——底也是黑的，
- * 等于在两条轨之间"抠"出一条缝隙，比半透明更容易看清。
+ * ============================ 路线图（本层）的样式 ============================
+ *
+ * 用户 2026-09-15 定的规格：**路线图 = 4 px 纯白线**。
+ *
+ * <p>为什么用纯白而不是按限速分色：路线图回答的是"世界上有哪些轨、怎么连"，
+ * 那是**结构**问题；限速分色（旧版的 5 个灰阶）在暗底上彼此只差一点，
+ * 既没表达清楚结构，又把"颜色"这个通道占掉了 —— 而颜色现在要留给区间层与各种状态
+ * （绑定绿、候选虚线、道岔琥珀、悬停/选中）。白线把结构画到最清楚，状态再在它上面叠。</p>
+ *
+ * <p>护套（shadow）宽度跟着本体一起定：本体 4 px，护套要比它宽出**足够的一圈**，
+ * 否则相邻股道会连成一片。这里取 4 + 2×1.6 = 7.2 px（每侧留 1.6 px 的暗缝）。</p>
  */
+
+/* 护套：比本体宽一圈的纯黑描边。底也是黑的，等于在两条轨之间"抠"出一条缝。 */
 .shadow {
 	fill: none;
 	stroke: #000000;
-	stroke-width: 4.4;
+	stroke-width: 7.2;
 	stroke-linecap: round;
 }
 
+/* 本体：**4 px 纯白**（用户规格）。所有状态在下面按类覆盖。 */
 .rail {
 	fill: none;
-	stroke-width: 1.6;
+	stroke: #ffffff;
+	stroke-width: 4;
 	stroke-linecap: round;
 }
 
-/* 与悬停节点相连的轨：加亮 */
+/* 与悬停节点相连的轨：略暗一点（白线已经最亮，只能往"不那么亮"调） */
 .rail.hover {
 	stroke: #c8c8c8;
 }
@@ -273,7 +265,7 @@ watch(drawn, items => {
  */
 .rail.bound {
 	stroke: #22c55e;
-	stroke-width: 3.2;
+	stroke-width: 4;
 }
 
 /*
@@ -282,16 +274,15 @@ watch(drawn, items => {
  */
 .rail.candidate {
 	stroke: var(--accent);
-	stroke-width: 2.4;
+	stroke-width: 4;
 	stroke-dasharray: 6 4;
 }
 
 /*
- * 选中道岔**当前开通**的那条腿：琥珀实线 + 加宽 + 发光。
+ * 选中道岔**当前开通**的那条腿：琥珀实线 + 发光。
  *
  * <p>用道岔自己的琥珀色（与菱形同色）而不是别的强调色：读起来就是"这条轨归那个道岔管"。
- * 发光（drop-shadow）是为了在密集站场里也能一眼找到 —— 世界图里几十条轨挤在一起，
- * 只靠颜色深浅分不出来。</p>
+ * 发光（drop-shadow）是为了在密集站场里也能一眼找到。</p>
  */
 .rail.connected {
 	stroke: #f59e0b;
