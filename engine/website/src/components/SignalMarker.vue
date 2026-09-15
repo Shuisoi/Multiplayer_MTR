@@ -2,18 +2,29 @@
 import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
 import type {Camera} from "@/domain/camera";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled, signalDecalOffset} from "@/domain/mapElements";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, scaled, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
 import {useZoomRatio} from "@/views/mapContext";
 
 /*
  * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
  *
- * <p>三件事：**状态**（颜色）、**方向**（箭头 `^`）、**在哪**（由本组件按统一模型算）。</p>
+ * ============================ 这一版是整个重画的 ============================
  *
- * <p><b>尺寸与偏移都是"规格值 × 当前倍率"</b>（用户 2026-09-15 定的口径："所谓的 8 px 是缩放为 6×
- * 的时候大小是 8 px，这个应该跟随缩放变换大小 —— 可以理解成是摄像机在移动，地图大小和位置关系不动"）。
- * 所以 6× 时图标 8 px、偏移 10 px；推近到 12× 就是 16 px / 20 px；拉远到 3× 就是 4 px / 5 px。
- * 规格与换算都在 `domain/mapElements.ts`，组件不再自己定任何像素值。</p>
+ * 用户 2026-09-15 连着提了三次，前两版的错法各不相同，所以这次不是再挪一下位置，
+ * 而是**把整盏灯画成一个整体、再整体放置**：
+ *
+ *   ① "信号灯图标的点和方向指示位置需要**错开一些**" —— 原来两个图形是两个绝对定位的元素，
+ *      各自算各自的位置，中心重合（折角尖的可见外缘离中心只 1.68 px，而灯点半径 2 px）；
+ *   ② "**现在距离又太大了**" —— 改成"箭头前移 12 + 灯点后退 8"（轴距 20 px）后离得太远；
+ *   ③ "**现在箭头又一左一右了**" —— 再改成"侧向 14 px"后，位移跟着朝向转，于是南行灯在左、
+ *      北行灯在右。**根因是位移挂在"管辖方向"那个会转的坐标系上**。
+ *
+ * 所以现在：
+ *   · **一个 `<svg>`**（viewBox 固定 `0 0 20 26`）里同时画灯点与折角 —— 内部几何是常量，
+ *     只有一处可以出错，而那一处有单测钉住（`signal-overlap.test.ts`）；
+ *   · **只做一次放置**：位移 = 世界坐标 → 屏幕 + 灯位偏移（`signalSideOffset`），
+ *     旋转 = 管辖方向。**位移不随朝向变**（整盏灯一起转），所以不会一左一右；
+ *   · 折角画在灯点**正上方**（同一组里一起转），箭头指向 = 管辖方向。
  */
 
 const props = defineProps<{
@@ -26,47 +37,52 @@ const props = defineProps<{
 }>();
 
 /**
- * 这个贴片的一切尺寸/位置都由 `domain/mapElements.ts` 决定（**唯一真源**）。
+ * 贴片规格（**唯一真源** `domain/mapElements.ts`）。
  *
- * <p>组件里不再出现"这几个像素是我算的"这类判断 —— 那正是以前每加一种元素就要重写一遍、
- * 并且写出"缩放时相对节点滑走"那类缺陷的原因。</p>
+ * <p>用户口径："所谓的 8 px 是缩放为 6× 的时候大小是 8 px，这个应该跟随缩放变换大小 ——
+ * 可以理解为摄像机在移动，地图大小和位置关系不动"。所以 6× 时图标 8 px；推近到 12× 是 16 px；
+ * 拉远到 3× 是 4 px。组件里不再出现任何写死的像素值。</p>
  */
-/** 缩放倍率（画布注入；拿不到按 1 算）。 */
 const zoomRatio = useZoomRatio();
 
-/** 图标与灯点的**当前**屏幕尺寸 = 规格值 × 倍率换算（6× 时正好是规格值）。 */
+/** 图标宽度（= viewBox 宽 20 单位的换算基准）。 */
 const iconPx = computed(() => scaled(DECAL_KINDS.icon, zoomRatio.value));
-const lampDotPx = computed(() => scaled(DECAL_KINDS.lampDot, zoomRatio.value));
-const lampDotHalf = computed(() => lampDotPx.value / 2);
+/** 整个 SVG 的高度：viewBox 是 20×26，所以高度按同一个比例走。 */
+const boxHeightPx = computed(() => iconPx.value * (DECAL_KINDS.signalUnit.boxHeight / DECAL_KINDS.signalUnit.boxWidth));
+/** 灯点在 viewBox 里的位置（世界坐标就落在它上面，也是旋转中心）。 */
+const anchor = signalUnitAnchor();
+/** 折角的线心折线：**与单测同一份几何**（`signalUnitChevronPath`），不许在模板里另写一遍。 */
+const chevronPath = signalUnitChevronPath();
+/**
+ * 整盏灯相对锚点的偏移：让**灯点**落在锚点上（灯点不在 SVG 盒子的正中心，
+ * 因为折角要画在它上方，所以整盒要按灯点在盒子里的比例往左上让）。
+ */
+const boxOffsetPercent = {
+	x: (anchor.x / DECAL_KINDS.signalUnit.boxWidth) * 100,
+	y: (anchor.y / DECAL_KINDS.signalUnit.boxHeight) * 100,
+};
 
 /**
- * 相对锚点的偏移：方向 = **管辖方向**，距离 = 规格值 × 倍率（所以它跟地图一起变，不是屏幕 HUD）。
+ * 灯位偏移：**只表示"灯在轨道的哪一侧"**，方向来自世界语义（司机的左手侧），距离 = 规格 × 倍率。
  *
- * <p>为什么沿管辖方向而不是横向（旧的 `sideOffsetDirection`）：整盏灯现在是**两个位置** ——
- * 灯点在后、方向箭头在前（用户 2026-09-15："信号灯图标的点和方向指示位置需要错开一些"），
- * 于是"锚点"应当落在**这一对的中段**。沿管辖方向偏移时，两个位置正好分列锚点前后，
- * 顺管辖方向看是"灯点 → 箭头"，与"信号机立在它所管区间的人口处、司机迎着它开"同向。</p>
+ * <p>它**不**参与"灯点与折角的错开" —— 那件事在 SVG 内部就做完了（见上）。</p>
  */
 const offsetPx = computed(() => pixelOffset(
-	props.signal.bearingDirection,
+	props.signal.sideOffsetDirection,
 	scaled(DECAL_KINDS.signalSideOffset, zoomRatio.value),
 ));
 
-/** 元素锚点：灯的世界坐标 → 屏幕 + 偏移。 */
-const placement = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value));
-
-/** 外层的位移。 */
-const rootTransform = computed(() => decalTransform(placement.value));
-
 /**
- * **灯点与方向箭头各自相对锚点的位移**（一处算、两处用；判据见 `signal-overlap.test.ts`）。
+ * 整盏灯的放置：世界坐标 → 屏幕 + 灯位偏移，然后绕**灯点**把整组旋转到管辖方向。
  *
- * <p>为什么两个都由 `signalDecalOffset` 给：用户 2026-09-15 要求"信号灯图标的点和方向指示位置
- * 需要错开一些"，而"错开"这件事只有在**同一个坐标系**里才量得准 —— 组件算一点、测试再算一遍，
- * 两边必然各漂各的。两个量都乘同一个倍率，所以错开比例在任何缩放下不变（不会推近了又粘上）。</p>
+ * <p>顺序很关键：`translate(placement)` 把原点搬到灯点、`rotate(...)` 绕它转、
+ * 最后 `translate(-anchor)` 把 SVG 盒子挪回来（让灯点落在那个原点上而不是盒子左上角）。
+ * 于是"灯点落在世界坐标上"与朝向无关，八个朝向都一样。</p>
  */
-const decalOffset = computed(() => signalDecalOffset(props.signal.angle, zoomRatio.value));
-
+const rootTransform = computed(() => {
+	const placement = decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value);
+	return `${decalTransform(placement, props.signal.arrowRotation)} translate(${-anchor.x} ${-anchor.y})`;
+});
 
 const emit = defineEmits<{
 	(e: "hover", key: string): void;
@@ -77,7 +93,7 @@ const emit = defineEmits<{
 	(e: "why", signal: Signal): void;
 }>();
 
-/** 状态 → 颜色。与 C# 端那套一致：红/黄/绿用高饱和，未接入用灰。 */
+/** 状态 → 颜色。与引擎那套一致：红/黄/绿用高饱和，未接入用灰。 */
 const stateColor = computed(() => {
 	switch (props.signal.state) {
 		case "red":
@@ -112,35 +128,54 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		class="signal"
 		:class="{hovered, selected}"
 		:data-key="signal.key"
-		:data-side-offset="`${Math.round(offsetPx.x)},${Math.round(offsetPx.y)}`"
+		:data-zoom-ratio="zoomRatio"
 		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="emit('pick', signal.key)"
 	>
 		<!--
-			方向：一个 `^` 形状的折角符号，按朝向角旋转（基准朝上 = 北）。
-
-			用 SVG 画折角（而不是文字 `^`）：形状一样，但线条长度/粗细/描边都可控 ——
-			实测字号下 DIN 的 `^` 字形只占元素框顶部一点点，旋转后被灯点盖住，等于看不见。
-
-			**位置由 `signalDecalOffset` 给**：沿管辖方向前移，所以折角不再压在灯点上
-			（用户 2026-09-15："信号灯图标的点和方向指示位置需要错开一些"）。
-			尺寸 = 图标直径（8 px），与道岔菱形同一个大小；viewBox 不变，所以笔画比例也不变。
+			整盏灯就这一个 SVG：灯点（状态色圆点）+ 折角（指向管辖方向）。
+			内部几何是常量（viewBox 0 0 20 26，1 px = 2.5 单位 @6×），
+			所以不存在"两个图形各自算位置、算着算着粘上/跑远/换边"这件事。
 		-->
 		<svg
-			class="arrow"
-			:style="{transform: `translate(-50%, -50%) translate(${decalOffset.arrow.x}px, ${decalOffset.arrow.y}px) rotate(${signal.arrowRotation}deg)`, color: stateColor}"
+			class="unit"
 			:width="iconPx"
-			:height="iconPx"
-			viewBox="0 0 20 20"
+			:height="boxHeightPx"
+			:viewBox="`0 0 ${DECAL_KINDS.signalUnit.boxWidth} ${DECAL_KINDS.signalUnit.boxHeight}`"
+			:style="{'--anchor-x': `${boxOffsetPercent.x}%`, '--anchor-y': `${boxOffsetPercent.y}%`}"
 		>
-			<!-- 先描一条比底色暗的粗线做"描边"，再画本色：暗底上任何颜色都能看清 -->
-			<path d="M 3 15 L 10 4 L 17 15" fill="none" stroke="#000000" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-			<path d="M 3 15 L 10 4 L 17 15" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+			<!--
+				折角：一个 `^`，尖朝组的上方。整组会被旋转到管辖方向，所以它指向管辖方向。
+				路径与笔画宽都来自 `DECAL_KINDS.signalUnit`（与单测同一份几何）。
+			-->
+			<path
+				class="chevron-outline"
+				:d="chevronPath"
+				:stroke-width="DECAL_KINDS.signalUnit.chevronOutline"
+				fill="none"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			/>
+			<path
+				class="chevron"
+				:d="chevronPath"
+				:stroke="stateColor"
+				:stroke-width="DECAL_KINDS.signalUnit.chevronStroke"
+				fill="none"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			/>
+			<!-- 灯点：圆心就是"信号机立在哪"（锚点），所以它在世界坐标上、不随旋转移动 -->
+			<circle
+				class="lamp"
+				:cx="anchor.x"
+				:cy="anchor.y"
+				:r="DECAL_KINDS.signalUnit.lampRadius"
+				:fill="stateColor"
+			/>
 		</svg>
-		<!-- 灯位：一个小圆点，颜色 = 状态。位置同样来自模型（沿管辖方向退到箭头后面）。 -->
-		<div class="lamp" :style="{background: stateColor, '--dot-x': `${decalOffset.dot.x}px`, '--dot-y': `${decalOffset.dot.y}px`}"/>
 
 		<div v-if="hovered" class="card">
 			<div class="card-head">
@@ -182,8 +217,8 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 
 <style scoped>
 /*
- * 零尺寸锚点放在信号灯中心：`translate()` 的数值就是中心，不用为元素自身尺寸做补偿
- * （那类补偿是上一版反复算错的地方之一）。
+ * 零尺寸锚点放在信号灯**灯点**的屏幕位置上：`transform` 里的位移就是灯点的位置
+ * （世界坐标 + 灯位偏移），旋转也绕它发生。
  */
 .signal {
 	position: absolute;
@@ -192,82 +227,47 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	width: 0;
 	height: 0;
 	pointer-events: auto;
-	cursor: default;
-}
-
-/*
- * 方向符号 `^`（SVG 画的折角）。
- *
- * <p>transform 有三件事，顺序不能换：`translate(-50%, -50%)` 把 SVG 的**中心**对到锚点，
- * 第二个 translate 把箭头沿管辖方向挪开（见 `signalArrowOffset`），最后才旋转。
- * 先旋转再平移的话，位移会跟着一起转 —— 那正是"越调越歪"的来源。
- * 旋转中心是元素中心（`transform-origin: 50% 50%`），所以折角绕自己的中心转、指向管辖方向。</p>
- */
-.arrow {
-	position: absolute;
-	left: 0;
-	top: 0;
-	/*
-	 * 箭头**不再画在灯点正中**：灯点是"状态在哪"，箭头是"管哪边"，两者各占一处。
-	 *
-	 * <p>历史上两者在同一个锚点上，折角的尖正好戳进灯点（用户 2026-09-15 报"需要错开一些"）。
-	 * 位移量来自规格表（前移 8 px + 横向 3 px @6×），并**乘同一个倍率**，
-	 * 所以拉远推近时这个错开比例不变 —— 不会出现"推近了又粘在一起"。</p>
-	 */
-	transform-origin: 50% 50%;
-	pointer-events: none;
-	filter: drop-shadow(0 0 1.5px #000000);
-}
-
-/*
- * 灯位圆点：尺寸与位置都来自规格表 **再乘当前倍率**（`DECAL_KINDS.lampDot` = 4 px @6×），
- * 所以 CSS 里不写死数字。
- *
- * <p>位置还要再加一层位移（`--dot-x/--dot-y`）：它沿管辖方向**退到方向箭头后面**
- * （用户 2026-09-15："信号灯图标的点和方向指示位置需要错开一些"）。两个位移来自
- * `domain/mapElements.ts#signalDecalOffset`，与箭头用的是同一个函数 —— 判据见 `signal-overlap.test.ts`。</p>
- *
- * <p>它必须比方向箭头小一圈 —— 两者现在已经错开（见 `signalDecalOffset`），但箭头仍可能扫过灯点附近，
- * 圆点大了就会把"方向"这件事重新压掉。</p>
- */
-.lamp {
-	position: absolute;
-	/* 半径也做成变量：下面描边/发光的宽度由它派生，于是它们随倍率一起缩放。 */
-	--lamp-r: v-bind('`${lampDotHalf}px`');
-	left: calc(var(--dot-x, 0px) - var(--lamp-r));
-	top: calc(var(--dot-y, 0px) - var(--lamp-r));
-	width: v-bind('`${lampDotPx}px`');
-	height: v-bind('`${lampDotPx}px`');
-	border-radius: 50%;
-	box-shadow: 0 0 0 calc(var(--lamp-r) * 0.25) #000000, 0 0 calc(var(--lamp-r) * 1.25) currentColor;
-}
-
-.signal.hovered .lamp {
-	box-shadow: 0 0 0 calc(var(--lamp-r) * 0.25) #000000, 0 0 0 calc(var(--lamp-r) * 0.63) rgba(255, 255, 255, 0.45);
-}
-
-/* 正在改绑定的灯：加一圈强调色环（比悬停更醒目，且不会因为指针离开而消失） */
-.signal.selected .lamp {
-	box-shadow: 0 0 0 calc(var(--lamp-r) * 0.25) #000000, 0 0 0 calc(var(--lamp-r) * 0.63) var(--accent), 0 0 calc(var(--lamp-r) * 2.5) var(--accent);
-}
-
-.signal {
 	cursor: pointer;
 }
 
-/* 守轨列表：等宽小字，一行一条 */
-.guarded {	margin: 6px 0 0;
-	padding: 6px 0 0;
-	border-top: 1px solid var(--hairline);
-	list-style: none;
-	font-family: var(--font-value);
-	font-size: 11px;
-	color: var(--accent);
+/*
+ * 整盏灯。它相对锚点是**负偏移**（`left/top` 由模板按灯点在 viewBox 里的位置给），
+ * 于是"灯点"正好落在锚点上 —— 这是"灯点 = 世界坐标"这条规格的实现方式。
+ *
+ * 命中区就是整个盒子（含折角），因为折角也是这盏灯的一部分；它比原来的 4 px 圆点大一圈，
+ * 反而更好点。
+ */
+.unit {
+	position: absolute;
+	/* 整盒往左上让，使**灯点**（而不是盒子中心）落在锚点上 */
+	left: calc(var(--anchor-x) * -1);
+	top: calc(var(--anchor-y) * -1);
+	overflow: visible;
+	filter: drop-shadow(0 0 1.5px #000000);
 }
 
-/*
- * 信息卡：C# 端的"假玻璃"深色卡片。定位在灯的右下方，避免盖住箭头。
- */
+/* 折角的黑色描边：比本色笔画宽一圈，暗底上做"描边"用（宽度由模板按规格给） */
+.chevron-outline {
+	stroke: #000000;
+}
+
+/* 灯点：没有描边、没有发光 —— 位置就是它的语义（"信号机立在哪"），不要用装饰把它画大 */
+.lamp {
+	stroke: none;
+}
+
+/* 悬停 / 选中：给灯点加一圈环（比 hover 更醒目，且不随指针离开消失） */
+.signal.hovered .lamp {
+	stroke: rgba(255, 255, 255, 0.45);
+	stroke-width: 1.6;
+}
+
+.signal.selected .lamp {
+	stroke: var(--accent);
+	stroke-width: 1.6;
+}
+
+/* 信息卡：C# 端的"假玻璃"深色卡片。定位在灯的右下方，避免盖住折角。 */
 .card {
 	position: absolute;
 	left: 12px;
@@ -337,6 +337,17 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	font-family: var(--font-value);
 }
 
+/* 守轨列表：等宽小字，一行一条 */
+.guarded {
+	margin: 6px 0 0;
+	padding: 6px 0 0;
+	border-top: 1px solid var(--hairline);
+	list-style: none;
+	font-family: var(--font-value);
+	font-size: 11px;
+	color: var(--accent);
+}
+
 /* 卡片底部的两个动作（复制坐标 / 送进指令栏）：小按钮，鼠标移上去才显眼 */
 .card-actions {
 	display: flex;
@@ -362,6 +373,3 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	border-color: var(--accent);
 }
 </style>
-
-
-
