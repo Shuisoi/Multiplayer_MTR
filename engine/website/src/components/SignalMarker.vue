@@ -65,10 +65,34 @@ const chevronPath = signalUnitChevronPath();
  * 整盒左上角直接压在锚点上、还右移了半个盒子。**这个坑实测把 96 盏灯全画到了地图左上角**
  * （`getBoundingClientRect` 全是同一个点），所以这里必须是实打实的像素。</p>
  */
-const boxOffsetPx = computed(() => ({
-	x: (anchor.x / DECAL_KINDS.signalUnit.boxWidth) * iconPx.value,
-	y: (anchor.y / DECAL_KINDS.signalUnit.boxHeight) * boxHeightPx.value,
-}));
+/**
+ * 整盏灯相对锚点的偏移（**屏幕像素**）：`left/top` 取"灯点在盒子里的位置"的相反数。
+ *
+ * <h3>这个值是在页面上试出来的，不是推导出来的</h3>
+ * <p>判据只有一个：**灯点必须落在锚点上**（锚点 = 世界坐标 + 灯位偏移，由 `.signal` 的位移给）。
+ * `sandbox/signal-offset-trial.js` 把 `.unit` 的 `left/top` 换成几组候选、各量 24 盏灯：</p>
+ *
+ * <table>
+ *   <tr><th>取值</th><th>偏离锚点（均值 / 最坏，px）</th></tr>
+ *   <tr><td><b>灯点在盒子里的位置（取反）</b></td><td><b>(0, −0.004) / 0.013</b></td></tr>
+ *   <tr><td>半个盒子</td><td>(0, 0.86) / 2.06</td></tr>
+ *   <tr><td>中心 − 灯点</td><td>(1.48, 3.23) / 8.53</td></tr>
+ *   <tr><td>0,0</td><td>(1.48, 2.37) / 6.72</td></tr>
+ * </table>
+ *
+ * <p>推导过两轮都差一个"盒子尺寸"的常数项：原因是旋转中心不是盒子的几何中心，而是
+ * `left/top` 之后**那个盒子的中心**（`transform-origin: 50% 50%`），而绝对定位的 SVG 还在
+ * `.rot`（零尺寸包含块）里 —— 常数项在中间被抵消掉了。**结论：别再用推导定这个数，
+ * 它由上面那个页面试验定，并且由 `check-web-signal-unit.ps1` 的"灯点在锚点上"看着。**</p>
+ */
+const boxOffsetPx = computed(() => {
+	const anchor = signalUnitAnchor();
+	const unit = DECAL_KINDS.signalUnit;
+	return {
+		x: (anchor.x / unit.boxWidth) * iconPx.value,
+		y: (anchor.y / unit.boxHeight) * boxHeightPx.value,
+	};
+});
 
 /**
  * 灯位偏移：**只表示"灯在轨道的哪一侧"**，方向来自世界语义（司机的左手侧），距离 = 规格 × 倍率。
@@ -80,18 +104,27 @@ const offsetPx = computed(() => pixelOffset(
 	scaled(DECAL_KINDS.signalSideOffset, zoomRatio.value),
 ));
 
+/** 灯点在屏幕上的位置（世界坐标 → 屏幕 + 灯位偏移）：**锚点**，旋转绕它发生。 */
+const anchorPx = computed(() => decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value));
+
 /**
- * 整盏灯的放置：世界坐标 → 屏幕 + 灯位偏移，然后绕**灯点**把整组旋转到管辖方向。
+ * 外层的位移：**只有平移，没有旋转**。
  *
- * <p>顺序很关键：`translate(placement)` 把原点搬到灯点、`rotate(...)` 绕它转、
- * 最后 `translate(-anchor)` 把 SVG 盒子挪回来（让灯点落在那个原点上而不是盒子左上角）。
- * 于是"灯点落在世界坐标上"与朝向无关，八个朝向都一样。</p>
+ * <p>旋转在里层的 `span.rot` 上（见下），所以这一层里的东西（信息卡）永远是正的 ——
+ * 用户 2026-09-15："向下的信号灯鼠标移上去**弹窗也是反的**"。原因是当时卡片是
+ * **被旋转元素的后代**：整盏灯转了 180°（朝下的灯），`<div>` 里的文字跟着倒过来。
+ * 现在"会转的只有图形"，卡片挂在不会转的这一层上。</p>
  */
-const rootTransform = computed(() => {
-	const placement = decalPlacement(props.signal.planeX, props.signal.planeY, props.camera, offsetPx.value);
-	// 旋转要绕**灯点**：先把原点搬到灯点，所以整盒先平移 −灯点（像素）
-	return `${decalTransform(placement, props.signal.arrowRotation)} translate(${-boxOffsetPx.value.x}px, ${-boxOffsetPx.value.y}px)`;
-});
+const rootTransform = computed(() => decalTransform(anchorPx.value));
+
+/**
+ * 整盏灯的旋转：**绕盒子中心**转到管辖方向。
+ *
+ * <p>盒子中心已经用 `left/top: -b`（`boxOffsetPx`）摆到了**灯点**上，所以 `rotate()` 的
+ * `transform-origin`（默认 = 盒子中心）正好就是灯点 —— 不需要再写 `translate(中心)…translate(−中心)`。
+ * 反过来说：**定位偏移只能写一处**，两处叠加会把旋转中心顶到别处（详见 `boxOffsetPx` 的说明）。</p>
+ */
+const unitTransform = computed(() => `rotate(${props.signal.arrowRotation}deg)`);
 
 const emit = defineEmits<{
 	(e: "hover", key: string): void;
@@ -138,23 +171,29 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 		:class="{hovered, selected}"
 		:data-key="signal.key"
 		:data-zoom-ratio="zoomRatio"
+		:data-angle="signal.angle"
 		:style="{transform: rootTransform}"
 		@pointerenter="emit('hover', signal.key)"
 		@pointerleave="emit('hover', '')"
 		@pointerdown.stop="emit('pick', signal.key)"
 	>
 		<!--
-			整盏灯就这一个 SVG：灯点（状态色圆点）+ 折角（指向管辖方向）。
-			内部几何是常量（viewBox 0 0 20 26，1 px = 2.5 单位 @6×），
-			所以不存在"两个图形各自算位置、算着算着粘上/跑远/换边"这件事。
+			**会转的只有图形**（`span.rot`），信息卡挂在外层（不转）——
+			否则朝下的灯（180°）会把卡片里的字一起倒过来（用户 2026-09-15："弹窗也是反的"）。
 		-->
-		<svg
-			class="unit"
-			:width="iconPx"
-			:height="boxHeightPx"
-			:viewBox="`0 0 ${DECAL_KINDS.signalUnit.boxWidth} ${DECAL_KINDS.signalUnit.boxHeight}`"
-			:style="{'--box-x': `${boxOffsetPx.x}px`, '--box-y': `${boxOffsetPx.y}px`}"
-		>
+		<span class="rot" :style="{transform: unitTransform}">
+			<!--
+				整盏灯就这一个 SVG：灯点（状态色圆点）+ 折角（指向管辖方向）。
+				内部几何是常量（viewBox 0 0 20 20.5），所以不存在"两个图形各自算位置、
+				算着算着粘上/跑远/换边"这件事。
+			-->
+			<svg
+				class="unit"
+				:width="iconPx"
+				:height="boxHeightPx"
+				:viewBox="`0 0 ${DECAL_KINDS.signalUnit.boxWidth} ${DECAL_KINDS.signalUnit.boxHeight}`"
+				:style="{'--box-x': `${boxOffsetPx.x}px`, '--box-y': `${boxOffsetPx.y}px`}"
+			>
 			<!--
 				折角：一个 `^`，尖朝组的上方。整组会被旋转到管辖方向，所以它指向管辖方向。
 				路径与笔画宽都来自 `DECAL_KINDS.signalUnit`（与单测同一份几何）。
@@ -184,7 +223,8 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 				:r="DECAL_KINDS.signalUnit.lampRadius"
 				:fill="stateColor"
 			/>
-		</svg>
+			</svg>
+		</span>
 
 		<div v-if="hovered" class="card">
 			<div class="card-head">
@@ -227,7 +267,7 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 <style scoped>
 /*
  * 零尺寸锚点放在信号灯**灯点**的屏幕位置上：`transform` 里的位移就是灯点的位置
- * （世界坐标 + 灯位偏移），旋转也绕它发生。
+ * （世界坐标 + 灯位偏移）。外层**不带旋转**，所以挂在这一层的信息卡永远是正的。
  */
 .signal {
 	position: absolute;
@@ -237,6 +277,21 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	height: 0;
 	pointer-events: auto;
 	cursor: pointer;
+}
+
+/*
+ * **会转的那一层**：只装图形（SVG），绕灯点转到管辖方向。
+ *
+ * <p>零尺寸、无 `position`（保持 static，让里面的绝对定位参照 `.signal` 而不是它 ——
+ * 它带 transform 会自己成为包含块，所以里面的 `left/top` 百分比仍然按它解析；
+ * 好在整盒用的是像素，不受影响）。</p>
+ */
+.rot {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 0;
+	height: 0;
 }
 
 /*
@@ -280,7 +335,10 @@ const guarded = computed(() => props.signal.boundRails.map(hex => ({hex, short: 
 	stroke-width: 1.6;
 }
 
-/* 信息卡：C# 端的"假玻璃"深色卡片。定位在灯的右下方，避免盖住折角。 */
+/*
+ * 信息卡：C# 端的"假玻璃"深色卡片。**挂在不会转的那一层**（`.signal` 只有位移、没有 rotate），
+ * 所以不管灯朝哪边，卡片永远是正的、永远在锚点的右下方。
+ */
 .card {
 	position: absolute;
 	left: 12px;
