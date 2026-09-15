@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Point} from "@/domain/Point";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specPxToWorld} from "@/domain/mapElements";
-import {useUnitsPerPx} from "@/views/mapContext";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specToWorld} from "@/domain/mapElements";
 
 /*
  * 一个道岔（**贴片元素**：位置由世界坐标定，尺寸恒为固定屏幕像素）。
@@ -22,9 +21,9 @@ const LEADER_PX = DECAL_KINDS.turnoutLeader;
 
 /** 缩放倍率（画布注入；拿不到按 1 算）。 */
 /** 菱形边长：**规格值 × 倍率**（6× 时为 8 px）。 */
-const diamondPx = computed(() => specPxToWorld(DECAL_KINDS.icon, unitsPerPx.value));
+const diamondPx = computed(() => specToWorld(DECAL_KINDS.icon));
 /** 引线长度同理跟着倍率走。 */
-const leaderPx = computed(() => specPxToWorld(LEADER_PX, unitsPerPx.value));
+const leaderPx = computed(() => specToWorld(LEADER_PX));
 
 /**
  * 菱形挂靠方向：**右下方**（屏幕对角）。
@@ -41,9 +40,8 @@ const DIAGONAL = {x: Math.SQRT1_2, y: Math.SQRT1_2};
  */
 const counterScale = computed(() => 1);
 /** 规格像素 → 世界单位的那个**唯一常量**（取景校准一次）。 */
-const unitsPerPx = useUnitsPerPx();
 /** 相对锚点的偏移（**世界单位**）：方向来自屏幕对角、距离是规格（全览 16 px）。 */
-const offsetWorld = computed(() => pixelOffset(DIAGONAL, specPxToWorld(DECAL_KINDS.turnoutOffset, unitsPerPx.value)));
+const offsetWorld = computed(() => pixelOffset(DIAGONAL, specToWorld(DECAL_KINDS.turnoutOffset)));
 /** 菱形与引线的定位用同一个偏移（都在世界坐标里）。 */
 const offsetScreenPx = offsetWorld;
 

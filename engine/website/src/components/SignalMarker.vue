@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import {computed} from "vue";
 import type {Signal} from "@/domain/Signal";
-import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specPxToWorld, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
-import {useUnitsPerPx} from "@/views/mapContext";
+import {DECAL_KINDS, decalPlacement, decalTransform, pixelOffset, specToWorld, signalUnitAnchor, signalUnitChevronPath} from "@/domain/mapElements";
 
 /*
  * 一个信号灯（**地图上的元素**：位置与尺寸都跟着摄像机走）。
@@ -42,14 +41,13 @@ const props = defineProps<{
  * 拉远到 3× 是 4 px。组件里不再出现任何写死的像素值。</p>
  */
 
-const unitsPerPx = useUnitsPerPx();
 
 /**
  * 图标宽度（**世界单位**）：规格 × `unitsPerPx`（全览时屏幕上就是规格 8 px）。
  *
- * <p>整套系统里只有这一处尺寸换算，之后由相机统一缩放 —— 见 `specPxToWorld`。</p>
+ * <p>整套系统里只有这一处尺寸换算，之后由相机统一缩放 —— 见 `specToWorld`。</p>
  */
-const iconPx = computed(() => specPxToWorld(DECAL_KINDS.icon, unitsPerPx.value));
+const iconPx = computed(() => specToWorld(DECAL_KINDS.icon));
 /** 整个 SVG 的高度：viewBox 是 20 × 20.5，高度按同一个比例走。 */
 const boxHeightPx = computed(() => iconPx.value * (DECAL_KINDS.signalUnit.boxHeight / DECAL_KINDS.signalUnit.boxWidth));
 /** 灯点在 viewBox 里的位置（世界坐标就落在它上面，也是旋转中心）。 */
@@ -105,7 +103,7 @@ const boxOffsetPx = computed(() => {
  */
 const offsetWorld = computed(() => pixelOffset(
 	props.signal.sideOffsetDirection,
-	specPxToWorld(DECAL_KINDS.signalSideOffset, unitsPerPx.value),
+	specToWorld(DECAL_KINDS.signalSideOffset),
 ));
 
 /** 灯点的**世界坐标**（世界坐标 + 灯位偏移）：**锚点**，旋转绕它发生。 */

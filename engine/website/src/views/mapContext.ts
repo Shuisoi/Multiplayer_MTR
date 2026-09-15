@@ -1,5 +1,5 @@
-import {computed, inject, provide} from "vue";
-import type {ComputedRef, InjectionKey, Ref} from "vue";
+import {inject, provide} from "vue";
+import type {InjectionKey, Ref} from "vue";
 import type {Camera} from "@/domain/camera";
 
 /*
@@ -76,23 +76,6 @@ export function useBaseScale(): Ref<number> {
 	return injected;
 }
 
-/**
- * **规格像素 → 世界单位**的那个常量（`unitsPerPx` = 1 屏幕像素等于多少世界单位）。
- *
- * <p>它由**取景**校准一次：取景时"世界跨度 ÷ 视口跨度"就是它。之后整张图的尺寸都用它换算，
- * 于是**所有元素共用一处换算**，而"跟着相机缩放"是自动的（相机由外层承担）。</p>
- *
- * <p><b>不要**改成"1 / 当前相机比例"**：那会把缩放正好抵消掉 ⇒ 屏幕尺寸恒定
- * （实测过 1× 与 5.35× 都量到 8 px），那是"屏幕固定大小"，不是地图。这条踩过好几次，
- * 所以名字与注释都写死。</b></p>
- */
-export function useUnitsPerPx(): ComputedRef<number> {
-	const baseScale = useBaseScale();
-	return computed(() => {
-		const scale = baseScale.value;
-		return scale > 0 ? 1 / scale : 1;
-	});
-}
 
 /**
  * 读当前摄像机（世界坐标 → 屏幕全靠它）。

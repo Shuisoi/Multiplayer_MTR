@@ -2,7 +2,7 @@
  * 地图元素尺度模型的单测（`npm run test:elements`）。
  *
  * <p>口径（用户 2026-09-15 **最终定的**）：**整幅地图一起缩放，基准是全览尺寸**。
- * 于是规格值就是"全览时屏幕上的像素"，其余跟着相机一起变（`specPxToWorld`：世界单位 = 规格 ÷ 相机比例）。
+ * 于是规格值是**世界单位**（乘一个标定常量即世界尺寸），屏幕大小由相机决定。
  * 这条在实现里反复搞错过三次（先按缩放 → 又做成固定像素 → 再改成固定偏移 → 又试过"6× 基准"），
  * 所以这里逐条钉住。</p>
  */
@@ -17,7 +17,8 @@ import {
 	pixelOffset,
 	scaled,
 	screenPxOfSpec,
-	specPxToWorld,
+	specToWorld,
+	WORLD_UNIT,
 } from "../src/domain/mapElements.ts";
 
 /** 一台相机：`scale` = 一个世界单位占多少屏幕像素；`originX/Y` = 视口左上角对应的世界坐标。 */
@@ -25,25 +26,23 @@ function camera(scale: number, originX = 0, originY = 0) {
 	return {originX, originY, scale};
 }
 
-test("规格的基准是**全览（1×）**：那时规格值就是屏幕值，之后跟着相机放大", () => {
+test("尺寸是**世界单位**：只由规格 × 标定常量决定，与视口/地图大小无关", () => {
 	/*
-	 * 用户 2026-09-15 最后定调："**整幅地图一起缩放，但把基准改成全览尺寸**"。
-	 * 换算只有一处：世界单位 = 规格 × unitsPerPx（取景校准一次的常量）；
-	 * 屏幕尺寸 = 世界单位 × 当前相机比例 = 规格 × 倍率。
+	 * 用户 2026-09-15 点出的要害："为什么全览 2px 写死？那么以后特别大的地图的话，
+	 * 岂不是线越来越粗？" —— 所以尺寸不再挂在"取景比例"上，而是世界属性：
+	 * 世界单位 = 规格 × WORLD_UNIT（一个标定常量）。
 	 */
-	assert.equal(screenPxOfSpec(DECAL_KINDS.icon, 1), DECAL_KINDS.icon, "全览时图标 = 规格值");
-	assert.equal(screenPxOfSpec(DECAL_KINDS.railWidth, 1), DECAL_KINDS.railWidth, "全览时轨道线 = 规格值");
-	assert.equal(screenPxOfSpec(DECAL_KINDS.endpointDot * 2, 1), DECAL_KINDS.endpointDot * 2, "全览时端点直径 = 规格值");
-	assert.equal(screenPxOfSpec(DECAL_KINDS.icon, 6), DECAL_KINDS.icon * 6, "6× 时图标 = 规格 × 6（跟着地图放大）");
-	// 那个常量与倍率无关：同一个规格永远得到同一个世界尺寸（"每个元素不需单独缩放"）
-	const unitsPerPx = 1 / 0.4668;
-	assert.equal(specPxToWorld(DECAL_KINDS.railWidth, unitsPerPx), specPxToWorld(DECAL_KINDS.railWidth, unitsPerPx),
-		"世界尺寸只由常量决定");
+	assert.equal(specToWorld(DECAL_KINDS.railWidth), DECAL_KINDS.railWidth * WORLD_UNIT, "轨道线：规格 × 常量");
+	assert.equal(specToWorld(DECAL_KINDS.icon), DECAL_KINDS.icon * WORLD_UNIT, "图标：规格 × 常量");
+	// 同一个规格在任何视口、任何地图大小下都得到同一个世界尺寸
+	assert.equal(specToWorld(DECAL_KINDS.railWidth), specToWorld(DECAL_KINDS.railWidth), "世界尺寸是常量");
+	// 屏幕上看到多少，由相机决定（相机比例 = 世界 → 屏幕）
+	assert.ok(screenPxOfSpec(specToWorld(DECAL_KINDS.icon), 6) > screenPxOfSpec(specToWorld(DECAL_KINDS.icon), 1),
+		"推近 ⇒ 屏幕上更大（相机的事，不是规格的事）");
 	// 端点必须明显细于线心，否则会盖住线心/状态条
 	assert.equal(DECAL_KINDS.endpointDot * 2 < DECAL_KINDS.sectionBaseWidth, true,
-		"端点必须明显小于线心，否则会盖住线心与状态条");
+		"端点必须明显小于线心");
 });
-
 test("尺寸跟着倍率变（世界不动、动的是摄像机）", () => {
 	// `scaled` 仍是"规格 × 倍率/基准"这条旧口径的换算，用于**视图层的读数**（倍率本身）
 	assert.equal(scaled(DECAL_KINDS.icon, REFERENCE_ZOOM), 8, "基准倍率处 = 规格值");

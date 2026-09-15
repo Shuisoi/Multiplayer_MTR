@@ -3,8 +3,7 @@ import {computed, ref, watch} from "vue";
 import type {Camera} from "@/domain/camera";
 import type {Rail} from "@/domain/Rail";
 import {buildStraightDirections, railWorldPath, straightLookup} from "@/domain/railPath";
-import {DECAL_KINDS, specPxToWorld} from "@/domain/mapElements";
-import {useUnitsPerPx} from "@/views/mapContext";
+import {DECAL_KINDS, specToWorld} from "@/domain/mapElements";
 
 /*
  * 轨道层：把引擎给的每条轨画出来（SVG，**世界坐标**；相机由外层 SVG 的 `viewBox` 承担）。
@@ -56,14 +55,13 @@ const hoveredRail = ref("");
 /**
  * 本图层的线宽（**世界单位**：这一层画在设了 `viewBox` 的 SVG 里，相机由 viewBox 承担）。
  *
- * <p>换算只有一处、也是唯一真源 {@link specPxToWorld}：{@code 世界单位 = 规格 ÷ 相机比例}。
+ * <p>换算只有一处、也是唯一真源 {@link specToWorld}：{@code 世界单位 = 规格 ÷ 相机比例}。
  * 于是这里**不再有 `sizeFactor`（倍率/6）那套补丁** —— 那是手写投影时代的产物：当时坐标本身就是
  * 屏幕像素，线宽也得跟着乘同一个因子才不至于与坐标脱节。</p>
  */
-const unitsPerPx = useUnitsPerPx();
-const railWidthPx = computed(() => `${specPxToWorld(DECAL_KINDS.railWidth, unitsPerPx.value)}`);
-const railShadowWidthPx = computed(() => `${specPxToWorld(DECAL_KINDS.railShadowWidth, unitsPerPx.value)}`);
-const railHitWidthPx = computed(() => `${specPxToWorld(DECAL_KINDS.railHitWidth, unitsPerPx.value)}`);
+const railWidthPx = computed(() => `${specToWorld(DECAL_KINDS.railWidth)}`);
+const railShadowWidthPx = computed(() => `${specToWorld(DECAL_KINDS.railShadowWidth)}`);
+const railHitWidthPx = computed(() => `${specToWorld(DECAL_KINDS.railHitWidth)}`);
 
 /** 这一层现在能不能点轨（有候选才有意义）。 */
 const pickable = computed(() => props.candidateRails !== undefined && props.candidateRails.length > 0);

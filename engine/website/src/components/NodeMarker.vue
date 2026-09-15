@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, watch} from "vue";
 import {Node} from "@/domain/Node";
-import {DECAL_KINDS, decalTransform} from "@/domain/mapElements";
-import {useUnitsPerPx} from "@/views/mapContext";
+import {DECAL_KINDS, decalTransform, specToWorld} from "@/domain/mapElements";
 
 /*
  * 一个节点（普通 HTML 元素，绝对定位在屏幕坐标上）。
@@ -51,12 +50,11 @@ const emit = defineEmits<{
  * <p>外层的父容器承担相机的"平移 + 缩放"，所以这个标记的 `left/top` 是**世界坐标**；
  * 而圆点半径是屏幕像素规格，要乘这个因子折成世界单位。</p>
  */
-const unitsPerPx = useUnitsPerPx();
 /**
- * 节点圆点半径（**世界单位**）：换算只有一处（`specPxToWorld` 的同一式）——
+ * 节点圆点半径（**世界单位**）：换算只有一处（`specToWorld` 的同一式）——
  * 世界单位 = 规格 ÷ 相机比例，于是屏幕上恒为**规格值**（全览口径）。
  */
-const radius = computed(() => DECAL_KINDS.nodeDot * unitsPerPx.value);
+const radius = computed(() => specToWorld(DECAL_KINDS.nodeDot));
 /**
  * **贴片不反向缩放**：图形跟着地图、与轨道同一个相机比例（`notes/165` 的口径）。
  *
