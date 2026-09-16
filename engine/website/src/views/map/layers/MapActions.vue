@@ -21,6 +21,7 @@
 import {ref} from "vue";
 import {useMessage} from "naive-ui";
 import {unlockAllPoints} from "@/api/command";
+import {scanSignals} from "@/api/topology";
 
 /** 正在下发（按钮置灰，避免连点）。 */
 const busy = ref(false);
@@ -46,6 +47,40 @@ async function unlockAllLocks(): Promise<void> {
 		busy.value = false;
 	}
 }
+
+/**
+ * 刷新信号灯登记表（手动刷新）。
+ *
+ * <h3>为什么要有这个按钮</h3>
+ * <p>登记表（`mmtr-signals.json`）是引擎侧的数据，而"世界里到底还有没有这盏灯"只有游戏端答得出来
+ * （只有游戏端能枚举区块里的方块实体）。用户实测的现场就是：**灯敲掉了，登记表没跟上** ——
+ * 地图上一直画着一盏已经不存在的灯。</p>
+ *
+ * <p>自动刷新（游戏端常驻：区块加载 / 敲灯事件 / 每秒轮转）已经把这件事变成"世界改了登记表就跟着改"，
+ * 但它是**按区块**收敛的 —— 没加载的区块不敢删（"找不到"只说明没加载）。所以"我确定这一片现在
+ * 没有灯了"需要一个能一次把全部已加载区块核一遍的入口，这就是这个按钮。</p>
+ *
+ * <p>下发的是 `signals scan`（游戏端执行），`scanSignals()` 会轮询命令日志直到看见
+ * `[signals] 扫描完成: …` 那行统计再回话 —— 所以按钮上的数字是**引擎自己报的**，不是猜的。</p>
+ */
+async function refreshSignals(): Promise<void> {
+	if (busy.value) {
+		return;
+	}
+	busy.value = true;
+	try {
+		const result = await scanSignals(15000);
+		if (result) {
+			message.success(`信号灯登记表已刷新：世界里 ${result.found} 盏，新增登记 ${result.added} 个（清掉几条看指令日志）`);
+		} else {
+			message.warning("扫描已下发，但没等到游戏端的统计回话（可能那一带的区块没加载）；指令日志里有详情");
+		}
+	} catch (caught) {
+		message.error(`刷新失败：${(caught as Error).message}`);
+	} finally {
+		busy.value = false;
+	}
+}
 </script>
 
 <template>
@@ -62,6 +97,20 @@ async function unlockAllLocks(): Promise<void> {
 			@click="unlockAllLocks()"
 		>
 			解锁所有人工锁岔
+		</button>
+
+		<!--
+			刷新信号灯登记表：一句"世界才是真的"的按钮。自动刷新已经在游戏端常驻，这个按钮是**手动的那一份**
+			—— 手动扫描能把全部已加载区块一次核完，而自动刷新为了不误删远处没加载的灯，只敢按区块逐步收敛。
+		-->
+		<button
+			type="button"
+			class="action-button"
+			:disabled="busy"
+			title="让游戏端把世界里真实存在的信号灯与登记表核对一遍（世界是准的：灯敲掉了就销掉登记，新放的灯就补上）。自动刷新一直在跑，这里是一次核完全部已加载区块的手动入口。"
+			@click="refreshSignals()"
+		>
+			刷新信号灯登记表
 		</button>
 	</div>
 </template>

@@ -319,6 +319,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/** Minimum gap between two "waiting for turnout authority" reports, ms. */
 	private static final long MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS = 5000;
 	/**
+	 * "我正在用这处道岔"（按着的正是自己计划要的位、车还压在岔轨上）时的**让位兜底**：这么久还没动就让。
+	 *
+	 * <p>取 3 分钟而不是 20 秒：20 秒是"正常等待（前车在过岔）"的量级，而"在用"的车往前走一步就要几秒到
+	 * 十几秒 —— 用 20 秒去劝退它，结果是位置每 20 秒换一次手、两班车都不动（2026-09-17 现场）。
+	 * 留这个兜底是为了保住"最终总有人让"这条活性（在用 ≠ 一定能走：它也可能被闭塞或信号扣住）。</p>
+	 */
+	private static final long MMTR_IN_USE_HOLD_MILLIS = 3L * MILLIS_PER_MINUTE;
+	/**
 	 * 闭塞区间 v2 (S3): the arc step used to read the movement's heading on its current rail when asking
 	 * the directional section model which block it is in. Small enough to stay inside a rail, big enough
 	 * that a sampled two-arc curve gives a usable direction.
@@ -652,6 +660,38 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (data instanceof final Simulator routeSimulator) {
 			routeSimulator.mmtrRoutes.refresh(getId(), routeSimulator.mmtrPointAuthority, mmtrPendingPointOps);
 		}
+	}
+
+	/**
+	 * **立刻**把当前任务自臂出去（规划进路 + 申请道岔 + 挂起点），不等下一 tick 的 {@code mmtrMissionTick}。
+	 *
+	 * <h3>为什么要这个入口（2026-09-17 现场问："为什么道岔请求慢半拍、不是换向后马上完成"）</h3>
+	 * <p>tick 内的顺序是：**车辆走行 → … → 作业调度器**（{@code Simulator.tick}）。换端这个动作、
+	 * 以及"该步完成"都发生在**车辆走行**里，而**下一步的挂载发生在同一 tick 更靠后的调度器里** ——
+	 * 于是"新计划的规划 + 道岔申请"只能等到**下一 tick** 车辆再走一遍时、由 {@code mmtrMissionTick}
+	 * 的自臂分支去做。现场看起来就是："换向已经做完（cab 翻了），道岔却慢半拍才申请、才扳"。</p>
+	 *
+	 * <p>调度器挂完任务后直接调这个入口，整条链就在同一 tick 里闭合：
+	 * 换端 → 该步完成 → 挂下一步 → 规划进路 → 申请道岔 → （{@code Simulator} 在本 tick 末再同步一次位置）
+	 * 世界上那道岔跟着动。</p>
+	 *
+	 * <p>判据与 {@code mmtrMissionTick} 里那条自臂分支**逐字一致**，所以从调度器调用不会做出
+	 * 车辆自己不会做的事；幂等：已经自臂过时 {@code mmtrMotionAuto} 已为真，直接返回 false。</p>
+	 *
+	 * @return 是否真的做了一次自臂
+	 */
+	public boolean mmtrArmActiveMissionNow(Simulator simulator) {
+		final MmtrMission mission = mmtrMission;
+		if (mission == null || mmtrMotionWalker == null || mmtrMotionAuto || mmtrMotionStopTargetM >= 0
+			|| mission.getState() == MmtrMission.State.AT_TARGET || mission.isTerminal()
+			|| !mmtrMissionNeedsRouteSetup(mission)) {
+			return false;
+		}
+		if (mission.getExecutor() == MmtrMission.Executor.PLAYER && mmtrPlayerRoutePublished) {
+			return false;
+		}
+		mmtrMotionSelfArmMission(simulator, mission);
+		return true;
 	}
 
 	/**
@@ -992,8 +1032,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
-	/** 自救日志的节流（同一件事最多每 {@link #MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS} 说一次）。 */
-	private void mmtrLogForkSelfHeal(String message) {
+	/** 自救日志的节流（同一件事最多每 {@link #MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS} 说一次）。 */	private void mmtrLogForkSelfHeal(String message) {
 		final long now = System.currentTimeMillis();
 		if (now - mmtrLastForkSelfHealLogMillis < MMTR_TURNOUT_WAIT_LOG_INTERVAL_MILLIS) {
 			return;
@@ -1019,6 +1058,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		if (!org.mtr.core.mmtr.point.MmtrPointAuthority.shouldYieldForOthers(now, mmtrTurnoutWaitSinceMillis, mmtrTurnoutYieldUntilMillis)) {
+			return;
+		}
+		/*
+		 * **我按着的正是自己计划要的位、而且人就压在这处道岔的轨上 ⇒ 我是"在用"的那一方，不让**
+		 * （2026-09-17 现场修：北端折返咽喉两班车互让到死）。
+		 *
+		 * <h3>现场读数</h3>
+		 * <p>车 B 在 36 m 正线轨上、按着位置 0（**正是它自己要的位**：它要直着开进 31 m 折返段），
+		 * 车 A 在斜线上排队要位置 1。而下面那条"有人排在我按着的位置后面 ⇒ 我就让"的破环规则，
+		 * 让 B 每 20 秒放一次、A 拿到 1；A 又按同一条判据在 20 秒后放出去、B 再拿回 0 ——
+		 * **位置每 20 秒换一次手，两班车谁也没动**（日志里 {@code 让位（停着不动）} 每 20 秒一行，
+		 * 刷了十几分钟）。而这时候正确行为是确定的：B 只要往前走一步就出清了，A 与它互斥、只能等；
+		 * 把"正在用"的车劝退，等于把唯一能解开这个环的动作取消掉。</p>
+		 *
+		 * <h3>为什么还留一个很长的兜底</h3>
+		 * <p>"在用"不等于"一定能走"：它也可能被前方的闭塞或信号扣住。所以超过
+		 * {@link #MMTR_IN_USE_HOLD_MILLIS} 还是不动的话照旧让位 —— 保留"最终总有人让"这条活性，
+		 * 只是不再每 20 秒空转一次。</p>
+		 */
+		if (now - mmtrTurnoutWaitSinceMillis < MMTR_IN_USE_HOLD_MILLIS && mmtrHoldsThePositionItsOwnPlanNeeds(simulator)) {
 			return;
 		}
 		if (!simulator.mmtrPointAuthority.someoneHasPriorityOver(mmtrPointOwner)) {
@@ -1065,6 +1124,38 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * 我手里按着的某处道岔上，是不是有"**我按着的正是自己计划要的位、且车还压在这处岔轨上**"的那一处
+	 * —— 也就是"我正在用这处道岔"（见 {@link #mmtrYieldTurnoutsWhenStuck} 里的让位豁免）。
+	 *
+	 * <p>需求位置按**本车自己的计划**算（同一节点只取最先要过的那一程，与 {@code armMmtrPointRun} 同一口径）；
+	 * 没有计划、或这处节点不是道岔时 {@link Integer#MIN_VALUE}，判据自然不成立。</p>
+	 */
+	private boolean mmtrHoldsThePositionItsOwnPlanNeeds(Simulator simulator) {
+		if (mmtrMotionPlan == null || mmtrPointOwner.isEmpty()) {
+			return false;
+		}
+		final org.mtr.core.mmtr.point.MmtrPointAuthority authority = simulator.mmtrPointAuthority;
+		for (final long[] node : authority.physicalHoldNodesOf(mmtrPointOwner)) {
+			final int demand = mmtrDemandAtNode(authority, node);
+			if (demand != Integer.MIN_VALUE && authority.holdsThePositionItNeeds(node[0], node[1], node[2], mmtrPointOwner, demand)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** 本车计划在这处道岔上要的位置（同一节点取最先要过的那一程；没计划/不是道岔 = MIN_VALUE）。 */
+	private int mmtrDemandAtNode(org.mtr.core.mmtr.point.MmtrPointAuthority authority, long[] node) {
+		for (final String[] op : mmtrMotionPlan.forkOps) {
+			if (Long.parseLong(op[0]) != node[0] || Long.parseLong(op[1]) != node[1] || Long.parseLong(op[2]) != node[2]) {
+				continue;
+			}
+			return authority.turnoutDemand(node[0], node[1], node[2], op[3], Integer.parseInt(op[4]));
+		}
+		return Integer.MIN_VALUE;
 	}
 
 	/**
@@ -1213,6 +1304,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return;
 		}
 		final double distanceNow = mmtrMotionWalker.distanceM();
+		/*
+		 * **"车已经不在那条进向轨上了" = 已越过**（2026-09-17 现场修：换端之后车卡在折返咽喉）。
+		 *
+		 * <h3>现场读数</h3>
+		 * <pre>
+		 * [interlock] rail=…FEDF(斜线) route=MAIN/**PENDING** rails=4 forks=2
+		 *   PENDING: 物理道岔 -176,-60,-253 被 v-8012883479216375661 按在位置 0，本车需要位置 1
+		 * 计划 entryRail = 31 m 折返轨；车早已开过那处道岔、现在人在斜线上
+		 * </pre>
+		 * <p>它的计划是"从 31 m 折返轨出发 → 斜线 → A 线 → 站1/1"，而车**已经越过**那处道岔了。
+		 * 但"已越过"这件事只有走行体上报（{@code drainCrossedPointKeys}）才会被记上，这一次没记上
+		 * （换端之后车体几何/空间口径整体反过来，走行体的越过上报与计划里的 {@code forkMeters}
+		 * 不再可比）—— 于是那条 fork 每 tick 都被重新申请，而它按着的位在**别的车**手里 ⇒
+		 * 进路判 PENDING 永远不 SET ⇒ 车停在斜线上不动，尽管它前面那条路（A 线）是空的。</p>
+		 *
+		 * <h3>判据</h3>
+		 * <p>用计划自己的轨序（{@code routeRailHexes}，第 0 项 = 规划时车所在的那根轨）：
+		 * fork 的进向轨（{@code op[3]}）在轨序里的位置**早于**车当前轨的位置 ⇒ 那处岔在身后 = 已越过。
+		 * 这与"距离"无关，所以不怕换端之后距离口径翻转；查不到（车不在计划轨序里、或轨序里没有那根轨）
+		 * 就退回原来的距离判据，行为不变。</p>
+		 *
+		 * <p>按"已越过"处理的两件事都要做：①记进路（{@code markForkCrossed}）—— 进路层才不会继续
+		 * 要求那处岔；②向权限层报一次"这处岔我过了"（{@code mmtrPointRelease}）—— 把自己在那里的
+		 * 持有与排队放掉，否则别的车还要在一个**已经没人需要**的队列位置后面等下去。</p>
+		 */
+		final int currentRailIndex = planRailIndexOf(mmtrMotionPlan, mmtrMotionWalker.railHex());
 		final ObjectArrayList<String[]> rebuilt = new ObjectArrayList<>();
 		final java.util.HashSet<String> nearestPassPerNode = new java.util.HashSet<>();
 		for (int j = 0; j < mmtrMotionPlan.forkOps.size(); j++) {
@@ -1230,6 +1347,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			 */
 			if (isMmtrForkCrossed(op)) {
 				continue; // 已越过（车尾出清）：crossing 时已释放，也不再申请
+			}
+			if (currentRailIndex >= 0) {
+				final int viaIndex = planRailIndexOf(mmtrMotionPlan, op[3]);
+				if (viaIndex >= 0 && viaIndex < currentRailIndex) {
+					markMmtrForkBehindAsCrossed(simulator, op);
+					continue;   // 身后的岔：进路不再要求它，自己在那里也不再持有/排队
+				}
 			}
 			/*
 			 * **同一处道岔只申请最先要过的那一程**（notes/137）：折返的两程要互斥的两个位置，
@@ -1253,6 +1377,35 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private boolean isMmtrForkCrossed(String[] op) {
 		final org.mtr.core.mmtr.route.MmtrRoute route = mmtrRoute;
 		return route != null && route.isForkCrossed(op);
+	}
+
+	/**
+	 * 把一处**已经在身后的**岔按"已越过"处理：记进路 + 向权限层报一次"我过了这处岔"。
+	 *
+	 * <p>用"车已经不在那条进向轨上"作为判据（见 {@link #replenishForkRequests} 的说明）：
+	 * 车既已不在那里，它在权限层按着的位与排队的位置都该放掉，进路层也不该再要求那处岔。</p>
+	 */
+	private void markMmtrForkBehindAsCrossed(Simulator simulator, String[] op) {
+		if (mmtrRoute != null) {
+			// 进路的越过键是字符串（节点 + "|" + 进向轨），与 drainMmtrCrossedPoints 同一口径
+			mmtrRoute.markForkCrossed(op[0] + "," + op[1] + "," + op[2] + "|" + op[3]);
+		}
+		if (!mmtrPointOwner.isEmpty()) {
+			simulator.mmtrPointRelease(Long.parseLong(op[0]), Long.parseLong(op[1]), Long.parseLong(op[2]), op[3], mmtrPointOwner);
+		}
+	}
+
+	/** 某根轨在计划的轨序（{@code routeRailHexes}）里的下标；不在里面 = -1。 */
+	private static int planRailIndexOf(MmtrRunPlanner.Plan plan, @org.jspecify.annotations.Nullable String railHex) {
+		if (plan == null || railHex == null || railHex.isEmpty()) {
+			return -1;
+		}
+		for (int i = 0; i < plan.routeRailHexes.size(); i++) {
+			if (railHex.equals(plan.routeRailHexes.get(i))) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	private boolean pendingContainsFork(String[] op) {
@@ -3950,7 +4103,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (vehiclePositions == null || mmtrMotionWalker == null || mmtrMotionLegs.isEmpty() || !(data instanceof final Simulator simulator)) {
 			return null;
 		}
-		final Position node = mmtrMotionWalker.aheadNode();
+		final Position node = org.mtr.core.mmtr.MmtrRunPlanner.travelAheadNode(mmtrMotionWalker);
 		if (node == null) {
 			return null;
 		}
@@ -3958,6 +4111,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (neighbours == null || neighbours.size() < 3) {
 			return null;
 		}
+		/*
+		 * **道岔那三条轨整根都算"侧面防护"**（2026-09-16 现场修：北端两班车相持）。
+		 *
+		 * <p>原来只看"节点起 {@link #MMTR_JUNCTION_CLEARANCE_M} m"这条窗。窗只有 10 m，而岔轨有 31~36 m：
+		 * 另一班车只要**走深一点**（>10 m）就落在窗外 ⇒ 本节判"岔区干净" ⇒ 我从另一条腿开进去 ⇒
+		 * 两班车各占一条腿、互相把对方的出路堵死（现场：一班压在岔股上、一班按着正线，谁也走不了）。
+		 *
+		 * <p>真道岔的几何是**一个整体**：只要道岔的岔轨上还有别的车，"从别的腿进岔"就该被拦在岔前
+		 * （这就是联锁的侧面防护）。三条排除，缺一条都会误挡：
+		 * ① 我自己现在这条轨不算；② **我接下来要走的那条轨不算**（那是"跟车"，距离由正常闭塞管）；
+		 * ③ **登记过的股道/站台不算**（车停在自己股道里是"停着"而不是"占着岔" —— 少了这条，
+		 * 两列车都出不了库：实测把 {@code MmtrRouteConflictTests} 的两条用例挂掉）。</p>
+		 *
+		 * <p>只影响**行车**（本车自己的停车点），不动灯色/显示口径 —— 显示那边仍按 10 m 净空窗判
+		 * （否则会退化成"车在岔轨上灯就永远红"，用户已经报过这个现象）。</p>
+		 */
+		final boolean modelledTurnout = simulator.mmtrTurnout(node.getX(), node.getY(), node.getZ()) != null;
+		final Rail nextRailForExclusion = mmtrMotionWalker.peekNextRail();
 		// The train must actually be about to CROSS the node (its section ends at the rail end); a
 		// mid-rail signal boundary is not a junction crossing.
 		final int index = indexInMmtrMotionLegs(railProgress);
@@ -3984,18 +4155,23 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (otherLength <= 0) {
 				continue;
 			}
+			// 排除三条（见上面的说明）：我脚下这条、我接下来要走的那条（跟车）、登记过的股道/站台（停着）。
+			if (other == rail || other == nextRailForExclusion || other.isSiding() || other.isPlatform()) {
+				continue;
+			}
 			// The clearance window is the first MMTR_JUNCTION_CLEARANCE_M metres of every rail meeting at
-			// the node, measured from the node (each rail's own ordered-1 arc space).
+			// the node, measured from the node (each rail's own ordered-1 arc space); at a real turnout
+			// (modelled) the WHOLE rail counts, so a train that has driven 10+ m in cannot be met head-on
+			// by a movement entering from another leg.
 			final double nodeArc = MmtrSectionGeometry.arcOfNode(other, node);
 			if (Double.isNaN(nodeArc)) {
 				continue;
 			}
-			final double windowFrom = nodeArc <= 1e-9 ? 0 : Math.max(0, otherLength - MMTR_JUNCTION_CLEARANCE_M);
-			final double windowTo = nodeArc <= 1e-9 ? Math.min(otherLength, MMTR_JUNCTION_CLEARANCE_M) : otherLength;
+			final double windowFrom = modelledTurnout ? 0 : nodeArc <= 1e-9 ? 0 : Math.max(0, otherLength - MMTR_JUNCTION_CLEARANCE_M);
+			final double windowTo = modelledTurnout ? otherLength : nodeArc <= 1e-9 ? Math.min(otherLength, MMTR_JUNCTION_CLEARANCE_M) : otherLength;
 			if (windowTo - windowFrom > 1e-9 && blockHasExternalOccupancy(other, windowFrom, windowTo, vehiclePositions)) {
-				// Walker-space distance to the ahead node: offsetM is measured from the entry node
-				// toward the node being approached (ordered-arc space flips for a reverse-running leg).
-				final double toNode = railLength - mmtrMotionWalker.offsetM();
+				// Walker-space distance to the ahead node：从车头到前方节点还有多少米（方向感知口径）。
+				final double toNode = Math.max(0, railLength - mmtrTravelledOnRailM());
 				return mmtrMotionWalker.distanceM() + Math.max(0, toNode - MMTR_BLOCK_NODE_EPS_M);
 			}
 		}

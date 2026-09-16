@@ -66,6 +66,7 @@ const starters = [
 	"query sections",
 	"point locks",
 	"point unlock --all",
+	"world scan-signals",
 ];
 
 async function refreshLog() {
@@ -134,6 +135,26 @@ async function unlockAllPoints() {
 		return;
 	}
 	input.value = "point unlock --all";
+	await run();
+}
+
+/**
+ * 一键刷新信号灯登记表（手动刷新）。
+ *
+ * <h3>为什么需要一个按钮</h3>
+ * <p>"世界里还有没有这盏灯"只有游戏端答得出来，所以登记表 ↔ 世界的核对只能由游戏端做：自动刷新
+ * （区块加载 / 敲灯 / 每秒轮转）已经常驻在游戏端，这个按钮是**手动的那一份**。它要存在的原因有两个：
+ * 自动刷新是**按区块**收敛的（看不到的区块不敢删），所以"我确定这一片现在没有灯了"这种判断需要一个
+ * 能一次把全部已加载区块核一遍的入口；以及灯放下之后（放灯没有事件钩子）想立刻见效，不用等轮转扫到。</p>
+ *
+ * <p>发的是 `world scan-signals`（游戏端执行，不在引擎里跑）：指令本身只读引擎，改的是登记表，
+ * 所以它会回一条"扫描完成: 找到 N …清理 M"的文本，写进下面的日志里。</p>
+ */
+async function scanSignals() {
+	if (busy.value) {
+		return;
+	}
+	input.value = "world scan-signals";
 	await run();
 }
 
@@ -236,6 +257,7 @@ defineExpose({openPanel});
 					<template v-if="last.affected.length > 0"> · 影响 {{ last.affected.length }} 项</template>
 				</span>
 				<button class="action" type="button" :disabled="busy" @click="unlockAllPoints">一键解锁人工锁</button>
+				<button class="action" type="button" :disabled="busy" @click="scanSignals">刷新信号灯登记表</button>
 				<button class="action" type="button" @click="refreshLog">刷新日志</button>
 				<button class="action" type="button" @click="closePanel">收起</button>
 			</header>

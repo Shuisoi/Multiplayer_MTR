@@ -156,14 +156,38 @@ public final class MmtrJobScheduler {
 		}
 	}
 
+	/** 圈间静置日志的节流：等待期间每 {@link #LOOP_IDLE_LOG_INTERVAL_MILLIS} 报一次倒计时。 */
+	private static final long LOOP_IDLE_LOG_INTERVAL_MILLIS = 30_000L;
+
 	/** Loop automation: after DONE/FAILED, wait one period, fully clean every touched siding, then restart. */
 	private void loopAdvance(JobInstance instance, long currentMillis, Simulator simulator) {
 		final long period = instance.job.loopEveryMs > 0 ? Math.max(1_000, instance.job.loopEveryMs) : 60_000;
 		if (instance.nextCycleAtMs == 0) {
 			instance.nextCycleAtMs = currentMillis + period;
+			/*
+			 * **圈间静置必须自己说出来**（2026-09-17 现场：用户盯着折返点看了一分多钟，以为车卡死了）。
+			 *
+			 * <p>这一圈的最后一步做完之后，调度器要等 {@code loopEveryMs} 才发下一圈；等待期间车**没有进路**
+			 * （{@code route} 是空的），因此**也不会申请道岔**。于是现场画面是：车停在折返点、道岔一动不动、
+			 * 日志里一个字都没有 —— 从外面看与"卡死"完全一样（用户原话："一直都没人讲"）。</p>
+			 *
+			 * <p>所以进入等待时打一条**说清"这是静置、不是卡住"**的日志，并在等待期间每
+			 * {@link #LOOP_IDLE_LOG_INTERVAL_MILLIS} 报一次倒计时；到点发车的 {@code cycle … restarted}
+			 * 那条本来就有。要改这个时长就改作业单的 {@code loopEveryMs}（同一行里写出来，免得又要问人）。</p>
+			 */
+			instance.nextCycleLoggedAtMs = currentMillis;
+			System.out.println("[MMTR-JOB] " + instance.job.jobId + " 一圈跑完，进入圈间静置：等 " + (period / 1000)
+				+ " 秒发下一圈（loopEveryMs=" + instance.job.loopEveryMs + "）。"
+				+ "期间车没有进路、不会申请道岔 —— 道岔不动是正常的，不是卡住。");
 			return;
 		}
 		if (currentMillis < instance.nextCycleAtMs) {
+			// 静置期间每 30 秒报一次倒计时：让"等下一圈"在日志里始终看得见。
+			if (currentMillis - instance.nextCycleLoggedAtMs >= LOOP_IDLE_LOG_INTERVAL_MILLIS) {
+				instance.nextCycleLoggedAtMs = currentMillis;
+				System.out.println("[MMTR-JOB] " + instance.job.jobId + " 圈间静置中：还有 "
+					+ Math.max(0, (instance.nextCycleAtMs - currentMillis + 999) / 1000) + " 秒发下一圈");
+			}
 			return;
 		}
 		markVisited(instance, instance.job.sidingId);
@@ -823,6 +847,15 @@ public final class MmtrJobScheduler {
 		if (!vehicle.isMmtrMotion()) {
 			vehicle.engageMissionAutopilot();
 		}
+		/*
+		 * **同一 tick 内就把新计划自臂出去**（2026-09-17 现场问："为什么道岔请求慢半拍、不是换向后马上完成"）。
+		 *
+		 * <p>不用等下一 tick 车辆自己走一遍：tick 内的顺序是"车辆走行 → … → 作业调度器"，
+		 * 而换端之后的这一步正是在**这一 tick 的调度器里**挂上去的 —— 不在这里顺手自臂，
+		 * 规划进路与申请道岔就要等下一 tick（现场可见"换向做完了、道岔慢半拍"）。
+		 * 自臂之后再由 {@code Simulator} 在本 tick 末同步一次道岔位置，世界上那道岔当 tick 就动。</p>
+		 */
+		vehicle.mmtrArmActiveMissionNow(simulator);
 	}
 
 	/**
@@ -1313,6 +1346,8 @@ public final class MmtrJobScheduler {
 		boolean humanHold;
 			long curSidingId;
 		long nextCycleAtMs;
+		/** 圈间静置日志的上一次打印时刻（倒计时节流用，见 {@code loopAdvance}）。 */
+		long nextCycleLoggedAtMs;
 		int cyclesDone;
 		long lastLoopResetAtMillis;
 		final ObjectArrayList<Long> visitedSidings = new ObjectArrayList<>();

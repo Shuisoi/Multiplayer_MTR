@@ -201,17 +201,24 @@ public class Simulator extends Data implements Utilities {
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis)
 		.withTurnoutLookup(this::mmtrTurnout)
 		.withPositionChangeGuard(this::mmtrPositionChangeBlockedReason)
-		.withHolderOccupancy(this::mmtrVehicleOnNodeRails);
+		.withHolderOccupancy(this::mmtrVehicleOnNodeRails)
+		/*
+		 * 实际位置：申请要的那一位如果**就是岔现在这一位**，这一趟什么都不用扳 ⇒ 不该排队、也不进净空闸
+		 * （见 MmtrPointAuthority#request 里"位置已经就是我要的那一位不排队"那段）。权限层自己只有
+		 * "持有者驱动"的位置（没人持有 = 无主），问不出"现在实际在哪一位"，所以要由这里喂进去。
+		 */
+		.withActualPositionLookup(this::mmtrTurnoutPosition);
 
 	/**
 	 * **某列车是不是还压在这处节点的轨上**（占用树答）。权限层用它决定"物理持有窗口到期能不能放位"：
 	 * 车还压在这处道岔的轨上时放位 = 允许别人把道岔从它脚下扳走（2026-09-16 现场"两个车顶头"的成因），
 	 * 所以那时持有续期而不是释放。
 	 */
-	private boolean mmtrVehicleOnNodeRails(long x, long y, long z, String owner) {
+	private @org.jspecify.annotations.Nullable Boolean mmtrVehicleOnNodeRails(long x, long y, long z, String owner) {
 		final long vehicleId = vehicleIdOfOwner(owner);
 		if (vehicleId == 0) {
-			return false;
+			// 不是车辆 owner（例如测试里的 "vA"/"vB" 标签）：查不出来 ⇒ null（调用方各自保守取舍）。
+			return null;
 		}
 		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<org.mtr.core.data.Position, org.mtr.core.data.Rail> neighbours =
 			positionsToRail.get(new org.mtr.core.data.Position(x, y, z));
@@ -1902,29 +1909,28 @@ public class Simulator extends Data implements Utilities {
 				continue;
 			}
 			/*
-			 * **岔区没清就不扳**（notes/130 §8 第 2 条遗留）。
+			 * **净空闸按"替谁扳"分别判，不再先做一次不带请求方的判定**（2026-09-16 现场修）。
 			 *
-			 * <p>人工扳岔与意图扳岔这两条路早就有这道闸（{@link MmtrJunctionState#blockedThrowReason}），
-			 * 只有这条"跟着授权自动扳"的路没有 —— 于是它照样能把道岔从车下抽走：一列停/压在岔上的车
-			 * 还在净空区里，另一条进路的授权一到，位置就在它脚下变了。闸门与显示层读**同一段**
-			 * 净空判定（{@code foulingRail}），所以"这盏灯说岔区被占、道岔却照样能扳"这种自相矛盾
-			 * 不会再出现。</p>
+			 * <p>原来这里在整个循环开头先判一次 {@code blockedThrowReason}（不带请求方）：只要岔区 10 m 内
+			 * 有**任何**车足迹就 {@code continue}。而**车走到岔前时车头本来就进了净空区** —— 于是
+			 * "车到了、道岔却永远不同步"，位置永远停在旧的那一位。现场表现正是用户报的那条：
+			 * **道岔不会被任务驱动**（灯按"走不出去"红着、车在信号前干等，而 {@code point why} 里那句
+			 * "（改位置的请求方 ）"是空的 —— 那就是这条路留下的痕迹）。</p>
 			 *
-			 * <p>为什么不加在单车那条 {@link #mmtrSyncTurnoutPositionToGrant} 上：那条是**列车自己**
-			 * 走到岔前、按自己的授权就位用的（{@code MmtrForkElection} 在选举之前调它）—— 车到岔前时
-			 * 车头本来就已经进了净空区，给它加闸等于"车到了、道岔却永远不同步"，那是新的死锁。
-			 * 本方法是**每 tick 的全局同步**（服务所有列车），在这里拦才拦得住"别人的道岔"。</p>
+			 * <p>净空闸的本意是"不许把道岔从**别的**车脚下抽走"，所以它必须在知道"替谁扳"之后判，
+			 * 并把那列车自己排除在外。下面两条路（物理持有者 / 逐进向授权）现在各自做**带请求方**的判定，
+			 * 用的都是同一个口径 {@code blockedThrowReasonExcept}。</p>
 			 */
-			final String foulReason = org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(this,
-				new org.mtr.core.data.Position(turnout.nodeX, turnout.nodeY, turnout.nodeZ));
-			if (foulReason != null) {
-				continue;
-			}
 			final int current = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
 			// T1: 物理持有者优先（理由同 mmtrSyncTurnoutPositionToGrant）。
 			final int physical = mmtrPointAuthority.physicalPosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
 			if (physical != org.mtr.core.mmtr.point.MmtrPointAuthority.NO_PHYSICAL_HOLDER) {
-				if (physical != current) {
+				if (physical == current) {
+					continue;   // 已经是这一位：没有什么可扳的（也就不该问净空闸）
+				}
+				final String physicalOwner = mmtrPointAuthority.physicalHolder(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+				if (org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReasonExcept(this,
+					new org.mtr.core.data.Position(turnout.nodeX, turnout.nodeY, turnout.nodeZ), vehicleIdOfOwner(physicalOwner)) == null) {
 					mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, physical);
 					normalizeTurnoutRows(turnout);
 					changed = true;
@@ -2134,6 +2140,33 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * 扫描看到"这一格确实有一盏灯"时的**原地刷新**：只改朝向与灯位数，人工绑定一律不动。
+	 *
+	 * <h3>为什么不能直接复用 {@link #mmtrSignalOp} 的 set</h3>
+	 * <p>{@code set} 走的是 {@code MmtrSignalRegistry.put}，那里面是 {@code new SignalEntry(...)}
+	 * 整体替换 —— {@code mode} / {@code target} / {@code rails} 三个字段会被一起冲掉。手动扫描偶尔
+	 * 跑一次还看不出问题（BOUND 条目被跳过），但**自动刷新是每秒都在跑的**：一盏 AUTO 灯只要被扫到
+	 * 一次，人工点选绑定就会被抹一次，而且抹掉之后再也回不来。刷新只该改"世界告诉我们的那两个值"
+	 * （朝向、灯位数），其余是人工意图，扫描没有资格改。</p>
+	 *
+	 * <h3>返回值为什么是"是否新增"</h3>
+	 * <p>新增要落盘（否则重启就丢）；只改朝向不落盘 —— 自动刷新每秒都在跑，按"变了就写世界文件"
+	 * 会把 {@code mmtr-signals.json} 变成每秒一写的热文件。朝向本来每次启动都会被重新读一遍世界，
+	 * 不落盘不会丢信息。</p>
+	 *
+	 * @return 是否新增了一条登记
+	 */
+	public boolean mmtrSignalRefresh(int x, int y, int z, float angle, int aspects) {
+		final org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry existing = mmtrSignals.get(x, y, z);
+		if (existing == null) {
+			return mmtrSignalOp(x, y, z, angle, aspects, "set", "");
+		}
+		existing.angle = angle;
+		existing.aspects = aspects;
+		return false;
+	}
+
+	/**
 	 * 节点的**朝向角**（游戏端扫描上报）：{@code BlockNode.getAngle(state)}，也就是 MTR 在放置节点时
 	 * 由玩家朝向决定的那个值（{@code FACING} / {@code IS_22_5} / {@code IS_45} 三个方块属性）。
 	 *
@@ -2235,14 +2268,21 @@ public class Simulator extends Data implements Utilities {
 
 	public org.mtr.core.mmtr.point.MmtrPointAuthority.Result mmtrPointRequest(long x, long y, long z, String viaRailHex, String owner, int leg, long untilMillis) {
 		final org.mtr.core.mmtr.point.MmtrPointAuthority.Result result = mmtrPointAuthority.request(x, y, z, viaRailHex, owner, leg, untilMillis);
-		System.out.println("[MMTR-PT] req " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex + " leg " + leg + " -> " + result);
+		// 节流：卡死的岔口会被每 tick 重申请，直接打会刷屏并拖住控制台线程（见 shouldLogDiagnostic）
+		if (org.mtr.core.mmtr.point.MmtrPointAuthority.shouldLogDiagnostic(
+			"req " + owner + "@" + x + "," + y + "," + z, String.valueOf(result))) {
+			System.out.println("[MMTR-PT] req " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex + " leg " + leg + " -> " + result);
+		}
 		return result;
 	}
 
 	/** The train crossed (or gave up on) a point: its hold is consumed and the queue advances. */
 	public void mmtrPointRelease(long x, long y, long z, String viaRailHex, String owner) {
 		mmtrPointAuthority.passed(x, y, z, viaRailHex, owner);
-		System.out.println("[MMTR-PT] rel " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex);
+		if (org.mtr.core.mmtr.point.MmtrPointAuthority.shouldLogDiagnostic(
+			"rel " + owner + "@" + x + "," + y + "," + z, "")) {
+			System.out.println("[MMTR-PT] rel " + owner + "@" + x + "," + y + "," + z + " via " + viaRailHex);
+		}
 	}
 
 	/**
@@ -3131,6 +3171,18 @@ public class Simulator extends Data implements Utilities {
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
 			}
+			/*
+			 * **同一 tick 内再同步一次道岔位置**（2026-09-17 现场问："为什么道岔请求慢半拍、不是换向后马上完成"）。
+			 *
+			 * <p>上面那次同步在**车辆走行之后、而在这两步之前**：位置队列的重试（{@code retryPhysicalQueues}）
+			 * 与作业调度器（换端之后挂下一步、并在同一 tick 里把新计划申请出去）都发生在它之后 ——
+			 * 它们拿到的授予要等到**下一 tick** 才被"跟着授权扳岔"同步到世界上。50 ms 一步，但现场可见：
+			 * 换端完成后，道岔的物理位置要慢半拍才动，而车已经在等它了。</p>
+			 *
+			 * <p>这个方法本身"没变就不动 + 只在真变了才落盘"，重复调用是幂等的，所以直接补一次即可
+			 * （不动原来那一次：车辆走行之后立刻同步，是本 tick 里绝大多数授予该有的时机）。</p>
+			 */
+			mmtrSyncTurnoutPositionsToGrants();
 			clients.forEach(client -> client.sendUpdates(this));
 
 			if (autoSave) {

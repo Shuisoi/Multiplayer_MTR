@@ -871,6 +871,14 @@ public final class MmtrSectionService {
 	 * （{@code nearestLampOnSpan} 会对每根轨遍历全部灯）。</p>
 	 */
 	private final Object2ObjectOpenHashMap<String, ObjectArrayList<double[]>> guardedHeadingsByLamp = new Object2ObjectOpenHashMap<>();
+	/**
+	 * 每盏灯**属于哪个节点**（键 = 灯键，值 = 节点键；{@code ""} = 附近没有节点）。
+	 *
+	 * <p>与 {@link #guardedHeadingsByLamp} 一样是 rebuild 期间的缓存：判定本身是
+	 * {@link #nearestNode}（扫全部节点），而 {@link #lampAt} 每走一个节点就要问一次，
+	 * 现算会让"节点数 × 灯数"的乘积进到走行里。</p>
+	 */
+	private final Object2ObjectOpenHashMap<String, String> lampNodeKeyByLamp = new Object2ObjectOpenHashMap<>();
 	private String cachedSignature = "";
 	/** 正在 rebuild（{@link #refresh()} 的重入护栏，见那里的说明）。 */
 	private boolean rebuilding;
@@ -2413,6 +2421,7 @@ public final class MmtrSectionService {
 		sectionsByRail.clear();
 		followingBySection.clear();
 		guardedHeadingsByLamp.clear();
+		lampNodeKeyByLamp.clear();
 		simulator.rails.forEach(rail -> railByHex.put(rail.getHexId(), rail));
 
 		/*
@@ -4068,8 +4077,25 @@ public final class MmtrSectionService {
 	 *
 	 * <p>现在与 ① 选腿同口径：以 {@link #NODE_BIND_RADIUS_M}（4 m）为半径找节点旁的灯 —— 那边也是
 	 * "灯离最近节点 3.16 格"这条实测值定的。</p>
+	 *
+	 * <h3>为什么还必须是"属于这个节点"的灯（2026-09-16 现场修：南行折返咽喉断链）</h3>
+	 * <p>4 m 半径是个**圆**，而节点之间可能只有几米 —— 于是"站在隔壁节点的灯"也会落进这个圆里，
+	 * 被当成"这个节点的下一架灯"，走行在它这里被砍断。<b>现场读数</b>（北端折返咽喉，
+	 * 节点 {@code -176,-60,-253}）：A 线节点 {@code -170,-60,-253} 旁那盏朝南的灯 {@code -172,-60,-253}
+	 * 距离这个节点**正好 4.0 m**（{@link #distanceToNode} 用灯格中心减节点格中心，{@code 4.0 <= 4.0} 收下），
+	 * 而它面朝南、正对"从 36 m 轨继续开进 31 m 折返段"这个走行方向 ⇒ 走行在节点上就"看见下一架灯"，
+	 * 于是**31 m 轨没有南行段**（{@code /mmtr-block-sections} 里那根轨只剩北行一段，
+	 * 入口灯 {@code -174,-60,-222}）。后果正是用户报的：车受南行许可开进 31 m 轨时那一段**没有行车区间**，
+	 * 该看的灯读绿、占用失去保护；而这条路本来是通的（道岔位置 0 = 正线贯通，{@code 36 m 轨 ↔ 31 m 轨}
+	 * 是直股续行）。</p>
+	 *
+	 * <p>判据用**与其余代码同一条**："灯属于离它最近的节点"（{@link #nearestNode}，
+	 * 也就是 {@link #resolveProtectedRailsInternal} 判"灯在哪个节点上"、{@code buildSection} 判
+	 * "这条腿是不是被道岔切掉的那一侧"用的那条口径）。隔壁节点的灯由它自己的节点认领，
+	 * 不再越界砍别人的走行。</p>
 	 */
 	private @Nullable SignalEntry lampAt(Position node, double headingX, double headingZ) {
+		final String nodeKey = MmtrJunctionState.nodeKey(node);
 		SignalEntry best = null;
 		double bestDistance = Double.MAX_VALUE;
 		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
@@ -4080,10 +4106,32 @@ public final class MmtrSectionService {
 			if (!facesInto(entry, headingX, headingZ)) {
 				continue;
 			}
+			if (!nodeKey.equals(lampOwnerNodeKey(entry))) {
+				continue;   // 这是**别的**节点旁边的灯（4 m 的圆会把它捞进来，理由见上面的说明）
+			}
 			best = entry;
 			bestDistance = distance;
 		}
 		return best;
+	}
+
+	/**
+	 * 这盏灯属于哪个节点：**离它最近的节点**（{@link #nearestNode} 的口径），返回节点键（{@code x,y,z}）。
+	 *
+	 * <p>与 {@link #guardedHeadings} 一样按灯缓存，由 {@code rebuild} 清空。</p>
+	 *
+	 * @return 节点键；{@code ""} = 它附近没有节点（那种灯只有"轨中段的灯"那条路能认它）
+	 */
+	private String lampOwnerNodeKey(SignalEntry entry) {
+		final String key = MmtrSignalRegistry.key(entry.x, entry.y, entry.z);
+		final String cached = lampNodeKeyByLamp.get(key);
+		if (cached != null) {
+			return cached;
+		}
+		final Position owner = nearestNode(entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
+		final String ownerKey = owner == null ? "" : MmtrJunctionState.nodeKey(owner);
+		lampNodeKeyByLamp.put(key, ownerKey);
+		return ownerKey;
 	}
 
 	/**

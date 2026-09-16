@@ -25,10 +25,16 @@ public final class TempLoopRunTests {
 	 * 也没有现场那些停在半路的车，所以三班车的仿真从干净状态开始（作业单由工具在副本里现装）。
 	 */
 	private static final Path SRC = Paths.get("C:/Users/30354/Desktop/Shuisoi DEV/MC/mmtr/game/fabric/run/world/mtr.bak-20260916-loop");
+
+	/**
+	 * **最新信号灯登记表**（线上那份）：灯是"守护灯光背面"的，用户拆装过几盏，验证必须用**当前**灯表，
+	 * 不能拿备份里那份旧的。备份世界只提供轨道/股道/车辆（干净的现场），灯表用它覆盖。
+	 */
+	private static final Path LIVE_SIGNALS = Paths.get("C:/Users/30354/Desktop/Shuisoi DEV/MC/mmtr/game/fabric/run/world/mtr/minecraft/overworld/mmtr-signals.json");
 	/** 复制出来的世界根目录：里面直接是 minecraft/overworld（和线上 world/mtr 一个层级）。 */
 	private static final Path DST = Paths.get(System.getProperty("java.io.tmpdir"), "mmtr-looprun");
 	private static final String JOB = "TT-LOOP-1-3";
-	private static final int SECONDS = 1_600;
+	private static final int SECONDS = 2_000;
 
 	private static void deleteRecursively(Path path) throws IOException {
 		if (!Files.exists(path)) {
@@ -100,6 +106,27 @@ public final class TempLoopRunTests {
 		}
 	}
 
+	/** 从副本灯表里删掉某一盏灯（验证"区间按灯切"的假设用；只动副本）。 */
+	private static void dropSignalAt(Path signalsFile, long x, long y, long z) throws IOException {
+		if (!Files.isRegularFile(signalsFile)) {
+			return;
+		}
+		final com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(Files.readString(signalsFile)).getAsJsonObject();
+		final com.google.gson.JsonArray kept = new com.google.gson.JsonArray();
+		int dropped = 0;
+		for (final com.google.gson.JsonElement element : root.getAsJsonArray("signals")) {
+			final com.google.gson.JsonObject signal = element.getAsJsonObject();
+			if (signal.get("x").getAsLong() == x && signal.get("y").getAsLong() == y && signal.get("z").getAsLong() == z) {
+				dropped++;
+			} else {
+				kept.add(signal);
+			}
+		}
+		root.add("signals", kept);
+		Files.writeString(signalsFile, root.toString());
+		System.out.println("[RUN] 副本灯表里删掉 " + x + "," + y + "," + z + " 的灯 " + dropped + " 盏（剩 " + kept.size() + " 盏）");
+	}
+
 	private static void report(Simulator sim, int second) {
 		final MmtrJobScheduler scheduler = sim.mmtrJobScheduler;
 		final StringBuilder text = new StringBuilder("[RUN] t=" + second + "s");
@@ -117,14 +144,47 @@ public final class TempLoopRunTests {
 		System.out.println("[DIAG] ==== t=" + second + "s ====");
 		for (final Siding siding : sim.sidings) {
 			siding.iterateVehicles(vehicle -> {
-				if (vehicle.getMmtrMission() != null) {
+				final var mission = vehicle.getMmtrMission();
+				if (mission != null) {
 					System.out.println("[DIAG] 车 " + vehicle.getId() + " 手上道岔申请=" + vehicle.getMmtrPendingPointOps()
 						+ " 停在信号前=" + vehicle.getMmtrMotionWalker().haltedAtAuthority()
-						+ " 锚点=" + vehicle.hasMmtrMotionStopAnchor());
+						+ " 锚点=" + vehicle.hasMmtrMotionStopAnchor()
+						+ " 任务=" + mission.getState() + " 失败原因=" + mission.getFailureReason());
+					final var diagWalker = vehicle.getMmtrMotionWalker();
+					System.out.println("[DIAG]   位置：轨=" + railText(sim, diagWalker.railHex()) + " 偏移=" + Math.round(diagWalker.offsetM() * 10) / 10.0
+						+ " 距离=" + Math.round(diagWalker.distanceM() * 10) / 10.0 + " 车速=" + vehicle.getSpeed() + " 移动=" + vehicle.isMoving()
+						+ " 目标=" + (mission.hasTargetRail() ? "轨" : String.valueOf(mission.getTargetSidingId())));
+					// **关键诊断**：按它当前的任务目标现规划一次，把"为什么排不出进路"的原话打出来。
+					final String targetHex = mission.hasTargetRail() ? mission.getTargetRailHex()
+						: (org.mtr.core.mmtr.MmtrRunPlanner.findSavedRailRail(sim, mission.getTargetSidingId()) == null ? "" : org.mtr.core.mmtr.MmtrRunPlanner.findSavedRailRail(sim, mission.getTargetSidingId()).getHexId());
+					if (!targetHex.isEmpty()) {
+						final org.mtr.core.mmtr.MmtrRunPlanner.Plan plan = org.mtr.core.mmtr.MmtrRunPlanner.planToRail(sim, vehicle, targetHex, mission.hasTargetRail() ? mission.getTargetRailFraction() : 1.0);
+						System.out.println("[DIAG]   现在规划到 " + targetHex.substring(0, 8) + "… → 可行=" + plan.feasible + " 原因=" + plan.reason
+							+ " 岔申请数=" + plan.forkOps.size());
+					}
 				}
 			});
 		}
-		for (final String command : new String[]{"point locks", "point why -176 -60 -253", "point why -176 -60 -306", "point why -176 -60 -289"}) {
+		// **占位实况**：两处关键岔口上，每条轨到底登记了哪些车的足迹（权限层"车压没压在岔上"就靠它）。
+		final var trees = sim.mmtrOccupancyTrees();
+		for (final org.mtr.core.data.Position node : new org.mtr.core.data.Position[]{
+			new org.mtr.core.data.Position(-176, -60, -253), new org.mtr.core.data.Position(-170, -60, -289)}) {
+			final var neighbours = sim.positionsToRail.get(node);
+			System.out.println("[DIAG] 节点 " + node.getX() + "," + node.getZ() + " 邻轨=" + (neighbours == null ? 0 : neighbours.size()));
+			if (neighbours != null) {
+				for (final org.mtr.core.data.Rail rail : neighbours.values()) {
+					final StringBuilder ids = new StringBuilder();
+					for (int i = 0; i < trees.size(); i++) {
+						final var vp = org.mtr.core.mmtr.signal.MmtrSectionService.footprintOn(trees.get(i), rail.mmtrOrderedPositions());
+						if (vp != null) {
+							ids.append(vp.footprintIds()).append(' ');
+						}
+					}
+					System.out.println("[DIAG]   轨 " + railText(sim, rail.getHexId()) + " 足迹车=" + (ids.length() == 0 ? "（无）" : ids));
+				}
+			}
+		}
+		for (final String command : new String[]{"point locks", "point why -170 -60 -289"}) {
 			final org.mtr.core.mmtr.command.MmtrCommandDispatcher.Result result = org.mtr.core.mmtr.command.MmtrCommandDispatcher.execute(sim, command);
 			System.out.println("[DIAG] $ " + command + " -> ok=" + result.ok);
 			result.lines.forEach(line -> System.out.println("[DIAG]   " + line));
@@ -136,6 +196,22 @@ public final class TempLoopRunTests {
 		Assumptions.assumeTrue(Files.isDirectory(SRC), "dev world save not present");
 		deleteRecursively(DST);
 		copyRecursively(SRC, DST);
+		// 用**线上最新的信号灯登记表**覆盖副本里的旧表（轨道/车辆仍来自干净的备份世界）。
+		if (Files.isRegularFile(LIVE_SIGNALS)) {
+			Files.createDirectories(DST.resolve("minecraft/overworld"));
+			Files.copy(LIVE_SIGNALS, DST.resolve("minecraft/overworld/mmtr-signals.json"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			System.out.println("[RUN] 已换上线上最新灯表：" + LIVE_SIGNALS);
+		} else {
+			System.out.println("[RUN] !! 找不到线上灯表，仍用备份里的旧表：" + LIVE_SIGNALS);
+		}
+		/*
+		 * **用户方案验证**：区间是按"面向该方向的信号灯"切的 —— 北向在中途 `(-176,-253)` 还有一盏灯
+		 * （`-174,-60,-253`，朝向 180°），于是 `(-289)…(-222)` 被切成两段：换端车在 `(-253)→(-222)` 里时，
+		 * `(-289)→(-253)` 那段仍判空闲，后车就敢进、一路顶到岔前 ✗。
+		 * 把这盏北向中途灯删掉（南向那盏用户已经拆了），北向区间就是**一整段** `(-289)→(-222)`：
+		 * 只要里面有车（含正在换端的车），`(-176,-289)` 的灯就是红、后车停在它前面等 ✓。
+		 */
+		dropSignalAt(DST.resolve("minecraft/overworld/mmtr-signals.json"), -174, -60, -253);
 		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, DST, false);
 		System.out.println("[RUN] 复制世界到 " + DST + " rails=" + sim.rails.size() + " sidings=" + sim.sidings.size()
 			+ " jobs=" + sim.mmtrJobRegistry.jobs.size() + " 调度器=" + (sim.mmtrJobScheduler != null));

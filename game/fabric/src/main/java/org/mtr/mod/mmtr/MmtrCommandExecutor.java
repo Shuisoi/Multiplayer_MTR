@@ -483,77 +483,30 @@ public final class MmtrCommandExecutor {
 	}
 
 	/**
-	 * Scan currently loaded chunks for placed MTR signal light block entities and register them
-	 * as AUTO entries (upsert). Entries already BOUND to a rail stay untouched.
+	 * 手动刷新：把**所有已加载区块**里的信号灯与登记表核对一遍（全量重建、结果可解释）。
 	 *
 	 * <h3>为什么还要**删**（用户实测："有几个信号灯我已经敲掉了，地图不正确"）</h3>
-	 * <p>原来这里是**只加不删**的：灯被敲掉之后登记表里那一条还在，于是地图上永远画着一盏
+	 * <p>第一版这里是**只加不删**的：灯被敲掉之后登记表里那一条还在，于是地图上永远画着一盏
 	 * 已经不存在的灯。扫描是唯一能看到"世界里到底还有没有这盏灯"的地方（只有游戏端能枚举已加载
 	 * 区块），所以删除也只能在这里做。</p>
 	 *
 	 * <h3>删除的安全边界（不然会误删）</h3>
 	 * <p>只能删**所在区块已加载、但区块里没有它**的条目。玩家走远之后区块会卸载，那时"找不到"
 	 * 只说明没加载，不代表灯没了 —— 按"没找到就删"会把远处的灯全部清掉，那是灾难性的。</p>
+	 *
+	 * <h3>为什么这里只剩一个循环</h3>
+	 * <p>逐区块的核对逻辑整体搬到了 {@link MmtrSignalSync#syncChunk}：自动刷新（区块加载 / 敲灯 /
+	 * 每秒轮转）和这条手动指令必须是**同一份实现**。两条路各写一份的结果是"手动扫一遍修好了、
+	 * 自动跑一轮又改回去"，而且用户没法用手动扫描的结果去解释自动刷新做了什么。</p>
 	 */
 	private static void scanSignals(Simulator simulator, ServerWorld serverWorld) {
-		int found = 0;
-		int added = 0;
-		int skippedBound = 0;
-		int removed = 0;
-		int removedBound = 0;
-		final World world = new World(serverWorld);
-		// 本次扫描覆盖到的区块（按区块坐标），以及在这些区块里真正看到的灯格
-		final java.util.Set<Long> scannedChunks = new java.util.HashSet<>();
-		final java.util.Set<String> seen = new java.util.HashSet<>();
+		final MmtrSignalSync.Result total = new MmtrSignalSync.Result();
 		for (final WorldChunk chunk : MmtrChunkTracker.loadedChunks(serverWorld)) {
-			scannedChunks.add(chunkKey(chunk.getPos().x, chunk.getPos().z));
-			// 先把这一块的方块实体抄一份再遍历：下面会在遍历中改登记表，而直接迭代原集合时序上更脆
-			final java.util.List<BlockEntity> blockEntities = new java.util.ArrayList<>(chunk.getBlockEntities().values());
-			for (final BlockEntity blockEntity : blockEntities) {
-				final BlockPos pos = blockEntity.getPos();
-				final BlockState blockState = world.getBlockState(new org.mtr.mapping.holder.BlockPos(pos.getX(), pos.getY(), pos.getZ()));
-				final Object block = blockState.getBlock().data;
-				if (!MmtrSignalBlocks.isSignalLight(block)) {
-					continue;
-				}
-				found++;
-				// 一盏灯方块两格高，扫描会把两格都记下 —— 两格都算"看到过"，
-				// 否则删除那一步会把另一格误判成"灯没了"。
-				seen.add(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(pos.getX(), pos.getY(), pos.getZ()));
-				seen.add(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(pos.getX(), pos.getY() - 1, pos.getZ()));
-				final SignalEntry existing = simulator.mmtrSignals.get(pos.getX(), pos.getY(), pos.getZ());
-				if (existing != null && "BOUND".equals(existing.mode)) {
-					skippedBound++;
-					continue;
-				}
-				if (simulator.mmtrSignalOp(pos.getX(), pos.getY(), pos.getZ(), BlockSignalBase.getAngle(blockState), MmtrSignalBlocks.aspectsOf(block), "set", "")) {
-					added++;
-				}
-			}
+			total.merge(MmtrSignalSync.syncChunk(simulator, serverWorld, chunk));
 		}
-		// 清掉"区块已加载、却不在世界里"的登记：这正是被玩家敲掉的灯
-		final java.util.List<SignalEntry> stale = new java.util.ArrayList<>();
-		for (final SignalEntry entry : simulator.mmtrSignals.signals.values()) {
-			if (seen.contains(org.mtr.core.mmtr.signal.MmtrSignalRegistry.key(entry.x, entry.y, entry.z))) {
-				continue;
-			}
-			if (!scannedChunks.contains(chunkKey(entry.x >> 4, entry.z >> 4))) {
-				continue; // 区块没加载：判断不了，留着
-			}
-			stale.add(entry);
-		}
-		for (final SignalEntry entry : stale) {
-			final boolean bound = "BOUND".equals(entry.mode);
-			if (simulator.mmtrSignalRemove(entry.x, entry.y, entry.z)) {
-				removed++;
-				if (bound) {
-					removedBound++;
-				}
-			}
-		}
-		simulator.mmtrCommandResult("[signals] 扫描完成: 找到 " + found + " 个信号灯, 新增 " + added
-			+ " 个 AUTO 条目, 跳过 BOUND " + skippedBound + " 个, 清理已拆掉的 " + removed + " 个"
-			+ (removedBound > 0 ? "（其中 " + removedBound + " 个是人工绑定：世界里的灯没了，绑定一并移除）" : "")
+		simulator.mmtrCommandResult("[signals] 扫描完成: 找到 " + total.found + " 个信号灯, 新增 " + total.added
+			+ " 个 AUTO 条目, 保留人工绑定 " + total.skippedBound + " 个（只刷新朝向，不动绑定）, 清理已拆掉的 " + total.removed + " 个"
+			+ (total.removedBound > 0 ? "（其中 " + total.removedBound + " 个是人工绑定：世界里的灯没了，绑定一并移除）" : "")
 			+ "; 节点朝向 " + scanNodeAngles(simulator, serverWorld));
 	}
 

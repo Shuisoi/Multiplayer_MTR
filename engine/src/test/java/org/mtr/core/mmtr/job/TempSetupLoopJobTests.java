@@ -94,7 +94,7 @@ public final class TempSetupLoopJobTests {
 		job.startTimeOfDayMs = startTimeOfDayMs;
 		job.repeatDaily = true;
 		job.loop = true;
-		job.loopEveryMs = 120_000L;               // 一圈跑完歇 2 分钟再发下一圈（三班同周期 ⇒ 相位不会被拖乱）
+		job.loopEveryMs = LOOP_EVERY_MS;           // 圈间等待（用户 2026-09-17：取消原来的 2 分钟）
 		final MmtrCarSpec car = new MmtrCarSpec();
 		car.vehicleId = "saf101";
 		car.length = 16;
@@ -135,23 +135,37 @@ public final class TempSetupLoopJobTests {
 	}
 
 	/**
-	 * 三班车的参数：股道 / 首次发车时刻（**错开**）/ 一圈怎么收尾。
+	 * 全部 6 班车的参数：股道 / 首次发车时刻（**错开**）/ 一圈怎么收尾。
 	 *
-	 * <p>错开量为什么是 150 s（≈ 一圈的 2/3）：这条环线的**两端共用同几处道岔**（南端 (-541)/(-511)、
-	 * 北端 (-253)/(289)），两班车同时停在同一端就会互相扣住。</p>
+	 * <h3>错开量为什么从 150 s 改成 40 s（2026-09-17 用户口径）</h3>
+	 * <p>用户要求：**剩下 4 辆也套同一张作业单、注意错开、并取消每圈 2 分钟的等待**。
+	 * 车辆段 987654 正好 6 条 43 m 股道、各一辆 saf101 ⇒ 6 班车。</p>
+	 * <p>一圈的实际运行时长约 236 s（现场日志：ceS→ceN 这半圈 118 s，两半对称）；
+	 * 圈间等待压到 5 s 之后，**周期 ≈ 241 s**，6 班平分就是 **40 s 一班**
+	 * （6 × 40 = 240 ≈ 一个周期）—— 错开量按"周期 ÷ 班数"取，才不会在周期回卷时两班叠在一起。</p>
+	 * <p>收尾方式（第 3 列：0 = 回库，非 0 = 北端 (-176,-222) 换端，不回库）：六班**全部**取北端换端，
+	 * 与用户"在 -176,-60,-222 处折返"的口径一致。</p>
 	 *
-	 * <p>收尾方式（第 3 列：0 = 回库，非 0 = 北端换端）——<b>三班都取"回库"</b>：
-	 * 在 (-176,-222) 经斜渡线换到 x=-170 正线、再进库房股道，下一圈从库里发车。这样**每一段的行车方向
-	 * 都是单向的**（出库走 A 往南、回程走 B 往北、回库再走 A 往北），不会出现"北部掉头处两个车顶头"
-	 * 那种对向相遇（现场实测过：B/C 在图里换端后下一圈要往南走 B 轨，正好撞上回程北上的车）。</p>
+	 * <p><b>产能提醒</b>：北端折返段是一根 31 m 的单线死头，一班车占用它 + 咽喉约 40–50 s；
+	 * 6 班按 240 s 周期跑，需要的咽喉时间（约 300 s）**超过**周期本身 ⇒ 现场会出现排队/顺延
+	 * （联锁会自己排，不会死锁）。真挤到一起时，把 {@link #LOOP_EVERY_MS} 调大即可自然拉开。</p>
 	 */
 	public static final long[][] LOOP_FLEET = {
-		{SIDING_C1, 1_000L, 0},                    // 987654/1 —— 第一班
-		{1607594720369027173L, 151_000L, 0},       // 987654/2 —— 第二班
-		{4321759533923363700L, 301_000L, 0},       // 987654/3 —— 第三班
+		{SIDING_C1, 1_000L, 1},                    // 987654/1 —— 第一班：北端 (-176,-222) 换端
+		{1607594720369027173L, 41_000L, 1},        // 987654/4
+		{4321759533923363700L, 81_000L, 1},        // 987654/6
+		{-7701010504948601156L, 121_000L, 1},      // 987654/1（库里第一条）
+		{139388029583209177L, 161_000L, 1},        // 987654/3
+		{3518737612429408379L, 201_000L, 1},       // 987654/5
 	};
 
-	public static final String[] LOOP_JOB_IDS = {"TT-LOOP-1-3", "TT-LOOP-1-3-B", "TT-LOOP-1-3-C"};
+	/** 圈间等待（原为 2 分钟；用户 2026-09-17："取消每圈的 2min 等待时间"）。引擎的下限是 1 s。 */
+	public static final long LOOP_EVERY_MS = 5_000L;
+
+	public static final String[] LOOP_JOB_IDS = {
+		"TT-LOOP-1-3", "TT-LOOP-1-3-B", "TT-LOOP-1-3-C",
+		"TT-LOOP-1-3-D", "TT-LOOP-1-3-E", "TT-LOOP-1-3-F",
+	};
 
 	/** 三班车一起造（收尾方式见 {@link #LOOP_FLEET}）。 */
 	public static java.util.List<MmtrConsistJob> buildFleet(Simulator sim) {
@@ -164,16 +178,48 @@ public final class TempSetupLoopJobTests {
 
 	@Test
 	public void setup() {
+		/*
+		 * **默认不写现场世界**（2026-09-16 现场事故修）：
+		 *
+		 * <p>这个工具会 `sim.stop()` —— 那是"立刻做一次非增量完整保存"，也就是把**线上世界连同作业单**
+		 * 一起重写。而它是个测试类：`gradlew test` 跑全量时会把它一起跑掉，于是"跑一遍测试"就悄悄把
+		 * 现场作业单换成了当时工具里写着的那一版（现场表现：服务端重启后跑的是实验版作业单，
+		 * 车在 (-176,-222) 换端后卡住、提示无进路）。</p>
+		 *
+		 * <p>现在要写现场必须显式给环境变量 {@code MMTR_WRITE_LIVE_WORLD=true}；不给自己跳过，
+		 * 测试套件因此永远不会改现场。</p>
+		 */
+		Assumptions.assumeTrue("true".equalsIgnoreCase(System.getenv("MMTR_WRITE_LIVE_WORLD")),
+			"写现场需要 MMTR_WRITE_LIVE_WORLD=true（这个工具会整份重写线上世界）");
 		Assumptions.assumeTrue(Files.isDirectory(ROOT), "dev world save not present");
 		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, ROOT, false);
-		// 老的三条都撤掉（含上一轮那条单班的），再写这三班错开时间的循环作业单。
+		// 老的作业单全部撤掉（含上一轮那三条），再写这一版错开时间的循环作业单。
 		for (final MmtrConsistJob existing : new java.util.ArrayList<>(sim.mmtrJobRegistry.jobs)) {
 			sim.mmtrJobRegistry.jobs.remove(existing);
 		}
+		/*
+		 * **先把场上所有 MMTR 车辆清掉，让 6 班车都从自己的股道干净出发**（2026-09-17）。
+		 *
+		 * <p>不清的话：服务端停机时那几班车正跑在半路上，它们的本务股道是空的 —— 新作业单去认领时
+		 * 找不到车，就会另生一辆，于是场上多出一批"没人管的孤儿车"（地图上看着像车变多了）。
+		 * 清掉之后，每班车都在自己那条股道上从库里认领，发车时刻也就是作业单写的那个。</p>
+		 */
+		int removed = 0;
+		final java.util.List<Long> liveIds = new java.util.ArrayList<>();
+		for (final org.mtr.core.data.Siding siding : sim.sidings) {
+			siding.iterateVehicles(vehicle -> liveIds.add(vehicle.getId()));
+		}
+		for (final long vehicleId : liveIds) {
+			if (sim.deleteMmtrVehicle(vehicleId)) {
+				removed++;
+			}
+		}
+		System.out.println("[SETUP] 已清空场上 MMTR 车辆 " + removed + " 辆（6 班车将各自从本务股道出发）");
 		for (final MmtrConsistJob job : buildFleet(sim)) {
 			sim.upsertMmtrJob(job);
 		}
-		System.out.println("[SETUP] 作业单已落盘 mmtr-jobs.json，条数=" + sim.mmtrJobRegistry.jobs.size());
+		System.out.println("[SETUP] 作业单已落盘 mmtr-jobs.json，条数=" + sim.mmtrJobRegistry.jobs.size()
+			+ "（错开 " + (LOOP_FLEET[1][1] - LOOP_FLEET[0][1]) / 1000 + " s，圈间等待 " + (LOOP_EVERY_MS / 1000) + " s）");
 		// `save()` 只是置 autoSave 标志（真正的写盘发生在 tick 里）；`stop()` 才是"立刻做一次非增量完整保存"
 		sim.stop();
 		System.out.println("[SETUP] 世界已保存（只改了作业单，没有动轨道/股道）");

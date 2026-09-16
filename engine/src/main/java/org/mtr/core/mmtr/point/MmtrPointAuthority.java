@@ -93,11 +93,17 @@ public final class MmtrPointAuthority {
 	/**
 	 * **某列车是不是还压在这处节点的轨上**（占用树答，权限层不认识车辆足迹）。
 	 *
-	 * <p>用途只有一个：物理持有窗口到期时决定"能不能放位"。放位等于允许别人把道岔扳到别的位，
-	 * 而车还压在这处道岔的轨上时那样做就是把道岔从它脚下抽走（见 {@code expirePhysical}）。</p>
+	 * <p>用途有两个：① 物理持有窗口到期/被抢时判断"能不能放位"（放位等于允许别人把道岔扳到别的位，
+	 * 而车还压在这处道岔的轨上时那样做就是把道岔从它脚下抽走）；② 释放"陈旧持有"（持有者根本不在
+	 * 岔轨上、又有人排队等着别的位）。</p>
+	 *
+	 * <p><b>三态</b>：{@code TRUE} = 确知在岔轨上；{@code FALSE} = 确知不在；{@code null} = 查不出来
+	 * （不是车辆 owner，例如测试里的 {@code "vA"} 标签）。两个用途对"查不出来"的取舍相反：
+	 * 放位/抢位时按"不在"处理（老语义不变），释放陈旧持有时按"在"处理（宁可不放）——
+	 * 少了这个区分，两边的既有用例会互相打架。</p>
 	 */
 	public interface HolderOccupancy {
-		boolean ownerIsOnNodeRails(long x, long y, long z, String owner);
+		@Nullable Boolean ownerIsOnNodeRails(long x, long y, long z, String owner);
 	}
 
 	/** 挂上"持有者还在不在岔轨上"的查询；不挂 = 到期就放位（老语义，测试夹具就是这样）。 */
@@ -107,6 +113,34 @@ public final class MmtrPointAuthority {
 	}
 
 	private @Nullable HolderOccupancy holderOccupancy;
+
+	/**
+	 * **这处道岔现在实际在哪一位**（不看持有者是谁，只看"位置"这件事本身）。
+	 *
+	 * <h3>为什么要单独问一次"位置"</h3>
+	 * <p>权限层里的 {@link #physicalPosition} 是**持有者驱动**的：没人持有就是
+	 * {@link #NO_PHYSICAL_HOLDER}（"无主"）。但"是否需要扳岔"这件事只取决于**道岔现在的位置**，
+	 * 与谁持有无关 —— 申请要的那一位如果就是现在的位，那这一趟**什么都不用扳**。</p>
+	 *
+	 * <p>不挂 = 问不出实际位置（测试夹具），此时退化为"按老语义排队"，既有用例逐位不变。</p>
+	 *
+	 * @return 位置（0/1），或 {@link #NO_PHYSICAL_HOLDER} = 问不出来
+	 */
+	public interface ActualPositionLookup {
+		int position(long x, long y, long z);
+	}
+
+	/** 挂上"这处道岔现在实际在哪一位"的查询（唯一实现是 {@code Simulator.mmtrTurnoutPosition}）。 */
+	public MmtrPointAuthority withActualPositionLookup(@Nullable ActualPositionLookup lookup) {
+		this.actualPositionLookup = lookup;
+		return this;
+	}
+
+	private @Nullable ActualPositionLookup actualPositionLookup;
+
+	private int actualPosition(long x, long y, long z) {
+		return actualPositionLookup == null ? NO_PHYSICAL_HOLDER : actualPositionLookup.position(x, y, z);
+	}
 
 	/** 车还压在岔轨上时，持有窗口一次续这么多（毫秒）；车出清后不再续期，正常释放。 */
 	private static final long PHYSICAL_HOLD_EXTENSION_MILLIS = 30_000;
@@ -270,6 +304,39 @@ public final class MmtrPointAuthority {
 		final long now = clock.getAsLong();
 		expirePhysical(nk, now);
 		final Physical holder = physicalHolders.get(nk);
+		/*
+		 * **位置空着、但队列里已经有人在等 ⇒ 排到队尾，不许插队**（2026-09-16 现场修）。
+		 *
+		 * <p>现场：北端咽喉三班车抢一处道岔，持有者被别人"让位"规则劝退之后位置一空，**它自己下一 tick
+		 * 立刻重新申请**，而这里看到"没人持有"就直接判给了它 —— 队列里排第一的那班永远等不到，
+		 * 现场表现就是"让位日志每 20 秒刷一次、车却谁也不动"（22:29–22:31 实测刷了 5 次）。</p>
+		 *
+		 * <p>先到先得：空位应当由**队列头**拿（{@link #retryPhysicalQueues} 每 tick 会把它判出去），
+		 * 新来的申请只在队列为空时才直接拿位。</p>
+		 */
+		if (holder == null && physicalQueueHasOtherOwner(nk, owner)) {
+			/*
+			 * **但"位置已经就是我要的那一位"不排队**（2026-09-16 现场修，北端咽喉实测）。
+			 *
+			 * <p>现场读数（23:48，每 5 秒一行 QUEUED 刷了两分钟）：{@code 物理位置=0（正线贯通）/
+			 * 物理持有者=（没有）/ 等待队列=[vA@1, vB@0]}。vA 那一条是**已经过了岔的车**留下的陈旧申请
+			 * （它要岔股 1 出去，而岔现在在正线 0）—— 那一条要"扳一位"，而扳位被净空闸挡下
+			 * （挡它的正是 vA 自己压在岔区的足迹，见 {@code 岔区净空被占}）⇒ **队列头永远推不动**；
+			 * 同时 vB 要的**正是岔现在这一位**，它排在队尾，于是"没人锁、没人持有、位置也对，就是不给"。</p>
+			 *
+			 * <p>联锁的道理：**不扳岔就不存在"把道岔从车下抽走"**。一个不需要扳岔的申请与队列里的
+			 * 等待者之间没有互相争用的东西 —— 它们争的是岔区这段路，那是闭塞与净空闸各管一层的活，
+			 * 不该由"位置队列"来兼职。所以这一位已经在的话直接放行，不进净空闸、也不排队。
+			 * 这与上面"位置相容：两列车要同一位就直接给"是同一条规则，只是这里要的是**当前那一位**。</p>
+			 *
+			 * <p>问不出实际位置时（测试夹具）行为不变：照旧排队。</p>
+			 */
+			final int actual = actualPosition(x, y, z);
+			if (actual == NO_PHYSICAL_HOLDER || actual != demand) {
+				enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis, priorityMillis);
+				return Result.QUEUED;
+			}
+		}
 		if (holder == null || holder.owner.equals(owner)) {
 			/*
 			 * 没人定这个位置，或者我本来就定着它 → 位置跟着我走。
@@ -278,9 +345,18 @@ public final class MmtrPointAuthority {
 			 * —— 那正是"把道岔从车下抽走"。请求方自己压在岔上不算（它按着自己的位，本来就该能改自己
 			 * 的需要，否则换端/折返会把自己锁死）。被挡下来时与"互斥"同一处置：**收回刚发出的逐进向
 			 * 授权**、改为在道岔上排队，绝不留下"半个持有"（T1b 的不变量）。</p>
+			 *
+			 * <p><b>"要不要扳一位"才决定问不问闸门</b>（2026-09-16 现场修的后半，与上面那条"不排队"
+			 * 是同一次修的两半）：没人持有的时候位置由**世界现在在哪一位**决定 —— 它已经在我要的
+			 * 那一位上，这一趟就不扳任何东西，净空闸（"不许把道岔从车下抽走"）也就无从谈起。
+			 * 修前这里只看"我有没有持有"，于是"位置本来就对、但岔区上压着别的车"照样被挡下来排队，
+			 * 而那种情况下根本没有东西要从谁脚下抽走。问不出实际位置时（测试夹具没挂查找）
+			 * 按老语义保守地问闸门，既有用例逐位不变。</p>
 			 */
-			if ((holder == null || holder.position != demand)
-				&& positionChangeBlockedReason(x, y, z, demand, owner) != null) {
+			final boolean throwNeeded = holder != null
+				? holder.position != demand
+				: (actualPosition(x, y, z) == NO_PHYSICAL_HOLDER || actualPosition(x, y, z) != demand);
+			if (throwNeeded && positionChangeBlockedReason(x, y, z, demand, owner) != null) {
 				holders.remove(k);
 				dropOwnerRequests(k, owner);
 				promote(k, now);
@@ -297,6 +373,24 @@ public final class MmtrPointAuthority {
 			return Result.GRANTED;
 		}
 		/*
+		 * **已经在岔里的车优先出清**（2026-09-16 现场修：北端两班车相持的最终环）。
+		 *
+		 * <p>现场读数：{@code 物理位置=0 持有者=vA … 队列=[vB@1]} —— vA 要正线（0）、站在岔外等着；
+		 * vB 压在岔轨上、要岔股（1）出去。两边都要对方的位置：vA 因为 vB 占着它的出路线而不动、
+		 * vB 因为拿不到 1 而出不去 ⇒ 位置永远不换手，两班车一起冻住（离线 1600 s 实测）。</p>
+		 *
+		 * <p>联锁的道理：**已经进了岔的车必须能出去**（否则把咽喉锁死）。所以请求方压在岔轨上、
+		 * 而按着位置的那班车还在岔外等 ⇒ 位置直接给岔里的这一班（它出清之后位置自然释放，
+		 * 队首的岔外车再拿）。这与"车压在岔上不扳"是同一条安全前提的不同侧面：不从车下抽位。</p>
+		 */
+		final boolean requesterInside = Boolean.TRUE.equals(ownerIsOnNodeRails(nk, owner));
+		if (requesterInside && !holderStillOnNodeRails(nk, holder)) {
+			System.out.println("[MMTR-PT] 岔内优先出清：把道岔 " + nk + " 的位置从 " + holder.owner + "（在岔外等）交给岔内的 " + owner);
+			physicalHolders.put(nk, new Physical(owner, demand, untilMillis, priorityMillis));
+			dropPhysicalQueued(nk, owner);
+			return Result.GRANTED;
+		}
+		/*
 		 * **早班车可以收回晚班车按着的位置**（notes/151，用户裁定的通行优先权）。
 		 *
 		 * 六台车去同一个车站、计划到达 00:05 / 00:07 / … 时，位置该给 00:05 那台：
@@ -304,19 +398,69 @@ public final class MmtrPointAuthority {
 		 *   - 而且要过**净空闸**：晚班车压在岔区里就不许从它脚下改位（那是把道岔抽走）；
 		 *   - 收回之后晚班车排队等（它的进向行还在，位置不在它手里），等它自己再申请时会按优先权排队。
 		 */
-		if (priorityMillis < holder.priorityMillis && positionChangeBlockedReason(x, y, z, demand, owner) == null) {
+		if (priorityMillis < holder.priorityMillis && positionChangeBlockedReason(x, y, z, demand, owner) == null
+			&& !holderStillOnNodeRails(nk, holder)) {
 			System.out.println("[MMTR-PT] 优先权：把道岔 " + nk + " 的位置从 " + holder.owner + "（计划 " + holder.priorityMillis
 				+ "）交给更早的 " + owner + "（计划 " + priorityMillis + "）");
 			physicalHolders.put(nk, new Physical(owner, demand, untilMillis, priorityMillis));
 			dropPhysicalQueued(nk, owner);
 			return Result.GRANTED;
 		}
+		/*
+		 * **车就压在这处道岔的轨上、而且它的计划要从这里过 ⇒ 位置冻结，先到先得**（2026-09-16 现场修：
+		 * "北部掉头处两个车顶头"）。
+		 *
+		 * <p>现场：一班车在 31 m 折返段上换端后要**岔股**去 x=-170，另一班回程车要**正线**直着北上 ——
+		 * 两个位置互斥，而"位置"在两班车之间**来回被抢**（优先权那条路各自把对方的位拿走），
+		 * 于是两条进路永远 PENDING、谁也过不去，看起来就是两车对死（`point why` 里持有者一会儿 A
+		 * 一会儿 B）。灯是对的、道岔模型也是对的，卡的是这条抢位规则。
+		 *
+		 * <p>现在：谁先拿到位置，只要它的车还压在这处道岔的三条轨上，位置就**只属于它** ——
+		 * 后来的车按互斥在道岔上排队（FIFO），等它出清这三条轨（`expirePhysical` 那里一到期就放）
+		 * 自然轮到下一个。两端都有等待的地方（回程车等在 36 m 段上、换端车等在这 31 m 段上），
+		 * 所以"先到先得"就能把这处咽喉串起来。</p>
+		 */
 		// 互斥：收回刚发出的逐进向授权，改为在**道岔上**排队。
 		holders.remove(k);
 		dropOwnerRequests(k, owner);
 		promote(k, now);
 		enqueuePhysical(nk, owner, viaRailHex, leg, demand, untilMillis, priorityMillis);
 		return Result.QUEUED;
+	}
+
+	/** 这处道岔的位置队列里，是否有**别人**在等（我自己的排队项、以及当前持有者自己的排队项都不算）。 */
+	private boolean physicalQueueHasOtherOwner(String nk, String owner) {
+		final ArrayDeque<PhysicalReq> q = physicalQueued.get(nk);
+		if (q == null) {
+			return false;
+		}
+		final Physical holder = physicalHolders.get(nk);
+		for (final PhysicalReq r : q) {
+			if (!r.owner.equals(owner) && (holder == null || !holder.owner.equals(r.owner))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * 现在按着这处道岔位置的那列车，是不是**还压在这处道岔的轨上**（是 ⇒ 位置不能从它脚下拿走）。
+	 * 查不出来（{@code null}）按"不在"处理 —— 保持既有语义（测试夹具/非车辆持有者照旧可以被抢位）。
+	 */
+	private boolean holderStillOnNodeRails(String nk, Physical holder) {
+		return Boolean.TRUE.equals(ownerIsOnNodeRails(nk, holder.owner));
+	}
+
+	/** 同上，但**确知**持有者已不在岔轨上（{@code FALSE}）；查不出来不放位。（目前没有调用方，留作后续钩子。） */
+	@SuppressWarnings("unused")
+	private boolean holderKnownAwayFromNodeRails(String nk, Physical holder) {
+		return Boolean.FALSE.equals(ownerIsOnNodeRails(nk, holder.owner));
+	}
+
+	/** 某 owner（{@code "v"+车辆id}）是不是还压在这处道岔的轨上（{@code null} = 查不出来）。 */
+	private @Nullable Boolean ownerIsOnNodeRails(String nk, String owner) {
+		final long[] node = parseNodeKey(nk);
+		return node == null || holderOccupancy == null ? null : holderOccupancy.ownerIsOnNodeRails(node[0], node[1], node[2], owner);
 	}
 
 	/**
@@ -892,6 +1036,43 @@ public final class MmtrPointAuthority {
 		return holder == null ? null : holder.owner;
 	}
 
+	/** 只读：某列车是不是还压在这处节点的轨上（{@code null} = 查不出来，例如测试里的标签 owner）。 */
+	public @Nullable Boolean ownerOnNodeRails(long x, long y, long z, String owner) {
+		return ownerIsOnNodeRails(nodeKey(x, y, z), owner);
+	}
+
+	/**
+	 * 只读：{@code owner} 是不是这处道岔**"正在用"的那一方** —— 它按着位置、按的又正是**自己要的**那一位、
+	 * 而且人就压在这处道岔的轨上。
+	 *
+	 * <h3>为什么让位规则必须问这一句（2026-09-17 现场：北端折返咽喉两班车互让到死）</h3>
+	 * <p>现场读数：车 B 在 36 m 正线轨上、按着位置 0（**正是它自己要的位**，它要直着开进 31 m 折返段）；
+	 * 车 A 在斜线上排队要位置 1。而"停着不动的车"那条让位规则只要看见**有人排在我按着的位置后面**
+	 * 就放掉自己 —— 于是 B 每 20 秒让一次、A 拿到 1；A 又因为同样的判据在 20 秒后让出去、B 再拿回 0……
+	 * **位置每 20 秒换一次手，两班车谁也没动**（日志里 {@code 让位（停着不动）} 每 20 秒一行刷了十几分钟）。</p>
+	 *
+	 * <p>而这时候的正确行为是确定的：**B 是在用的那一方**（它要的位就是当前的位、它的车还压在岔轨上），
+	 * 它只要往前走一步就出清了；A 要的位与它互斥，只能等。规则不能把"正在用"的车劝退 —— 那不是破环，
+	 * 那是把唯一能解开这个环的动作取消掉。</p>
+	 *
+	 * <p>"压在这处道岔的轨上"这一条不能少：车已经出清到岔外时，它按着的位才是真的挡着别人（它自己
+	 * 一时半会儿不会再用），那种情况照旧让位。查不出占用（{@code null}）按**在**处理（宁可不劝退）。</p>
+	 *
+	 * @param demand 这列车**自己计划**在这处道岔上要的位置（由调用方按它的进路算出来）
+	 */
+	public boolean holdsThePositionItNeeds(long x, long y, long z, String owner, int demand) {
+		if (demand == Integer.MIN_VALUE) {
+			return false;
+		}
+		final String nk = nodeKey(x, y, z);
+		expirePhysical(nk, clock.getAsLong());
+		final Physical holder = physicalHolders.get(nk);
+		if (holder == null || !holder.owner.equals(owner) || holder.position != demand) {
+			return false;
+		}
+		return !Boolean.FALSE.equals(ownerIsOnNodeRails(nk, owner));
+	}
+
 	/**
 	 * **诊断出口**：现在能不能把这处道岔扳到 {@code newPosition}；返回原因 = 不能。
 	 *
@@ -1068,6 +1249,18 @@ public final class MmtrPointAuthority {
 	}
 
 	private void enqueuePhysical(String nk, String owner, String viaRailHex, int leg, int position, long untilMillis, long priorityMillis) {
+		/*
+		 * **已经按着这个位置的人不要排队**（2026-09-16 现场修：北端两班车相持的真正机制）。
+		 *
+		 * <p>现场读数：{@code holder=vX@0 … queue=vX@0} —— **持有者自己也在队列里**。来源是原子申请那条路
+		 * （{@code queueSet}）在一组道岔里"整组等"时，把**已经在手里的那一处**也一起排进队。后果是
+		 * 位置一空出来，{@link #promotePhysical} 的队首又是它自己 ⇒ 它原地再拿一次 ⇒ 另一班车永远轮不到
+		 * （实测：两班车在同一处道岔上按着相反的两个位置来回相持，位置永远不换手）。</p>
+		 */
+		final Physical current = physicalHolders.get(nk);
+		if (current != null && current.owner.equals(owner) && current.position == position) {
+			return;
+		}
 		final ArrayDeque<PhysicalReq> q = physicalQueued.computeIfAbsent(nk, key -> new ArrayDeque<>());
 		for (final PhysicalReq r : q) {
 			if (r.owner.equals(owner)) {
@@ -1103,6 +1296,45 @@ public final class MmtrPointAuthority {
 	private final Map<String, Long> physicalRetryLogMillis = new HashMap<>();
 	private static final long PHYSICAL_RETRY_LOG_INTERVAL_MILLIS = 5_000;
 
+	/** 申请/释放诊断日志的节流状态：键 = {@code 车@节点(+方向)}，值 = {上次打印的时刻, 上次打印的结果}。 */
+	private static final Map<String, Object[]> DIAGNOSTIC_LOG_STATE = new HashMap<>();
+	private static final long DIAGNOSTIC_LOG_INTERVAL_MILLIS = 10_000;
+	/** 键空间很小（车 × 岔口），超过这个数说明键里有会变的东西（比如把结果串进键），清一次兜底。 */
+	private static final int DIAGNOSTIC_LOG_MAX_KEYS = 2_048;
+
+	/**
+	 * 道岔申请/释放诊断日志的**节流闸**（2026-09-16 现场事故）。
+	 *
+	 * <h3>为什么必须节流</h3>
+	 * <p>一处卡死的道岔会让车辆**每 tick** 重发同一个申请（"按计划补申请"那条自救路就是这么写的），
+	 * 于是 {@code [MMTR-PT] req … -> QUEUED} 每秒刷 20 行、几十个字符一行的长串。这不只是难看：
+	 * 这些行进的是服务端控制台，而控制台 I/O 与 tick 同一个线程 —— 实测刷屏时 {@code mmtr-command}
+	 * 请求直接超时（8 s 不应答）、{@code server stop} 也发不进去，现场看起来像"引擎卡死"，
+	 * 实际是它在写日志。诊断要留着（卡死时正是靠这几行定位的），但**同一个结论不需要每秒说 20 遍**。</p>
+	 *
+	 * <h3>规则</h3>
+	 * <p>第一次一定打（新出现的申请要看得见）；结果变了马上打（QUEUED → GRANTED 这种状态跃迁不能等）；
+	 * 其余每 {@link #DIAGNOSTIC_LOG_INTERVAL_MILLIS} 最多一条。节流是**按"车@节点"分别算**的，
+	 * 所以一列车刷屏不会把别的车的话吞掉。</p>
+	 *
+	 * @param key     稳定的键（车 + 节点 + 方向），不要把结果串进键里
+	 * @param outcome 本次结果的可比较文本（用来判"结论变了没有"）
+	 */
+	public static boolean shouldLogDiagnostic(String key, String outcome) {
+		final long now = System.currentTimeMillis();
+		synchronized (DIAGNOSTIC_LOG_STATE) {
+			if (DIAGNOSTIC_LOG_STATE.size() > DIAGNOSTIC_LOG_MAX_KEYS) {
+				DIAGNOSTIC_LOG_STATE.clear();
+			}
+			final Object[] previous = DIAGNOSTIC_LOG_STATE.get(key);
+			if (previous != null && outcome.equals(previous[1]) && now - (Long) previous[0] < DIAGNOSTIC_LOG_INTERVAL_MILLIS) {
+				return false;
+			}
+			DIAGNOSTIC_LOG_STATE.put(key, new Object[]{now, outcome});
+			return true;
+		}
+	}
+
 	/**
 	 * **推进"位置队列"**（每 tick 由 {@link org.mtr.core.simulation.Simulator} 调用）。
 	 *
@@ -1120,6 +1352,12 @@ public final class MmtrPointAuthority {
 		if (physicalQueued.isEmpty()) {
 			return;
 		}
+		/*
+		 * 注：曾经在这里加过一条"释放陈旧持有"（持有者不在岔轨上、又有人排队要别的位 ⇒ 放位），
+		 * **实测副作用更大**：两班车各按着一个自己用不上的位置、互相等着对方时，这条规则会每 tick
+		 * 放一次、双方立刻再申请一次，日志刷满（现场 23:06 实测每 tick 三行），位置在两者之间空转 ✗。
+		 * 所以撤掉，只保留下面"队列推进"这一条（它才是必要的：位置空着而队列有人 ⇒ 判给队首）。
+		 */
 		for (final String nk : new ObjectArrayList<>(physicalQueued.keySet())) {
 			final ArrayDeque<PhysicalReq> q = physicalQueued.get(nk);
 			if (q == null) {
