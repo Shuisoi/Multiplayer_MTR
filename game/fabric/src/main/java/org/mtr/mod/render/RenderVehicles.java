@@ -37,6 +37,8 @@ public class RenderVehicles implements IGui {
 	private static long mmtrLastWorldRenderLogMillis = 0;
 
 	public static void render(long millisElapsed, Vector3d cameraShakeOffset) {
+		// notes/177：帧率单独量（tick 率看不出一帧不出）。见 MmtrPlayerMotionTrace.frame()。
+		MmtrPlayerMotionTrace.frame();
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final ClientWorld clientWorld = minecraftClient.getWorldMapped();
 		final ClientPlayerEntity clientPlayerEntity = minecraftClient.getPlayerMapped();

@@ -4,6 +4,7 @@ import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.MmtrCoupleSurgery;
+import org.mtr.core.data.Platform;
 import org.mtr.core.data.Rail;
 import org.mtr.core.data.Siding;
 import org.mtr.core.data.Vehicle;
@@ -166,27 +167,38 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		markVisited(instance, instance.job.sidingId);
-		// A returned consist rests on its yard siding with its motion state still flagged "on
-		// route" (it drove there, it did not respawn there), so clearParkedVehicles never removes
-		// it and the next spawn would share the rail with it. Delete the old consist physically
-		// wherever it stands (yard or, for a FAILED round, anywhere on the network) so the next
-		// cycle starts from a clean siding with one fresh parked spawn.
-		if (instance.vehicleId != 0) {
+		/*
+		 * 一圈跑完时车停在哪儿，就**从哪儿接着跑**（2026-09-16 现场两轮修正）。
+		 *
+		 * <p>修前收尾一律"删掉旧车 + 清股道 + 下一圈在库里重生"，于是两种走法都会在画面上变成瞬移：
+		 * 最后一步是"回库"时（车已经自己开回本务股道停好了）被删掉重生；最后一步是"在北端 (-176,-222)
+		 * 换端"时（车停在北端，本来下一圈该自己往外开）也被删掉重生回库。</p>
+		 *
+		 * <p>现在只有**本圈失败**（半路停住、卡在别处）才按老办法删车重造；正常跑完就保留这列车、
+		 * 只把步骤指针拨回开头 —— 下一圈它从当前位置自己发车。闭环作业（不靠库房重生）因此才成立。</p>
+		 */
+		final boolean roundFailed = instance.state == JobState.FAILED;
+		final boolean keepConsist = instance.vehicleId != 0 && !roundFailed;
+		if (!keepConsist && instance.vehicleId != 0) {
+			// Delete the old consist physically wherever it stands so the next cycle starts from a
+			// clean siding with one fresh parked spawn.
 			simulator.deleteMmtrVehicle(instance.vehicleId);
 		}
-		for (final Long sidingId : instance.visitedSidings) {
-			final Siding siding = findSiding(simulator, sidingId);
-			if (siding != null) {
-				siding.clearParkedVehicles();
-				siding.setVehicleCars(new ObjectArrayList<>());
+		if (!keepConsist) {
+			for (final Long sidingId : instance.visitedSidings) {
+				final Siding siding = findSiding(simulator, sidingId);
+				if (siding != null) {
+					siding.clearParkedVehicles();
+					siding.setVehicleCars(new ObjectArrayList<>());
+				}
 			}
 		}
 		instance.cyclesDone++;
 		instance.state = JobState.PENDING;
 		instance.stepIndex = 0;
-		instance.vehicleId = 0;
-		instance.curSidingId = 0;
-		instance.carsPlaced = false;
+		instance.vehicleId = keepConsist ? instance.vehicleId : 0;
+		instance.curSidingId = keepConsist ? instance.curSidingId : 0;
+		instance.carsPlaced = keepConsist;   // 车还在场上：不要再往股道上放一次
 		instance.mergedPlaced = false;
 		instance.consumed = false;
 		instance.started = false;
@@ -684,6 +696,16 @@ public final class MmtrJobScheduler {
 	}
 
 	/**
+	 * 车是不是正停在**指定**股道上（用于"一圈跑完时车在不在库里"）：只看股道的车表 ——
+	 * 自己开回库的车 {@code getIsOnRoute()} 仍然是 true（它是开过去的，不是重生在那儿的），
+	 * 所以不能用"在途"标志判。
+	 */
+	private static boolean vehicleParkedOnSiding(Simulator simulator, long vehicleId, long sidingId) {
+		final Siding siding = findSiding(simulator, sidingId);
+		return siding != null && siding.getVehicleById(vehicleId) != null;
+	}
+
+	/**
 	 * Start the current (parked) consist on its outbound service/mission once. Sets the instance
 	 * state to RUNNING; leaves it FAILED when the mode-specific start failed.
 	 */
@@ -728,34 +750,66 @@ public final class MmtrJobScheduler {
 			// as the consist stands (the approach was the preceding MOVE_TO).
 			return;
 		}
-		if (step.type == MmtrJobStep.StepType.SERVE) {
-			// Passenger dwell is part of the PASSENGER arrival mission: the SERVE step is a dwell
-			// gate at the platform - advanceManual completes it once the consist rests there.
+		/*
+		 * SERVE（站台作业）必须**自己带一个任务实例**下到车上去，不能当成"车已经停在那儿就算了"。
+		 *
+		 * <p>修前的口径是"停留是上一步到站任务的一部分，SERVE 只是个停稳闸门"，于是它在
+		 * {@code advanceManual} 里被"停稳就算完"直接推过去 —— 而 {@code DriveToPlatformTask} 的停留是 0，
+		 * 结果作业单的每一站都是**一闪而过、门开一 tick 就关**（实测：循环作业到 1 站后卡在 SERVE 不动，
+		 * 因为那条闸门判的是 {@code thisPlatformId}，而这个字段在 Motion 时代根本没人写）。</p>
+		 *
+		 * <p>现在照设计走：SERVE → {@link org.mtr.core.mmtr.task.StationServiceTask}（原地动作），
+		 * 车的任务执行器负责"开门 → 停够 → 关门"（{@code Vehicle.mmtrRunInPlaceTaskAction}），
+		 * 任务在停留结束后完成（{@code Vehicle.mmtrMissionTick} 的 AT_TARGET 分支）。
+		 * 车不在那个站台上时，自臂会照常规划一趟开过去（自臂里的站台在场判据），所以这里不需要特判。</p>
+		 */
+		final long targetId = step.targetId;
+		/*
+		 * **轨目标**（折返/换端点）：目的地是一根正规轨道而不是站台/股道对象。用户现场口径 ——
+		 * "折返就是开到某根正规轨上换端，不可能去定义某条线为换端专用"。这种步骤：
+		 *   · kind = MANEUVER（不是客运停站，不开门）；
+		 *   · 不带任务实例（任务层的词汇只有站台/股道，轨目标没有对应的 task，硬套会被 validate 拒掉）；
+		 *   · 停车点 = 这根轨的远端（fraction 默认 1.0，按行车方向）= 开到头，正好留给下一步换端。
+		 */
+		final Rail railTarget = org.mtr.core.mmtr.MmtrRunPlanner.findRailByHex(simulator, step.targetRailHex);
+		final boolean railTargetStep = step.targetRailHex != null && !step.targetRailHex.trim().isEmpty();
+		if (railTargetStep && railTarget == null) {
+			fail(instance, "step " + step.stepId + " 的轨目标 " + step.targetRailHex + " 在图里找不到");
 			return;
 		}
-		final long targetId = step.targetId;
-		if (targetId == 0) {
+		if (!railTargetStep && targetId == 0) {
 			fail(instance, "step " + step.stepId + " needs an explicit platform/siding target for a Motion-Core drive");
 			return;
 		}
 		// PASSENGER when the step serves a platform (doors + dwell at the stop), MANEUVER for a
-		// plain relocation (yard return). Motion-mode missions self-arm every tick (route plan,
-		// turnout grants, stop target), so no legacy autopilot seam is engaged for them.
-		final boolean targetIsPlatform = isPlatform(simulator, targetId);
+		// plain relocation (yard return) or a rail target (折返). Motion-mode missions self-arm every
+		// tick (route plan, turnout grants, stop target), so no legacy autopilot seam is engaged.
+		final boolean targetIsPlatform = !railTargetStep && isPlatform(simulator, targetId);
 		final MmtrMission.Kind kind = targetIsPlatform ? MmtrMission.Kind.PASSENGER : MmtrMission.Kind.MANEUVER;
-		final boolean shuntNeeded = !targetIsPlatform && grantShuntForStep(instance, vehicle, simulator, targetId);
+		final boolean shuntNeeded = !railTargetStep && !targetIsPlatform && grantShuntForStep(instance, vehicle, simulator, targetId);
 		// Task mapping (作业单步骤 → 任务实例): the mission carries the task definition so the
 		// timetable layer and the future interlocking read where/when/what of the running step.
-		final org.mtr.core.mmtr.task.MmtrTask task = org.mtr.core.mmtr.task.MmtrTaskFactory.fromStep(step, targetIsPlatform);
+		final org.mtr.core.mmtr.task.MmtrTask task = railTargetStep ? null : org.mtr.core.mmtr.task.MmtrTaskFactory.fromStep(step, targetIsPlatform);
 		if (task != null) {
 			final String invalid = task.validate();
 			if (!invalid.isEmpty()) {
 				fail(instance, "step " + step.stepId + " task invalid: " + invalid);
 				return;
 			}
+			// 站台自己配了停留时间（现场 10s）就用它，别一律用引擎默认 5s —— 作业单里的"停站"
+			// 就是站台属性说了算，这样站台停留改了不用改作业单。
+			if (task instanceof final org.mtr.core.mmtr.task.StationServiceTask service && service.dwellMs <= 0) {
+				final Platform platform = simulator.platformIdMap.get(targetId);
+				if (platform != null && platform.getDwellTime() > 0) {
+					service.dwellMs = platform.getDwellTime();
+				}
+			}
 		}
 		final MmtrMission mission = new MmtrMission(vehicle.getId(), kind, instance.job.sidingId, targetId, simulator.getCurrentMillis());
 		mission.setNeedsShuntAuthority(shuntNeeded);
+		if (railTargetStep) {
+			mission.setTargetRail(railTarget.getHexId(), step.targetRailFraction);
+		}
 		if (task != null) {
 			mission.attachTask(task);
 		}
@@ -763,7 +817,9 @@ public final class MmtrJobScheduler {
 			fail(instance, "could not attach mission for step " + step.stepId);
 			return;
 		}
-		System.out.println("[MMTR-JOB] manual step " + step.stepId + " -> " + kind + " target " + targetId + " vehicle=" + vehicle.getId());
+		System.out.println("[MMTR-JOB] manual step " + step.stepId + " -> " + kind + " target "
+			+ (railTargetStep ? "轨 " + railTarget.getHexId().substring(0, 8) + "… @" + Math.round(step.targetRailFraction * 100.0) / 100.0 : String.valueOf(targetId))
+			+ " vehicle=" + vehicle.getId());
 		if (!vehicle.isMmtrMotion()) {
 			vehicle.engageMissionAutopilot();
 		}
@@ -988,15 +1044,12 @@ public final class MmtrJobScheduler {
 			}
 			return;
 		}
-		if (step != null && step.type == MmtrJobStep.StepType.SERVE) {
-			// Dwell gate: the consist completed its passenger arrival (doors cycled); the step
-			// closes once it rests at the target platform.
-			if (!vehicle.isMoving() && vehicle.vehicleExtraData.getThisPlatformId() == step.targetId) {
-				System.out.println("[MMTR-JOB] SERVE done at platform " + step.targetId);
-				instance.stepIndex++;
-			}
-			return;
-		}
+		/*
+		 * SERVE 的推进**由它自己的任务完成**（{@link org.mtr.core.mmtr.task.StationServiceTask}：
+		 * 开门 → 停够 → 关门 → 任务完成），所以这里不能再"停稳就算完" —— 那条捷径判的是
+		 * {@code thisPlatformId}（Motion 时代没人写这个字段，永远为 0），既推不动也对不上"开关门"的语义。
+		 * 下面的任务终态分支统一处理它。
+		 */
 		if (step != null && (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE)) {
 			// C9 action step: the approach (if any) already finished, so run the surgery as soon as the
 			// consist stands. executeCoupleAtStand/executeUncoupleAtStand report "not yet" by returning
@@ -1014,7 +1067,15 @@ public final class MmtrJobScheduler {
 			return;
 		}
 		final MmtrMission mission = vehicle.getMmtrMission();
-		if (mission != null && step != null && step.type == MmtrJobStep.StepType.MOVE_TO
+		/*
+		 * C9 的"到位"捷径**只对股道目标成立**：它要表达的是"目标股道的远端在物理上被停着的车列堵住，
+		 * 车钩贴上了就算这趟调车走完了"。站台目标没有这回事 —— 站台的到点判据就是本车自己的停车点（锚点），
+		 * 用这条捷径会让 MOVE_TO **在车还在半路上**就被判完成（2026-09-16 实测：1↔3 站循环的股道折返步
+		 * 在车还压在渡线 (-176,-541)→(-170,-511) 上时就被判到达，于是换端发生在渡线上而不是支线尽头，
+		 * 后面的每一步都被带偏）。
+		 */
+		final boolean targetIsSiding = step != null && findSiding(simulator, step.targetId) != null;
+		if (mission != null && targetIsSiding && step.type == MmtrJobStep.StepType.MOVE_TO
 			&& (arrivedAtTargetConsist(vehicle, simulator) || targetConsistAbsorbed(vehicle, simulator, step.targetId))) {
 			// C9: the planned stop of a cross-track run is the FAR end of the target siding, but the run
 			// really ends where the standing rake is - the occupancy face under the 调车授权 stops the

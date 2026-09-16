@@ -45,12 +45,14 @@ final class MmtrQueryCommands {
 				return topology(simulator);
 			case "sections":
 				return sections(simulator);
+			case "totals":
+				return totals(simulator);
 			case "occupancy":
 				return occupancy(simulator);
 			case "node":
 				return node(simulator, positional);
 			default:
-				return MmtrCommandDispatcher.usage("query 支持 depots / trains / signals / points / topology / sections / occupancy / node <x,y,z>");
+				return MmtrCommandDispatcher.usage("query 支持 depots / trains / signals / points / topology / sections / totals / occupancy / node <x,y,z>");
 		}
 	}
 
@@ -201,7 +203,7 @@ final class MmtrQueryCommands {
 			}
 			for (int i = 0; i < trees.size(); i++) {
 				final org.mtr.core.data.VehiclePosition position =
-					org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.footprintOn(trees.get(i), ordered);
+					org.mtr.core.mmtr.signal.MmtrSectionService.footprintOn(trees.get(i), ordered);
 				if (position != null) {
 					matched++;
 					result.line("  (" + ordered[0].getX() + "," + ordered[0].getY() + "," + ordered[0].getZ() + ")→("
@@ -331,7 +333,7 @@ final class MmtrQueryCommands {
 	private static MmtrCommandDispatcher.Result sections(Simulator simulator) {
 		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "query", "sections");
 		final var trees = simulator.mmtrOccupancyTrees();
-		final var views = simulator.mmtrDirectionalBlocks.sectionViews(trees, ignored -> false);
+		final var views = simulator.mmtrSections.sectionViews(trees, ignored -> false);
 		int occupied = 0;
 		final it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap<String> byDirection = new it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap<>();
 		for (final var view : views) {
@@ -345,6 +347,49 @@ final class MmtrQueryCommands {
 			result.line("  " + entry.getKey() + "：" + entry.getIntValue() + " 个");
 		}
 		result.line("信号灯 " + simulator.mmtrSignals.signals.size() + " 个");
+		return result;
+	}
+
+	/**
+	 * {@code query totals}：**总区间**的规模与概况（notes/168）。
+	 *
+	 * <p>总区间 = 地图上"一条带"：几何就是 L1 轨道区间（切点只由灯产生 ⇒ 再想变粗就得放弃某个方向的
+	 * 灯当界），多出来的是**归属** —— 这一处由哪几个方向的哪几段覆盖。所以这里报三件事：</p>
+	 * <ul>
+	 *   <li>**条数必须与 {@code query tracks} 的条数相等**（一一对应；不等就说明有人又按"上下行都照到"
+	 *       重划了一遍）；</li>
+	 *   <li>方向数分布（1 = 只有单侧有灯或另一侧是无灯大区间）；</li>
+	 *   <li>**错开**多少处（上下行都照到、但不是同一段路）—— 那正是"车既在上行也在下行"的地方。</li>
+	 * </ul>
+	 */
+	private static MmtrCommandDispatcher.Result totals(Simulator simulator) {
+		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "query", "totals");
+		final var trees = simulator.mmtrOccupancyTrees();
+		final var restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+		final var totals = simulator.mmtrSections.totalSectionViews(trees, restricted::contains);
+		int occupied = 0;
+		int staggered = 0;
+		int unsignalled = 0;
+		// 按方向数排序输出（不是 hash 顺序）：这条是给人读的，两次跑出不同顺序会让人以为模型在变
+		final java.util.TreeMap<String, Integer> byDirections = new java.util.TreeMap<>();
+		for (final var total : totals) {
+			if (total.occupied) {
+				occupied++;
+			}
+			if (total.staggered()) {
+				staggered++;
+			}
+			if (total.covers.isEmpty() || total.directionCount() == 0) {
+				unsignalled++;
+			}
+			byDirections.merge(String.valueOf(total.directionCount()), 1, Integer::sum);
+		}
+		result.line("总区间 " + totals.size() + " 条（几何 = L1 轨道区间，条数应与 `query tracks` 相等），其中被占用 " + occupied + " 条");
+		result.line("  错开 " + staggered + " 条（上下行都照到、但不是同一段路 —— 车既在上行也在下行的那一段）");
+		byDirections.forEach((directions, count) -> result.line("  覆盖它的方向数 = " + directions + "：" + count + " 条"));
+		if (unsignalled > 0) {
+			result.line("  其中 " + unsignalled + " 条一条 cover 都没有（连无灯大区间也没覆盖到 —— 该查走行）");
+		}
 		return result;
 	}
 }

@@ -87,7 +87,6 @@ public final class MmtrSectionAuthorityStopTests {
 			sim.sync();
 			assertTrue(depot.savedRails.contains(siding), "the yard siding must attach to the depot");
 			siding.tick();
-			sim.mmtrEnsureSignalColors();
 		}
 
 		Vehicle spawn() {

@@ -61,7 +61,15 @@ public final class MmtrAwsWarningTests {
 		final Rail cRail;
 		final Depot depot;
 		final Siding siding;
-		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = new ObjectArrayList<>();
+		/**
+		 * 占用树（notes/166 R8）：**必须用 sim 自己的那一份**。
+		 *
+		 * <p>旧夹具用的是一份**私有**列表（`new ObjectArrayList<>()` 再 add 两棵），而**信号显示与 AWS
+		 * 触发器**读的是 sim 的树 ⇒ 那道危险灯永远读绿，警告只能靠"占用停车边界"那一路触发
+		 * （实测日志：{@code signal GREEN on cRail in 71.0m, boundary at 362.0m}）。真实世界里两者是同一份
+		 * （车把足迹写进 sim 的树），所以夹具必须跟着走。</p>
+		 */
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees;
 
 		AwsNet(String savePath) {
 			sim = new Simulator("test", new String[]{"test"}, Paths.get(savePath), false);
@@ -86,11 +94,25 @@ public final class MmtrAwsWarningTests {
 			sim.mmtrConsistTypes = ConsistTypeRegistry.parse(CONSIST_JSON);
 			sim.mmtrDefaultConsistTypeId = "emu";
 			sim.sync();
-			sim.mmtrEnsureSignalColors();
+			/*
+			 * notes/166 R5：这个世界原来**一盏灯都没有** —— 而新模型里"没有任何信号灯的连通块整块是
+			 * 一个大区间"（用户 2026-09-15 裁定），于是 A/B/C 合成一段，"隔一段的单黄"这个前提根本
+			 * 不存在（AWS 也没有信号可触发，实测警告一次都不响）。
+			 *
+			 * 按用例本意补两盏朝东的灯：A/B 节点那盏守 B、B/C 节点那盏守 C ⇒ C 被占时，
+			 * 车还在 A 上、**即将通过的那架灯**（142 处）就该读单黄（depth 2）—— 这才是本用例要测的东西。
+			 */
+			addLampAt(aEnd);
+			addLampAt(new Position(342, 0, 0));
 			assertTrue(depot.savedRails.contains(siding), "siding must attach to the depot yard");
 			siding.tick();
-			trees.add(new Object2ObjectAVLTreeMap<>());
-			trees.add(new Object2ObjectAVLTreeMap<>());
+			trees = sim.mmtrOccupancyTrees();
+			assertTrue(trees != null && trees.size() >= 2, "sim 必须有占用树（占用只有这一份来源）");
+		}
+
+		/** 在节点格上放一盏**朝东**（MTR 角 270）的自动推断灯：它守从该节点朝东出去的那根轨。 */
+		private void addLampAt(Position node) {
+			sim.mmtrSignals.put((int) node.getX(), (int) node.getY(), (int) node.getZ(), 270, 4, "AUTO", "");
 		}
 
 		Vehicle spawn() {
@@ -122,14 +144,11 @@ public final class MmtrAwsWarningTests {
 		}
 
 		/**
-		 * A3: the aspect the engine sees comes from the authoritative per-rail signal channel, so a
-		 * test that wants the engine to SEE an occupied rail has to mark it there too (a real train
-		 * does both: its footprint in the shared trees and its hold under the rail's signal colour).
+		 * notes/166 R4：占用只有一份来源 —— 共享占用树，所以"标一根轨被占"就是 {@link #tickWithOccupancy}
+		 * （它写树 + 走一步）。这里保留这个入口名只是为了让调用点读起来仍是"把这条轨的信号占用标上"。
 		 */
 		void occupyRailSignal(Rail rail) {
-			rail.blockRail(new LongArrayList());
-			rail.tick1(sim);
-			rail.tick2(0);
+			// 空实现：写树那一半已经由 tickWithOccupancy 做了（原来这里还写"每轨预留信号色"通道，已删）。
 		}
 
 		/** Clears a rail's signal-channel occupancy (two rounds: the old snapshot also counts). */
@@ -140,7 +159,7 @@ public final class MmtrAwsWarningTests {
 			rail.tick2(60_000);
 		}
 
-		/** C occupied in BOTH channels (footprint + signal colour), then one simulated tick. */
+		/** C occupied for the whole tick, then one simulated step. */
 		void tickWithOccupiedC() {
 			occupyRailSignal(cRail);
 			tickWithOccupancy(cRail);
@@ -212,8 +231,14 @@ public final class MmtrAwsWarningTests {
 		boolean spad = false;
 		for (int i = 0; i < 500 && !stoppedAtBoundary; i++) {
 			n.tickWithOccupiedB();
-			if (v.isMmtrAwsWarningPending() && !acked) {
-				// The driver acknowledges while the train is still running (one-shot press).
+			if (v.isMmtrAwsWarningPending()) {
+				/*
+				 * notes/166 R8：新模型下一次行程里**可能响两次** —— 先是"信号预告"那一路
+				 * （即将进入的那根轨上那盏灯非绿），它随着列车前进会清掉；然后是"占用停车边界"那一路。
+				 * 真实的 AWS 规定**每一次新的警告都要重新确认**（本文件另一条用例的注释也这么说：
+				 * "the driver presses the button at every AWS horn"），所以这里改成每次响都按。
+				 * 旧模型只会响一次（那时信号那一路读不到危险），所以"只按一次"才够用。
+				 */
 				new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1).setAcknowledge(true), driver).apply(n.sim);
 				acked = true;
 			}
@@ -256,20 +281,36 @@ public final class MmtrAwsWarningTests {
 		v.updateRidingEntities(entities);
 		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
 
-		boolean warnedOnA = false;
+		boolean warned = false;
 		boolean spad = false;
-		for (int i = 0; i < 400 && !warnedOnA && !spad; i++) {
+		for (int i = 0; i < 400 && !warned && !spad; i++) {
 			n.tickWithOccupiedC();
 			if (v.isMmtrAwsWarningPending()) {
-				warnedOnA = n.aRail.getHexId().equals(v.getMmtrMotionWalker().railHex()) && v.getSpeed() > 1e-9;
+				/*
+				 * notes/166 R6：新模型里"没有信号灯的连通块整块是一个大区间"，**黄灯链往前看得更远**
+				 * （探针实测：从 bRail 的 142 入口读 depth 2 = 单黄）。于是警告在**车还没起步**时就响了
+				 * —— 那正是侧线/第一根轨上、即将进入 aRail 的位置。旧断言要求"必须还在 aRail 上且速度>0"，
+				 * 在新时序下永远抓不到（警告第一 tick 就进 ACKED，之后 `pending` 不再为真）。
+				 *
+				 * 所以这里只断言"**确实响过**"（本用例要证明的正是"只靠 S1 占用停车的旧规则看不到的
+				 * 隔一段危险，AWS 也看得到"），语义核心由下面那条 aspect 断言单独钉住。
+				 */
+				warned = true;
 				// Acknowledge at once so the test measures the TRIGGER, not the SPAD window.
 				new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1).setAcknowledge(true), driver).apply(n.sim);
 			}
 			spad = v.isMmtrProtectionFromSync();
 		}
 		assertFalse(spad, "the warning was acknowledged, no SPAD");
-		assertTrue(warnedOnA, "a single-yellow signal two blocks ahead warns while the train is still on the first rail, rail="
+		assertTrue(warned, "隔一段的黄灯必须能触发 AWS 告警（旧规则只看 S1 占用停车的触发带），rail="
 			+ v.getMmtrMotionWalker().railHex() + " progress=" + v.getRailProgress());
+		/*
+		 * 本用例的语义核心（单独钉住，不再靠"必须还在 aRail 上"间接表达）：
+		 * **C 被占 ⇒ 保护 B 的那架灯读单黄**（depth 2 = 隔一段）。
+		 */
+		assertEquals(org.mtr.core.mmtr.signal.MmtrSignalAspect.Aspect.SINGLE_YELLOW,
+			n.sim.mmtrSignalAspectView().aspectFrom(n.bRail.getHexId(), new Position(142, 0, 0)),
+			"C 被占 ⇒ 保护 B 的那架灯（142 处）读单黄：隔一段危险");
 	}
 
 	/**

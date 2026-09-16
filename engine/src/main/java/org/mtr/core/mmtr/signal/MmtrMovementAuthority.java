@@ -39,7 +39,7 @@ import org.mtr.core.simulation.Simulator;
  *
  * <p>黄灯真正承担的是**预告**（AWS 的响与确认，notes/103 已实机验收）。若日后 LZB 那条连续曲线
  * 要用黄灯提前减速，需要的是"到下一架信号的距离"，那时再按需接
- * {@link MmtrDirectionalBlockService#sectionEndAheadM}，并且是**加法**（本段剩余 + 下一段长度），
+ * {@link MmtrSectionService#sectionEndAheadM}，并且是**加法**（本段剩余 + 下一段长度），
  * 不是替换语义。</p>
  *
  * <p>本片**只算不停**：出口是 feed 与诊断，没有任何停车规则读它（那是 T3）。所以这一片最强的验收
@@ -129,21 +129,6 @@ public final class MmtrMovementAuthority {
 			return none(MmtrSignalAspect.Aspect.GREEN, "轨位置解不出来");
 		}
 		final MmtrSignalAspect.Aspect aspect = simulator.mmtrSignalAspectView().aspectFrom(signalRailHex, entryNode, vehicleId);
-		/*
-		 * T3：**v1 逐轨回退链的红灯不能作为停车依据**。
-		 *
-		 * v1 读的是"预留信号色"通道，那个通道**认不出这团影子是不是问话的这列车自己**
-		 * （notes/112 §4 就是它：车把自己的车头影子读成"前方占用"，一给油就告警）。AWS 那边
-		 * 只是响一声，可以忍；把它接成停车规则就会**让列车被自己的影子永久扣住** ——
-		 * 实测：本规则一接上，五条既有用例的列车再也到不了目的地。
-		 *
-		 * v2（灯到灯有向区间）带 excludeVehicleId，能排除自身；所以停车只认 v2 的结论。
-		 * 没有 v2 区块的轨段：本条**不作声**，交给原有规则 (2)(3)(4) 照旧扣车（行为与修前一致）。
-		 */
-		if (aspect == MmtrSignalAspect.Aspect.RED && !simulator.mmtrDirectionalBlocks.hasSection(signalRailHex)) {
-			return new MmtrMovementAuthority(aspect, "", NO_TARGET_M, Double.MAX_VALUE, false,
-				"红灯（来自 v1 逐轨链，不作为停车依据：它认不出这是不是本车自己的影子）");
-		}
 		return of(aspect, signalRailHex, toSignalM);
 	}
 

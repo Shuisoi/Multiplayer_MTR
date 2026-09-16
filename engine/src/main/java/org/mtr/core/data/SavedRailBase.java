@@ -41,6 +41,20 @@ public abstract class SavedRailBase<T extends SavedRailBase<T, U>, U extends Are
 		return Data.tryGet(data.positionsToRail, position1, position2);
 	}
 
+	/**
+	 * The saved rail's two declared ends, ordered the same way {@link Rail#mmtrOrderedPositions()} orders a
+	 * rail's ends (lexicographically smaller first) — so a platform's ends and the hex of the rail it lies
+	 * on use ONE convention and cannot disagree.
+	 *
+	 * <p>Public for the same reason as the rail one: the map feed lives outside this package while
+	 * {@code position1}/{@code position2} stay protected. Worth publishing even when
+	 * {@link #mmtrGraphRail()} comes back null — a platform whose rail is gone still has an extent, and
+	 * the console should draw it rather than silently drop the station.</p>
+	 */
+	public Position[] mmtrOrderedPositions() {
+		return position1.compareTo(position2) <= 0 ? new Position[]{position1, position2} : new Position[]{position2, position1};
+	}
+
 	@Override
 	public boolean isValid() {
 		return true;

@@ -12,6 +12,15 @@
 		"noImplicitOverride": true,
 		"isolatedModules": true,
 		"verbatimModuleSyntax": true,
+		/*
+		 * 允许相对导入写显式 `.ts` 扩展名。
+		 *
+		 * 为什么需要：`scripts/*.test.ts` 是**直接用 node 跑源码**的（`node --experimental-strip-types`），
+		 * 而 Node 的 ESM 解析不认打包器那套"省略扩展名"，会 ERR_MODULE_NOT_FOUND —— 领域模块
+		 * （如 `domain/MapNode.ts`）只要被测试引到，它自己的相对导入就必须带 `.ts`。
+		 * Vite 与 vue-tsc 都照收，于是测试与页面共用同一份源码，不必为测试另建构建。
+		 */
+		"allowImportingTsExtensions": true,
 		"skipLibCheck": true,
 		"resolveJsonModule": true,
 		"useDefineForClassFields": true,

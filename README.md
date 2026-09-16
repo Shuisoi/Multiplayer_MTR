@@ -18,11 +18,15 @@ mmtr/
 ├─ scripts/  # 构建/运行/打包/自检脚本（含 check-paths.ps1 路径守卫）
 ├─ notes/    # 逐轮技术笔记与决策（01–，只增不改）
 ├─ docs/     # 本项目文档（入口 docs/README.md：00-历史 / 01-设计 / 02-运行与作业 / 03-交接与实机 / reference）
+├─ deploy/   # 部署信息（入口 deploy/README.md：工作区重建 + 被排除项来源；命令级见 deploy/BUILD.md）
 └─ mappings/ # (规划) Minecraft-Mappings / Mod-API-Tools 源码级参与（如需）
 ```
 
-> 工作区级约定（工具链/第三方/资产/日志放哪、路径真源）见仓库上级目录的 `README.md`；
-> 2026-09-09 的目录整理见上级目录的 `整理方案.md`。
+> **部署 / 换机 / 想跑起来**：先看 [`deploy/README.md`](deploy/README.md)（工作区怎么摆、
+> JDK 与第三方 jar 从哪来）→ [`deploy/BUILD.md`](deploy/BUILD.md)（构建/运行/打包/发布命令）。
+> 工具链 / 第三方 / 资产 / 日志放哪、路径真源，都在 `deploy/` 里说明；本仓库**只有源码**，
+> `env/` `vendor/` `assets/` `artifacts/` `logs/` `instances/` 都在工作区里、在仓库之外。
+> 2026-09-09 的目录整理记录见 [`deploy/workspace-template/整理方案.md`](deploy/workspace-template/整理方案.md)。
 
 ## 里程碑速览
 M0 派生跑通 → M0b 桥接原型(EngineBridge+带宽) → M1 车底与物理 → M2 任务引擎+AI+连解挂 → M3 货运 → M4 UI → M5 运营化。
@@ -30,9 +34,13 @@ M0 派生跑通 → M0b 桥接原型(EngineBridge+带宽) → M1 车底与物理
 最新交接：docs/03-交接与实机/MotionCore-Vehicle集成-交接.md。
 
 ## 本地开发速记
-- JDK21 必需（engine 要求 toolchain 21，与上游 CI 一致）：`env\jdk-21`（Adoptium/Temurin，见上级 `env/README.md`）
+
+完整命令见 [`deploy/BUILD.md`](deploy/BUILD.md)；换机/首次搭建见 [`deploy/README.md`](deploy/README.md)。
+
+- JDK 21 必需（engine 要求 toolchain 21，与上游 CI 一致）：工作区 `env\jdk-21`（Adoptium/Temurin，见 [`deploy/workspace-template/env/README.md`](deploy/workspace-template/env/README.md)）
 - 所有脚本的路径真源：`. env\workspace.env.ps1` / `call env\workspace.env.bat`；禁止硬编码绝对路径
-- engine 编译：cd engine && gradlew.bat classes
-- engine jar 同步进 game/libs：`scripts\sync-engine.bat`
-- game 编译：见 game/README 与 notes
+- engine 编译：`cd engine && gradlew.bat shadowJar`（产出 `build\libs\Transport-Simulation-Core-*.jar`）
+- engine jar 同步进 `game/libs`：`scripts\deploy-engine.ps1 -Build`（带停机检查；`scripts\sync-engine.bat` 是不检查的粗暴版）
+- game 编译：`cd game && gradlew.bat :fabric:build`（发布物 `game\fabric\build\libs\fabric-4.0.5.jar`）
+- 起 dev 服务端 / 客户端：`scripts\dev-server.ps1` / `scripts\dev-client.ps1`
 - 提交前自检：`pwsh -File scripts\check-paths.ps1`

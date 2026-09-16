@@ -210,9 +210,9 @@ final class MmtrSignalCommands {
 		return false;
 	}
 
-	/** 轨 hex 的规范写法（与 {@code MmtrDirectionalBlockService.canonicalHex} 同一规则）。 */
+	/** 轨 hex 的规范写法（与 {@code MmtrSectionService.canonicalHex} 同一规则）。 */
 	private static String canonicalRailKey(String hex) {
-		return org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(hex);
+		return org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(hex);
 	}
 
 	/** {@code signal list [--state=红|黄|绿] [--limit=n]} */
@@ -220,7 +220,7 @@ final class MmtrSignalCommands {
 		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "signal", "list");
 		final var trees = simulator.mmtrOccupancyTrees();
 		final var restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
-		final var aspects = simulator.mmtrDirectionalBlocks.lampAspectNames(trees, restricted::contains);
+		final var aspects = simulator.mmtrSections.lampAspectNames(trees, restricted::contains);
 		final String wanted = options.get("state");
 		final int limit = MmtrCommandDispatcher.intOption(options, "limit", 200);
 		int shown = 0;

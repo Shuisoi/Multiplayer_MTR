@@ -42,6 +42,11 @@ public final class DynamicDataResponse extends DynamicDataResponseSchema {
 		vehiclesToKeep.forEach(consumer);
 	}
 
+	/** 这一拍要**原地合并**的稀疏补丁（notes/173）：只有变化的字段，客户端用 updateData 合并。 */
+	public void iterateVehiclesToPatch(Consumer<VehiclePatch> consumer) {
+		vehiclesToPatch.forEach(consumer);
+	}
+
 	public void iterateLiftsToUpdate(Consumer<Lift> consumer) {
 		liftsToUpdate.forEach(consumer);
 	}
@@ -68,6 +73,11 @@ public final class DynamicDataResponse extends DynamicDataResponseSchema {
 
 	public void addVehicleToKeep(long vehicleId) {
 		vehiclesToKeep.add(vehicleId);
+	}
+
+	/** 补丁走它自己的通道（{@code vehiclesToPatch}）：客户端那边是原地合并，不是重建镜像。 */
+	public void addVehicleToPatch(long vehicleId, String patchJson) {
+		vehiclesToPatch.add(new VehiclePatch(vehicleId, patchJson));
 	}
 
 	public void addLiftToUpdate(Lift lift) {

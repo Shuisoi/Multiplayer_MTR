@@ -3,6 +3,7 @@ package org.mtr.core.servlet;
 public enum HttpResponseStatus {
 
 	OK(200, "OK"),
+	NOT_MODIFIED(304, "Not Modified"),
 	REDIRECT(301, "Redirect"),
 	BAD_REQUEST(400, "Bad Request"),
 	NOT_FOUND(404, "Not Found"),

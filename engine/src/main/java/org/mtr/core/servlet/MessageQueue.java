@@ -1,6 +1,7 @@
 package org.mtr.core.servlet;
 
 import lombok.extern.log4j.Log4j2;
+import org.jspecify.annotations.Nullable;
 
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.function.Consumer;
@@ -48,5 +49,25 @@ public final class MessageQueue<T> {
 				callback.accept(object);
 			}
 		}
+	}
+
+	/**
+	 * Take one element off the head, or {@code null} when the queue is empty.
+	 *
+	 * <p>Unlike {@link #process(Consumer)} this lets the caller decide after <em>every</em> element
+	 * whether it can afford another one — which is how the web queue honours its per-tick time
+	 * budget (notes/172): a caller with a deadline cannot hand the whole queue to a drain loop that
+	 * runs to empty.</p>
+	 */
+	public @Nullable T poll() {
+		return linkedBlockingDeque.poll();
+	}
+
+	/**
+	 * How many elements are waiting right now. Used for the backlog line in the health summary —
+	 * a growing web queue is the first sign that the browser is asking for more than the tick can pay.
+	 */
+	public int size() {
+		return linkedBlockingDeque.size();
 	}
 }

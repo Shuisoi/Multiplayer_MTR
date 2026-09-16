@@ -100,7 +100,6 @@ public final class MmtrPlayerMissionInterlockTests {
 			assertTrue(depot.savedRails.contains(siding), "车场股道要挂在车辆段上");
 			assertTrue(station.savedRails.contains(platform), "站台要挂在车站上");
 			siding.tick();
-			sim.mmtrEnsureSignalColors();
 		}
 
 		Vehicle spawn() {

@@ -187,89 +187,17 @@ public final class MmtrSignalAspect {
 	}
 
 	private int chainDepth(String hex, Position entryPos, long excludeVehicleId) {
-		final MmtrDirectionalBlockService directional = simulator.mmtrDirectionalBlocks;
-		if (directional.hasSection(hex)) {
-			/*
-			 * notes/152：走链时"受限节点"这一档也要**排除本车自己的足迹** —— 否则车自己的车体压在
-			 * 岔区里，这一档就把前方那架信号判成红，**车被自己扣在出发信号前**（现场读数：进路 SET、
-			 * 道岔全部拿到、车速 0，下一区间"别人占=False、占用者=[它自己]"）。
-			 */
-			final java.util.function.Predicate<String> restricted = excludeVehicleId == 0
-				? this::junctionRestrictedKey
-				: restrictedNodeKeysExcluding(excludeVehicleId)::contains;
-			final int directionalDepth = directional.chainDepth(hex, entryPos, occupancyTrees, restricted, MAX_DEPTH, excludeVehicleId);
-			if (directionalDepth > 0) {
-				return directionalDepth;
-			}
-			// v2 reads the shared occupancy TREES. A hold that only ever went through the v1 per-section
-			// reserved-colour channel (a legacy/manual block, or a caller that reserved a colour without
-			// writing a footprint) would otherwise read as GREEN here, so the v1 walk still gets to speak -
-			// and being the more restrictive of the two is the safe direction for a signal.
-			//
-			// notes/152：但 v1 那条路**也要能排除本车**（见 v1ChainDepth）—— 否则"自己压着岔区"
-			// 这条会在 v2 已经判清之后把信号重新涂红，车还是被自己扣住（现场：车头停在道岔节点上不动）。
-			return v1ChainDepth(hex, entryPos, excludeVehicleId);
-		}
-		return v1ChainDepth(hex, entryPos, excludeVehicleId);
-	}
-
-	private int v1ChainDepth(String hex, Position entryPos) {
-		return v1ChainDepth(hex, entryPos, 0);
-	}
-
-	/**
-	 * v1 逐轨回退链（{@code excludeVehicleId} 见 notes/152）。
-	 *
-	 * <p><b>两处口径</b>：</p>
-	 * <ul>
-	 *   <li><b>岔区受限节点</b>：由足迹算出来（{@link MmtrJunctionState#unclearedNodeKeys}），
-	 *       所以**能排除本车** —— 车自己的车体压在岔区里，不该把自己的信号判红；</li>
-	 *   <li><b>预留信号色</b>（{@link #sectionBlocked}）：那个通道只有"颜色"，**天生认不出是谁**，
-	 *       所以它只在**没有 v2 区间**的轨段上说话（有 v2 时占用那一层已由 v2 带排除地判过了，
-	 *       让颜色再判一次就等于把"自己的影子"重新放回来）。</li>
-	 * </ul>
-	 */
-	private int v1ChainDepth(String hex, Position entryPos, long excludeVehicleId) {
-		final List<Object[]> level = new ObjectArrayList<>();
-		level.add(new Object[]{entryPos, hex, entryArcOf(hex, entryPos)});
-		for (int depth = 1; depth <= MAX_DEPTH; depth++) {
-			for (final Object[] entry : level) {
-				// ④: a step is restricted when its section is occupied, OR the junction it enters through
-				// (the signal's own node) cannot be cleared, OR the junction it leaves through cannot be
-				// cleared - the two holds the motion rules (①/②/③) enforce are now visible in the display.
-				final String stepHex = (String) entry[1];
-				final Position stepNode = (Position) entry[0];
-				if (sectionBlocked(stepHex, (Double) entry[2])
-					|| junctionRestrictedFor(stepNode, excludeVehicleId)
-					|| junctionRestrictedFor(farEndOf(stepHex, stepNode), excludeVehicleId)) {
-					return depth;
-				}
-			}
-			if (depth == MAX_DEPTH) {
-				break;
-			}
-			final List<Object[]> nextLevel = new ObjectArrayList<>();
-			for (final Object[] entry : level) {
-				final Position node = (Position) entry[0];
-				final String curHex = (String) entry[1];
-				final double arc = (Double) entry[2];
-				final MmtrBlockService.Block section = simulator.mmtrBlocks.blockAt(curHex, arc);
-				final Rail rail = byHex.get(curHex);
-				final double railLength = rail == null ? 0 : rail.railMath.getLength();
-				if (section != null && section.arcToM < railLength - 1e-9) {
-					// Another section on the SAME rail: the next step keeps the entry node.
-					nextLevel.add(new Object[]{node, curHex, section.arcToM});
-				} else {
-					continuations(node, curHex, nextLevel);
-				}
-			}
-			if (nextLevel.isEmpty()) {
-				break;
-			}
-			level.clear();
-			level.addAll(nextLevel);
-		}
-		return 0;
+		/*
+		 * notes/166 R4：链**只走新层**（Level 2 行车区间）。
+		 *
+		 * 原来这里是两半：v2 的有向区间链 + v1 的逐轨回退链（读"预留信号色"通道），取更严的那个。
+		 * v1 连同那条颜色通道整层删除了，所以回退也一起消失 —— 占用现在只有一份来源（占用树），
+		 * 而且带 excludeVehicleId 能排除问话列车自己（notes/152：否则车被自己的影子扣住）。
+		 */
+		final java.util.function.Predicate<String> restricted = excludeVehicleId == 0
+			? this::junctionRestrictedKey
+			: restrictedNodeKeysExcluding(excludeVehicleId)::contains;
+		return simulator.mmtrSections.chainDepth(hex, entryPos, occupancyTrees, restricted, MAX_DEPTH, excludeVehicleId);
 	}
 
 	/** ④: whether {@code node} is a junction that cannot be cleared (fouled zone / undecided points). */
@@ -345,35 +273,6 @@ public final class MmtrSignalAspect {
 		}
 		final double arc = rail.mmtrArcOfEndNode(entryPos);
 		return Double.isNaN(arc) ? 0 : arc;
-	}
-
-	/**
-	 * Whether the section of {@code hex} containing {@code arc} is occupied. The authoritative source is
-	 * the per-section reserved signal colour (B3b); a blocked colour that belongs to NO section - a
-	 * legacy MTR block or a manual block - conservatively closes the whole rail, which is exactly the
-	 * pre-B3b per-rail reading.
-	 */
-	private boolean sectionBlocked(String hex, double arc) {
-		final Rail rail = byHex.get(hex);
-		if (rail == null) {
-			return false;
-		}
-		final ObjectArrayList<MmtrBlockService.Block> sections = simulator.mmtrBlocks.blocksOf(hex);
-		if (sections.isEmpty()) {
-			return rail.mmtrIsCurrentlyBlocked();
-		}
-		final MmtrBlockService.Block section = simulator.mmtrBlocks.blockAt(hex, arc);
-		if (section != null && rail.mmtrIsSignalColorBlocked(section.signalColor)) {
-			return true;
-		}
-		boolean anySectionColorBlocked = false;
-		for (final MmtrBlockService.Block candidate : sections) {
-			if (rail.mmtrIsSignalColorBlocked(candidate.signalColor)) {
-				anySectionColorBlocked = true;
-				break;
-			}
-		}
-		return rail.mmtrIsCurrentlyBlocked() && !anySectionColorBlocked;
 	}
 
 	/**

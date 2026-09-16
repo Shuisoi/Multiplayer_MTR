@@ -58,7 +58,6 @@ public final class MmtrSignalAspectTests {
 			sim.rails.add(diverge);
 			sim.rails.add(beyond);
 			sim.sync();
-			sim.mmtrEnsureSignalColors();
 			// ④: a fork nobody has decided shows danger (no route through the junction can be set). The
 			// real server presets EVERY (fork, approach) pair to operator branch 0
 			// (Simulator.mmtrDefaultPointsZero), so preset them here too - otherwise these "free driving"
@@ -69,9 +68,7 @@ public final class MmtrSignalAspectTests {
 
 		/** Mark a rail occupied the way a standing train does (manual block -> CURRENTLY_RESERVE). */
 		void occupy(Rail rail) {
-			rail.blockRail(new LongArrayList());
-			rail.tick1(sim); // roll the tick snapshots
-			rail.tick2(0);   // reserve under the manual block -> currently-blocked set
+			occupyArcInTrees(sim, rail, 0, rail.railMath.getLength());
 		}
 
 		MmtrSignalAspect aspect() {
@@ -109,9 +106,19 @@ public final class MmtrSignalAspectTests {
 		n2.occupy(n2.straight);
 		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, n2.aspect().aspectOf(n2.entry.getHexId()), "one rail beyond occupied is single yellow");
 
+		/*
+		 * n3（notes/166 R4 按新语义改写）：Net 是**无灯站场**，而新模型里"没有任何信号灯的连通块
+		 * 整块是一个大区间"（用户 2026-09-15 裁定）—— straight 与 beyond 之间只有一个度=2 的接头、
+		 * 没有灯，所以它们属于**同一个**行车区间。"再往前一段"这一档在无灯区**不存在**：
+		 * 占住 beyond 与占住 straight 读出来是同一个深度（单黄，不是双黄）。
+		 *
+		 * 一句话：**三档显示需要三盏灯**。要双黄请看带灯的两段/三段夹具
+		 * （`theChainCountsBlocksBetweenLamps` 与 `MmtrSectionServiceTests` 的锚点用例）。
+		 */
 		final Net n3 = new Net("build/mmtr-aspect-chain3");
 		n3.occupy(n3.beyond);
-		assertEquals(MmtrSignalAspect.Aspect.DOUBLE_YELLOW, n3.aspect().aspectOf(n3.entry.getHexId()), "two rails beyond occupied is double yellow");
+		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, n3.aspect().aspectOf(n3.entry.getHexId()),
+			"无灯站场：straight 与 beyond 是同一个大区间，占住它读单黄（不是双黄）");
 	}
 
 	@Test
@@ -188,7 +195,16 @@ public final class MmtrSignalAspectTests {
 		sim.rails.add(s2);
 		sim.rails.add(d);
 		sim.sync();
-		sim.mmtrEnsureSignalColors();
+		/*
+		 * notes/166 R5：这个夹具原来**无灯** —— 新模型下"没有信号灯的连通块整块是一个大区间"，
+		 * 于是 entry 与 s 属于**同一段**（它们之间没有灯），"占住 entry 而 s 那盏灯仍单黄"这个前提
+		 * 就不成立了（实测读红，而且那是对的）。按用例本意补两盏朝东的灯（MTR 角 270 = 东）：
+		 *   n 处那盏守 s（本用例问的就是"保护 s 的那架信号"）；
+		 *   m 处那盏守它面朝那一侧的**全部**腿（s2 与 d —— 一灯多腿，用户 2026-09-10 的"守整个咽喉"），
+		 *   于是"岔股被占"能从 n 那盏灯的链上看到（depth 2 = 单黄）。
+		 */
+		sim.mmtrSignals.put((int) n.getX(), (int) n.getY(), (int) n.getZ(), 270, 4, "AUTO", "");
+		sim.mmtrSignals.put((int) m.getX(), (int) m.getY(), (int) m.getZ(), 270, 4, "AUTO", "");
 		// ④: decide the fork at M on every approach the way the real server's default preset does, so the
 		// free driving signal is not held at danger for an undecided turnout.
 		sim.positionsToRail.get(m).forEach((otherEnd, rail) ->
@@ -213,16 +229,37 @@ public final class MmtrSignalAspectTests {
 	}
 
 	private static void occupy(Simulator sim, Rail rail) {
-		rail.blockRail(new LongArrayList());
-		rail.tick1(sim);
-		rail.tick2(0);
+		occupyArcInTrees(sim, rail, 0, rail.railMath.getLength());
 	}
 
-	/** B3b: occupy ONE section by reserving just that section's colour (what a train standing in it does). */
-	private static void occupySection(Simulator sim, Rail rail, org.mtr.core.mmtr.signal.MmtrBlockService.Block section) {
-		rail.mmtrReserveSignalColor(999_999_004L, section.signalColor);
-		rail.tick1(sim);
-		rail.tick2(0);
+	/** 把 {@code rail} 的 {@code [fromM, toM)} 标成被占，写进调用方指定的那份占用树。 */
+	private static void occupyArcIn(Rail rail, double fromM, double toM,
+			ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		Data.put(trees.get(1), ordered[0], ordered[1],
+			vehiclePosition -> {
+				final VehiclePosition value = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+				value.addSegment(fromM, toM, 999_999_004L);
+				return value;
+			}, Object2ObjectAVLTreeMap::new);
+	}
+
+	/**
+	 * 占住 L1 的一段 —— **写进调用方指定的那份占用树**。
+	 *
+	 * <p>notes/166 R6/R7：占用只有占用树这一份来源，而有的用例是拿一份**局部**树去断言的
+	 * （{@code new MmtrSignalAspect(sim, sim.mmtrRoutes, trees)}）。旧代码读的是全局的"预留信号色"
+	 * 通道，所以"写进 sim 的树、却拿局部树断言"看不出来；新模型下那等于**根本没占**（实测：期望单黄读成绿）。</p>
+	 */
+	private static void occupySection(Rail rail, org.mtr.core.mmtr.signal.MmtrSectionService.TrackSpan span,
+			ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees) {
+		final Position[] ordered = rail.mmtrOrderedPositions();
+		Data.put(trees.get(1), ordered[0], ordered[1],
+			vehiclePosition -> {
+				final VehiclePosition value = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+				value.addSegment(span.arcFromM, span.arcToM, 999_999_004L);
+				return value;
+			}, Object2ObjectAVLTreeMap::new);
 	}
 
 	/**
@@ -249,7 +286,6 @@ public final class MmtrSignalAspectTests {
 		sim.rails.add(straight);
 		sim.rails.add(diverge);
 		sim.sync();
-		sim.mmtrEnsureSignalColors();
 
 		// (1) 45° 单开道岔 = 一处物理道岔，位置默认 0（正线贯通）= **已决定** → 不压红。
 		assertNotNull(sim.mmtrTurnout(n.getX(), n.getY(), n.getZ()), "the 45° fork must be recognised as one physical turnout");
@@ -272,7 +308,6 @@ public final class MmtrSignalAspectTests {
 		wye.rails.add(armUp);
 		wye.rails.add(armDown);
 		wye.sync();
-		wye.mmtrEnsureSignalColors();
 		assertNull(wye.mmtrTurnout(c.getX(), c.getY(), c.getZ()), "a 120° wye is NOT a single turnout");
 		assertEquals(MmtrSignalAspect.Aspect.RED, new MmtrSignalAspect(wye, wye.mmtrRoutes).aspectOf(wyeEntry.getHexId()),
 			"没人决定的三岔口仍旧把守着进路的信号压红");
@@ -298,9 +333,12 @@ public final class MmtrSignalAspectTests {
 		// (3) With the junction decided and NO occupancy in its clearance zone, the same signal falls back
 		// to the ordinary chain: an occupied block one section ahead is a caution, not a junction danger.
 		trees.get(1).clear();
-		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> straightSections = sim.mmtrBlocks.blocksOf(straight.getHexId());
-		assertEquals(1, straightSections.size(), "the straight rail has no mid-rail signal");
-		occupySection(sim, straight, straightSections.get(0));
+		/*
+		 * notes/166 R7：占的是**清限区之外**那一段（岔口那侧前 10 m 属清限区）。
+		 * 第一版把整根轨都标成占用 ⇒ 前 10 m 落在清限区里 ⇒ ④ 规则把岔口判成"清不掉" ⇒ 读**红**
+		 * （那是规则正确、夹具写错）。这里占 12..20 m：既不在清限区，又足够占到"够算占用"（重叠 8 m）。
+		 */
+		occupyArcIn(straight, 12, 20, trees);
 		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, new MmtrSignalAspect(sim, sim.mmtrRoutes, trees).aspectOf(entry.getHexId()),
 			"a decided junction with the next block occupied is the ordinary single yellow");
 	}
@@ -322,8 +360,8 @@ public final class MmtrSignalAspectTests {
 		// Two lamps on the rail: the first protects [0, 100), the second protects [100, 200).
 		final Simulator sim = splitRailSim("build/mmtr-aspect-sections", true);
 		final Rail longRail = sim.rails.stream().filter(rail -> rail.railMath.getLength() > 100).findFirst().orElseThrow();
-		assertEquals(2, sim.mmtrBlocks.blocksOf(longRail.getHexId()).size(), "the two lights split the rail (v1 view)");
-		assertEquals(2, sim.mmtrDirectionalBlocks.allSections().size(), "and v2 sees two lamp-to-lamp blocks");
+		assertEquals(2, sim.mmtrSections.trackSectionsOf(longRail.getHexId()).size(), "一盏轨中段的灯把轨切成 2 个轨道区间（L1）");
+		assertEquals(2, sim.mmtrSections.allSections().size(), "and v2 sees two lamp-to-lamp blocks");
 		final MmtrSignalAspect aspect = new MmtrSignalAspect(sim, sim.mmtrRoutes);
 		assertEquals(MmtrSignalAspect.Aspect.GREEN, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)), "clear: green");
 
@@ -353,8 +391,9 @@ public final class MmtrSignalAspectTests {
 			"nothing held: green");
 
 		// Reserve the near block's colour the v1 way, with NO footprint in the trees.
-		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> blocks = sim.mmtrBlocks.blocksOf(longRail.getHexId());
-		occupySection(sim, longRail, blocks.get(0));
+		final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSpan nearSpan = sim.mmtrSections.trackSpanAt(longRail.getHexId(), 50);
+		assertNotNull(nearSpan, "近侧那一段");
+		occupySection(longRail, nearSpan, sim.mmtrOccupancyTrees());
 		assertEquals(MmtrSignalAspect.Aspect.RED, aspect.aspectFrom(longRail.getHexId(), new Position(0, 0, 0)),
 			"the v1 colour channel alone still holds the signal at danger");
 	}
@@ -388,7 +427,6 @@ public final class MmtrSignalAspectTests {
 			final org.mtr.core.tool.Vector middle = longRail.railMath.getPosition(100, false);
 			sim.mmtrSignals.put((int) Math.floor(middle.x()), (int) Math.floor(middle.y()), (int) Math.floor(middle.z()), 270, 2, "set", longRail.getHexId());
 		}
-		sim.mmtrEnsureSignalColors();
 		return sim;
 	}
 

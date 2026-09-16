@@ -138,7 +138,7 @@ public final class MmtrPointDefaultZeroTests {
 		if (trees != null) {
 			final org.mtr.core.data.Position[] ordered = target.mmtrOrderedPositions();
 			for (int i = 0; i < trees.size(); i++) {
-				if (org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.footprintOn(trees.get(i), ordered) != null) {
+				if (org.mtr.core.mmtr.signal.MmtrSectionService.footprintOn(trees.get(i), ordered) != null) {
 					found = true;
 					break;
 				}

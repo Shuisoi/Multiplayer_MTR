@@ -197,12 +197,19 @@ public final class MmtrJunctionState {
 
 	/** 同上，但可以把某一列车的足迹排除在外（{@code excludeVehicleId}；0 = 不排除）。 */
 	private static Rail foulingRail(Position node, it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, long excludeVehicleId) {
+		/*
+		 * 净空区 = "节点起 {@link Vehicle#MMTR_JUNCTION_CLEARANCE_M} m"这条窗（**不要改成整根轨**）：
+		 * 曾经试过"度 ≥3 的节点整根轨都算岔区"，结果 6 个灯色用例与 1 个净空用例一起挂 ——
+		 * 车只要在岔轨上（哪怕 30 m 外），节点就永远显示"净空被占"、灯永远红，
+		 * 而那正是用户报的"信号灯不变绿"。所以显示/灯色口径维持短窗不变；
+		 * "不许在车还压着岔轨时扳岔"这条另走一遍（见 {@code MmtrPointAuthority} 的持有窗口续期）。
+		 */
 		for (final Rail rail : neighbours.values()) {
 			final double length = rail.railMath.getLength();
 			if (length <= 0) {
 				continue;
 			}
-			final double nodeArc = MmtrBlockService.arcOfNode(rail, node);
+			final double nodeArc = MmtrSectionGeometry.arcOfNode(rail, node);
 			if (Double.isNaN(nodeArc)) {
 				continue;
 			}
@@ -213,7 +220,7 @@ public final class MmtrJunctionState {
 			}
 			final Position[] ordered = rail.mmtrOrderedPositions();
 			for (int i = 0; i < trees.size(); i++) {
-				final VehiclePosition vehiclePosition = MmtrDirectionalBlockService.footprintOn(trees.get(i), ordered);
+				final VehiclePosition vehiclePosition = MmtrSectionService.footprintOn(trees.get(i), ordered);
 				if (vehiclePosition != null && foulsZone(vehiclePosition, from, to, excludeVehicleId)) {
 					return rail;
 				}

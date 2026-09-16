@@ -1,9 +1,11 @@
 package org.mtr.core.data;
 
+import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.objects.ObjectAVLTreeSet;
+import org.jspecify.annotations.Nullable;
 import org.mtr.core.generated.data.ClientSchema;
 import org.mtr.core.operation.DynamicDataResponse;
 import org.mtr.core.operation.PlayerPresentResponse;
@@ -25,6 +27,15 @@ public class Client extends ClientSchema {
 	private final LongAVLTreeSet existingVehicleIds = new LongAVLTreeSet();
 	private final LongAVLTreeSet keepVehicleIds = new LongAVLTreeSet();
 	private final Long2ObjectAVLTreeMap<VehicleUpdate> vehicleUpdates = new Long2ObjectAVLTreeMap<>();
+	/**
+	 * 这一拍要发的**稀疏补丁**（notes/174）：车辆 id → 只含变化字段的那段 JSON。
+	 *
+	 * <p>与 {@link #vehicleUpdates} 是同一件事的两档：整份快照只在"客户端第一次看到这辆车"或
+	 * **静态字段**变了（换交路/改编组/path 换了）时发；其余动态变化走这里。
+	 * 两者都算"这个客户端现在持有这辆车"，所以都要进 {@link #existingVehicleIds} ——
+	 * 否则下一拍它会被判成"要删掉"。</p>
+	 */
+	private final Long2ObjectAVLTreeMap<JsonObject> vehiclePatches = new Long2ObjectAVLTreeMap<>();
 
 	private final LongAVLTreeSet existingLiftIds = new LongAVLTreeSet();
 	private final LongAVLTreeSet keepLiftIds = new LongAVLTreeSet();
@@ -85,7 +96,7 @@ public class Client extends ClientSchema {
 	 */
 	public void sendUpdates(Simulator simulator) {
 		final DynamicDataResponse dynamicDataResponse = new DynamicDataResponse(uuid, simulator);
-		final boolean hasUpdate1 = process(vehicleUpdates, existingVehicleIds, keepVehicleIds, dynamicDataResponse::addVehicleToUpdate, dynamicDataResponse::addVehicleToKeep);
+		final boolean hasUpdate1 = processVehicles(dynamicDataResponse);
 		final boolean hasUpdate2 = process(liftUpdates, existingLiftIds, keepLiftIds, dynamicDataResponse::addLiftToUpdate, dynamicDataResponse::addLiftToKeep);
 		final boolean hasUpdate3 = process(signalBlockUpdates, existingRailIds, keepRailIds, dynamicDataResponse::addSignalBlockUpdate, railId -> {
 		});
@@ -97,6 +108,51 @@ public class Client extends ClientSchema {
 	}
 
 	/**
+	 * 车辆那一档的三路分派：**整份快照 / 稀疏补丁 / 保活**（notes/174）。
+	 *
+	 * <p>与通用 {@link #process} 的两处不同：①多了"补丁"这一路，它同样意味着"这个客户端现在持有
+	 * 这辆车"，所以必须一起进 {@link #existingVehicleIds}；②"要不要删"仍由"这一拍发出去的三样
+	 * 加起来"决定 —— 少算了任何一路，客户端就会把还在视野里的车删掉（一亮一灭）。</p>
+	 */
+	private boolean processVehicles(DynamicDataResponse dynamicDataResponse) {
+		vehicleUpdates.forEach((vehicleId, vehicleUpdate) -> {
+			dynamicDataResponse.addVehicleToUpdate(vehicleUpdate);
+			existingVehicleIds.remove(vehicleId);
+		});
+
+		vehiclePatches.forEach((vehicleId, patch) -> {
+			dynamicDataResponse.addVehicleToPatch(vehicleId, patch.toString());
+			/*
+			 * ★ **补丁必须同时保活**（notes/174 的实机回归，2026-09-16）：
+			 * 客户端那条镜像的规则是"**这一条消息里没出现的车就删掉**"
+			 * （`PacketUpdateVehiclesLifts.updateVehiclesOrLifts` 的 removeIf，删的时候还会
+			 * dispose 掉按节数缓存的渲染数据）。所以只放进补丁列表的话，客户端每收到一次补丁
+			 * 就把这辆车删掉、渲染缓存重建 —— 现场表现是**列车一亮一灭、非常卡**，
+			 * 而且要等到 30 秒后的兜底整份才恢复。
+			 */
+			dynamicDataResponse.addVehicleToKeep(vehicleId);
+			existingVehicleIds.remove(vehicleId);
+		});
+
+		keepVehicleIds.forEach(vehicleId -> {
+			dynamicDataResponse.addVehicleToKeep(vehicleId);
+			existingVehicleIds.remove(vehicleId);
+		});
+
+		final boolean hasUpdate = !existingVehicleIds.isEmpty() || !vehicleUpdates.isEmpty() || !vehiclePatches.isEmpty();
+
+		existingVehicleIds.clear();
+		existingVehicleIds.addAll(vehicleUpdates.keySet());
+		existingVehicleIds.addAll(vehiclePatches.keySet());
+		existingVehicleIds.addAll(keepVehicleIds);
+
+		vehicleUpdates.clear();
+		vehiclePatches.clear();
+		keepVehicleIds.clear();
+		return hasUpdate;
+	}
+
+	/**
 	 * Track a vehicle for the next {@link #sendUpdates} cycle. If the vehicle is new or
 	 * dirty it is queued for a full update; otherwise it is kept alive so the client knows not
 	 * to remove it.
@@ -104,15 +160,37 @@ public class Client extends ClientSchema {
 	 * @param vehicle         the vehicle to track
 	 * @param needsUpdate     whether the vehicle's state has changed since the last sync
 	 * @param pathUpdateIndex index into the vehicle's path data for partial updates
+	 * @param patch           {@link org.mtr.core.operation.VehicleSyncPatch} 产出的稀疏补丁；
+	 *                        {@code null} = 发整份快照（静态变了或第一次），空对象 = 其实没有变化
 	 */
-	public void update(Vehicle vehicle, boolean needsUpdate, int pathUpdateIndex) {
+	public void update(Vehicle vehicle, boolean needsUpdate, int pathUpdateIndex, @Nullable JsonObject patch) {
 		final long vehicleId = vehicle.getId();
 		if (needsUpdate || !existingVehicleIds.contains(vehicleId)) {
-			vehicleUpdates.put(vehicleId, new VehicleUpdate(vehicle, vehicle.vehicleExtraData.copy(pathUpdateIndex)));
+			final boolean clientAlreadyHasIt = existingVehicleIds.contains(vehicleId);
+			if (patch != null && patch.size() > 0 && clientAlreadyHasIt) {
+				// 客户端已经持有这辆车、而这一拍只有动态字段变了 ⇒ 发补丁（原地合并）
+				vehiclePatches.put(vehicleId, patch);
+				vehicleUpdates.remove(vehicleId);
+			} else {
+				// 第一次看到，或静态字段变了（客户端要重建镜像）：整份快照
+				vehicleUpdates.put(vehicleId, new VehicleUpdate(vehicle, vehicle.vehicleExtraData.copy(pathUpdateIndex)));
+				vehiclePatches.remove(vehicleId);
+			}
 			keepVehicleIds.remove(vehicleId);
-		} else if (!vehicleUpdates.containsKey(vehicleId)) {
+		} else if (!vehicleUpdates.containsKey(vehicleId) && !vehiclePatches.containsKey(vehicleId)) {
 			keepVehicleIds.add(vehicleId);
 		}
+	}
+
+	/**
+	 * 兼容旧调用方（无补丁）：等价于"这一次发整份快照"。
+	 *
+	 * @deprecated 新增调用方请用 {@link #update(Vehicle, boolean, int, JsonObject)}；
+	 * 保留它只是为了不动升降机/信号那些不在这条协议里的路径。
+	 */
+	@Deprecated
+	public void update(Vehicle vehicle, boolean needsUpdate, int pathUpdateIndex) {
+		update(vehicle, needsUpdate, pathUpdateIndex, null);
 	}
 
 	/**

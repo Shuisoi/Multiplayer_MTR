@@ -35,7 +35,6 @@ public final class MmtrClientRoutes {
 
 	private static volatile Map<String, List<String>> nextRails = Collections.emptyMap();
 	private static volatile Set<String> pendingEntries = Collections.emptySet();
-	private static volatile Map<String, List<MmtrSignalChain.Section>> sections = Collections.emptyMap();
 	private static volatile Set<String> restrictedNodes = Collections.emptySet();
 	/** S4: lamp {@code x,y,z} key -&gt; the aspect the ENGINE's v2 model gives that lamp. */
 	private static volatile Map<String, String> lampAspects = Collections.emptyMap();
@@ -52,12 +51,12 @@ public final class MmtrClientRoutes {
 
 	/** Replace the mirror (called from the packet handler on the client thread). */
 	public static void update(Map<String, List<String>> next, Set<String> pending) {
-		update(next, pending, Collections.emptyMap(), Collections.emptySet(), Collections.emptyMap());
+		update(next, pending, Collections.emptySet(), Collections.emptyMap());
 	}
 
-	/** Replace the mirror including the B3b section map and the ④ restricted-junction node keys. */
-	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted) {
-		update(next, pending, sectionMap, restricted, Collections.emptyMap());
+	/** Replace the mirror including the ④ restricted-junction node keys. */
+	public static void update(Map<String, List<String>> next, Set<String> pending, Set<String> restricted) {
+		update(next, pending, restricted, Collections.emptyMap());
 	}
 
 	/**
@@ -65,8 +64,8 @@ public final class MmtrClientRoutes {
 	 * (what one lamp protects, walked lamp to lamp), so it ships its conclusion instead of the raw walk and
 	 * the client renderer looks its own block position up.
 	 */
-	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted, Map<String, String> lampAspectMap) {
-		update(next, pending, sectionMap, restricted, lampAspectMap, Collections.emptyMap());
+	public static void update(Map<String, List<String>> next, Set<String> pending, Set<String> restricted, Map<String, String> lampAspectMap) {
+		update(next, pending, restricted, lampAspectMap, Collections.emptyMap());
 	}
 
 	/**
@@ -74,14 +73,11 @@ public final class MmtrClientRoutes {
 	 *
 	 * <p>这份关系由引擎算（它持有节点、朝向、人工绑定与区间那一整套），客户端只显示。</p>
 	 */
-	public static void update(Map<String, List<String>> next, Set<String> pending, Map<String, List<MmtrSignalChain.Section>> sectionMap, Set<String> restricted, Map<String, String> lampAspectMap, Map<String, List<String>> lampRailMap) {
+	public static void update(Map<String, List<String>> next, Set<String> pending, Set<String> restricted, Map<String, String> lampAspectMap, Map<String, List<String>> lampRailMap) {
 		final Map<String, List<String>> copy = new HashMap<>();
 		next.forEach((railHex, nexts) -> copy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(nexts))));
 		nextRails = Collections.unmodifiableMap(copy);
 		pendingEntries = Collections.unmodifiableSet(new HashSet<>(pending));
-		final Map<String, List<MmtrSignalChain.Section>> sectionCopy = new HashMap<>();
-		sectionMap.forEach((railHex, railSections) -> sectionCopy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(railSections))));
-		sections = Collections.unmodifiableMap(sectionCopy);
 		restrictedNodes = Collections.unmodifiableSet(new HashSet<>(restricted));
 		lampAspects = Collections.unmodifiableMap(new HashMap<>(lampAspectMap));
 		final Map<String, List<String>> lampRailsCopy = new HashMap<>();
@@ -92,7 +88,6 @@ public final class MmtrClientRoutes {
 	public static void clear() {
 		nextRails = Collections.emptyMap();
 		pendingEntries = Collections.emptySet();
-		sections = Collections.emptyMap();
 		restrictedNodes = Collections.emptySet();
 		lampAspects = Collections.emptyMap();
 		lampRails = Collections.emptyMap();
@@ -144,19 +139,16 @@ public final class MmtrClientRoutes {
 	}
 
 	/**
-	 * B3b: the sections of {@code railHex} as mirrored by the engine; empty when the rail is not split
-	 * (one section = one rail, so the renderer falls back to the per-rail occupancy test).
+	 * 客户端**不再自己数区间**（notes/166 R4）：B3b 那条"引擎把每根被切分轨的弧窗+颜色推给客户端，
+	 * 客户端自己数"的通道随 v1 整层删除。现在区间与显示的结论都由引擎给（{@code lamps} /
+	 * {@code lampRails}），这里恒空 —— 渲染器于是退回"每根轨一个单位"的保守链。
 	 */
 	public static List<MmtrSignalChain.Section> sections(@Nullable String railHex) {
-		if (railHex == null) {
-			return Collections.emptyList();
-		}
-		final List<MmtrSignalChain.Section> railSections = sections.get(railHex);
-		return railSections == null ? Collections.emptyList() : railSections;
+		return Collections.emptyList();
 	}
 
 	public static int sectionRailCount() {
-		return sections.size();
+		return 0;
 	}
 
 	/**

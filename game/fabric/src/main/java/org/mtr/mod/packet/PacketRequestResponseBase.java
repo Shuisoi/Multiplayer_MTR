@@ -75,6 +75,16 @@ public abstract class PacketRequestResponseBase extends PacketHandler {
 	 */
 	protected abstract PacketRequestResponseBase getInstance(String content);
 
+	/**
+	 * MMTR 取证（notes/177）：这条包文的原始 JSON 长度。
+	 *
+	 * <p>整份车辆快照实测 3.5 KB、稀疏补丁只有几十字节 —— 现场排查"到底在发哪一种"时，
+	 * 光看条数是不够的（一条整份顶一百条补丁），所以把字节数一起记下来。</p>
+	 */
+	protected final int mmtrContentLength() {
+		return content.length();
+	}
+
 	protected abstract SerializedDataBase getDataInstance(JsonReader jsonReader);
 
 	@Nonnull

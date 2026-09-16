@@ -68,6 +68,15 @@ public class VehicleRidingMovement {
 	private static boolean mmtrDriverSynced;
 	/** True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk. */
 	private static boolean mmtrCabLocked;
+	/**
+	 * MMTR 取证计数器（notes/177）：客户端把玩家"按"到车内绝对坐标的次数。
+	 *
+	 * <p>"人卡在两帧之间来回抽搐"最可能的机制就是这里跟服务端抢人 —— 客户端每帧把玩家按到车上，
+	 * 服务端每帧按回它认为的位置。所以这个计数只要不是 0，就说明本地确实在持续瞬移玩家；
+	 * 它跟 {@link MmtrPlayerMotionTrace} 的"拍间挪动"计数放在一起，就能分清是"本地按人"还是
+	 * "服务端按人"。</p>
+	 */
+	private static int mmtrMovePlayerCalls;
 
 	public static final int SEND_UPDATE_FREQUENCY = 1000;
 	private static final float VEHICLE_WALKING_SPEED_MULTIPLIER = 0.005F;
@@ -394,6 +403,18 @@ public class VehicleRidingMovement {
 		return ridingVehicleId;
 	}
 
+	/** @return 从进程启动起，客户端把玩家按到车内坐标的累计次数（notes/177 取证用） */
+	public static int mmtrGetMovePlayerCalls() {
+		return mmtrMovePlayerCalls;
+	}
+
+	/** @return 同上，但读后清零 —— 用来做"这一窗口按了几次"的统计 */
+	public static int mmtrGetAndResetMovePlayerCalls() {
+		final int value = mmtrMovePlayerCalls;
+		mmtrMovePlayerCalls = 0;
+		return value;
+	}
+
 	/**
 	 * MMTR: while the crew holds a cab the driver is fixed at the seat and cannot walk around; the
 	 * passenger compartment stays freely walkable. Set when a cab is taken and cleared when it is
@@ -551,6 +572,7 @@ public class VehicleRidingMovement {
 	 */
 	private static void movePlayer(double x, double y, double z) {
 		if (InitClient.getGameTick() > 40) {
+			mmtrMovePlayerCalls++;
 			final Runnable runnable = () -> {
 				final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 				final ClientWorld clientWorld = minecraftClient.getWorldMapped();

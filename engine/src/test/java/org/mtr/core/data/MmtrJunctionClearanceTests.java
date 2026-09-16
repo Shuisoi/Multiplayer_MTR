@@ -137,7 +137,6 @@ public final class MmtrJunctionClearanceTests {
 			westYard2.tick();
 			eastYard.tick();
 			southYard.tick();
-			sim.mmtrEnsureSignalColors();
 		}
 
 		Vehicle spawn(Siding yard) {

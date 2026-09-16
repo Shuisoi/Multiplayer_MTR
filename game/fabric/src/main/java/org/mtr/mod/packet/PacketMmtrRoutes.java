@@ -35,20 +35,22 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 
 	/** Build the wire form from the engine's derived views (flattened pairs; a rail may repeat). */
 	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries) {
-		return contentOf(nextRails, pendingEntries, new Object2ObjectOpenHashMap<>(), new ObjectOpenHashSet<>());
+		return contentOf(nextRails, pendingEntries, new ObjectOpenHashSet<>(), new Object2ObjectOpenHashMap<String, String>());
 	}
 
 	/**
-	 * B3b: the same payload plus the block sections of every SPLIT rail, flattened as
-	 * {@code [railHex, fromM, toM, color] * n}. Unsplit rails are omitted, so a world without a
-	 * mid-rail light sends nothing extra.
+	 * 同一份载荷 + ④ 的"清不掉的岔口"节点键（{@code restrictedNodes}）。
+	 *
+	 * <p>B3b 那条"每根被切分轨的弧窗 + 预留色"的 `sections` 载荷**已删除**（notes/166 R4）：
+	 * 它随 v1 的预留信号色通道一起消失 —— 客户端不再自己数区间，区间与显示的结论都由引擎给
+	 * （{@code lamps} / {@code lampRails}）。</p>
 	 *
 	 * <p>④: {@code restrictedNodes} carries the {@code x,y,z} keys of junctions the engine cannot clear
 	 * (undecided points or a fouled clearance zone); the client chain treats a step through them as
 	 * occupied, so the lights agree with the motion rules.</p>
 	 */
-	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes) {
-		return contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, new Object2ObjectOpenHashMap<>());
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, ObjectOpenHashSet<String> restrictedNodes) {
+		return contentOf(nextRails, pendingEntries, restrictedNodes, new Object2ObjectOpenHashMap<String, String>());
 	}
 
 	/**
@@ -63,12 +65,12 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 	 * "这盏灯守哪几根轨"。这份关系由**引擎**算（它才持有节点、朝向、人工绑定、区间那一整套），
 	 * 客户端只显示 —— 客户端自己按几何推一遍必然与引擎分叉，而"灯到底守哪根轨"正是要看的那个东西。</p>
 	 */
-	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects) {
-		return contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, lampAspects, new Object2ObjectOpenHashMap<>());
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects) {
+		return contentOf(nextRails, pendingEntries, restrictedNodes, lampAspects, new Object2ObjectOpenHashMap<>());
 	}
 
 	/** As above, carrying each lamp's guarded rails ({@code [lampKey, railHex] * n}). */
-	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects, Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails) {
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects, Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
 		nextRails.forEach((from, tos) -> tos.forEach(to -> {
@@ -79,14 +81,6 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		pendingEntries.forEach(pending::add);
 		json.add("nextRails", next);
 		json.add("pendingEntries", pending);
-		final JsonArray sections = new JsonArray();
-		splitRails.forEach((railHex, blocks) -> blocks.forEach(block -> {
-			sections.add(railHex);
-			sections.add(String.valueOf(block.arcFromM));
-			sections.add(String.valueOf(block.arcToM));
-			sections.add(String.valueOf(block.signalColor));
-		}));
-		json.add("sections", sections);
 		final JsonArray restricted = new JsonArray();
 		restrictedNodes.forEach(restricted::add);
 		json.add("restrictedNodes", restricted);
@@ -115,18 +109,6 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		for (int i = 0; i + 1 < flat.size(); i += 2) {
 			next.computeIfAbsent(flat.get(i), key -> new java.util.ArrayList<>()).add(flat.get(i + 1));
 		}
-		// B3b sections: flattened 4-tuples [railHex, fromM, toM, color].
-		final ObjectArrayList<String> sectionHexes = new ObjectArrayList<>();
-		jsonReader.iterateStringArray("sections", sectionHexes::clear, sectionHexes::add);
-		final Map<String, java.util.List<org.mtr.mod.mmtr.MmtrSignalChain.Section>> sections = new HashMap<>();
-		for (int i = 0; i + 3 < sectionHexes.size(); i += 4) {
-			sections.computeIfAbsent(sectionHexes.get(i), key -> new java.util.ArrayList<>()).add(
-				new org.mtr.mod.mmtr.MmtrSignalChain.Section(
-					Double.parseDouble(sectionHexes.get(i + 1)),
-					Double.parseDouble(sectionHexes.get(i + 2)),
-					Long.parseLong(sectionHexes.get(i + 3))
-				));
-		}
 		// ④: the junctions the engine cannot clear, as x,y,z keys.
 		final ObjectOpenHashSet<String> restrictedNodes = new ObjectOpenHashSet<>();
 		jsonReader.iterateStringArray("restrictedNodes", restrictedNodes::clear, restrictedNodes::add);
@@ -144,8 +126,8 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		for (int i = 0; i + 1 < lampRailEntries.size(); i += 2) {
 			lampRails.computeIfAbsent(lampRailEntries.get(i), key -> new java.util.ArrayList<>()).add(lampRailEntries.get(i + 1));
 		}
-		MmtrClientRoutes.update(next, pending, sections, restrictedNodes, lampAspects, lampRails);
-		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + sections.size() + " split rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s), " + lampRails.size() + " lamp binding(s)");
+		MmtrClientRoutes.update(next, pending, restrictedNodes, lampAspects, lampRails);
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s), " + lampRails.size() + " lamp binding(s)");
 	}
 
 	@Override

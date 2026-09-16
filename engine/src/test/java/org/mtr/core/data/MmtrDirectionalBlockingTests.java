@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.ControlState;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
-import org.mtr.core.mmtr.signal.MmtrDirectionalBlockService;
+import org.mtr.core.mmtr.signal.MmtrSectionService;
 import org.mtr.core.mmtr.signal.MmtrSignalRegistry;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.operation.MmtrDriveControl;
@@ -163,10 +163,10 @@ public final class MmtrDirectionalBlockingTests {
 	@Test
 	public void theSectionSpansTheWholeCorridorAndTheRailsInsideItAreNotBoundaries() {
 		final CorridorNet n = new CorridorNet("build/mmtr-dirblocking-shape");
-		final MmtrDirectionalBlockService service = n.sim.mmtrDirectionalBlocks;
+		final MmtrSectionService service = n.sim.mmtrSections;
 
 		assertEquals(1, service.sectionCount(), "one lamp -> one directional section");
-		final MmtrDirectionalBlockService.Section section = service.sectionOfSignal(MmtrSignalRegistry.key(0, 0, 0));
+		final MmtrSectionService.Section section = service.sectionOfSignal(MmtrSignalRegistry.key(0, 0, 0));
 		assertNotNull(section, "the lamp at the yard mouth starts the section");
 		assertEquals(3, section.spans.size(),
 			"the section spans RA, RB and RC: a lamp-to-lamp section crosses rail boundaries");

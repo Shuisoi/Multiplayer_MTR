@@ -14,6 +14,8 @@ import org.mtr.core.serializer.SerializedDataBaseWithId;
 import org.mtr.core.servlet.MessageQueue;
 import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.core.servlet.QueueObject;
+import org.mtr.core.servlet.WebFeed;
+import org.mtr.core.servlet.WebRun;
 import org.mtr.core.tool.Utilities;
 import org.mtr.legacy.data.LegacyRailLoader;
 
@@ -198,7 +200,39 @@ public class Simulator extends Data implements Utilities {
 	 * walker reads manual operator settings (mmtrPointBranches) first and this authority second. */
 	public final org.mtr.core.mmtr.point.MmtrPointAuthority mmtrPointAuthority = new org.mtr.core.mmtr.point.MmtrPointAuthority(this::getCurrentMillis)
 		.withTurnoutLookup(this::mmtrTurnout)
-		.withPositionChangeGuard(this::mmtrPositionChangeBlockedReason);
+		.withPositionChangeGuard(this::mmtrPositionChangeBlockedReason)
+		.withHolderOccupancy(this::mmtrVehicleOnNodeRails);
+
+	/**
+	 * **某列车是不是还压在这处节点的轨上**（占用树答）。权限层用它决定"物理持有窗口到期能不能放位"：
+	 * 车还压在这处道岔的轨上时放位 = 允许别人把道岔从它脚下扳走（2026-09-16 现场"两个车顶头"的成因），
+	 * 所以那时持有续期而不是释放。
+	 */
+	private boolean mmtrVehicleOnNodeRails(long x, long y, long z, String owner) {
+		final long vehicleId = vehicleIdOfOwner(owner);
+		if (vehicleId == 0) {
+			return false;
+		}
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<org.mtr.core.data.Position, org.mtr.core.data.Rail> neighbours =
+			positionsToRail.get(new org.mtr.core.data.Position(x, y, z));
+		if (neighbours == null) {
+			return false;
+		}
+		final org.mtr.core.data.Position[] orderedScratch = new org.mtr.core.data.Position[2];
+		final ObjectArrayList<Object2ObjectAVLTreeMap<org.mtr.core.data.Position, Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = mmtrOccupancyTrees();
+		for (final org.mtr.core.data.Rail rail : neighbours.values()) {
+			final org.mtr.core.data.Position[] ordered = rail.mmtrOrderedPositions();
+			orderedScratch[0] = ordered[0];
+			orderedScratch[1] = ordered[1];
+			for (int i = 0; i < trees.size(); i++) {
+				final org.mtr.core.data.VehiclePosition footprint = org.mtr.core.mmtr.signal.MmtrSectionService.footprintOn(trees.get(i), orderedScratch);
+				if (footprint != null && footprint.footprintIds().contains(vehicleId)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 
 	/**
 	 * **改道岔位置之前的净空闸**（授权层问过来的）：另一列车压在岔区上时不许改位置 —— 与人工扳岔、
@@ -242,15 +276,12 @@ public class Simulator extends Data implements Utilities {
 	 * state), derived from {@link #mmtrPointAuthority}. The signal layer (A2) reads it to decide whether
 	 * a proceed aspect may be shown; the ops feed shows it per train. */
 	public final org.mtr.core.mmtr.route.MmtrRouteRegistry mmtrRoutes = new org.mtr.core.mmtr.route.MmtrRouteRegistry();
-	/** 闭塞区间服务 (B1/B2): sections cut by the wayside signals reading each rail. S1 stops at a
-	 * SECTION boundary instead of the rail end, so a train may run up to the signal protecting an
-	 * occupied section. Lazy + rails/signals-signature gated. */
-	public final org.mtr.core.mmtr.signal.MmtrBlockService mmtrBlocks = new org.mtr.core.mmtr.signal.MmtrBlockService(this);
-	/** 闭塞区间 v2 (S1-S3): <strong>directional, lamp-to-lamp</strong> sections - what one lamp protects,
-	 * walked the way it faces until the next lamp, so a section spans rail boundaries. S1 stops at this
-	 * model's boundary ({@code Vehicle.directionalSectionStopM}) with the v1 service above as the
-	 * fallback on rails no lamp reaches. Lazy + rails/signals-signature gated. */
-	public final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService mmtrDirectionalBlocks = new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(this);
+	/**
+	 * 闭塞区间（两层模型，notes/166）：Level 1 轨道区间（无方向、占用判定的唯一单位）＋
+	 * Level 2 行车区间（有方向，灯到灯；无灯连通块整块一个大区间）。
+	 * 这是**唯一**的区间层 —— v1（逐轨）与 v2（作为独立模型）都已删除，不留回退分支。
+	 */
+	public final org.mtr.core.mmtr.signal.MmtrSectionService mmtrSections = new org.mtr.core.mmtr.signal.MmtrSectionService(this);
 	/** 硬默认 0 (option 3): real servers preset every turnout to operator branch 0. Engines tests keep
 	 * this false so authority/mission semantics stay synthetic; {@link org.mtr.core.Main} enables it. */
 	public boolean mmtrDefaultPointsZero;
@@ -274,6 +305,51 @@ public class Simulator extends Data implements Utilities {
 	private int watchdogProtections;
 	private int watchdogJammedRoutes;
 
+	/*
+	 * ------------------------------------------------ 网页任务的 tick 预算（notes/172）
+	 *
+	 * 起因是"网页刷新地图会阻碍客户端动作"：HTTP 请求的活儿是被塞回模拟线程、在 tick 里执行的，
+	 * 而嵌入式运行时（模组 `useThreadedSimulation=false`）模拟线程**就是 MC 服务端主线程** ——
+	 * 于是一次地图刷新能吃掉几百毫秒，等于几个 tick，64 人同时卡。
+	 *
+	 * 三条一起才成立：
+	 *   ① 只读接口走快照（`mmtrWebFeed`）：常规刷新根本不进 tick；
+	 *   ② 进 tick 的那些单独排队、**按时间片上上限**（下面这条预算）；
+	 *   ③ tick 本来就已经很慢时，整 tick 不再接网页任务 —— 网页有快照兜底（读旧一拍），游戏没有。
+	 */
+	/** 一 tick 最多给网页任务留的时间片。 */
+	private static final long WEB_RUN_BUDGET_NANOS = 2_000_000L;
+	/** tick 已经用掉这么多毫秒时，本 tick 不再接网页任务（先把游戏让出来）。 */
+	private static final long WEB_RUN_SKIP_TICK_MILLIS = 40L;
+	/** 单条网页任务超过这个耗时就要点名（说明有重活又落回 tick 里了）。 */
+	private static final long WEB_RUN_WARN_MILLIS = 25L;
+	/** 同类点名日志的最小间隔，免得一个慢接口每拍刷一行。 */
+	private static final long WEB_RUN_WARN_INTERVAL_MILLIS = 10_000L;
+	/**
+	 * 一条网页任务超过这个耗时之后，接下来 {@link #WEB_RUN_COOLDOWN_MILLIS} 之内不再接网页任务。
+	 *
+	 * <p>实测：地图页一拍要三路，其中两路各自要几十到两百毫秒（notes/172 的表）。它们会**连着几个 tick
+	 * 各跑一个** —— 玩家看到的是"连续四五个 tick 全在卡"。冷却把它们摊开：一个重活之后先让游戏跑一会儿，
+	 * 网页宁可多等半秒（读旧一份快照），也不要连着把 tick 占满。</p>
+	 */
+	private static final long WEB_RUN_COOLDOWN_TRIGGER_MILLIS = 20L;
+	private static final long WEB_RUN_COOLDOWN_MILLIS = 400L;
+	/** 快照清扫间隔（tick）：长时间没人看就把发布的那几份丢掉。 */
+	private static final int WEB_FEED_SWEEP_TICKS = 1200;
+	private static final long NANOS_PER_MILLISECOND = 1_000_000L;
+
+	private final MessageQueue<WebRun> queuedWebRuns = new MessageQueue<>();
+	private int webFeedSweepTickCounter;
+	private long webRunCount;
+	private long webRunLastMillis;
+	private long webRunMaxMillis;
+	private String webRunMaxLabel = "";
+	private int webRunDeferred;
+	private long webRunSkippedTicks;
+	private long webRunShed;
+	private long webRunCooldownUntilMillis;
+	private long webRunWarnedAtMillis;
+
 	/**
 	 * Stable dimension identifier (e.g. {@code "minecraft/overworld"}).
 	 */
@@ -286,6 +362,12 @@ public class Simulator extends Data implements Utilities {
 	 * Background path-finder for passenger directions queries.
 	 */
 	public final DirectionsFinder directionsFinder = new DirectionsFinder(this);
+
+	/**
+	 * 只读接口的**快照发布器**（notes/172）：网页面板读的是这一份，所以"几个标签、每拍问几次"
+	 * 不再等于"tick 里算几次"。由 {@code SystemMapServlet} 的 FEEDS 表决定哪些接口往里发。
+	 */
+	public final WebFeed mmtrWebFeed = new WebFeed();
 
 	private final FileLoader<Station> fileLoaderStations;
 	private final FileLoader<Platform> fileLoaderPlatforms;
@@ -1323,38 +1405,15 @@ public class Simulator extends Data implements Utilities {
 
 	private String mmtrSignalColorsSignature = "";
 
-	/**
-	 * MMTR signal display (server-authoritative): give every rail its own reserved MMTR signal
-	 * color (rails-signature gated) so the standard rail signal-block channel can carry MMTR
-	 * occupancy - {@link Vehicle#markMmtrSignalBlocks()} registers CURRENTLY_RESERVE holds under
-	 * these colors, Rail#tick1 diffs them and pushes SignalBlockUpdates, and the in-game signal
-	 * lights turn red for EVERY client regardless of locally simulated vehicles.
+	/*
+	 * `mmtrEnsureSignalColors()` 与整条"每区间一个预留信号色"的通道**已删除**（notes/166 R4）。
 	 *
-	 * <p>B3b: a rail that a wayside signal splits carries one colour per SECTION (section 0 = the rail
-	 * colour, so unsplit rails are unchanged); {@link Vehicle#markMmtrSignalBlocks()} reserves only the
-	 * sections the consist actually occupies, which is what lets the display count sections.</p>
+	 * 它存在的理由（B3b）：让标准信号方块通道替 MMTR 把**区间占用**送到每个客户端。新模型里
+	 * 占用只有一份来源 —— Level 1 轨道区间读**占用树**（{@code MmtrSectionService.isOccupied}，
+	 * 且能排除问话列车自己），所以这条影子通道连同 {@code Rail.mmtrEnsureSignalColor*} /
+	 * {@code Vehicle.markMmtrSignalBlock} 一并删除。它也是那个"列车被自己的影子扣住"缺陷的载体：
+	 * 颜色通道认不出这团影子是谁的（notes/112 §4、notes/152）。
 	 */
-	public void mmtrEnsureSignalColors() {
-		// B3b: a rail split by a wayside signal carries one colour per SECTION, so the standard
-		// signal-block channel can carry per-section occupancy to every client.
-		mmtrBlocks.refresh();
-		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|').append(mmtrBlocks.signature()).append('|');
-		final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> hexes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
-		for (final org.mtr.core.data.Rail rail : rails) {
-			hexes.add(rail.getHexId());
-		}
-		hexes.sort(null);
-		hexes.forEach(hex -> sig.append(hex).append(','));
-		final String signature = sig.toString();
-		if (signature.equals(mmtrSignalColorsSignature)) {
-			return;
-		}
-		mmtrSignalColorsSignature = signature;
-		rails.forEach(rail -> {
-			rail.mmtrEnsureSignalColor();
-			mmtrBlocks.blocksOf(rail.getHexId()).forEach(block -> rail.mmtrEnsureSignalColor(block.signalColor));
-		});
-	}
 
 	/**
 	 * ④ 显示层: the live occupancy trees of the train transport mode (the pair S1 reads: current tick
@@ -1447,6 +1506,26 @@ public class Simulator extends Data implements Utilities {
 		final ObjectArrayList<org.mtr.core.mmtr.point.MmtrTurnout> out = new ObjectArrayList<>(mmtrTurnouts.values());
 		out.sort((a, b) -> a.key().compareTo(b.key()));
 		return out;
+	}
+
+	/**
+	 * 道岔状态的**廉价签名**（notes/172）：只做整数混合，不分配、不排序、不拼字符串。
+	 *
+	 * <p>为什么需要它：{@code MmtrSectionService.signature()} 是引擎里最热的查询之一
+	 * （一次链走行要算七八遍，`aspectsForAllRails()` 一次请求约 2500 遍），而它原来走
+	 * {@link #mmtrAllTurnouts()} —— 那是"分配一个数组 + 拷贝所有值 + 排序 + 排序比较里每次再拼两个 key 字符串"。
+	 * 签名只需要"**变了会变**"（只跟本次运行内上一次的值比），不需要顺序确定。</p>
+	 */
+	public int mmtrTurnoutStateSignature() {
+		refreshMmtrTurnouts();
+		int hash = mmtrTurnouts.size() * 31 + 1;
+		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
+			hash = hash * 31 + Long.hashCode(turnout.nodeX);
+			hash = hash * 31 + Long.hashCode(turnout.nodeY);
+			hash = hash * 31 + Long.hashCode(turnout.nodeZ);
+			hash = hash * 31 + mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+		}
+		return hash;
 	}
 
 	/** 道岔位置（0 = 正线贯通 / 1 = 岔股开放）。 */
@@ -1858,11 +1937,23 @@ public class Simulator extends Data implements Utilities {
 					continue;
 				}
 				final int position = mmtrTurnoutPositionForLeg(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via, granted);
-				if (position != Integer.MIN_VALUE && position != current) {
-					mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, position);
-					normalizeTurnoutRows(turnout);
-					changed = true;
+				if (position == Integer.MIN_VALUE || position == current) {
+					continue;
 				}
+				/*
+				 * **这是替"拿到这条腿授权的那列车"扳的**，所以净空闸要把**它自己**排除在外
+				 * （2026-09-16 现场修）：原来这里读的是不带请求方的判定，而列车走到岔前时车头本来就
+				 * 进了岔区 ⇒ 判定永远"净空被占" ⇒ 位置永远不跟着授权走 ⇒ 那处道岔的灯按"走不出去"红着、
+				 * 车在信号前干等（诊断日志里那句"（改位置的请求方 ）"是空的，就是这条路的痕迹）。
+				 */
+				final String grantOwner = mmtrPointAuthority.holder(turnout.nodeX, turnout.nodeY, turnout.nodeZ, via);
+				if (org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReasonExcept(this,
+					new org.mtr.core.data.Position(turnout.nodeX, turnout.nodeY, turnout.nodeZ), vehicleIdOfOwner(grantOwner)) != null) {
+					continue;
+				}
+				mmtrPointBranches.setNode(turnout.nodeX, turnout.nodeY, turnout.nodeZ, position);
+				normalizeTurnoutRows(turnout);
+				changed = true;
 			}
 		}
 		if (changed) {
@@ -2098,7 +2189,7 @@ public class Simulator extends Data implements Utilities {
 	 * light BOUND to that rail.
 	 *
 	 * <p><strong>Single source of truth (闭塞区间 v2).</strong> The rail is chosen by the SAME resolution
-	 * the section model uses ({@code MmtrDirectionalBlockService.resolveProtectedRail}), which resolves by
+	 * the section model uses ({@code MmtrSectionService.resolveProtectedRail}), which resolves by
 	 * the lamp's facing angle. An earlier version re-implemented the facing maths here with a
 	 * "the renderer applies a 90 degree offset" assumption; a bind tool that disagrees with the model by a
 	 * quarter turn is exactly how a light ends up bound to a rail running ACROSS its facing - the dead
@@ -2117,8 +2208,8 @@ public class Simulator extends Data implements Utilities {
 		// search only when the model cannot answer (no rail within tolerance of the light).
 		final org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry probe =
 			new org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry(x, y, z, angle, aspects);
-		final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.ProtectedRail resolved =
-			mmtrDirectionalBlocks.resolveProtectedRail(probe);
+		final org.mtr.core.mmtr.signal.MmtrSectionService.ProtectedRail resolved =
+			mmtrSections.resolveProtectedRail(probe);
 		if (resolved != null) {
 			return mmtrSignalOp(x, y, z, angle, aspects, "set", resolved.rail.getHexId());
 		}
@@ -2200,7 +2291,7 @@ public class Simulator extends Data implements Utilities {
 	 * <h3>为什么必须翻一次（用户 2026-09-14 现场报的"这个道岔不会高亮显示道岔状态"）</h3>
 	 * <p>一条轨的 hex 是「端点1-端点2」，**哪个端点写在前**取决于这条 Rail 怎么被声明/读出来：
 	 * 同一根实体轨，从 A 到 B 画与从 B 到 A 画会得到两个互为逆序的字符串
-	 * （见 {@code MmtrDirectionalBlockService.canonicalHex}）。接口对外一律发**规范写法**
+	 * （见 {@code MmtrSectionService.canonicalHex}）。接口对外一律发**规范写法**
 	 * （拓扑接口早就这么做，网页也把收到的 hex 原样发回来），而引擎内部的表（进向行、道岔的
 	 * stem/far/branch、授权、锁）用的是 {@code getHexId()}。不翻一次，网页按道岔卡片给出的 hex
 	 * 去比对地图上的轨就永远对不上（实测 {@code -19,-60,51} 的两根东向轨正是这种轨：
@@ -2218,10 +2309,10 @@ public class Simulator extends Data implements Utilities {
 		if (neighbours == null) {
 			return railHex;
 		}
-		final String wanted = org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(railHex);
+		final String wanted = org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(railHex);
 		for (final org.mtr.core.data.Rail rail : neighbours.values()) {
 			if (rail.getHexId().equals(railHex)
-				|| org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(rail.getHexId()).equals(wanted)) {
+				|| org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(rail.getHexId()).equals(wanted)) {
 				return rail.getHexId();
 			}
 		}
@@ -2760,6 +2851,126 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * 把一条**网页**任务排到下一次 tick（见 {@link #mmtrProcessWebRuns}）。
+	 *
+	 * <p>与 {@link #run(Runnable)} 分开是刻意的：那一队里是游戏侧的活（客户端保活、玩家会话清理），
+	 * 它们必须在那一 tick 里做完；网页这一队可能很贵（一次地图 JSON 就是几十毫秒），
+	 * 所以它单独排队、按时间片跑，并且 tick 已经很慢时整队让开。</p>
+	 *
+	 * @param label 接口名，只用于慢任务点名日志
+	 */
+	public void runWeb(String label, Runnable runnable) {
+		queuedWebRuns.put(new WebRun(label, runnable));
+	}
+
+	/**
+	 * 网页排队任务的时间片排空（notes/172）。
+	 *
+	 * <p>规矩三条：① 每 tick 至少跑一条（否则服务器一忙，网页队列就永远不动，快照也永远刷不新）；
+	 * ② 超过 {@link #WEB_RUN_BUDGET_NANOS} 就把剩下的留给下一 tick；③ 这一 tick 自己已经超过
+	 * {@link #WEB_RUN_SKIP_TICK_MILLIS} 时一条都不跑 —— 网页那边有快照兜底（读旧一拍），游戏没有。</p>
+	 *
+	 * <p>队列深度是有界的：同一路接口在窗口内的重复请求在 {@link WebFeed} 里就被合并了，
+	 * 所以"开十个标签"不会变成十条排队任务。</p>
+	 */
+	private void mmtrProcessWebRuns(long tickStartNanos) {
+		/*
+		 * 三道闸，按"最该让开"的顺序：
+		 *   ① 刚跑过一个重活（冷却中）⇒ 整队让开，先把游戏还给玩家；
+		 *   ② 这一 tick 自己已经很慢 ⇒ 整队让开；
+		 *   ③ 否则按时间片跑，至少一条。
+		 * 网页那三路都有快照兜底（读旧一拍），游戏没有 —— 所以让开的永远是网页。
+		 */
+		final long wallClockMillis = System.currentTimeMillis();
+		if (queuedWebRuns.size() > 0 && wallClockMillis < webRunCooldownUntilMillis) {
+			webRunShed++;
+			webRunDeferred = queuedWebRuns.size();
+			return;
+		}
+
+		final long currentNanos = System.nanoTime();
+		if ((currentNanos - tickStartNanos) / NANOS_PER_MILLISECOND >= WEB_RUN_SKIP_TICK_MILLIS && queuedWebRuns.size() > 0) {
+			webRunSkippedTicks++;
+			webRunDeferred = queuedWebRuns.size();
+			return;
+		}
+
+		final long deadlineNanos = currentNanos + WEB_RUN_BUDGET_NANOS;
+		int processed = 0;
+		long maxMillis = 0;
+		String maxLabel = "";
+		while (processed == 0 || System.nanoTime() < deadlineNanos) {
+			final WebRun webRun = queuedWebRuns.poll();
+			if (webRun == null) {
+				break;
+			}
+			final long runStartNanos = System.nanoTime();
+			try {
+				webRun.run();
+			} catch (Throwable e) {
+				// 一条网页任务炸了不许把整个 tick 带走（tick() 外面那个 catch 会中止本 tick 剩下的全部工作）。
+				log.error("Web request {} failed while running on the simulator thread", webRun.label, e);
+			}
+			final long runMillis = (System.nanoTime() - runStartNanos) / NANOS_PER_MILLISECOND;
+			webRunCount++;
+			webRunLastMillis = runMillis;
+			processed++;
+			if (runMillis > maxMillis) {
+				maxMillis = runMillis;
+				maxLabel = webRun.label;
+			}
+		}
+
+		webRunDeferred = queuedWebRuns.size();
+		if (maxMillis > webRunMaxMillis) {
+			webRunMaxMillis = maxMillis;
+			webRunMaxLabel = maxLabel;
+		}
+		if (maxMillis >= WEB_RUN_COOLDOWN_TRIGGER_MILLIS) {
+			webRunCooldownUntilMillis = System.currentTimeMillis() + WEB_RUN_COOLDOWN_MILLIS;
+		}
+		if (maxMillis >= WEB_RUN_WARN_MILLIS && getCurrentMillis() - webRunWarnedAtMillis >= WEB_RUN_WARN_INTERVAL_MILLIS) {
+			webRunWarnedAtMillis = getCurrentMillis();
+			log.warn("网页任务 {} 在模拟线程上花了 {} ms（本 tick 共 {} 条，队列还剩 {}；这一个 tick 里其他所有工作都被它推迟了）", maxLabel, maxMillis, processed, webRunDeferred);
+		}
+	}
+
+	/** 从快照答出去的请求数（诊断）。 */
+	public long getMmtrWebServedFromSnapshot() {
+		return mmtrWebFeed.getServedFromSnapshot();
+	}
+
+	/** 快照重建次数（诊断）。 */
+	public long getMmtrWebPublished() {
+		return mmtrWebFeed.getPublished();
+	}
+
+	/** 累计在模拟线程上跑过的网页任务数（诊断）。 */
+	public long getMmtrWebRunCount() {
+		return webRunCount;
+	}
+
+	/** 上一条网页任务花了多少毫秒（用例与诊断）。 */
+	public long getMmtrWebRunLastMillis() {
+		return webRunLastMillis;
+	}
+
+	/** 网页任务队列当前深度（诊断）。 */
+	public int getMmtrWebQueueSize() {
+		return queuedWebRuns.size();
+	}
+
+	/** 因为 tick 已经很慢而整队让开的次数（诊断）。 */
+	public long getMmtrWebSkippedTicks() {
+		return webRunSkippedTicks;
+	}
+
+	/** 因为刚跑过一个重活、处在冷却里而整队让开的次数（诊断）。 */
+	public long getMmtrWebShed() {
+		return webRunShed;
+	}
+
+	/**
 	 * Enqueue a client-to-server message; processed during the next tick.
 	 */
 	public void sendMessageC2S(QueueObject queueObject) {
@@ -2876,6 +3087,8 @@ public class Simulator extends Data implements Utilities {
 	 * @param millisElapsed the number of milliseconds since the last tick
 	 */
 	private void tick(long millisElapsed) {
+		// 本 tick 的起点：网页任务的时间片与"整队让开"都按它算（notes/172）。
+		final long tickStartNanos = System.nanoTime();
 		lastMillis = getCurrentMillis();
 		setCurrentMillis(lastMillis + millisElapsed);
 		currentPassengerDirectionsRequests = 0;
@@ -2911,7 +3124,9 @@ public class Simulator extends Data implements Utilities {
 			mmtrTickPlanDispatchers();
 			mmtrEnsurePointDefaults();
 			mmtrSyncTurnoutPositionsToGrants();
-			mmtrEnsureSignalColors();
+			// 位置队列自愈：净空被挡时排队的那条申请必须**自己**再试（修前只有"持有者释放/过期"两个事件
+			// 会推进队列 ⇒ 出现"位置空着、车排第一却永远轮不到"，实测车停了三分钟，只能人工扳岔救）。
+			mmtrPointAuthority.retryPhysicalQueues(getCurrentMillis());
 			mmtrRefreshSignalAspectView();
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
@@ -2929,6 +3144,18 @@ public class Simulator extends Data implements Utilities {
 
 			// Process queued runs
 			queuedRuns.process(Runnable::run);
+
+			/*
+			 * 网页排队任务（notes/172）：单独排队、按时间片跑，tick 已经很慢时整队让开。
+			 * 放在游戏侧排队任务**之后**：网页慢了只是网页旧一拍，游戏侧的保活/清理不能被网页挡住。
+			 */
+			mmtrProcessWebRuns(tickStartNanos);
+
+			// 快照清扫：长时间没人看就把发布的那几份丢掉（大 JSON 不该一直占着内存）
+			if (++webFeedSweepTickCounter >= WEB_FEED_SWEEP_TICKS) {
+				webFeedSweepTickCounter = 0;
+				mmtrWebFeed.sweep();
+			}
 
 			// Directions
 			directionsFinder.tick();
@@ -2988,9 +3215,27 @@ public class Simulator extends Data implements Utilities {
 		final boolean watchdogInteresting = watchdogRiders > 0 || watchdogDrivers > 0 || watchdogMmtrOverrides > 0 || watchdogProtections > 0 || watchdogJammedRoutes > 0;
 		if (watchdogInteresting || getCurrentMillis() - watchdogLastLogAtMillis >= MMTR_WATCHDOG_LOG_INTERVAL_MILLIS) {
 			watchdogLastLogAtMillis = getCurrentMillis();
+			/*
+			 * 网页那一组（notes/172）是这一行里唯一能回答"网页到底花了多少 tick"的字段：
+			 *   webHits/webBuilds —— 快照答出去的次数 / 重建次数（前者远大于后者＝快照层真的在挡请求）；
+			 *   webMaxMs/webSlow   —— 本窗口内最慢的一条网页任务与它的接口名（0/空 = 网页没进过 tick）；
+			 *   webQueue/webSkipped/webShed —— 当前排队深度 / 因为 tick 太慢让开的次数 / 因为刚跑过重活冷却而让开的次数。
+			 *
+			 * <p>`vehicleSync` 是 notes/174 那套车辆同步协议的**档位**：`patches` = 静态只发一次、
+			 * 动态只发变化字段；`full` = 每次发整份快照（`-Dmmtr.sync.patches=false` 的旧行为）。
+			 * 为什么放进这一行：引擎自己的 `log.info` 在模组里**看不见**（log4j 的 provider 在
+			 * 打包时被重定位/裁掉了，实测服务端日志里只有这一行 System.out 能看见）——
+			 * 于是"这一次跑的是哪套协议"必须落在这一行上，否则只能靠抓包反推。</p>
+			 */
 			System.out.println("[MMTR-HLTH] t=" + getCurrentMillis()
 				+ " vehicles=" + watchdogVehicles + " riders=" + watchdogRiders + " drivers=" + watchdogDrivers
-				+ " mmtrOverrides=" + watchdogMmtrOverrides + " protections=" + watchdogProtections + " jammedRoutes=" + watchdogJammedRoutes);
+				+ " mmtrOverrides=" + watchdogMmtrOverrides + " protections=" + watchdogProtections + " jammedRoutes=" + watchdogJammedRoutes
+				+ " webHits=" + mmtrWebFeed.getServedFromSnapshot() + " webBuilds=" + mmtrWebFeed.getPublished()
+				+ " webMaxMs=" + webRunMaxMillis + " webSlow=" + (webRunMaxLabel.isEmpty() ? "-" : webRunMaxLabel)
+				+ " webQueue=" + webRunDeferred + " webSkipped=" + webRunSkippedTicks + " webShed=" + webRunShed
+				+ " vehicleSync=" + (Boolean.parseBoolean(System.getProperty("mmtr.sync.patches", "true")) ? "patches" : "full"));
+			webRunMaxMillis = 0;
+			webRunMaxLabel = "";
 		}
 	}
 

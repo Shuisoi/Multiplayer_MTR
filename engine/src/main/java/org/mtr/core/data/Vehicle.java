@@ -1,6 +1,7 @@
 package org.mtr.core.data;
 
 import it.unimi.dsi.fastutil.booleans.BooleanBooleanImmutablePair;
+import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
 import it.unimi.dsi.fastutil.doubles.DoubleDoubleImmutablePair;
 import it.unimi.dsi.fastutil.ints.IntAVLTreeSet;
@@ -28,7 +29,8 @@ import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
-import org.mtr.core.mmtr.signal.MmtrBlockService;
+import org.mtr.core.mmtr.signal.MmtrSectionGeometry;
+import org.mtr.core.mmtr.signal.MmtrSectionService;
 import org.mtr.core.mmtr.signal.MmtrMovementAuthority;
 import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.path.SidingPathFinder;
@@ -263,6 +265,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * MMTR: how long a mission stays AT_TARGET (dwell for passengers) before completing.
 	 */
 	private static final long MMTR_MISSION_DWELL_MILLIS = 5000;
+
+	/**
+	 * 停车点与"车头实际停住的位置"之间的允许误差（米）。闭塞停车点与本车停车点几乎重合时
+	 * （实测差 0.02 m），按"已经到点"处理，不许在闭塞点干等（见 {@code simulateMmtrMotion} 里的说明）。
+	 */
+	private static final double MMTR_ARRIVAL_EPS_M = 0.5;
 	/**
 	 * Signal S1: stop margin in front of an external occupancy face (tail of a same-direction train
 	 * or head of an oncoming one), m, in walker distance space.
@@ -296,8 +304,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * engine keeps the lead small so short test rails still exercise the state machine (constant,
 	 * tunable).
 	 */
-	private static final double MMTR_AWS_TRIGGER_LEAD_M = 75.0;
-	/**
+	private static final double MMTR_AWS_TRIGGER_LEAD_M = 75.0;	/**
 	 * Signal S3/A3 (AWS): driver acknowledgement window before an unacknowledged warning becomes a
 	 * SPAD emergency stop. A3 aligned this with the real semantics (2.5 s; UK AWS warning cancels in
 	 * ~2.5-3 s), counted in vehicle tick time so tests stay clock-free.
@@ -683,14 +690,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				return;
 			}
 		}
-		if (targetSidingId == 0) {
-			mission.fail("motion missions need an explicit target platform/siding id");
-			return;
-		}
-		final Rail targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
-		if (targetRail == null) {
-			mission.fail("target siding " + targetSidingId + " has no graph rail");
-			return;
+		/*
+		 * 目的地有两种写法：
+		 *   ① 站台/股道对象（targetSidingId）—— 历史口径，按 id 反查它所在的那根图轨；
+		 *   ② **轨目标**（mission.targetRailHex）—— 折返/换端点用"正规轨道"表达（用户的现场口径：
+		 *      折返就是开到某根正规轨的尽头换端，不必把线路定义成股道），直接按 hex 找轨。
+		 */
+		final Rail targetRail;
+		final double stopFraction;
+		if (mission.hasTargetRail()) {
+			targetRail = MmtrRunPlanner.findRailByHex(simulator, mission.getTargetRailHex());
+			stopFraction = mission.getTargetRailFraction();
+			if (targetRail == null) {
+				mission.fail("target rail " + mission.getTargetRailHex() + " does not exist in the rail graph");
+				return;
+			}
+		} else {
+			if (targetSidingId == 0) {
+				mission.fail("motion missions need an explicit target platform/siding id");
+				return;
+			}
+			targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
+			stopFraction = 1.0;
+			if (targetRail == null) {
+				mission.fail("target siding " + targetSidingId + " has no graph rail");
+				return;
+			}
 		}
 		if (targetRail.getHexId().equals(mmtrMotionWalker.railHex())) {
 			// Already standing on the target rail: the movement is complete. This is the normal end of a
@@ -707,7 +732,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			return;
 		}
-		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), 1.0);
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), stopFraction);
 		final MmtrConsistWalker selfArmConsistWalker = getMmtrConsistWalker();
 		if (!plan.feasible && speed <= 1e-9 && !mmtrMissionFlippedForTarget && selfArmConsistWalker != null) {
 			// C10 反向行驶: the plan could not be made in the direction the train happens to face - the
@@ -925,7 +950,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		 * 自救日志一行都没有）。改用"当前轨 + 前方节点 + 计划说接着走哪根轨"三件事实。
 		 */
 		final org.mtr.core.data.Rail currentRail = mmtrMotionWalker.currentRail();
-		final Position forkNode = mmtrMotionWalker.aheadNode();
+		/*
+		 * **必须用方向感知的节点**（notes/171）：编组走行体的 {@code aheadNode()/enteredFromPosition()}
+		 * 是脊线 A→B 的两个端点 —— 车反向（A 端在前）行驶时它们与行车方向**正好相反**。
+		 * 读裸值会让下面那次"按计划补申请"问错节点：腿必然解不出来（leg<0），于是每 5 秒打一行
+		 * "计划要的腿不在岔口腿表里"的假警报，而真正该发的申请一次都没发出去。
+		 */
+		final Position forkNode = org.mtr.core.mmtr.MmtrRunPlanner.travelAheadNode(mmtrMotionWalker);
+		final Position entryNode = org.mtr.core.mmtr.MmtrRunPlanner.travelEntryNode(mmtrMotionWalker);
 		if (currentRail == null || forkNode == null) {
 			return;
 		}
@@ -938,7 +970,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (neighbors == null || neighbors.size() < 2) {
 			return;   // 不是岔口：没有决策要申请
 		}
-		final int leg = org.mtr.core.mmtr.MmtrRunPlanner.legIndexForRail(simulator, mmtrMotionWalker.enteredFromPosition(), forkNode, currentRail, desired);
+		final int leg = org.mtr.core.mmtr.MmtrRunPlanner.legIndexForRail(simulator, entryNode, forkNode, currentRail, desired);
 		if (leg < 0) {
 			mmtrLogForkSelfHeal("按计划补申请：车 " + getId() + " 被 " + org.mtr.core.mmtr.signal.MmtrJunctionState.nodeKey(forkNode)
 				+ " 挡住，但计划要的腿不在岔口腿表里 —— 需要重规划");
@@ -996,8 +1028,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			 *
 			 * 这条**不打日志**：它每 tick 都会成立，打出来就是刷屏（"等哪一处道岔、谁挡着"那条
 			 * 周期性日志已经把现场说清楚了）。
+			 *
+			 * <p><b>但"没人比我更早"不等于"我不该让"</b>（2026-09-16 现场修）：作业单里的循环车都没有
+			 * 计划时刻（priority 全是一样的 {@code Long.MAX_VALUE}），于是这条早退让**所有车都不让** ——
+			 * 现场就是三班车在 (-176,-253) 那处道岔上互相扣死（一辆压在岔股轨上、一辆按着位置 0、
+			 * 一辆在队列里），`point why` 原话 {@code queue=v…@0} 明明白白排着队，却谁也不退。
+			 * 所以补一条确定性的破环规则：**有人排在我按着的位置后面等着** ⇒ 我让（等待时长足够时）。</p>
 			 */
-			return;
+			if (!someoneQueuedBehindMyHold(simulator)) {
+				return;
+			}
 		}
 		simulator.mmtrPointAuthority.releaseAll(mmtrPointOwner);
 		releaseMmtrPointRequests();
@@ -1008,6 +1048,23 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrTurnoutWaitSinceMillis = 0;
 		System.out.println("[MMTR-PT] 让位（停着不动）：车 " + getId() + " 挡着计划更早的车，放掉自己在道岔层的持有与排队，" + (org.mtr.core.mmtr.point.MmtrPointAuthority.MMTR_TURNOUT_YIELD_MILLIS / 1000)
 			+ " 秒后重新规划并申请");
+	}
+
+	/**
+	 * 我按着的某处道岔上，是否**有别的车在排队等着**（{@code point why} 里那串 {@code queue=v…@0}）。
+	 *
+	 * <p>用它做"没人比我更早时要不要让位"的判据：别人已经排在我按着的位置后面等着了，说明我挡着它 ——
+	 * 停着的车本来就不在用那处道岔，让出去环就解开了；没人排队时不让（避免"放掉又申请"的振荡）。</p>
+	 */
+	private boolean someoneQueuedBehindMyHold(Simulator simulator) {
+		for (final long[] node : simulator.mmtrPointAuthority.physicalHoldNodesOf(mmtrPointOwner)) {
+			for (final String queued : simulator.mmtrPointAuthority.physicalQueueSnapshot(node[0], node[1], node[2])) {
+				if (!queued.startsWith(mmtrPointOwner + "@")) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1389,7 +1446,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				if (tailProgress > leg.getEndDistance()) {
 					break;
 				}
-				markMmtrSignalBlock(leg, index == headLegIndex, tailProgress);
+				markMmtrSignalBlock(leg);
 			}
 		}
 
@@ -1539,37 +1596,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * B3b: register this consist's hold on ONE leg's rail. A rail that is not split carries a single
-	 * MMTR colour, so the legacy whole-rail reservation ({@link Rail#isBlocked}, which also keeps the
-	 * MTR block semantics for the legacy path) is exactly right. A rail split by a wayside signal
-	 * carries one colour per SECTION instead, and only the sections the consist actually stands on are
-	 * reserved - otherwise a train in the far section would still close the near one and the display
-	 * could never count sections.
+	 * 这条腿所在的轨上登记"本车列正占着"——**只走原版 MTR 的每轨通道**（{@code isBlocked}，
+	 * 那是 MTR 自己的闭塞语义，游戏内原版信号仍按它走）。
+	 *
+	 * <p>这里原来还有另一半：B3b 的"每区间一个预留信号色"（沿 {@code MmtrSectionService.TrackSpan}
+	 * 逐段 {@code mmtrReserveSignalColor}）。它随 v1 整层删除（notes/166 R4）：MMTR 的**区间占用**现在
+	 * 只有一份来源 —— Level 1 轨道区间读占用树，且带 {@code excludeVehicleId} 能排除本车自己。
+	 * 颜色通道认不出这团影子是谁的，正是"列车被自己的影子扣住"的载体（notes/112 §4、notes/152）。</p>
 	 */
-	private void markMmtrSignalBlock(PathData leg, boolean isHeadLeg, double tailProgress) {
-		final Rail legRail = leg.getRail();
-		final ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block> sections =
-			data instanceof final Simulator simulator ? simulator.mmtrBlocks.blocksOf(legRail.getHexId()) : null;
-		if (sections == null || sections.size() <= 1) {
-			legRail.isBlocked(id, Rail.BlockReservation.CURRENTLY_RESERVE);
-			return;
-		}
-		final double legLength = leg.getEndDistance() - leg.getStartDistance();
-		if (legLength <= 0) {
-			return;
-		}
-		final double headOffset = isHeadLeg ? Utilities.clampSafe(railProgress - leg.getStartDistance(), 0, legLength) : legLength;
-		final double tailOffset = Utilities.clampSafe(tailProgress - leg.getStartDistance(), 0, legLength);
-		// The leg runs from its entry node; convert the two offsets into the rail's ordered-1 arc space.
-		final double headArc = leg.reversePositions ? legLength - headOffset : headOffset;
-		final double tailArc = leg.reversePositions ? legLength - tailOffset : tailOffset;
-		final double arcFrom = Math.min(headArc, tailArc);
-		final double arcTo = Math.max(headArc, tailArc);
-		for (final org.mtr.core.mmtr.signal.MmtrBlockService.Block section : sections) {
-			if (section.arcToM > arcFrom + 1e-9 && section.arcFromM < arcTo - 1e-9) {
-				legRail.mmtrReserveSignalColor(id, section.signalColor);
-			}
-		}
+	private void markMmtrSignalBlock(PathData leg) {
+		leg.getRail().isBlocked(id, Rail.BlockReservation.CURRENTLY_RESERVE);
 	}
 
 	long getSidingDepartureTime() {
@@ -1935,10 +1971,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				speed = 0;
 				mmtrMotionArriveAtStopTarget();
 			} else if (mmtrBlockStopM < Double.MAX_VALUE / 2 && railProgress >= mmtrBlockStopM - 1e-6) {
-				// Arrived exactly at the occupancy stop (rail ahead occupied): rest and wait for it
-				// to clear - not a terminal state, never opens doors, never reports a task arrival.
+				/*
+				 * Arrived exactly at the occupancy stop (rail ahead occupied): rest and wait for it
+				 * to clear - not a terminal state, never opens doors, never reports a task arrival.
+				 *
+				 * **但停车点就在眼前/已经在身后时不许在这儿等**（2026-09-16 实测）：闭塞停车点是"车头前方
+				 * 那段区间被别人占了"的位置，它可能落在本车自己的停车点**之后一点点**（实测：目标 784.4m、
+				 * 闭塞停车点 784.38m）。这时车停在闭塞点上，`mmtrBlockedWaiting` 只会在"刹车目标比车头更远"
+				 * 时自动解除 —— 而刹车目标 = min(停车点, 闭塞点) 已经在身后 ⇒ 永远不解除，车就停在自己的终点上
+				 * 无限等一个根本不需要通过的闭塞，任务也永远收不到"到点"（1↔3 站循环的最后一步就死在这里）。
+				 */
 				speed = 0;
-				if (!mmtrBlockedWaiting) {
+				if (stopTargetActive && mmtrMotionStopTargetM - railProgress <= MMTR_ARRIVAL_EPS_M) {
+					mmtrMotionArriveAtStopTarget();
+				} else if (!mmtrBlockedWaiting) {
 					mmtrBlockedWaiting = true;
 					System.out.println("[MMTR-SIG] motion stopped at block stop " + Math.round(mmtrBlockStopM * 100.0) / 100.0 + "m (" + mmtrBlockStopReason() + ", waiting)");
 				}
@@ -2186,7 +2232,22 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return false;
 		}
 		final double anchorOffset = mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM();
-		return mmtrMotionWalker.offsetM() >= anchorOffset - 1e-6;
+		return mmtrTravelledOnRailM() >= anchorOffset - 1e-6;
+	}
+
+	/**
+	 * 车头在**当前轨上已经走了多少米**（从它进入这根轨的那一端量起，按行车方向）。
+	 *
+	 * <p>为什么不能直接用 {@code walker.offsetM()}：锚点的比例是"**从进站端算起**、1.0 = 远端"
+	 * （见 {@link org.mtr.core.mmtr.MmtrRunPlanner#planToRail} 的口径），而编组走行体
+	 * （{@code MmtrConsistWalker}）的 {@code offsetM()} 是**沿脊线 A→B 量的弧长**：车朝 A 端开时它是递减的
+	 * （还剩多少米，而不是已经走了多少米）。两者混用会让 {@code distanceM() - offsetM() + 比例×轨长}
+	 * 每 tick 多算一个"剩余距离" ⇒ 停车点被"按锚点校正"一路往前推、车冲过站台
+	 * （2026-09-16 实测：1↔3 站循环在 3 站 1 台冲过站台约 10 m，日志里连着三次 {@code 停车点按锚点校正} 都是往前推）。
+	 * {@link org.mtr.core.mmtr.MmtrRunPlanner#remainingToAheadNodeM} 是引擎里既有的方向感知口径，这里照它换算。</p>
+	 */
+	private double mmtrTravelledOnRailM() {
+		return Math.max(0, mmtrMotionWalker.currentRailLengthM() - org.mtr.core.mmtr.MmtrRunPlanner.remainingToAheadNodeM(mmtrMotionWalker));
 	}
 
 	/** @return 当前这次自臂有没有停车锚点（诊断用；空 = 只按累计里程）。 */
@@ -2199,7 +2260,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			|| !mmtrMotionStopRailHex.equals(mmtrMotionWalker.railHex())) {
 			return Double.MAX_VALUE;
 		}
-		return mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM() - mmtrMotionWalker.offsetM();
+		return mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM() - mmtrTravelledOnRailM();
 	}
 
 	/**
@@ -2215,7 +2276,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			|| !mmtrMotionStopRailHex.equals(mmtrMotionWalker.railHex())) {
 			return;
 		}
-		final double exactM = mmtrMotionWalker.distanceM() - mmtrMotionWalker.offsetM()
+		final double exactM = mmtrMotionWalker.distanceM() - mmtrTravelledOnRailM()
 			+ mmtrMotionStopFraction * mmtrMotionWalker.currentRailLengthM();
 		if (exactM <= mmtrMotionWalker.distanceM() + 1e-9 || Math.abs(exactM - mmtrMotionStopTargetM) <= 1e-9) {
 			return;   // 已经过了锚点，或本来就一样：不动
@@ -3199,6 +3260,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final boolean needsUpdate = vehicleExtraData.checkForUpdate();
 			final long now = data.getCurrentMillis();
 			final boolean logPush = needsUpdate || now - mmtrMotionLastClientPushMillis >= 1000;
+			/*
+			 * 每辆车每脏 tick **只做一次**这一份（notes/174）：原来它是在"每辆车 × 每个可见客户端"的
+			 * 循环里做的，而那份数据（快照与补丁）与客户端**无关** —— 深拷贝又是 JSON 往返（60 µs/次）。
+			 * 现在一份共享给所有可见客户端，并且只在静态字段没变时退化成几百字节的稀疏补丁。
+			 */
+			final JsonObject syncPayload = needsUpdate ? mmtrBuildSyncPayload(0) : null;
 			final @Nullable Position[] minMaxPositions = {null, null};
 			int index = indexInMmtrMotionLegs(railProgress);
 			while (index >= 0) {
@@ -3216,7 +3283,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				final Position clientPosition = client.getPosition();
 				final double updateRadius = client.getUpdateRadius();
 				if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(clientPosition, updateRadius) : Utilities.isBetween(clientPosition, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
-					client.update(this, needsUpdate, 0);
+					client.update(this, needsUpdate, 0, syncPayload);
 					if (logPush) {
 						org.mtr.core.mmtr.MmtrTrace.log("[MMTR-SYNC] push vehicle " + id + " dirty=" + needsUpdate + " client=" + client.uuid + " progress=" + Math.round(railProgress) + " legs=" + mmtrMotionLegs.size() + " radius=" + updateRadius + " pos=" + clientPosition.getX() + "," + clientPosition.getZ());
 					}
@@ -3395,13 +3462,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				// MMTR: clients now mirror the same mmtr physics from the snapshot fields, so the
 				// stock dirty-driven sync cadence (needsUpdate on state/power changes) is accurate
 				// enough — no per-tick authoritative push hack required anymore.
-				// TODO for continuous movement, maybe only send the path once rather than sending the entire path for each vehicle
 				final int pathUpdateIndex = transportMode.continuousMovement ? 0 : Math.max(0, index + 1);
+				// notes/174: 这一份每辆车每脏 tick 只做一次，且静态没变时退化成稀疏补丁（原来每客户端一次 3.5 KB）。
+				final JsonObject syncPayload = needsUpdate ? mmtrBuildSyncPayload(pathUpdateIndex) : null;
 				simulator.clients.forEach(client -> {
 					final Position position = client.getPosition();
 					final double updateRadius = client.getUpdateRadius();
 					if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(position, updateRadius) : Utilities.isBetween(position, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
-						client.update(this, needsUpdate, pathUpdateIndex);
+						client.update(this, needsUpdate, pathUpdateIndex, syncPayload);
 					}
 				});
 			}
@@ -3409,6 +3477,40 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			vehicleExtraData.setRoutePlatformInfo(siding.area, currentIndex);
 		}
 	}
+
+	/**
+	 * **一辆车这一拍该发什么**（notes/174）：整份快照（静态变了 / 第一次）还是稀疏补丁（只有动态字段变了）。
+	 *
+	 * <p>判据与"上一次发出去的那一份"比（每辆车记一份，所有客户端共用同一条流），
+	 * 白名单见 {@link org.mtr.core.operation.VehicleSyncPatch#isDynamicKey}：**没列到的一律当静态**，
+	 * 于是"漏字段"的后果是"多发一份快照"（慢一点），而不是"客户端那个字段永远不更新"（静默错）。
+	 * 另外每 {@link org.mtr.core.operation.VehicleSyncPatch#FULL_RESYNC_MILLIS} 毫秒强制整份一次兜底。</p>
+	 *
+	 * @return 补丁（只含变化的字段）；{@code null} = 发整份快照；空对象 = 其实没有变化
+	 */
+	private @Nullable JsonObject mmtrBuildSyncPayload(int pathUpdateIndex) {
+		if (!Boolean.parseBoolean(System.getProperty("mmtr.sync.patches", "true")) || data.getCurrentMillis() >= mmtrSyncFullResendAtMillis) {
+			mmtrSyncLastSent = null;
+		}
+
+		final JsonObject current = new JsonObject();
+		current.add("vehicle", Utilities.getJsonObjectFromData(this));
+		current.add("data", Utilities.getJsonObjectFromData(vehicleExtraData.copy(pathUpdateIndex)));
+		final JsonObject patch = org.mtr.core.operation.VehicleSyncPatch.patchOf(mmtrSyncLastSent, current);
+		mmtrSyncLastSent = current;
+		if (patch == null) {
+			// 发了整份 ⇒ 下一次兜底重算从现在开始
+			mmtrSyncFullResendAtMillis = data.getCurrentMillis() + org.mtr.core.operation.VehicleSyncPatch.FULL_RESYNC_MILLIS;
+		}
+		return patch;
+	}
+
+	/**
+	 * 发给客户端的**上一次那一份**（快照或补丁算出来的基准）与"下一次强制整份"的时刻（notes/174）。
+	 * 只在模拟线程上用。
+	 */
+	private @Nullable JsonObject mmtrSyncLastSent;
+	private long mmtrSyncFullResendAtMillis;
 
 	/**
 	 * Checks if the rails ahead are clear up to a certain point (in terms of other vehicles or signals).
@@ -3692,8 +3794,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 		final boolean restricted = signalInLead
-			|| boundaryM < Double.MAX_VALUE / 2 && boundaryM - mmtrMotionWalker.distanceM() <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;
-		if (!restricted) {
+			|| boundaryM < Double.MAX_VALUE / 2 && boundaryM - mmtrMotionWalker.distanceM() <= MMTR_AWS_TRIGGER_LEAD_M + 1e-9;		if (!restricted) {
 			// A press with no warning showing is not an acknowledgement (see applyMmtrControl).
 			mmtrAwsAckQueued = false;
 			if (mmtrAwsState != MMTR_AWS_NONE) {
@@ -3869,7 +3970,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final double legLength = segment.getEndDistance() - segment.getStartDistance();
 		final double headOffsetInLeg = Math.max(0, Math.min(legLength, railProgress - segment.getStartDistance()));
 		final double headArc = segment.reversePositions ? legLength - headOffsetInLeg : headOffsetInLeg;
-		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
+		final MmtrSectionService.TrackSpan current = simulator.mmtrSections.trackSpanAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
 		if (current == null) {
 			return null;
 		}
@@ -3885,7 +3986,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			// The clearance window is the first MMTR_JUNCTION_CLEARANCE_M metres of every rail meeting at
 			// the node, measured from the node (each rail's own ordered-1 arc space).
-			final double nodeArc = MmtrBlockService.arcOfNode(other, node);
+			final double nodeArc = MmtrSectionGeometry.arcOfNode(other, node);
 			if (Double.isNaN(nodeArc)) {
 				continue;
 			}
@@ -3928,7 +4029,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final double legLength = segment.getEndDistance() - segment.getStartDistance();
 		final double headOffsetInLeg = Math.max(0, Math.min(legLength, railProgress - segment.getStartDistance()));
 		final double headArc = segment.reversePositions ? legLength - headOffsetInLeg : headOffsetInLeg;
-		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
+		final MmtrSectionService.TrackSpan current = simulator.mmtrSections.trackSpanAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
 		if (current == null) {
 			return null;
 		}
@@ -3941,7 +4042,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (entryRail == null) {
 				return null;
 			}
-			entryArc = MmtrBlockService.arcOfNode(entryRail, mmtrMotionWalker.aheadNode());
+			entryArc = MmtrSectionGeometry.arcOfNode(entryRail, mmtrMotionWalker.aheadNode());
 			if (Double.isNaN(entryArc)) {
 				return null;
 			}
@@ -3949,7 +4050,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			entryRail = rail;
 			entryArc = towardHigherArc ? current.arcToM : current.arcFromM;
 		}
-		final MmtrBlockService.Block entrySection = simulator.mmtrBlocks.blockAt(entryRail.getHexId(), entryArc);
+		final MmtrSectionService.TrackSpan entrySection = simulator.mmtrSections.trackSpanAt(entryRail.getHexId(), entryArc);
 		if (entrySection == null) {
 			return null;
 		}
@@ -4000,7 +4101,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final double headingX = dx / norm;
 		final double headingZ = dz / norm;
-		final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService service = simulator.mmtrDirectionalBlocks;
+		final org.mtr.core.mmtr.signal.MmtrSectionService service = simulator.mmtrSections;
 		// Exclude THIS vehicle's own footprint: a train's body shadow is stored under its own id, and when
 		// the shadow's anchor sits at or ahead of the head, counting it as "occupied ahead" puts the stop
 		// point at the train's own feet - the throttle then does nothing and the train can never move far
@@ -4052,7 +4153,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 		}
 
-		final MmtrBlockService.Block current = simulator.mmtrBlocks.blockAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
+		final MmtrSectionService.TrackSpan current = simulator.mmtrSections.trackSpanAt(rail.getHexId(), Math.max(0, Math.min(railLength - 1e-6, headArc)));
 		if (current == null) {
 			return null;
 		}
@@ -4064,7 +4165,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!boundaryAtRailEnd) {
 			// The signal splits this rail: the section beyond it is the next block on the same rail.
 			final double probeArc = Math.max(0, Math.min(railLength - 1e-6, boundaryArc + (towardHigherArc ? 1e-6 : -1e-6)));
-			final MmtrBlockService.Block next = simulator.mmtrBlocks.blockAt(rail.getHexId(), probeArc);
+			final MmtrSectionService.TrackSpan next = simulator.mmtrSections.trackSpanAt(rail.getHexId(), probeArc);
 			if (next == null || next == current) {
 				return null;
 			}
@@ -4086,12 +4187,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (authority != null && authority.covers(nextRail.getHexId())) {
 			return null;
 		}
-		final double entryArc = org.mtr.core.mmtr.signal.MmtrBlockService.arcOfNode(nextRail, mmtrMotionWalker.aheadNode());
+		final double entryArc = MmtrSectionGeometry.arcOfNode(nextRail, mmtrMotionWalker.aheadNode());
 		if (Double.isNaN(entryArc)) {
 			return null;
 		}
 		final double nextLength = nextRail.railMath.getLength();
-		final MmtrBlockService.Block next = simulator.mmtrBlocks.blockAt(nextRail.getHexId(), Math.max(0, Math.min(nextLength - 1e-6, entryArc)));
+		final MmtrSectionService.TrackSpan next = simulator.mmtrSections.trackSpanAt(nextRail.getHexId(), Math.max(0, Math.min(nextLength - 1e-6, entryArc)));
 		if (next == null || !blockHasExternalOccupancy(nextRail, next.arcFromM, next.arcToM, vehiclePositions)) {
 			return null;
 		}

@@ -174,7 +174,7 @@ public final class MmtrSignalBindingOverlay {
 	private static Rail findRail(MinecraftClientData data, String railHex) {
 		return data.positionsToRail.values().stream()
 			.flatMap(map -> map.values().stream())
-			.filter(rail -> rail.getHexId().equals(railHex) || org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(rail.getHexId()).equals(org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(railHex)))
+			.filter(rail -> rail.getHexId().equals(railHex) || org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(rail.getHexId()).equals(org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(railHex)))
 			.findFirst()
 			.orElse(null);
 	}

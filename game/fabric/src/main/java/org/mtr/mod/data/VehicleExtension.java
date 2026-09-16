@@ -62,11 +62,25 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		}
 	}
 
+	/**
+	 * 把一段**稀疏补丁**合并进这份镜像（notes/174）。
+	 *
+	 * <p><b>两段都允许缺席</b>：`getAsJsonObject(...)` 在键不存在时返回 {@code null}，
+	 * 而 {@code new JsonReader(null)} 会**抛异常**（实机吃过：服务端只发了 `data` 一段的补丁，
+	 * 这里当场炸，整条补丁作废 —— 表现为"车与人抽搐、无法移动"）。现在的约定是
+	 * 服务端一定把两段都发出来（空段给 `{}`），这里也再兜一层，谁先升级都不会炸。</p>
+	 */
 	public void updateData(@Nullable JsonObject jsonObject) {
 		if (jsonObject != null) {
-			updateData(new JsonReader(jsonObject.getAsJsonObject("vehicle")));
-			vehicleExtraData.updateData(new JsonReader(jsonObject.getAsJsonObject("data")));
-			serverSpeedKilometersPerHour = getSpeed() * 3600;
+			final JsonObject vehicleJson = jsonObject.getAsJsonObject("vehicle");
+			if (vehicleJson != null) {
+				updateData(new JsonReader(vehicleJson));
+				serverSpeedKilometersPerHour = getSpeed() * 3600;
+			}
+			final JsonObject dataJson = jsonObject.getAsJsonObject("data");
+			if (dataJson != null) {
+				vehicleExtraData.updateData(new JsonReader(dataJson));
+			}
 		}
 	}
 

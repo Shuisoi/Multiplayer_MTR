@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.point.MmtrPointRegistry.BranchStore;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
-import org.mtr.core.mmtr.signal.MmtrBlockService;
 import org.mtr.core.mmtr.signal.MmtrMovementAuthority;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Angle;
@@ -99,7 +98,6 @@ public final class MmtrRedLampStopTests {
 			// 灯：两根轨各自的**起点节点**，面朝东
 			addLamp(r1, 0);
 			addLamp(r2, 0);
-			sim.mmtrEnsureSignalColors();
 			siding.tick();
 		}
 
@@ -111,9 +109,22 @@ public final class MmtrRedLampStopTests {
 
 		/** 把这根轨的那个区间标成"别人占着"（预留信号色通道）—— **树里没有车**，只有规则 (5) 会因此响。 */
 		void reserveSectionOf(Rail rail, long otherVehicleId) {
-			final MmtrBlockService.Block block = sim.mmtrBlocks.blockAt(rail.getHexId(), 10.0);
-			assertNotNull(block, "这根轨上要有一个区间（灯把它切出来了）");
-			rail.mmtrReserveSignalColor(otherVehicleId, block.signalColor);
+			/*
+			 * notes/166 R4：占用只有一份来源 —— **占用树**。这里原来走"预留信号色"通道（B3b），
+			 * 那条通道随 v1 整层删除；所以改成把外来车的足迹写进树里（车长 16 m 的量纲不变，
+			 * 取整段弧窗足矣：占用判据要求重叠到车长的一半）。
+			 */
+			final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSpan span = sim.mmtrSections.trackSpanAt(rail.getHexId(), 10.0);
+			assertNotNull(span, "这根轨上要有一个轨道区间（灯把它切出来了）");
+			final it.unimi.dsi.fastutil.objects.ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees = sim.mmtrOccupancyTrees();
+			assertNotNull(trees, "占用树要在");
+			final Position[] ordered = rail.mmtrOrderedPositions();
+			Data.put(trees.get(1), ordered[0], ordered[1],
+				vehiclePosition -> {
+					final VehiclePosition value = vehiclePosition == null ? new VehiclePosition() : vehiclePosition;
+					value.addSegment(span.arcFromM, span.arcToM, otherVehicleId);
+					return value;
+				}, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap::new);
 		}
 
 		Vehicle spawn() {

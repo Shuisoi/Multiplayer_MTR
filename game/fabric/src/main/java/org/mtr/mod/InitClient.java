@@ -23,6 +23,7 @@ import org.mtr.mod.client.CustomResourceLoader;
 import org.mtr.mod.client.DynamicTextureCache;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.MmtrPlayerMotionTrace;
 import org.mtr.mod.config.Config;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.entity.EntityRendering;
@@ -400,6 +401,9 @@ public final class InitClient {
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerStartClientTick(() -> {
+			// notes/177 取证：这是**开工前**的那次采样，用于和上一拍收工时的坐标对比 —— 两者之差
+			// 就是"tick 之间被外部挪动"（服务端位置校正），也就是"人来回抽搐"里被服务端拉的那一半。
+			MmtrPlayerMotionTrace.tickStart();
 			final long currentMillis = System.currentTimeMillis();
 			final long millisElapsed = currentMillis - lastMillis;
 			lastMillis = currentMillis;
@@ -446,6 +450,8 @@ public final class InitClient {
 				movePlayer = null;
 			}
 			ScheduledSound.playScheduledSounds();
+			// notes/177 取证：收工后采样（此时车内定位已经跑过），用于量"这一拍本地把玩家挪了多少"。
+			MmtrPlayerMotionTrace.tickEnd();
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerChunkLoad((clientWorld, worldChunk) -> {

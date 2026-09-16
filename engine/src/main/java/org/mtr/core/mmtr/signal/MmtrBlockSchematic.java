@@ -46,7 +46,7 @@ public final class MmtrBlockSchematic {
 	private static final int MIN_CELL_HEIGHT = 16;
 
 	private final Simulator simulator;
-	private final MmtrDirectionalBlockService blocks;
+	private final MmtrSectionService blocks;
 	private final Object2ObjectOpenHashMap<String, Rail> railByHex = new Object2ObjectOpenHashMap<>();
 	/**
 	 * The 区间 layer this diagram draws: **one entry per (灯, 方向)**.
@@ -54,7 +54,7 @@ public final class MmtrBlockSchematic {
 	 * <p>原来这里装的是"水闸区间"（一盏灯一个格子、节点归属唯一）。那一层已按用户裁定删除：区间是
 	 * **某方向的一段路**，所以同一根轨、同一个格子可以同时属于两个方向的区间。</p>
 	 */
-	private final ObjectArrayList<MmtrDirectionalBlockService.SectionView> sections;
+	private final ObjectArrayList<MmtrSectionService.SectionView> sections;
 	/** (cellX, cellZ) -> the lattice node id. */
 	private final Object2ObjectOpenHashMap<Long, Integer> nodeIdByCell = new Object2ObjectOpenHashMap<>();
 	/** Lattice node -> the world positions that snapped into it. */
@@ -64,8 +64,14 @@ public final class MmtrBlockSchematic {
 
 	private MmtrBlockSchematic(Simulator simulator) {
 		this.simulator = simulator;
-		this.blocks = new MmtrDirectionalBlockService(simulator);
-		this.sections = blocks.sectionViews(null, ignored -> false);
+		this.blocks = new MmtrSectionService(simulator);
+		/*
+		 * ④ 受限节点必须与 `/mmtr-sections` **同口径**（notes/166 R6）：区间图原来传 `ignored -> false`，
+		 * 等于把"岔区没清 / 道岔没人定"这一档在图上关掉 —— 同一段区间于是"运营台黄、区间图绿"。
+		 * 现在两处都传真实集合（{@code MmtrJunctionState.unclearedNodeKeys}）。
+		 */
+		this.sections = blocks.sectionViews(simulator.mmtrOccupancyTrees(),
+			MmtrJunctionState.unclearedNodeKeys(simulator, simulator.mmtrOccupancyTrees())::contains);
 		simulator.rails.forEach(rail -> railByHex.putIfAbsent(rail.getHexId(), rail));
 	}
 
@@ -265,11 +271,11 @@ public final class MmtrBlockSchematic {
 		 */
 		final ObjectArrayList<DiagramSection> diagramSections = new ObjectArrayList<>();
 		for (int index = 0; index < sections.size(); index++) {
-			final MmtrDirectionalBlockService.SectionView section = sections.get(index);
+			final MmtrSectionService.SectionView section = sections.get(index);
 			final DiagramSection diagramSection = new DiagramSection(index, section.id, section.entrySignalKey, section.exitSignalKey,
 				section.direction.angle, section.direction.label(), section.lengthM(), section.occupied, section.aspect);
 			diagramSections.add(diagramSection);
-			for (final MmtrDirectionalBlockService.RailSpan span : section.spans) {
+			for (final MmtrSectionService.RailSpan span : section.spans) {
 				final ObjectArrayList<Integer> edges = edgeIndexesByRail.get(span.railHex);
 				if (edges != null) {
 					diagramSection.railEdges.addAll(edges);
@@ -356,10 +362,10 @@ public final class MmtrBlockSchematic {
 		 */
 		private int sectionServing(Rail rail, boolean forward, MmtrBlockSchematic schematic) {
 			final double length = rail.railMath.getLength();
-			final double[] positive = MmtrDirectionalBlockService.railHeadingAt(rail, length <= 2 ? length / 2 : 1);
+			final double[] positive = MmtrSectionService.railHeadingAt(rail, length <= 2 ? length / 2 : 1);
 			final double[] direction = forward ? positive : new double[]{-positive[0], -positive[1]};
 			for (int index = 0; index < schematic.sections.size(); index++) {
-				for (final MmtrDirectionalBlockService.RailSpan span : schematic.sections.get(index).spans) {
+				for (final MmtrSectionService.RailSpan span : schematic.sections.get(index).spans) {
 					if (span.railHex.equals(rail.getHexId()) && span.matchesHeading(direction[0], direction[1])) {
 						return index;
 					}

@@ -50,6 +50,34 @@ public final class MmtrMission {
 		this.assignedMillis = assignedMillis;
 	}
 
+	/**
+	 * **轨目标**：这次任务的目的地是一根**正规轨道**（而不是某个站台/股道对象），折返换端就是这么表达的。
+	 * 非空时车辆侧直接把它交给 {@code MmtrRunPlanner.planToRail}，不再按站台/股道 id 反查轨道。
+	 *
+	 * @param railHex      图轨 hex（任一端写法都能给，车辆侧会归一）
+	 * @param stopFraction 停车点比例（0 = 进站端，1 = 这根轨的远端/尽头，按行车方向）
+	 */
+	public void setTargetRail(String railHex, double stopFraction) {
+		targetRailHex = railHex == null ? "" : railHex.trim();
+		targetRailFraction = Math.max(0.0, Math.min(1.0, stopFraction));
+	}
+
+	public String getTargetRailHex() {
+		return targetRailHex;
+	}
+
+	public double getTargetRailFraction() {
+		return targetRailFraction;
+	}
+
+	/** Whether this mission goes to a raw rail target instead of a platform/siding object. */
+	public boolean hasTargetRail() {
+		return !targetRailHex.isEmpty();
+	}
+
+	private String targetRailHex = "";
+	private double targetRailFraction = 1.0;
+
 	/** Attach the task definition this mission executes (where/when/what for timetable/interlocking). */
 	public void attachTask(@Nullable MmtrTask task) {
 		this.task = task;

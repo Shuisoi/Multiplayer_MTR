@@ -1,6 +1,6 @@
 package org.mtr.core.mmtr.command;
 
-import org.mtr.core.mmtr.signal.MmtrDirectionalBlockService;
+import org.mtr.core.mmtr.signal.MmtrSectionService;
 import org.mtr.core.mmtr.signal.MmtrJunctionState;
 import org.mtr.core.mmtr.signal.MmtrSignalRegistry;
 import org.mtr.core.simulation.Simulator;
@@ -38,7 +38,7 @@ final class MmtrSignalWhy {
 	 * <p>找不到占用者、却仍然判"占用"时，问题一定在占用数据本身（不是区间走歪），
 	 * 这个列表就是用来区分这两种情况的：<b>有 id</b> = 真的停着车；<b>空</b> = 占用树里有幽灵足迹。</p>
 	 */
-	private static String ownersOn(MmtrDirectionalBlockService.RailSpan span) {
+	private static String ownersOn(MmtrSectionService.RailSpan span) {
 		if (active == null) {
 			return "";
 		}
@@ -64,7 +64,7 @@ final class MmtrSignalWhy {
 			.append(")→(").append(ordered[1].getX()).append(',').append(ordered[1].getY()).append(',').append(ordered[1].getZ())
 			.append(')');
 		for (int i = 0; i < occupancyTrees.size(); i++) {
-			final org.mtr.core.data.VehiclePosition position = org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.footprintOn(occupancyTrees.get(i), ordered);
+			final org.mtr.core.data.VehiclePosition position = org.mtr.core.mmtr.signal.MmtrSectionService.footprintOn(occupancyTrees.get(i), ordered);
 			if (position == null) {
 				continue;
 			}
@@ -98,7 +98,7 @@ final class MmtrSignalWhy {
 			return MmtrCommandDispatcher.usage("坐标必须是整数：signal why <x> <y> <z>");
 		}
 
-		final MmtrDirectionalBlockService blocks = simulator.mmtrDirectionalBlocks;
+		final MmtrSectionService blocks = simulator.mmtrSections;
 		final var trees = simulator.mmtrOccupancyTrees();
 		active = simulator;
 		/*
@@ -114,11 +114,11 @@ final class MmtrSignalWhy {
 		final MmtrSignalRegistry.SignalEntry below = simulator.mmtrSignals.get(x, y - 1, z);
 		final MmtrSignalRegistry.SignalEntry near = simulator.mmtrSignals.getNear(x, y, z);
 		/*
-		 * 让接下来的 refresh 顺手记下**这盏灯**的选腿明细（见 MmtrDirectionalBlockService#recordLegTraceFor）。
+		 * 让接下来的 refresh 顺手记下**这盏灯**的选腿明细（见 MmtrSectionService#recordLegTraceFor）。
 		 * 按灯键记录是必须的：refresh 会重建全部灯，不指定目标的话记下来的是"最后一盏"的明细，
 		 * 拿去解释这盏灯就会把人引到错的灯上。
 		 */
-		MmtrDirectionalBlockService.recordLegTraceFor(near == null ? "" : MmtrSignalRegistry.key(near.x, near.y, near.z));
+		MmtrSectionService.recordLegTraceFor(near == null ? "" : MmtrSignalRegistry.key(near.x, near.y, near.z));
 		if (exact == null && below == null) {
 			result.line("这一格（以及下面一格）都没有登记过信号灯。");
 			result.line("用 signal list 看看登记了哪些；世界里新放的灯要先扫描（world scan-signals）才会登记。");
@@ -143,15 +143,15 @@ final class MmtrSignalWhy {
 				result.line("     " + hex);
 			}
 		}
-		final MmtrDirectionalBlockService.ProtectedRail protectedRail = blocks.resolveProtectedRail(near);
+		final MmtrSectionService.ProtectedRail protectedRail = blocks.resolveProtectedRail(near);
 		if (boundEntry != null && !boundEntry.rails.isEmpty()) {
 			/*
 			 * 注意顺序：`protectedRailsOf` 自己会 refresh，而 refresh 会把"目标灯的记录"重置掉
-			 * （见 MmtrDirectionalBlockService#recordLegTraceFor），所以**先**取它的返回值，
+			 * （见 MmtrSectionService#recordLegTraceFor），所以**先**取它的返回值，
 			 * **再**读 lastBindReject —— 反过来读到的就会是别的灯留下的（或者空的）。
 			 */
 			final var effective = blocks.protectedRailsOf(boundEntry);
-			final String rejected = MmtrDirectionalBlockService.lastBindReject();
+			final String rejected = MmtrSectionService.lastBindReject();
 			result.line("     → 实际生效 " + effective.size() + " 条" + (effective.isEmpty()
 				? "（**绑定被忽略了**，下面按自动推断继续看）"
 				: "：" + String.join(", ", effective)));
@@ -196,7 +196,7 @@ final class MmtrSignalWhy {
 		}
 
 		// ② 它开始的区间，以及区间链上的占用情况
-		final MmtrDirectionalBlockService.Section section = blocks.sectionOfSignal(key);
+		final MmtrSectionService.Section section = blocks.sectionOfSignal(key);
 		if (section == null) {
 			result.line("② 它开始的区间：**没有**（这条走行没能走出一段区间：可能空走、也可能是被前一架灯的区间吸收了）。");
 			result.line("   这盏灯因此没有可推算的状态，显示层会回退到逐轨链或显示未知。");
@@ -214,15 +214,15 @@ final class MmtrSignalWhy {
 		final var allSections = blocks.sectionsOfSignal(key);
 		if (allSections.size() > 1) {
 			result.line("②[多腿] 这盏灯守 " + allSections.size() + " 条腿，各成一段区间；显示层取**最不利**的一条：");
-			for (final MmtrDirectionalBlockService.Section other : allSections) {
+			for (final MmtrSectionService.Section other : allSections) {
 				result.line("     · id=" + other.id + "  长=" + Math.round(other.lengthM()) + " m"
 					+ "  占用=" + (blocks.isOccupied(other, trees) ? "**是**" : "否")
 					+ "  段数=" + other.spans.size()
 					+ "  链深=" + depthAt(blocks, other, trees)
-					// 被道岔切断的腿**不是进路**：它不算进颜色（见 MmtrDirectionalBlockService.Section#blockedAtDeparture）
+					// 被道岔切断的腿**不是进路**：它不算进颜色（见 MmtrSectionService.Section#blockedAtDeparture）
 					+ (other.blockedAtDeparture ? "   ← 这一条是**道岔禁行侧**：不是进路，不参与灯色" : ""));
 				// 每段展开：占用的最后一步是"这根轨上有谁的车"，看不到它就只能猜
-				for (final MmtrDirectionalBlockService.RailSpan span : other.spans) {
+				for (final MmtrSectionService.RailSpan span : other.spans) {
 					final String owners = ownersOn(span);
 					result.line("         span 轨" + span.railHex + " 弧 " + Math.round(span.arcFromM) + ".."
 						+ Math.round(span.arcToM) + " m  占用者=" + (owners.isEmpty() ? "无" : owners));
@@ -230,7 +230,7 @@ final class MmtrSignalWhy {
 			}
 		}
 
-		MmtrDirectionalBlockService.Section walk = section;
+		MmtrSectionService.Section walk = section;
 		for (int depth = 1; depth <= CHAIN_LIMIT && walk != null; depth++) {
 			final boolean occupied = blocks.isOccupied(walk, trees);
 			final String restrictedNodes = restrictedNodesOf(walk);
@@ -257,7 +257,7 @@ final class MmtrSignalWhy {
 			}
 			result.line("      结束原因：" + walk.endReason);
 			// 占用来自哪一段、哪辆车：这是"为什么红/黄"的最后一步，不看到它就只能猜
-			for (final MmtrDirectionalBlockService.RailSpan span : walk.spans) {
+			for (final MmtrSectionService.RailSpan span : walk.spans) {
 				final String owners = ownersOn(span);
 				result.line("      span 轨" + shortHex(span.railHex) + " 弧 " + Math.round(span.arcFromM) + ".." + Math.round(span.arcToM)
 					+ " m（长 " + Math.round(span.lengthM()) + " m，方向 " + Math.round(span.headingX) + "," + Math.round(span.headingZ) + "）"
@@ -269,7 +269,7 @@ final class MmtrSignalWhy {
 			}
 			// 链接判据：链是按"结束节点 / 轨中间首尾相接"连的，把这两个事实打出来，
 			// 断了的时候才知道该往哪儿看（名字对不上是断链最常见的原因）。
-			final MmtrDirectionalBlockService.Section next = blocks.following(walk);
+			final MmtrSectionService.Section next = blocks.following(walk);
 			result.line("      本段起点节点=" + (walk.entryNodeKeyOrNull() == null ? "（未知）" : walk.entryNodeKeyOrNull())
 				+ "  结束节点=" + (walk.endNodeKey == null ? "（未知）" : walk.endNodeKey)
 				+ "  下一段=" + (next == null ? "**无（链到此为止）**" : next.id));
@@ -286,7 +286,7 @@ final class MmtrSignalWhy {
 		int worstSeverity = 0;
 		boolean anyRoute = false;
 		int shownDepth = 0;
-		for (final MmtrDirectionalBlockService.Section candidate : allSections.isEmpty() ? java.util.List.of(section) : allSections) {
+		for (final MmtrSectionService.Section candidate : allSections.isEmpty() ? java.util.List.of(section) : allSections) {
 			if (candidate == null || candidate.blockedAtDeparture) {
 				continue;
 			}
@@ -307,11 +307,11 @@ final class MmtrSignalWhy {
 		 * 现象都只是"这盏灯颜色不对"。实测 depot test1 就是：那盏灯有区间、但守的是一条
 		 * 前方余长 0 m 的腿，光看结论无法判断是哪一步出的错。
 		 */
-		final String legTrace = MmtrDirectionalBlockService.lastLegTrace();
+		final String legTrace = MmtrSectionService.lastLegTrace();
 		if (!legTrace.isEmpty()) {
 			result.line(legTrace);
 		}
-		final String bindReject = MmtrDirectionalBlockService.lastBindReject();
+		final String bindReject = MmtrSectionService.lastBindReject();
 		if (!bindReject.isEmpty()) {
 			result.line(bindReject);
 		}
@@ -364,7 +364,7 @@ final class MmtrSignalWhy {
 	 * <p>两个数放在一起，才能看出阈值是不是按预期在起作用：重叠 2 m 而阈值 1.5 m 时，2 m ≥ 1.5 m，
 	 * **仍然算占用** —— 这正是"改了阈值却什么都没变"的原因，光看结论是看不出来的。</p>
 	 */
-	private static String overlaps(org.mtr.core.data.VehiclePosition position, MmtrDirectionalBlockService.RailSpan span) {
+	private static String overlaps(org.mtr.core.data.VehiclePosition position, MmtrSectionService.RailSpan span) {
 		double best = 0;
 		for (final double[] segment : position.segmentsExcluding(0)) {
 			final double low = Math.max(span.arcFromM, Math.min(segment[0], segment[1]));
@@ -379,12 +379,12 @@ final class MmtrSignalWhy {
 	 *
 	 * <p>判据与显示层一致：{@code MmtrJunctionState.unclearedNodeKeys}（净空被占 / 道岔未定）。</p>
 	 */
-	private static String restrictedNodesOf(MmtrDirectionalBlockService.Section section) {
+	private static String restrictedNodesOf(MmtrSectionService.Section section) {
 		if (active == null) {
 			return "";
 		}
 		final StringBuilder out = new StringBuilder();
-		for (final String nodeKey : active.mmtrDirectionalBlocks.boundaryNodeKeys(section)) {
+		for (final String nodeKey : active.mmtrSections.boundaryNodeKeys(section)) {
 			if (nodes().contains(nodeKey)) {
 				if (out.length() > 0) {
 					out.append(", ");
@@ -401,13 +401,13 @@ final class MmtrSignalWhy {
 	}
 
 	/** 这一段的边界节点里，哪些现在"清不掉"（有序，便于逐条打印原因）。 */
-	private static java.util.List<String> restrictedNodeKeys(MmtrDirectionalBlockService.Section section) {
+	private static java.util.List<String> restrictedNodeKeys(MmtrSectionService.Section section) {
 		final java.util.List<String> out = new java.util.ArrayList<>();
 		if (active == null) {
 			return out;
 		}
 		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> uncleared = nodes();
-		for (final String nodeKey : active.mmtrDirectionalBlocks.boundaryNodeKeys(section)) {
+		for (final String nodeKey : active.mmtrSections.boundaryNodeKeys(section)) {
 			if (uncleared.contains(nodeKey)) {
 				out.add(nodeKey);
 			}
@@ -431,7 +431,7 @@ final class MmtrSignalWhy {
 	}
 
 	/** 区间沿哪边走的文字说明（诊断用）。 */
-	private static String travelDirectionText(MmtrDirectionalBlockService.ProtectedRail protectedRail) {
+	private static String travelDirectionText(MmtrSectionService.ProtectedRail protectedRail) {
 		final double headingX = protectedRail.headingX;
 		final double headingZ = protectedRail.headingZ;
 		if (Math.abs(headingX) >= Math.abs(headingZ)) {
@@ -440,16 +440,16 @@ final class MmtrSignalWhy {
 		return headingZ > 0 ? "南(+z) 走" : "北(-z) 走";
 	}
 
-	/** 与 {@code MmtrDirectionalBlockService.depthAt} 同规则的复算（故意重写一遍，用来互相印证）。 */
+	/** 与 {@code MmtrSectionService.depthAt} 同规则的复算（故意重写一遍，用来互相印证）。 */
 	/**
-	 * 深度**直接用显示层那一份**（{@code MmtrDirectionalBlockService.aspectDepthFor}）。
+	 * 深度**直接用显示层那一份**（{@code MmtrSectionService.aspectDepthFor}）。
 	 *
 	 * <p>原来这里"故意重写一遍来互相印证"，结果它只沿**单条**链走（{@code following} 取第一支），
 	 * 岔口另一支上的占用看不到 —— 实测 73 盏里 6 盏自相矛盾：接口/网页/游戏读的是单黄/双黄，
 	 * 这条诊断却说绿。诊断输出骗人比没有诊断更坏（用户正是拿它来问"为什么是黄的"），
 	 * 所以现在与权威口径**同源**，不再各算一遍。</p>
 	 */
-	private static int depthAt(MmtrDirectionalBlockService blocks, MmtrDirectionalBlockService.Section section, Object trees) {
+	private static int depthAt(MmtrSectionService blocks, MmtrSectionService.Section section, Object trees) {
 		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> uncleared = nodes();
 		return blocks.aspectDepthFor(section, castTrees(trees), uncleared::contains);
 	}

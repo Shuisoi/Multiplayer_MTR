@@ -64,6 +64,8 @@ const starters = [
 	"signal list",
 	"point list",
 	"query sections",
+	"point locks",
+	"point unlock --all",
 ];
 
 async function refreshLog() {
@@ -117,6 +119,22 @@ onMounted(() => {
 
 function closePanel() {
 	open.value = false;
+}
+
+/**
+ * 一键解锁人工锁。
+ *
+ * <p>为什么要一个直接执行的按钮、而不是只放一条"常用指令"：道岔人工锁是**永久生效直到解锁**的
+ * （落盘在 `mmtr-points.json`），而界面（地图节点菜单）只能**逐进向**解 —— 人工搬岔一次锁的是三条进向，
+ * 其中没有按钮的那些永远解不掉，现场表现就是"网页上锁闭显示 0、重启后锁全回来"。
+ * 引擎里有全解锁入口（`point unlock --all`，清的是引擎自己持有的锁键），这里把它一次发出去。</p>
+ */
+async function unlockAllPoints() {
+	if (busy.value) {
+		return;
+	}
+	input.value = "point unlock --all";
+	await run();
 }
 
 async function run() {
@@ -217,6 +235,7 @@ defineExpose({openPanel});
 					{{ last.namespace || "?" }} {{ last.verb || "?" }} · {{ okText }}
 					<template v-if="last.affected.length > 0"> · 影响 {{ last.affected.length }} 项</template>
 				</span>
+				<button class="action" type="button" :disabled="busy" @click="unlockAllPoints">一键解锁人工锁</button>
 				<button class="action" type="button" @click="refreshLog">刷新日志</button>
 				<button class="action" type="button" @click="closePanel">收起</button>
 			</header>

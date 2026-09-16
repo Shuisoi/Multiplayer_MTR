@@ -124,6 +124,15 @@ public class Main {
 		// Real servers (engine Main hosts the live world): every turnout defaults to operator branch 0.
 		tempSimulators.forEach(simulator -> simulator.mmtrDefaultPointsZero = true);
 
+		/*
+		 * 车辆同步的档位（notes/174）：**启动那一行**必须能一眼看出"这次跑的是哪套协议"。
+		 * 否则"补丁是不是生效了"只能靠抓包或读代码反推 —— 现场排查最缺的就是这一行。
+		 */
+		final boolean sparsePatches = Boolean.parseBoolean(System.getProperty("mmtr.sync.patches", "true"));
+		log.info("MMTR vehicle sync: {} (system property mmtr.sync.patches={})",
+			sparsePatches ? "稀疏补丁 ON（静态只发一次，动态只发变化字段）" : "稀疏补丁 OFF（每次发整份快照，旧行为）",
+			sparsePatches);
+
 		if (webserverPort > 0) {
 			webserver = new Webserver(webserverPort);
 			// 前端静态文件：有 mmtr.web.root 就从磁盘按字节发（见 StaticFileServlet），

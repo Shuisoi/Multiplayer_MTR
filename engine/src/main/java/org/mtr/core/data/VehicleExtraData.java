@@ -63,8 +63,17 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
 		newVehicleExtraData.path.clear();
 
 		for (int i = pathUpdateIndex; i <= path.size(); i++) {
-			if (i == path.size() && !path.isEmpty()) {
-				newVehicleExtraData.path.add(0, path.getFirst());
+			/*
+			 * **path 为空时不许取 path.get(i)**（2026-09-16 用例抓到）：原来的条件是
+			 * `i == path.size() && !path.isEmpty()`，而 path 为空时 i=0 == size=0 走 else 分支
+			 * ⇒ `path.get(0)` 抛 IndexOutOfBounds。这个异常发生在**同步路径**上，
+			 * 会被 tick 外层那个 `catch (Throwable)` 接住并**中断本 tick 剩下的全部工作** ——
+			 * 也就是"一辆没有 path 的车（比如还没排班的车底）一旦变脏，整个 tick 就废掉"。
+			 */
+			if (i >= path.size()) {
+				if (!path.isEmpty()) {
+					newVehicleExtraData.path.add(0, path.getFirst());
+				}
 			} else {
 				final PathData pathData = path.get(i);
 				if (i == pathUpdateIndex || pathData.getStartDistance() <= stoppingPoint) {

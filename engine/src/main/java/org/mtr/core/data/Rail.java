@@ -439,53 +439,6 @@ public final class Rail extends RailSchema {
 	}
 
 	/**
-	 * MMTR signal display: a per-rail reserved signal color, deterministic from the rail hex - the
-	 * engine occupancy driver registers a train's CURRENTLY_RESERVE hold under this color, the
-	 * standard rail signal-block channel (Rail#tick1 diff -> SignalBlockUpdate) then pushes it to
-	 * every client, whose signal lights turn red. One reserved color per rail keeps the recursive
-	 * same-colour reservation in {@link #isBlocked} from spreading a hold across connected rails.
-	 */
-	public long mmtrSignalColor() {
-		return 0x40000000L | (getHexId().hashCode() & 0x3FFFFFFF);
-	}
-
-	/** Adds this rail's MMTR reserved signal color unless it already carries it (idempotent). */
-	public void mmtrEnsureSignalColor() {
-		mmtrEnsureSignalColor(mmtrSignalColor());
-	}
-
-	/**
-	 * MMTR 闭塞区间 (B3b): adds one reserved signal color unless the rail already carries it. Besides
-	 * the per-rail color, a rail split by a wayside signal carries one color per SECTION, so the
-	 * standard signal-block channel can carry per-section occupancy to every client.
-	 */
-	public void mmtrEnsureSignalColor(long color) {
-		if (!signalColors.contains(color)) {
-			signalColors.add(color);
-		}
-	}
-
-	/**
-	 * MMTR 闭塞区间 (B3b): whether this rail currently holds {@code color} (this tick or the previous
-	 * tick's snapshot) - the per-SECTION counterpart of {@link #mmtrIsCurrentlyBlocked()}.
-	 */
-	public boolean mmtrIsSignalColorBlocked(long color) {
-		return currentlyBlockedVehicleIds.containsKey(color) || currentlyBlockedVehicleIdsOld.containsKey(color);
-	}
-
-	/**
-	 * MMTR 闭塞区间 (B3b): register a CURRENTLY_RESERVE hold under one section color. Section colors
-	 * are unique to (rail, section), so unlike {@link #isBlocked} this never spreads a hold to the
-	 * connected rails - which is exactly what makes "the train is in section 2 but section 1 is clear"
-	 * expressible in the standard signal-block channel.
-	 */
-	public void mmtrReserveSignalColor(long vehicleId, long color) {
-		if (signalColors.contains(color)) {
-			currentlyBlockedVehicleIds.put(color, vehicleId);
-		}
-	}
-
-	/**
 	 * MMTR 岔区清限 (B/④): the rail's two declared endpoints in the order the shared occupancy trees key
 	 * them (ordered position 1 first). Public because the junction-clearance test lives outside the data
 	 * package, while {@link #getPosition1()}/{@link #getPosition2()} stay protected.

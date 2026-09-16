@@ -83,7 +83,7 @@ public final class MmtrClientRoutesTests {
 		final Map<String, String> lamps = new HashMap<>();
 		lamps.put("-170,-60,-122", "RED");
 		lamps.put("-149,-60,-169", "GREEN");
-		MmtrClientRoutes.update(Map.of(), Set.of(), Map.of(), Set.of(), lamps);
+		MmtrClientRoutes.update(Map.of(), Set.of(), Set.of(), lamps);
 
 		assertEquals("RED", MmtrClientRoutes.lampAspect(-170, -60, -122), "the lamp's own block position finds it");
 		assertEquals("GREEN", MmtrClientRoutes.lampAspect(-149, -60, -169));

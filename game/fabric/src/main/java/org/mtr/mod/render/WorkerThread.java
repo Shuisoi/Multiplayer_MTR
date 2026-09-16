@@ -30,18 +30,41 @@ public final class WorkerThread extends CustomThread {
 
 	@Override
 	protected void runTick() {
-		try {
-			Thread.sleep(10); // Give the CPU a little break
-		} catch (InterruptedException e) {
-		}
+		/*
+		 * notes/177：这一轮循环原来是"**先睡 10 ms**，醒来如果队列非空就 resetCache() + 每个队列只跑**一个**任务"。
+		 * 两条后果都很贵：
+		 *
+		 *   ① `resetCache()` 是 `Arrays.fill` 一个 **(2*reach)³/4** 字节的数组。渲染距离 32 区块时
+		 *      reach = 512 ⇒ 那个数组是 **256 MB**，清一次 ~7 ms。而队列在每帧都有产出（车、轨各一个）
+		 *      的情况下**长期是满的**，于是它每秒清约 100 次 —— 实测 jstack 连续两次都停在
+		 *      `Arrays.fill ← ArrayOcclusionCache.resetCache ← WorkerThread.runTick`，两次之间
+		 *      5.15 秒里烧掉 3.77 秒 CPU（**73% 的一个核**），同时把内存带宽和 CPU 缓存占干净，
+		 *      渲染线程跟着几乎不出帧（现场表现就是"客户端卡死"）。
+		 *      ⇒ 缓存换成 {@link MmtrSparseOcclusionCache}：只清这一轮碰过的几百个格子。
+		 *
+		 *   ② 每轮只跑一个任务、还要先睡 10 ms ⇒ 消费上限 100 个/秒，而产出（每帧一个 × 帧率）
+		 *      在 120 FPS 时是 240 个/秒 ⇒ 队列**永远是满的**，于是调度方
+		 *      （`scheduleVehicles` / `scheduleMTRRails` 的 `size() < MAX_QUEUE_SIZE`）**把任务丢掉**：
+		 *      花了 73% 的核却几乎没做剔除。
+		 *      ⇒ 有活就一口气干完（不再每轮睡），没活才睡。
+		 */
+		final boolean hasOcclusionTasks = !occlusionQueueVehicle.isEmpty() || !occlusionQueueLift.isEmpty() || !occlusionQueueMisc.isEmpty() || !occlusionQueueRail.isEmpty();
 
-		if (!occlusionQueueVehicle.isEmpty() || !occlusionQueueLift.isEmpty() || !occlusionQueueMisc.isEmpty() || !occlusionQueueRail.isEmpty()) {
+		if (hasOcclusionTasks) {
 			updateInstance();
 			occlusionCullingInstance.resetCache();
-			run(occlusionQueueVehicle, task -> task.accept(occlusionCullingInstance));
-			run(occlusionQueueLift, task -> task.accept(occlusionCullingInstance));
-			run(occlusionQueueRail, task -> task.accept(occlusionCullingInstance));
-			run(occlusionQueueMisc, task -> task.accept(occlusionCullingInstance));
+			// 用 `|` 而不是 `||`：四个队列每一轮都要清空，不能因为左边跑过就短路掉右边
+			while (run(occlusionQueueVehicle, task -> task.accept(occlusionCullingInstance))
+					| run(occlusionQueueLift, task -> task.accept(occlusionCullingInstance))
+					| run(occlusionQueueRail, task -> task.accept(occlusionCullingInstance))
+					| run(occlusionQueueMisc, task -> task.accept(occlusionCullingInstance))) {
+				// 队列里的任务全部跑完为止（队列本身由调度方限制长度，所以这个循环是有界的）
+			}
+		} else {
+			try {
+				Thread.sleep(10); // Give the CPU a little break
+			} catch (InterruptedException e) {
+			}
 		}
 
 		run(dynamicTextureQueue, Runnable::run);
@@ -85,21 +108,26 @@ public final class WorkerThread extends CustomThread {
 		final int newRenderDistance = MinecraftClientHelper.getRenderDistance();
 		if (renderDistance != newRenderDistance) {
 			renderDistance = newRenderDistance;
-			occlusionCullingInstance = new OcclusionCullingInstance(Math.min(renderDistance, MAX_OCCLUSION_CHUNK_DISTANCE) * 16, new CullingDataProvider());
+			// notes/177：缓存用**只清碰过的格子**的那一份实现 —— 库自带的 ArrayOcclusionCache 在
+			// reach=512（渲染距离 32 区块）时是 256 MB，每帧全清一次就吃掉 73% 的一个核。见那里。
+			occlusionCullingInstance = new OcclusionCullingInstance(Math.min(renderDistance, MAX_OCCLUSION_CHUNK_DISTANCE) * 16, new CullingDataProvider(), new MmtrSparseOcclusionCache(Math.min(renderDistance, MAX_OCCLUSION_CHUNK_DISTANCE) * 16), 0.5);
 		}
 	}
 
-	private static <T> void run(ObjectArrayList<T> queue, Consumer<T> consumer) {
-		if (!queue.isEmpty()) {
-			try {
-				final T task = queue.remove(0);
-				if (task != null) {
-					consumer.accept(task);
-				}
-			} catch (Exception e) {
-				Init.LOGGER.error("", e);
-			}
+	/** @return 是否真的跑了一个任务（{@link #runTick()} 用它判断队列有没有被清空） */
+	private static <T> boolean run(ObjectArrayList<T> queue, Consumer<T> consumer) {
+		if (queue.isEmpty()) {
+			return false;
 		}
+		try {
+			final T task = queue.remove(0);
+			if (task != null) {
+				consumer.accept(task);
+			}
+		} catch (Exception e) {
+			Init.LOGGER.error("", e);
+		}
+		return true;
 	}
 
 	private static final class CullingDataProvider implements DataProvider {

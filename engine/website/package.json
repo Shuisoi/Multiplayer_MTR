@@ -9,14 +9,21 @@
 		"preview": "vite preview",
 		"lint": "eslint .",
 		"test:plan": "node --experimental-strip-types --test scripts/plan-time.test.ts",
-		"test:bands": "node --experimental-strip-types --test scripts/section-bands.test.ts",
-		"test:elements": "node --experimental-strip-types --test scripts/map-elements.test.ts",
-		"test:signal": "node --experimental-strip-types --test scripts/signal-overlap.test.ts",
-    "test:viewbox": "node --experimental-strip-types --test scripts/viewbox.test.ts",
-		"test": "npm run test:plan && npm run test:bands && npm run test:elements && npm run test:signal && npm run test:viewbox"
+		"test:map-nodes": "node --experimental-strip-types --test scripts/map-nodes.test.ts",
+		"test:total-sections": "node --experimental-strip-types --test scripts/total-sections.test.ts",
+		"test:rail-frame": "node --experimental-strip-types --test scripts/rail-frame.test.ts",
+		"test:platforms": "node --experimental-strip-types --test scripts/platforms.test.ts",
+		"test:vehicles": "node --experimental-strip-types --test scripts/vehicles.test.ts",
+		"test:vehicle-shapes": "node --experimental-strip-types --test scripts/vehicle-shapes.test.ts",
+		"test:vehicle-hit": "node --experimental-strip-types --test scripts/vehicle-hit.test.ts",
+		"test:mission-target": "node --experimental-strip-types --test scripts/mission-target.test.ts",
+		"test:map-actions": "node --experimental-strip-types --test scripts/map-actions.test.ts",
+		"test:api-client": "node --experimental-strip-types --test scripts/api-client.test.ts",
+		"test": "npm run test:plan && npm run test:map-nodes && npm run test:total-sections && npm run test:rail-frame && npm run test:platforms && npm run test:vehicles && npm run test:vehicle-shapes && npm run test:vehicle-hit && npm run test:mission-target && npm run test:map-actions && npm run test:api-client"
 	},
 	"dependencies": {
 		"naive-ui": "^2.42.0",
+		"svg-pan-zoom": "^3.6.2",
 		"vue": "^3.5.13"
 	},
 	"devDependencies": {
@@ -31,4 +38,3 @@
 		"vue-tsc": "^3.1.1"
 	}
 }
-

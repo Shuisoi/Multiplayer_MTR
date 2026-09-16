@@ -47,15 +47,12 @@ public final class MmtrRouteMirror {
 			}
 			final Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails = simulator.mmtrRoutes.setMainRouteNextRails();
 			final ObjectOpenHashSet<String> pendingEntries = simulator.mmtrRoutes.pendingEntryRails();
-			// B3b: the block sections of every SPLIT rail (a wayside signal in mid-rail). Empty in a
-			// world whose lights all stand beside nodes - which is the normal case - so nothing is sent.
-			final Object2ObjectOpenHashMap<String, ObjectArrayList<org.mtr.core.mmtr.signal.MmtrBlockService.Block>> splitRails = simulator.mmtrBlocks.splitRails();
 			// ④: junctions the engine cannot clear (undecided points or a fouled clearance zone) - the
 			// client's chain counts a step through them as occupied, so the lights agree with the holds.
 			final ObjectOpenHashSet<String> restrictedNodes = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, simulator.mmtrOccupancyTrees());
 			// S4: every lamp's v2 display. The engine owns the 闭塞区间 v2 walk, so it ships its conclusion
 			// per lamp; the renderer (which works per rail block) looks its own lamp key up.
-			final Object2ObjectOpenHashMap<String, String> lampAspects = simulator.mmtrDirectionalBlocks.lampAspectNames(simulator.mmtrOccupancyTrees(), restrictedNodes::contains);
+			final Object2ObjectOpenHashMap<String, String> lampAspects = simulator.mmtrSections.lampAspectNames(simulator.mmtrOccupancyTrees(), restrictedNodes::contains);
 			/*
 			 * 守轨（绑定工具的叠加层用）：每盏灯守哪几根轨，由**引擎**算。
 			 *
@@ -64,17 +61,17 @@ public final class MmtrRouteMirror {
 			 */
 			final Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails = new Object2ObjectOpenHashMap<>();
 			simulator.mmtrSignals.signals.forEach((key, entry) -> {
-				final ObjectArrayList<String> rails = simulator.mmtrDirectionalBlocks.protectedRailsOf(entry);
+				final ObjectArrayList<String> rails = simulator.mmtrSections.protectedRailsOf(entry);
 				if (!rails.isEmpty()) {
 					lampRails.put(key, rails);
 				}
 			});
-			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + splitRails.toString() + "|" + restrictedNodes.toString() + "|" + lampAspects.toString() + "|" + lampRails.toString();
+			final String signature = nextRails.toString() + "|" + pendingEntries.toString() + "|" + restrictedNodes.toString() + "|" + lampAspects.toString() + "|" + lampRails.toString();
 			if (signature.equals(LAST_SIGNATURE.get(worldId))) {
 				continue;
 			}
 			LAST_SIGNATURE.put(worldId, signature);
-			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, splitRails, restrictedNodes, lampAspects, lampRails);
+			final String content = PacketMmtrRoutes.contentOf(nextRails, pendingEntries, restrictedNodes, lampAspects, lampRails);
 			final org.mtr.mapping.holder.ServerWorld mappedWorld = new org.mtr.mapping.holder.ServerWorld(serverWorld);
 			MinecraftServerHelper.iteratePlayers(mappedWorld, serverPlayerEntity -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketMmtrRoutes(content)));
 		}

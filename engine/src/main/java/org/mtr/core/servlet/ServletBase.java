@@ -17,6 +17,7 @@ import org.jspecify.annotations.Nullable;
 import org.mtr.core.integration.Response;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.simulation.Simulator;
+import org.mtr.core.servlet.WebFeed.Entry;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -31,6 +32,10 @@ import java.util.stream.Collectors;
  * a {@link JsonReader}, then defers to the subclass-implemented
  * {@link #getContent(String, String, Object2ObjectAVLTreeMap, JsonReader, Simulator, Consumer)}
  * which runs on the simulator thread to keep state mutation single-threaded.</p>
+ *
+ * <p><b>只读接口的例外（notes/172）</b>：{@link #tryServeFromSnapshot} 允许一路纯只读接口
+ * 直接从已发布的快照作答，整条路径在 Jetty 线程上走完，**不进模拟线程**。这条路径是"网页刷新不再
+ * 吃掉游戏 tick"的关键 —— 嵌入式运行时模拟线程就是 MC 服务端主线程。</p>
  */
 @Log4j2
 public abstract class ServletBase extends HttpServlet {
@@ -103,6 +108,19 @@ public abstract class ServletBase extends HttpServlet {
 	 */
 	protected abstract void getContent(String endpoint, String data, Object2ObjectAVLTreeMap<String, String> parameters, JsonReader jsonReader, Simulator simulator, Consumer<@Nullable JsonObject> sendResponse);
 
+	/**
+	 * 钩子：这一路接口能不能**不碰模拟线程**就答出来（notes/172）。
+	 *
+	 * <p>返回 {@code null}（默认）＝照旧排队到模拟线程去算；返回快照＝由本条 Jetty 线程直接写出去，
+	 * 这一次请求对游戏 tick 的开销是 <b>0</b>。</p>
+	 *
+	 * <p>只有**纯只读**接口可以接这个钩子 —— 写接口必须回到模拟线程，那是唯一改状态的地方。
+	 * 实现方（见 {@code SystemMapServlet.FEEDS}）自己保证这一点。</p>
+	 */
+	protected @Nullable Entry tryServeFromSnapshot(String endpoint, String data, Object2ObjectAVLTreeMap<String, String> parameters, JsonReader jsonReader, Simulator simulator) {
+		return null;
+	}
+
 	private void run(HttpServletRequest httpServletRequest, @Nullable HttpServletResponse httpServletResponse, @Nullable AsyncContext asyncContext, JsonReader jsonReader, Simulator simulator) {
 		final String endpoint;
 		final String data;
@@ -123,11 +141,48 @@ public abstract class ServletBase extends HttpServlet {
 			}
 		});
 
-		simulator.run(() -> getContent(endpoint, data, parameters, jsonReader, simulator, (@Nullable JsonObject jsonObject) -> {
+		/*
+		 * 快照直发：已经有发布好的那一份就在本线程写完，不排队。
+		 *
+		 * `dimensions=all` 的场合没有可写的响应（httpServletResponse == null），所以不走这里 ——
+		 * 否则只会把"这一路有人想要"的标记立起来、却没人去算，那一路就永远停在旧的一份上。
+		 */
+		if (httpServletResponse != null && asyncContext != null) {
+			final Entry snapshot = tryServeFromSnapshot(endpoint, data, parameters, jsonReader, simulator);
+			if (snapshot != null) {
+				sendSnapshot(httpServletRequest, httpServletResponse, asyncContext, snapshot, endpoint, data);
+				return;
+			}
+		}
+
+		// 走模拟线程：读接口的"第一次/过期那一拍"与全部写接口都在这里。排队时带上接口名，慢了好点名。
+		simulator.runWeb(endpoint, () -> getContent(endpoint, data, parameters, jsonReader, simulator, (@Nullable JsonObject jsonObject) -> {
 			if (httpServletResponse != null && asyncContext != null) {
 				buildResponseObject(httpServletResponse, asyncContext, jsonObject, jsonObject == null ? HttpResponseStatus.NOT_FOUND : HttpResponseStatus.OK, endpoint, data);
 			}
 		}));
+	}
+
+	/**
+	 * 写出一份快照：带 {@code ETag}，并处理条件请求。
+	 *
+	 * <p>客户端带着同一个 {@code ETag} 回来时就回 304 —— 那一刻**连序列化都不做**，
+	 * 于是"世界没动"的那些拍只花一次头部比较（快照的代次只在内容真的变了时才前进，见 {@link WebFeed#publish}）。</p>
+	 */
+	private void sendSnapshot(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, AsyncContext asyncContext, Entry snapshot, String endpoint, String data) {
+		final String etag = snapshot.etag();
+		httpServletResponse.addHeader("ETag", etag);
+		httpServletResponse.addHeader("X-MMTR-Snapshot-Age-Millis", String.valueOf(Math.max(0L, System.currentTimeMillis() - snapshot.builtAtMillis)));
+		if (etag.equals(httpServletRequest.getHeader("If-None-Match"))) {
+			try {
+				httpServletResponse.setStatus(HttpResponseStatus.NOT_MODIFIED.code);
+				asyncContext.complete();
+			} catch (Exception e) {
+				log.error("Failed to complete a 304 snapshot response", e);
+			}
+			return;
+		}
+		sendResponse(httpServletResponse, asyncContext, snapshot.responseBytes(() -> buildResponseJson(snapshot.body, HttpResponseStatus.OK, snapshot.builtAtMillis, endpoint, data)), getMimeType("json"), HttpResponseStatus.OK);
 	}
 
 	/**
@@ -136,14 +191,23 @@ public abstract class ServletBase extends HttpServlet {
 	 * JSON / static-asset payload from the simulator thread without blocking it.
 	 */
 	public static void sendResponse(HttpServletResponse httpServletResponse, AsyncContext asyncContext, String content, String contentType, HttpResponseStatus httpResponseStatus) {
+		sendResponse(httpServletResponse, asyncContext, content.getBytes(StandardCharsets.UTF_8), contentType, httpResponseStatus);
+	}
+
+	/**
+	 * As above, but takes the payload already encoded.
+	 *
+	 * <p>快照路径用它：同一代的字节只编码一次（{@link WebFeed.Entry#responseBytes}），
+	 * 于是"多个标签读同一份"连编码都不重复。</p>
+	 */
+	public static void sendResponse(HttpServletResponse httpServletResponse, AsyncContext asyncContext, byte[] contentBytes, String contentType, HttpResponseStatus httpResponseStatus) {
 		try {
 			final ServletOutputStream servletOutputStream = httpServletResponse.getOutputStream();
-			final byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
 			final int[] contentPosition = {0};
 			httpServletResponse.addHeader("Content-Type", contentType);
 			httpServletResponse.addHeader("Access-Control-Allow-Origin", "*");
 			if (httpResponseStatus == HttpResponseStatus.REDIRECT) {
-				httpServletResponse.addHeader("Location", content);
+				httpServletResponse.addHeader("Location", new String(contentBytes, StandardCharsets.UTF_8));
 			}
 			servletOutputStream.setWriteListener(new WriteListener() {
 				@Override
@@ -201,12 +265,23 @@ public abstract class ServletBase extends HttpServlet {
 	}
 
 	private static void buildResponseObject(HttpServletResponse httpServletResponse, AsyncContext asyncContext, @Nullable JsonObject data, HttpResponseStatus httpResponseStatus, String... parameters) {
+		sendResponse(httpServletResponse, asyncContext, buildResponseJson(data, httpResponseStatus, System.currentTimeMillis(), parameters), getMimeType("json"), httpResponseStatus);
+	}
+
+	/**
+	 * 信封（`{code, currentTime, text, version, data}`）的文本。
+	 *
+	 * <p>抽出来是为了快照路径能**复用同一份**：同一个代次只构建一次（见
+	 * {@link WebFeed.Entry#responseText}）。{@code currentTime} 由调用方给：
+	 * 快照接口给的是**数据构建时刻**，其余接口给的是响应时刻（notes/172）。</p>
+	 */
+	private static String buildResponseJson(@Nullable JsonObject data, HttpResponseStatus httpResponseStatus, long currentTime, String... parameters) {
 		final StringBuilder reasonPhrase = new StringBuilder(httpResponseStatus.description);
 		final String trimmedParameters = Arrays.stream(parameters).filter(parameter -> !parameter.isEmpty()).collect(Collectors.joining(", "));
 		if (!trimmedParameters.isEmpty()) {
 			reasonPhrase.append(" - ").append(trimmedParameters);
 		}
-		sendResponse(httpServletResponse, asyncContext, new Response(httpResponseStatus.code, reasonPhrase.toString(), data).getJson().toString(), getMimeType("json"), httpResponseStatus);
+		return new Response(httpResponseStatus.code, currentTime, reasonPhrase.toString(), data).getJson().toString();
 	}
 
 	private static String tryGetParameter(HttpServletRequest httpServletRequest, String parameter) {

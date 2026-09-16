@@ -78,7 +78,7 @@ final class MmtrPointCommands {
 		appendRows(result, simulator, turnout, x, y, z);
 
 		result.line("—— 闭塞归属（这个节点被哪些区间覆盖；双向线路上可能有多个方向各一条）——");
-		appendLines(result, new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator).describeNodeSections(node));
+		appendLines(result, new org.mtr.core.mmtr.signal.MmtrSectionService(simulator).describeNodeSections(node));
 		return result;
 	}
 

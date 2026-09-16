@@ -135,7 +135,7 @@ public final class MmtrSignalRegistry {
 		entry.rails.clear();
 		if (rails != null) {
 			/*
-			 * 按**规范 hex** 去重（见 MmtrDirectionalBlockService.canonicalHex）。
+			 * 按**规范 hex** 去重（见 MmtrSectionService.canonicalHex）。
 			 *
 			 * <p>同一根轨的两种端点写法是不同的字符串，用原始字符串判断"收过没有"会漏：
 			 * 点选绑定传进来的可能是逆序写法，而列表里已经存着正序的那一份 —— 于是同一根轨被记两次，
@@ -147,7 +147,7 @@ public final class MmtrSignalRegistry {
 				if (hex == null || hex.isEmpty()) {
 					continue;
 				}
-				if (seen.add(org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(hex))) {
+				if (seen.add(org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(hex))) {
 					entry.rails.add(hex);
 				}
 			}

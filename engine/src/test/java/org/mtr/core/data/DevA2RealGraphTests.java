@@ -39,7 +39,6 @@ public final class DevA2RealGraphTests {
 		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, DEV_MTR_ROOT, false);
 		sim.mmtrConsistTypes = ConsistTypeRegistry.parse(CONSIST_JSON);
 		sim.mmtrDefaultConsistTypeId = "emu";
-		sim.mmtrEnsureSignalColors();
 
 		// A probe train on the first real siding that can size a consist body.
 		final ObjectArrayList<VehicleCar> probeCars = new ObjectArrayList<>();
@@ -59,9 +58,9 @@ public final class DevA2RealGraphTests {
 		Assumptions.assumeTrue(spawned[0] != null, "no real siding could take a probe train - skipping");
 		final Vehicle vehicle = spawned[0];
 
-		// One simulated tick: the train registers its footprint under the rail's signal colour, which is
-		// exactly the channel the aspect view reads.
-		sim.sidings.forEach(siding -> siding.simulateVehicles(1000, null));
+		// One simulated tick: the train writes its footprint into the shared occupancy trees - the ONLY
+		// occupancy source now (notes/166 R4: the per-rail signal-colour channel is gone).
+		sim.sidings.forEach(siding -> siding.simulateVehicles(1000, sim.mmtrOccupancyTrees()));
 		final String railHex = vehicle.getMmtrMotionWalker().railHex();
 		assertNotNull(railHex, "the real train reports the rail it stands on");
 

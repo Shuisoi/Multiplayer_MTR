@@ -162,6 +162,9 @@ tasks {
 
 	val setupWebserverTask = register("setupWebserver") {
 		description = "Setup webserver"
+		// 前端产物必须是**输入**：只声明 outputs 的话，这个任务第一次生成过 WebserverResources.java 之后就永远
+		// UP-TO-DATE —— 之后重编网页，jar 里内嵌的仍然是旧那一份（发布包/无 mmtr.web.root 的场合就是这个后果）。
+		inputs.dir("website/dist/website/browser")
 		outputs.file("src/main/java/org/mtr/core/generated/WebserverResources.java")
 
 		doLast {

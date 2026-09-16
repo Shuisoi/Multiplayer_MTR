@@ -1,4 +1,3 @@
-import {isAxisAligned} from "./railGeometry";
 
 /**
  * 轨实体。
@@ -85,7 +84,12 @@ export class Rail {
 
 	/** 是否"同一轴"：x 或 z 任一相同 → 画直线，否则画曲线。 */
 	get isAxisAligned(): boolean {
-		return isAxisAligned(this.x1, this.z1, this.x2, this.z2);
+		/*
+	 * "同一轴"的判据（原来是 `railGeometry.isAxisAligned`）：x 或 z 任一相同就是轴对齐。
+	 * 容差取 0.05 格（方块坐标下的浮点噪声远小于它）。绘图那一摊删掉之后它留在这里 ——
+	 * 这条规则属于**数据**（这条轨是直是弯），不属于画法。
+	 */
+	return Math.abs(this.x1 - this.x2) < 0.05 || Math.abs(this.z1 - this.z2) < 0.05;
 	}
 
 	/** 两个方向的限速是否一致（不一致的轨在界面上单独标出来）。 */
@@ -103,3 +107,49 @@ export class Rail {
 		return Math.hypot(this.x2 - this.x1, this.z2 - this.z1);
 	}
 }
+
+/**
+ * **采样坐标系相对节点坐标系的系统偏移**（世界格）—— 也就是"方块中心 − 方块角"。
+ *
+ * <h2>为什么需要它（这一页踩到的坑）</h2>
+ * <p>引擎里有两套写法，量的是同一个物理位置：</p>
+ * <ul>
+ *   <li>**节点坐标是方块角**（整数）：`mmtr-topology.nodes`、`mmtr-points` 的道岔行、`mmtr-lamps` 的
+ *       灯坐标都在这套里；</li>
+ *   <li>**轨的采样点（`path`）与区间的 span 是方块中心**（`n + 0.5`）：一根轨的首个采样点比它的
+ *       端点**一致地多 (0.5, 0.5) 格** —— 实测这张 dev 世界 159 根轨的 318 个端点里 **317 个**
+ *       都是这个偏移（另一个是轨中段被灯切出来的那段）。</li>
+ * </ul>
+ * <p>所以"把 A 画到 B 旁边"时，两边只要不是同一套写法，就会出现半格的错位。区间地图上亲眼看到的是：
+ * **信号灯左右分布不均匀** —— 灯锚在**节点**上（角），而这一页的轨/带/端点在**方块中心**，
+ * 于是右边的灯离点 1.58 格、左边的灯 2.55 格（实测 48 盏 2.55 + 43 盏 1.58）。</p>
+ *
+ * <h2>为什么"量"而不是写死 0.5</h2>
+ * <p>与「地图」页那条"不要把校正量写成减 0.5 格"同源：引擎的约定一变，写死的数就会**反向偏**。
+ * 这里取所有轨的 {@code path[0] − 端点1} 的**众数**（按 0.01 格取整后统计），没有 `path` 的轨不参与；
+ * 一条都算不出来时返回 {@code [0, 0]}（= 两套写法一致，不做任何搬移）。</p>
+ */
+export function railSampleShift(rails: readonly Rail[]): readonly [number, number] {
+	const counts = new Map<string, {offset: readonly [number, number]; count: number}>();
+	for (const rail of rails) {
+		const first = rail.path[0];
+		if (!first) {
+			continue;
+		}
+		const offset = [
+			Math.round((first.x - rail.planeX1) * 100) / 100,
+			Math.round((first.z - rail.planeY1) * 100) / 100,
+		] as const;
+		const key = offset.join(",");
+		const seen = counts.get(key);
+		counts.set(key, {offset, count: (seen?.count ?? 0) + 1});
+	}
+	let best: {offset: readonly [number, number]; count: number} | null = null;
+	for (const entry of counts.values()) {
+		if (best === null || entry.count > best.count) {
+			best = entry;
+		}
+	}
+	return best?.offset ?? [0, 0];
+}
+

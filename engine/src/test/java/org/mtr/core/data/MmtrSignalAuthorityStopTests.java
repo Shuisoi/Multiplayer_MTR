@@ -96,7 +96,6 @@ public final class MmtrSignalAuthorityStopTests {
 			sim.sync();
 			assertTrue(depot.savedRails.contains(siding), "车场股道要挂在车辆段上");
 			siding.tick();
-			sim.mmtrEnsureSignalColors();
 		}
 
 		Vehicle spawn() {

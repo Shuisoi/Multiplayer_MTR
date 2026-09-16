@@ -249,16 +249,17 @@ export class Point {
 		return this.isTurnout && this.via === this.stemHex;
 	}
 
-	/** 当前位置下禁止通行的那条轨是哪一根（根部/正线远端/岔股）。 */
+	/** 当前位置下禁止通行的那条轨是哪一根（根部/正线远端/岔股）—— 带坐标，免得对上不图上的轨。 */
 	get prohibitedText(): string {
 		if (!this.isTurnout) {
 			return "";
 		}
+		const rail = railEndpointsText(this.prohibitedHex);
 		if (this.prohibitedHex === this.branchHex) {
-			return "岔股";
+			return `岔股 ${rail}`;
 		}
 		if (this.prohibitedHex === this.farHex) {
-			return "正线远端";
+			return `正线远端 ${rail}`;
 		}
 		return "（未知）";
 	}
@@ -280,10 +281,49 @@ export class Point {
 		return leg === undefined ? -1 : leg.index;
 	}
 
-	/** 位置 0/1 各自接哪条轨（按钮提示用）。 */
+	/**
+	 * **位置 0/1 各接哪两根轨**（按钮提示 + 卡片那一行）—— 用**坐标**，不是 hex 前缀。
+	 *
+	 * <p>用户 2026-09-16 现场问："`-176,-60,-253` 这处道岔为什么像是在 `-176,-60,-222` 与
+	 * `-176,-60,-289` 之间切？不应该是在 `-176,-60,-289` 与 `-170,-60,-289` 之间么？"
+	 * —— 引擎的模型是对的（位置 0 = 根部↔正线远端、位置 1 = 根部↔岔股），问题在**卡片没说清
+	 * 这两个位置各接哪两根轨**：只说"正线贯通/岔股开放"，人就没法与图上看到的轨对上。</p>
+	 *
+	 * <p>写全的三件事：**根部**（两个位置都连、列车开来的一侧，不参与切换）、这个位置**接**的那根、
+	 * 以及**被切断**的那根。</p>
+	 */
 	turnoutPositionText(position: number): string {
+		const stem = railEndpointsText(this.stemHex);
+		const far = railEndpointsText(this.farHex);
+		const branch = railEndpointsText(this.branchHex);
 		return position === 1
-			? `岔股开放：根部接岔股 ${this.branchHex.slice(0, 8)}…，正线远端禁止通行`
-			: `正线贯通：根部接正线远端 ${this.farHex.slice(0, 8)}…，岔股禁止通行`;
+			? `位置 1（岔股开放）：根部 ${stem} 接岔股 ${branch}；正线远端 ${far} 禁止通行`
+			: `位置 0（正线贯通）：根部 ${stem} 接正线远端 ${far}；岔股 ${branch} 禁止通行`;
+	}
+}
+
+/**
+ * 轨 hex → **两端节点的坐标**（`(-176,-253)↔(-176,-289)`，只写 x,z 免得一行太长）。
+ *
+ * <h3>为什么要自己解 hex</h3>
+ * <p>道岔那几行（`stem` / `far` / `branch` / `prohibited` / `legs[].hex`）**只给 hex**，
+ * 而人读的是坐标。界面从前拿 `hex.slice(0, 8)` 当"短名"，可 hex 的前 8 个字符是**所有负坐标轨
+ * 共有的** {@code FFFFFFFF} —— 等于没说。用户两次当场指出（2026-09-14："卡片里接哪两条轨
+ * （坐标）退化成 hex 前缀"；2026-09-16："这处道岔到底在哪两根轨之间切，看不出来"）。</p>
+ *
+ * <p>hex 的六段就是 {@code x1-y1-z1-x2-y2-z2}（64 位补码十六进制），坐标本来就在字符串里，
+ * 不必再回拓扑查一遍：{@code BigInt.asIntN(64, …)} 负责把负号还原。
+ * 段数不对/不是十六进制时**原样返回**（宁可显示丑，也不要抛异常把整张卡片弄没）。</p>
+ */
+export function railEndpointsText(hex: string): string {
+	const parts = hex.split("-");
+	if (parts.length !== 6) {
+		return hex;
+	}
+	try {
+		const n = parts.map(part => Number(BigInt.asIntN(64, BigInt(`0x${part}`))));
+		return `(${n[0]},${n[2]})↔(${n[3]},${n[5]})`;
+	} catch {
+		return hex;
 	}
 }

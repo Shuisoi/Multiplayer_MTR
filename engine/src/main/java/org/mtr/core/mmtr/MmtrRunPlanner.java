@@ -97,8 +97,13 @@ public final class MmtrRunPlanner {
 	 * running A-end-first (the common yard parking: system key at the A cab) travels the other way, so
 	 * its raw ahead/entry nodes are swapped. Planning from the wrong end made a parked locomotive's
 	 * route start at the dead end of its own siding (实机 2026-09-09, aassdd).
+	 *
+	 * <p>公开（2026-09-16）：车辆侧的"停在岔口前按计划补申请"那条自救路也要用同一口径 ——
+	 * 它原来读裸的 {@code aheadNode()}/{@code enteredFromPosition()}，车反向行驶时**问错了节点**，
+	 * 于是 {@code legIndexForRail} 必然解不出腿、打出"计划要的腿不在岔口腿表里"的假警报
+	 * （实测：日志指着 {@code -170,-60,-458}，而那处按 {@code query node} 只有度 2、根本不是岔口）。</p>
 	 */
-	private static @Nullable Position travelAheadNode(MmtrMotionPosition walker) {
+	public static @Nullable Position travelAheadNode(MmtrMotionPosition walker) {
 		if (walker instanceof final MmtrConsistWalker consistWalker && !consistWalker.travelsTowardB()) {
 			return walker.enteredFromPosition();
 		}
@@ -106,7 +111,7 @@ public final class MmtrRunPlanner {
 	}
 
 	/** The node the consist is really coming from (see {@link #travelAheadNode}). */
-	private static @Nullable Position travelEntryNode(MmtrMotionPosition walker) {
+	public static @Nullable Position travelEntryNode(MmtrMotionPosition walker) {
 		if (walker instanceof final MmtrConsistWalker consistWalker && !consistWalker.travelsTowardB()) {
 			return walker.aheadNode();
 		}
@@ -758,6 +763,33 @@ public final class MmtrRunPlanner {
 			});
 		}
 		return found[0];
+	}
+
+	/**
+	 * **按 hex 找图轨**，两种端点写法都认：{@code getHexId()} 用的是轨的**声明顺序**，而作业单/网页里
+	 * 手写的 hex 可能把两端写反（{@code x1-y1-z1-x2-y2-z2} 的前后半互换）。折返点这类"轨目标"
+	 * （{@link org.mtr.core.mmtr.job.MmtrJobStep#targetRailHex}）全靠它解析。
+	 *
+	 * @return the graph rail, or {@code null} when the hex matches nothing
+	 */
+	@Nullable
+	public static Rail findRailByHex(Simulator simulator, @Nullable String railHex) {
+		if (railHex == null) {
+			return null;
+		}
+		final String trimmed = railHex.trim();
+		if (trimmed.isEmpty()) {
+			return null;
+		}
+		final Rail direct = simulator.railIdMap.get(trimmed);
+		if (direct != null) {
+			return direct;
+		}
+		final String[] parts = trimmed.split("-");
+		if (parts.length == 6) {
+			return simulator.railIdMap.get(parts[3] + "-" + parts[4] + "-" + parts[5] + "-" + parts[0] + "-" + parts[1] + "-" + parts[2]);
+		}
+		return null;
 	}
 
 	/** Applies a feasible plan's turnout presets into {@code store} (skips identical settings). */

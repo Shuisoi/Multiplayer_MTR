@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 那一半由全量套件（553/0/4 不变）证明，不在这里写成断言。</p>
  *
  * <p>测试边界：**"下一架管我的信号是哪一架"这条规则不在这里测** —— 它是
- * {@link MmtrSignalAspect#aspectFrom} 的结论，由 {@code MmtrDirectionalBlockServiceTests}
+ * {@link MmtrSignalAspect#aspectFrom} 的结论，由 {@code MmtrSectionServiceTests}
  * 那一整套（v2 选腿 / 轨中段的灯 / 岔口多腿 / 折返双候选）负责。本类只测**映射**与**接线**：
  * 映射是纯函数，接线是一行委托（{@link MmtrMovementAuthority#forApproach} 只调一次
  * {@code aspectFrom}，灯显读的也是它）。</p>

@@ -90,6 +90,27 @@ public final class MmtrPointAuthority {
 		@Nullable String blockReason(long x, long y, long z, int newPosition, String owner);
 	}
 
+	/**
+	 * **某列车是不是还压在这处节点的轨上**（占用树答，权限层不认识车辆足迹）。
+	 *
+	 * <p>用途只有一个：物理持有窗口到期时决定"能不能放位"。放位等于允许别人把道岔扳到别的位，
+	 * 而车还压在这处道岔的轨上时那样做就是把道岔从它脚下抽走（见 {@code expirePhysical}）。</p>
+	 */
+	public interface HolderOccupancy {
+		boolean ownerIsOnNodeRails(long x, long y, long z, String owner);
+	}
+
+	/** 挂上"持有者还在不在岔轨上"的查询；不挂 = 到期就放位（老语义，测试夹具就是这样）。 */
+	public MmtrPointAuthority withHolderOccupancy(@Nullable HolderOccupancy occupancy) {
+		this.holderOccupancy = occupancy;
+		return this;
+	}
+
+	private @Nullable HolderOccupancy holderOccupancy;
+
+	/** 车还压在岔轨上时，持有窗口一次续这么多（毫秒）；车出清后不再续期，正常释放。 */
+	private static final long PHYSICAL_HOLD_EXTENSION_MILLIS = 30_000;
+
 	/** {@link #physicalPosition} answer when nobody currently defines this turnout's position. */
 	public static final int NO_PHYSICAL_HOLDER = Integer.MIN_VALUE;
 
@@ -977,6 +998,29 @@ public final class MmtrPointAuthority {
 	private void expirePhysical(String nk, long now) {
 		final Physical holder = physicalHolders.get(nk);
 		if (holder != null && holder.untilMillis <= now) {
+			/*
+			 * **车还压在这处道岔的轨上，窗口到期也不放**（2026-09-16 现场修，就是"北部掉头处两个车顶头"那条）。
+			 *
+			 * <p>物理持有是有**窗口**的（{@code untilMillis}，申请时给的）。列车跨过岔口后会自己释放，
+			 * 但"尾部还没出清"的那段时间里窗口可能先到期 ⇒ 位置一空出来，另一条进路的申请立刻把它拿走
+			 * ⇒ **道岔在还压着它的那辆车脚下被扳走了**。现场后果有两条：那辆车停在了"禁行侧"的轨上，
+			 * 它头上那盏灯从此按红显示（{@code signal why} 原话："撞在道岔 -176,-60,-253 的禁行侧"），
+			 * 而另一辆车按着位置也走不了 ⇒ 两班车互相封死。
+			 *
+			 * <p>判据用"这辆车在这处节点的轨上还有没有足迹"（{@code HolderOccupancy}，由 Simulator 接
+			 * 占用树回答）。续期而不是永久持有：车一开出去，下一次到期就正常释放并推进队列。</p>
+			 */
+			final long[] node = parseNodeKey(nk);
+			if (node != null && holderOccupancy != null && holderOccupancy.ownerIsOnNodeRails(node[0], node[1], node[2], holder.owner)) {
+				physicalHolders.put(nk, new Physical(holder.owner, holder.position, now + PHYSICAL_HOLD_EXTENSION_MILLIS, holder.priorityMillis));
+				final long last = physicalRetryLogMillis.getOrDefault(nk + "|hold", Long.MIN_VALUE);
+				if (now - last >= PHYSICAL_RETRY_LOG_INTERVAL_MILLIS) {
+					physicalRetryLogMillis.put(nk + "|hold", now);
+					System.out.println("[MMTR-PT] 位置持有续期：节点 " + nk + " 仍是 " + holder.owner + " 位置 " + holder.position
+						+ "（车还压在这处道岔的轨上，窗口到期也不放位）");
+				}
+				return;
+			}
 			physicalHolders.remove(nk);
 			promotePhysical(nk, now);
 		}
@@ -1008,14 +1052,14 @@ public final class MmtrPointAuthority {
 			if (head == null) {
 				break;
 			}
-			q.remove(head);
-			physicalHolders.put(nk, new Physical(head.owner, head.position, head.untilMillis, head.priorityMillis));
-			final String k = keyOfNode(nk, head.viaRailHex);
-			final Holder existing = holders.get(k);
-			if (existing == null || existing.owner.equals(head.owner)) {
-				holders.put(k, new Holder(new Req(head.owner, head.leg, head.untilMillis)));
-				byOwner.computeIfAbsent(head.owner, o -> new ObjectArrayList<>()).add(holders.get(k));
+			// 净空闸对"事件驱动的推进"同样算数：持有者刚走，但岔区可能还被别人压着 —— 那时不许把位置
+			// 判出去（否则就是把道岔从别人车下抽走）。挡着就留在队列里，等 retryPhysicalQueues 的下一轮。
+			final long[] node = parseNodeKey(nk);
+			if (node != null && positionChangeBlockedReason(node[0], node[1], node[2], head.position, head.owner) != null) {
+				break;
 			}
+			q.remove(head);
+			grantPhysical(nk, head);
 			break;
 		}
 		if (q.isEmpty()) {
@@ -1052,6 +1096,93 @@ public final class MmtrPointAuthority {
 			if (q.isEmpty()) {
 				physicalQueued.remove(nk);
 			}
+		}
+	}
+
+	/** "位置队列卡住"诊断日志的节流（每个节点每 {@link #PHYSICAL_RETRY_LOG_INTERVAL_MILLIS} 最多一条）。 */
+	private final Map<String, Long> physicalRetryLogMillis = new HashMap<>();
+	private static final long PHYSICAL_RETRY_LOG_INTERVAL_MILLIS = 5_000;
+
+	/**
+	 * **推进"位置队列"**（每 tick 由 {@link org.mtr.core.simulation.Simulator} 调用）。
+	 *
+	 * <p>为什么必须有这一句（2026-09-16 现场）：请求改位置被净空闸挡下时会进
+	 * {@code physicalQueued}，而推进队列的 {@link #promotePhysical} 只在**持有者释放/窗口过期**这两个
+	 * 事件里被调用 —— 于是出现"位置空着、车排在队首、却永远轮不到"：车停在站台上等了三分钟，
+	 * {@code point why} 的读数是 {@code 物理位置=0 / 物理持有者=（没有）/ 等待队列=[v…@1]}，
+	 * 只有人工扳一次道岔（{@code point set}）才把它救出来。净空是会自己清掉的（车走了、区间空了），
+	 * 所以队列也必须**自己**再试一次，不能只等那两个事件。</p>
+	 *
+	 * <p>每次调用对"没有持有者"的队列重排一次队首，并按**同一条净空闸**再判一次：闸还挡着就继续排队
+	 * （并节流打一行原因，方便操作者知道是谁/哪根轨压着岔区 —— 修前这条路径是**完全静默**的）。</p>
+	 */
+	public void retryPhysicalQueues(long now) {
+		if (physicalQueued.isEmpty()) {
+			return;
+		}
+		for (final String nk : new ObjectArrayList<>(physicalQueued.keySet())) {
+			final ArrayDeque<PhysicalReq> q = physicalQueued.get(nk);
+			if (q == null) {
+				continue;
+			}
+			q.removeIf(r -> r.untilMillis <= now);
+			if (q.isEmpty()) {
+				physicalQueued.remove(nk);
+				continue;
+			}
+			if (physicalHolders.containsKey(nk)) {
+				continue;   // 有持有者：等它释放或过期（那两条路会自己 promotePhysical）
+			}
+			final PhysicalReq head = pickNextPhysical(q, now);
+			final long[] node = parseNodeKey(nk);
+			if (head == null || node == null) {
+				continue;
+			}
+			final String blocked = positionChangeBlockedReason(node[0], node[1], node[2], head.position, head.owner);
+			if (blocked != null) {
+				final long last = physicalRetryLogMillis.getOrDefault(nk, Long.MIN_VALUE);
+				if (now - last >= PHYSICAL_RETRY_LOG_INTERVAL_MILLIS) {
+					physicalRetryLogMillis.put(nk, now);
+					System.out.println("[MMTR-PT] 位置队列等净空：节点 " + nk + " 车 " + head.owner + " 要位置 " + head.position + " —— " + blocked);
+				}
+				continue;
+			}
+			q.remove(head);
+			grantPhysical(nk, head);
+			final long lastGrantLog = physicalRetryLogMillis.getOrDefault(nk + "|grant", Long.MIN_VALUE);
+			if (now - lastGrantLog >= PHYSICAL_RETRY_LOG_INTERVAL_MILLIS) {
+				// 节流：原子组还在等别的点时，本处每 tick 都会被重新排队并判出——不节流会把日志刷满
+				// （实测 20 行/秒，把真正该看的作业/信号行全埋掉）。
+				physicalRetryLogMillis.put(nk + "|grant", now);
+				System.out.println("[MMTR-PT] 位置队列推进：节点 " + nk + " → 位置 " + head.position + " 给了 " + head.owner);
+			}
+			if (q.isEmpty()) {
+				physicalQueued.remove(nk);
+			}
+		}
+	}
+
+	/** 把一处位置判给队首，并**同一步**发出它那条逐进向授权（走行只读逐进向，不读位置表）。 */
+	private void grantPhysical(String nk, PhysicalReq head) {
+		physicalHolders.put(nk, new Physical(head.owner, head.position, head.untilMillis, head.priorityMillis));
+		final String k = keyOfNode(nk, head.viaRailHex);
+		final Holder existing = holders.get(k);
+		if (existing == null || existing.owner.equals(head.owner)) {
+			holders.put(k, new Holder(new Req(head.owner, head.leg, head.untilMillis)));
+			byOwner.computeIfAbsent(head.owner, o -> new ObjectArrayList<>()).add(holders.get(k));
+		}
+	}
+
+	/** {@code "x,y,z"} → {@code [x, y, z]}；解析不出来返回 {@code null}。 */
+	private static long @Nullable [] parseNodeKey(String nk) {
+		final String[] parts = nk.split(",");
+		if (parts.length != 3) {
+			return null;
+		}
+		try {
+			return new long[]{Long.parseLong(parts[0].trim()), Long.parseLong(parts[1].trim()), Long.parseLong(parts[2].trim())};
+		} catch (NumberFormatException e) {
+			return null;
 		}
 	}
 

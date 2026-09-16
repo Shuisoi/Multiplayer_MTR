@@ -87,13 +87,13 @@ public final class MmtrCommandExecutor {
 		 * 区间层（按方向划分）。`blocks <节点键>` = 这个节点被哪些区间覆盖；`blocks` = 逐区间转储。
 		 *
 		 * <p>原来这两条走 `MmtrDirectionalBlockReport`（水闸区间的"唯一归属"，notes/157 已删）。
-		 * 那个类的"诊断报告"职责现在由 `MmtrDirectionalBlockService` 自己承担：
+		 * 那个类的"诊断报告"职责现在由 `MmtrSectionService` 自己承担：
 		 * 节点那一问用 `describeNodeSections`（**多值**，双向线路上一个节点被两个方向的区间同时覆盖），
 		 * 区间那一份直接遍历 `allSections()` 打印 —— 不再需要一层只做转储的中间类。</p>
 		 */
 		if (parts.length >= 1 && parts[0].equals("blocks")) {
-			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService blockService =
-				new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator);
+			final org.mtr.core.mmtr.signal.MmtrSectionService blockService =
+				new org.mtr.core.mmtr.signal.MmtrSectionService(simulator);
 			if (parts.length >= 2) {
 				final String[] nodeParts = parts[1].split(",");
 				if (nodeParts.length == 3) {
@@ -124,10 +124,43 @@ public final class MmtrCommandExecutor {
 			simulator.mmtrCommandResult(report.toString());
 			return;
 		}
+		/*
+		 * Level 1 轨道区间（notes/166）：**占用判定的单位**，无方向、双向共用。
+		 *
+		 * 与 `blocks-v2`（Level 2 行车区间，有方向）分开两条指令，是因为两层要能分别看：
+		 *   `tracks`      → 切点只由灯产生，轨上每一点恰好属于一段（占用在这里算）
+		 *   `tracks <轨>` → 这根轨上被切成了几段、各段的弧窗
+		 */
+		if (parts.length >= 1 && parts[0].equals("tracks")) {
+			final org.mtr.core.mmtr.signal.MmtrSectionService sectionService =
+				new org.mtr.core.mmtr.signal.MmtrSectionService(simulator);
+			if (parts.length >= 2) {
+				final var onRail = sectionService.trackSectionsOf(parts[1]);
+				if (onRail.isEmpty()) {
+					simulator.mmtrCommandResult("[tracks] 轨 " + parts[1] + " 上没有轨道区间（这根轨不存在？）");
+					return;
+				}
+				final StringBuilder one = new StringBuilder("[tracks] 轨 " + parts[1] + " 上有 " + onRail.size() + " 个轨道区间");
+				for (final var track : onRail) {
+					one.append("\n  ").append(track.id).append(" 跨 ").append(track.spans.size()).append(" 段 长=")
+						.append(Math.round(track.lengthM() * 10) / 10.0).append(" ").append(track.spans);
+				}
+				simulator.mmtrCommandResult(one.toString());
+				return;
+			}
+			final StringBuilder report = new StringBuilder("[tracks] 轨道区间（Level 1，无方向，占用在这一层算）");
+			for (final var track : sectionService.allTrackSections()) {
+				report.append("\n  ").append(track.id).append(" 跨 ").append(track.spans.size()).append(" 段 长=")
+					.append(Math.round(track.lengthM() * 10) / 10.0).append(" ").append(track.spans);
+			}
+			report.append("\n[tracks] 合计 ").append(sectionService.trackSectionCount()).append(" 个轨道区间");
+			simulator.mmtrCommandResult(report.toString());
+			return;
+		}
 		// 某一根轨属于哪几个区间（一个点属于哪几段，**多值**）。
 		if (parts.length >= 1 && parts[0].equals("blocks-v2")) {
-			final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService blockService =
-				new org.mtr.core.mmtr.signal.MmtrDirectionalBlockService(simulator);
+			final org.mtr.core.mmtr.signal.MmtrSectionService blockService =
+				new org.mtr.core.mmtr.signal.MmtrSectionService(simulator);
 			if (parts.length >= 2 && !parts[1].equals("all")) {
 				final var onRail = blockService.sectionsOfRail(parts[1]);
 				if (onRail.isEmpty()) {
@@ -157,25 +190,74 @@ public final class MmtrCommandExecutor {
 			simulator.mmtrCommandResult("[blocks-v2] 用法: blocks-v2 all | blocks-v2 <轨hex>（逐区间转储请用 `blocks`）");
 			return;
 		}
-		// 闭塞区间 v2 (S4, observable before it is wired): what every lamp WOULD show under the v2 rule.
-		if (parts.length >= 1 && parts[0].equals("lamps-v2")) {
+		/*
+		 * 逐灯转储：**灯的状态绑定在它开的行车区间上**（notes/167）。
+		 *
+		 * `lamps` 是正式名（`lamps-v2` 保留为别名）：一行一盏灯 —— 它守的轨、开的区间（一灯多腿多条）、
+		 * 该区间的占用、由段状态推出的显示、以及未接入闭塞时的"未接入"。
+		 * 这样"灯为什么是这个颜色"可以直接从"它开的那一段怎么样"读出来，不需要去看轨。
+		 */
+		if (parts.length >= 1 && (parts[0].equals("lamps") || parts[0].equals("lamps-v2"))) {
 			// `var`, not an explicit ObjectArrayList: the engine jar ships its own relocated fastutil
 			// (org.mtr.libraries.*), so naming the type here would clash with the game's copy.
 			final var restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, null);
-			final var lines = simulator.mmtrDirectionalBlocks.describeLampAspects(null, restricted::contains);
-			simulator.mmtrCommandResult(String.join("\n", lines));
+			final var bindings = simulator.mmtrSections.lampBindings(null, restricted::contains);
+			final java.util.TreeMap<String, String> sorted = new java.util.TreeMap<>();
+			bindings.forEach((key, binding) -> {
+				final StringBuilder line = new StringBuilder();
+				line.append("[lamps] ").append(key).append(" → ").append(binding.unbound ? "**未接入闭塞**" : binding.aspect);
+				line.append("  占用=").append(binding.occupied);
+				line.append("  守轨=").append(binding.protectedRails.size());
+				if (binding.sections.isEmpty()) {
+					line.append("  区间=（无）");
+				} else {
+					for (final var section : binding.sections) {
+						line.append("  区间=").append(section.id).append("[").append(section.spans.size()).append("段/")
+							.append(Math.round(section.lengthM() * 10) / 10.0).append("m]");
+					}
+					line.append("  后继=").append(binding.nextSectionIds(simulator.mmtrSections));
+				}
+				sorted.put(key, line.toString());
+			});
+			simulator.mmtrCommandResult(String.join("\n", sorted.values()));
+			return;
+		}
+		/*
+		 * 总区间（notes/168）：**地图上一条带** —— 一个位置 ＋ 覆盖它的各方向行车区间。
+		 *
+		 * 存在的理由就是"错开处"：一辆车夹在错开的一段里时，它**既在上行区间里、也在下行区间里**，
+		 * 两条带并排画会重叠 —— 总区间把"位置"和"归属"分开：位置只有一条（几何 = 轨道区间），
+		 * 归属逐方向列出。这里的 `**错开**` 就是那两个方向不是同一段路的情形。
+		 */
+		if (parts.length >= 1 && parts[0].equals("totals")) {
+			final var restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, null);
+			final var totals = simulator.mmtrSections.totalSectionViews(null, restricted::contains);
+			final StringBuilder report = new StringBuilder("[totals] 总区间（几何 = 轨道区间；每一条带出覆盖它的各方向行车区间）");
+			int staggered = 0;
+			for (final var total : totals) {
+				if (total.staggered()) {
+					staggered++;
+				}
+				report.append("\n  ").append(total.track.id)
+					.append(" 长=").append(Math.round(total.lengthM() * 10) / 10.0)
+					.append(total.occupied ? " **占用**" : " 空")
+					.append(total.staggered() ? " **错开**（上下行的区间不是同一段路）" : "");
+				for (final var cover : total.covers) {
+					final boolean uncovered = cover.entrySignalKey == null || cover.entrySignalKey.isEmpty();
+					report.append("\n      ").append(uncovered ? "（无灯）" : cover.entrySignalKey)
+						.append(" → ").append(uncovered ? "（无信号）" : cover.aspect)
+						.append(" 占用=").append(cover.occupied)
+						.append(" 方向=").append(cover.direction.label())
+						.append(" 长=").append(Math.round(cover.lengthM() * 10) / 10.0);
+				}
+			}
+			report.append("\n[totals] 合计 ").append(totals.size()).append(" 个总区间，其中错开 ").append(staggered).append(" 个");
+			simulator.mmtrCommandResult(report.toString());
 			return;
 		}
 		// 占用转储: whose footprint is on a rail right now (why a train is "blocked ahead").
 		if (parts.length >= 2 && parts[0].equals("occ")) {
-			simulator.mmtrCommandResult(String.join("\n", simulator.mmtrDirectionalBlocks.describeOccupancy(parts[1])));
-			return;
-		}
-		// B3 闭塞区间诊断: blocks [all|<railHex>] - 哪些轨被灯切成多段、每架灯绑到哪根轨。
-		if (parts[0].equals("blocks")) {
-			simulator.mmtrCommandResult(parts.length >= 2 && !parts[1].equals("all")
-				? org.mtr.core.mmtr.signal.MmtrBlockReport.describe(simulator, parts[1])
-				: org.mtr.core.mmtr.signal.MmtrBlockReport.describeAll(simulator));
+			simulator.mmtrCommandResult(String.join("\n", simulator.mmtrSections.describeOccupancy(parts[1])));
 			return;
 		}
 		if (parts.length >= 2 && (parts[0].equals("changeends") || parts[0].equals("cab") || parts[0].equals("doors"))) {
@@ -197,7 +279,7 @@ public final class MmtrCommandExecutor {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | lamps-v2 | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])"
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | tracks [<railHex>] | lamps | totals | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])"
 			+ "（这些也都能用名词打头的写法从网页指令栏发：train doors <id> open / train couple <a> <b> / …）");
 	}
 

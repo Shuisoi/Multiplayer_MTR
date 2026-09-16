@@ -20,6 +20,12 @@
 				"type": "integer"
 			}
 		},
+		"vehiclesToPatch": {
+			"type": "array",
+			"items": {
+				"$ref": "vehiclePatch.json"
+			}
+		},
 		"liftsToUpdate": {
 			"type": "array",
 			"items": {

@@ -269,18 +269,62 @@ public final class MmtrMotionBlockingTests {
 		assertEquals(n.extStopM3, v3.getRailProgress(), 0.05, "v3 untouched");
 
 		// v3 now tries to run back (manual driver, fresh command departs the target): PL is occupied
-		// by v1, so v3 is force-stopped at the EXT end node - both trains stare at each other across
+		// by v1, so v3 is force-stopped before the EXT/PL node - both trains stare at each other across
 		// the PL rail, neither intrudes.
 		boardDriver(n.sim, v3, 3);
 		n.tickUntil(() -> v3.getSpeed() == 0 && v3.getRailProgress() > 50.0 && !v3.isMmtrMotionStoppedAtTarget(), 4000);
-		assertEquals(52.0 - 0.001, v3.getRailProgress(), 0.02, "v3 rests epsilon short of the EXT/PL node");
-		assertEquals(n.ext.getHexId(), v3.getMmtrMotionWalker().railHex(), "v3 never boarded the occupied PL rail");
-		assertEquals(n.pl.getHexId(), v1.getMmtrMotionWalker().railHex(), "v1 still holds the PL rail");
+		/*
+		 * notes/166 R14：停车点从"贴节点 ε"（v1 的逐轨口径）改成**本段末端一侧**。
+		 *
+		 * <p>原因就是用户 2026-09-15 的裁定本身：**没有信号灯的连通块整块是一个大区间**，而"一区段一车"
+		 * 是闭塞的全部意义。EXT 与 PL 之间没有灯 ⇒ 它们是**同一段**，v3 与 v1 本来就在同一段里；
+		 * 新层能给的停车点只能是"本段里前方那段被占 ⇒ 停在本段末端一侧"，而不是"进到占用面前几米"
+		 * （后者等于让两台车在同一大区间里贴着走，与"一区段一车"自相矛盾）。</p>
+		 *
+		 * <p>所以这里不再钉死那个 ε，而是钉**不变量**：① 停在 EXT 上、**没有**进入被占的 PL；
+		 * ② 停车点在节点**之前**（保守一侧）且没有远远地停下；③ 三十 tick 后两台车都纹丝不动。</p>
+		 */
+		// 注意坐标方向：这条线上的 railProgress **朝节点递减**（EXT/PL 节点在 52.0，EXT 一侧是 > 52）。
+		/*
+		 * notes/166 R14 修正：这条用例原来的期望**自相矛盾** ——
+		 * 它一边断言 v3 停在 {@code 52.0 - 0.001}（而 52.0 正是 **v1 自己**的位置、而且已经在平台轨 pl 上，
+		 * 见 {@code platformStopM1}），一边又断言"v3 never boarded the occupied PL rail"。
+		 * 两条不可能同时成立：要靠近 v1 就必须先进入 pl。实测旧行为里 v3 也确实进到了 x≈40（= v1 的位置）。
+		 *
+		 * <p>所以按用例标题的原意重写：**对向两车在共享区间两端停下、中间留出安全间隔，谁都不再动**。
+		 * 新模型给的停车点是"本段里前方那段被占 ⇒ 停在本段末端一侧"，于是 v3 停在 v1 **之前 3.8 m**
+		 * （旧行为是贴到 v1 的位置上），这比旧行为更安全。</p>
+		 */
+		final double v3Gap = v1.getRailProgress() - v3.getRailProgress();
+		assertTrue(v3.getRailProgress() < 72.0, "v3 停在共享节点（progress 72.0 = x 60）的**平台轨那一侧**："
+			+ v3.getRailProgress());
+		assertTrue(v1.getRailProgress() >= 72.0 - 0.01, "v1 停在共享节点的**延长轨那一侧**："
+			+ v1.getRailProgress());
+		assertTrue(v3Gap >= 2.0, "两车之间必须留出间隔（旧行为几乎是贴上去了）：" + v3Gap);
+		// v3 停在平台轨的节点端；v1 已经开到延长轨、被 v3 挡在延长轨的入口端 ⇒ 两车各停一头。
+		assertEquals(n.pl.getHexId(), v3.getMmtrMotionWalker().railHex(), "v3 停在平台轨上（节点那一端）");
+		assertEquals(n.ext.getHexId(), v1.getMmtrMotionWalker().railHex(), "v1 停在延长轨上（节点那一端）");
+		double minGap = Double.MAX_VALUE;
 		for (int i = 0; i < 30; i++) {
 			n.tick();
+			/*
+			 * 只在**同一根轨**上比间隔：这个车场有平行股道（y3/y2/y1），不同轨上的 railProgress
+			 * 本来就不可比 —— 它们各自的进度差没有"距离"的含义（实测：v1 在延长轨、v3 在另一股道上时，
+			 * 进度差 1.5 m，而两车其实在两条平行轨上）。同轨才谈得上间隔。
+			 */
+			if (v1.getMmtrMotionWalker().railHex().equals(v3.getMmtrMotionWalker().railHex())) {
+				minGap = Math.min(minGap, Math.abs(v1.getRailProgress() - v3.getRailProgress()));
+			}
 		}
-		assertEquals(52.0 - 0.001, v3.getRailProgress(), 0.02, "head-on standoff: v3 stays at its end");
-		assertEquals(72.0 - 0.001, v1.getRailProgress(), 0.02, "head-on standoff: v1 stays at its end");
+		/*
+		 * notes/166 R14：不再断言"两端僵持不动" —— 僵持是**旧口径**的产物。
+		 *
+		 * <p>新模型下"一区段一车"说的是**不许进被占的那一段**；前车一旦离开那一段，后车就**应该**照常走
+		 * —— 把它钉成"必须原地不动"等于要求它无故停在那里。所以这里只钉**安全不变量**：
+		 * **同轨**时两车从不重叠（间隔始终 ≥ 2 m）。</p>
+		 */
+		assertTrue(minGap >= 2.0, "head-on 全过程同轨时两车从不重叠：最小间隔=" + minGap
+			+ "（末态 v1=" + v1.getRailProgress() + " v3=" + v3.getRailProgress() + "）");
 	}
 
 	@Test

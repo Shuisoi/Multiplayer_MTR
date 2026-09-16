@@ -4,11 +4,14 @@ import com.google.gson.JsonObject;
 import it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectImmutableList;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.Main;
 import org.mtr.core.data.NameColorDataBase;
+import org.mtr.core.data.Position;
+import org.mtr.core.data.Rail;
 import org.mtr.core.data.Vehicle;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.map.*;
@@ -16,16 +19,69 @@ import org.mtr.core.operation.ArrivalsRequest;
 import org.mtr.core.operation.MmtrMissionControl;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.simulation.Simulator;
+import org.mtr.core.servlet.WebFeed.Entry;
 import org.mtr.core.tool.Utilities;
 
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public final class SystemMapServlet extends ServletBase {
 
 	private final Object2ObjectAVLTreeMap<String, CachedResponse> stationsAndRoutesResponses = new Object2ObjectAVLTreeMap<>();
 	private final Object2ObjectAVLTreeMap<String, CachedResponse> departuresResponses = new Object2ObjectAVLTreeMap<>();
 	private final Object2ObjectAVLTreeMap<String, CachedResponse> clientsResponses = new Object2ObjectAVLTreeMap<>();
-	private final Object2ObjectAVLTreeMap<String, CachedResponse> mmtrTrainsResponses = new Object2ObjectAVLTreeMap<>();
+
+	/*
+	 * ------------------------------------------------ 只读接口的快照层（notes/172）
+	 *
+	 * 这张表是"哪些接口可以不进 tick"的**唯一真源**：表里有名字的接口走
+	 * 「已发布的快照 → 够新就在 Jetty 线程直接答 / 过旧才回模拟线程重算一次并发布」，
+	 * 表里没有的（写接口、需要请求体的接口）照旧排队到模拟线程。**加一路只读接口 = 这里加一行。**
+	 *
+	 * 每条的最大年龄**不是刷新率**（刷新率由前端节拍决定，`LIVE_REFRESH_MILLIS` = 2 s），
+	 * 而是"同一路接口在这个窗口内可以把前一份重复用在多个请求上"：
+	 * 够长 ⇒ 多开几个控制台标签几乎不额外花 tick；够短 ⇒ 网页不会看到旧帧（过期那一拍会有人去重算）。
+	 *
+	 * 分层依据是"多久变一次"：
+	 */
+	/** 活数据（网页每一拍都在问：道岔 / 灯 / 车 / 总区间）。 */
+	private static final long FEED_LIVE_MAX_AGE_MILLIS = 400L;
+	/** 半静态（区间几何、区间图：只在有人改世界、扳岔、设进路时变）。 */
+	private static final long FEED_WARM_MAX_AGE_MILLIS = 1_000L;
+	/** 静态（轨网 / 线路 / 进向表 / 站台：只在有人修轨道时变）。 */
+	private static final long FEED_STATIC_MAX_AGE_MILLIS = 5_000L;
+
+	/**
+	 * 接口名 → 快照规格。**包内可见**（不是 private）：成本用例要遍历它，逐路量"这一路现在多贵"。
+	 *
+	 * <p>键**只用接口名**：这几路都不看第二段路径（`data`）与查询串（`parameters`）——
+	 * `SystemMapServlet` 里本来就没用过它们，所以"同一路接口的响应"只有一份。</p>
+	 */
+	static final Object2ObjectOpenHashMap<String, FeedSpec> FEEDS = new Object2ObjectOpenHashMap<>();
+	static {
+		FEEDS.put("mmtr-trains", new FeedSpec(SystemMapServlet::getMmtrTrains, FEED_LIVE_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-points", new FeedSpec(SystemMapServlet::getMmtrPoints, FEED_LIVE_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-signals", new FeedSpec(SystemMapServlet::getMmtrSignals, FEED_LIVE_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-total-sections", new FeedSpec(SystemMapServlet::getMmtrTotalSections, FEED_LIVE_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-track-sections", new FeedSpec(SystemMapServlet::getMmtrTrackSections, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-block-sections", new FeedSpec(SystemMapServlet::getMmtrBlockSections, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-lamps", new FeedSpec(SystemMapServlet::getMmtrLamps, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-sections", new FeedSpec(SystemMapServlet::getMmtrSections, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-schematic", new FeedSpec(SystemMapServlet::getMmtrSchematic, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-topology", new FeedSpec(SystemMapServlet::getMmtrTopology, FEED_STATIC_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-lines", new FeedSpec(SystemMapServlet::getMmtrLines, FEED_STATIC_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-junction-legs", new FeedSpec(SystemMapServlet::getMmtrJunctionLegs, FEED_STATIC_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-platforms", new FeedSpec(SystemMapServlet::getMmtrPlatforms, FEED_STATIC_MAX_AGE_MILLIS));
+	}
+
+	/**
+	 * 一路只读接口：怎么算（只在模拟线程上算），以及"手上这一份最多容忍多旧"。
+	 *
+	 * <p>能用它的前提是**纯只读**：不读请求体、不改模拟状态。写接口一律留在 {@link #getContent} 的
+	 * switch 里 —— 那是唯一能改状态的地方。</p>
+	 */
+	record FeedSpec(Function<Simulator, JsonObject> builder, long maxAgeMillis) {
+	}
 
 	/**
 	 * Cache lifespan for the relatively-static stations / routes payload.
@@ -33,25 +89,69 @@ public final class SystemMapServlet extends ServletBase {
 	private static final long STATIONS_AND_ROUTES_CACHE_MILLIS = 30_000L;
 	/**
 	 * Cache lifespan for live departures and client positions — short enough for the map UI to feel live, long enough that a busy server isn't recomputing per request.
+	 *
+	 * <p><b>必须短于控制台的刷新节拍</b>（用户 2026-09-16："所有可变的都需要 0.5s 一次变动"）：
+	 * 网页侧是 `LIVE_REFRESH_MILLIS`。原来这里是 3000 ms —— 页面每拍问一次，引擎却三秒才重算一次，
+	 * 等于好几拍拿到同一帧，看起来就是"没刷新"。现在留 400 ms：每拍都能拿到新的一帧，
+	 * 又不必为每次请求都重算（一个节拍内重复请求仍合并）。</p>
+	 *
+	 * <p>这一条只覆盖 OBA 那几路。控制台自己的图层接口走 {@link #FEEDS} 的快照层（notes/172），
+	 * 那里的窗口是"同一个窗口内多个请求共用一份"，理由与这里相同。</p>
 	 */
-	private static final long LIVE_DATA_CACHE_MILLIS = 3_000L;
+	private static final long LIVE_DATA_CACHE_MILLIS = 400L;
 
 	/**
 	 * Samples per rail in the topology feed's {@code path}.
 	 *
 	 * <p>A rail's shape is two circular arcs; 32 steps is enough that the polyline is visually
 	 * indistinguishable from the arc in a plan view (a 20 m rail segment turns a couple of degrees per
-	 * step) while keeping the payload bounded: 33 points × 3 integers × 134 rails ≈ 13 K numbers.</p>
+	 * step) while keeping the payload bounded: 33 points × 3 coordinates × 159 rails ≈ 16 K numbers.</p>
 	 */
 	private static final int MMTR_RAIL_PATH_STEPS = 32;
+
+	/**
+	 * A sampled {@code path} coordinate, kept to two decimals.
+	 *
+	 * <p><b>Do NOT round these to integers</b> (which is what this used to do, for payload size).
+	 * Integer rounding turns the arcs back into staircases, and the plan view then shows straight
+	 * tracks with hooks and curving tracks as block-sized steps. Measured on the dev world: a nearly
+	 * horizontal rail from (-202,74) to (-166,76) had 30 of its 33 samples sitting on the same cell
+	 * (z=75) with the last two jumping to 76/77, and rails that really do bend (up to 22.38 blocks off
+	 * the straight chord) came out as steps a block wide.</p>
+	 *
+	 * <p>Two decimals cost ~8 KB more JSON across all rails, and 0.01 blocks is ~0.19 px even at the
+	 * console's maximum zoom (0.01 × 2 units/block × 37.5 px/unit) — invisible, so nothing is gained
+	 * by dropping them.</p>
+	 */
+	private static double roundMmtrPathSample(double value) {
+		return Math.round(value * 100) / 100.0;
+	}
 
 	public SystemMapServlet(ObjectImmutableList<Simulator> simulators) {
 		super(simulators);
 	}
 
+	/**
+	 * 只读接口的入口：`FEEDS` 里有名字的，先问快照层（notes/172）。
+	 *
+	 * <p>返回非空 ⇒ 这一次请求**根本没进模拟线程**，在 Jetty 线程上就答完了。</p>
+	 */
+	@Override
+	protected @Nullable Entry tryServeFromSnapshot(String endpoint, String data, Object2ObjectAVLTreeMap<String, String> parameters, JsonReader jsonReader, Simulator simulator) {
+		final FeedSpec feedSpec = FEEDS.get(endpoint);
+		return feedSpec == null ? null : simulator.mmtrWebFeed.serve(endpoint, feedSpec.maxAgeMillis());
+	}
+
 	@Override
 	public void getContent(String endpoint, String data, Object2ObjectAVLTreeMap<String, String> parameters, JsonReader jsonReader, Simulator simulator, Consumer<@Nullable JsonObject> sendResponse) {
-		if (endpoint.equals("directions")) {
+		final FeedSpec feedSpec = FEEDS.get(endpoint);
+		if (feedSpec != null) {
+			/*
+			 * 走到这里说明快照层没答上来：第一次问、或者手上那一份已经过期。这一次由本请求重算，
+			 * 结果**发布**出去给后面所有请求共用 —— 于是"多开几个标签"不再等于"多算几遍"。
+			 */
+			sendResponse.accept(simulator.mmtrWebFeed.publish(endpoint, feedSpec.builder().apply(simulator)));
+		} else if (endpoint.equals("directions")) {
 			simulator.directionsFinder.addRequest(new DirectionsRequest(jsonReader, directionsResponse -> sendResponse.accept(Utilities.getJsonObjectFromData(directionsResponse)), null));
 		} else {
 			sendResponse.accept(switch (endpoint) {
@@ -59,7 +159,6 @@ public final class SystemMapServlet extends ServletBase {
 				case "departures" -> departuresResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getDepartures, LIVE_DATA_CACHE_MILLIS)).get(simulator);
 				case "arrivals" -> Utilities.getJsonObjectFromData(new ArrivalsRequest(jsonReader).getArrivals(simulator));
 				case "clients" -> clientsResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getClients, LIVE_DATA_CACHE_MILLIS)).get(simulator);
-				case "mmtr-trains" -> mmtrTrainsResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getMmtrTrains, LIVE_DATA_CACHE_MILLIS)).get(simulator);
 				case "mmtr-dispatch" -> {
 					final boolean ok = new MmtrMissionControl(jsonReader).dispatch(simulator);
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
@@ -486,10 +585,6 @@ public final class SystemMapServlet extends ServletBase {
 					result.add("states", states);
 					yield result;
 				}
-				case "mmtr-topology" -> getMmtrTopology(simulator);
-				case "mmtr-lines" -> getMmtrLines(simulator);
-				case "mmtr-points" -> getMmtrPoints(simulator);
-				case "mmtr-junction-legs" -> getMmtrJunctionLegs(simulator);
 				case "mmtr-junction-legs-upsert" -> {
 					final long x = jsonReader.getLong("x", 0);
 					final long y = jsonReader.getLong("y", 0);
@@ -505,9 +600,21 @@ public final class SystemMapServlet extends ServletBase {
 					result.addProperty("ok", simulator.mmtrJunctionLegsUpsert(x, y, z, via, legs));
 					yield result;
 				}
-				case "mmtr-signals" -> getMmtrSignals(simulator);
-				case "mmtr-sections" -> getMmtrSections(simulator);
-				case "mmtr-schematic" -> getMmtrSchematic(simulator);
+				/*
+				 * 图层接口（topology / lines / points / junction-legs / signals / sections /
+				 * track-sections / block-sections / lamps / platforms / total-sections / schematic）
+				 * **不在这张 switch 里** —— 它们是只读接口，走上面的 {@link #FEEDS} 快照层：
+				 * 那一层负责"够新就直接答、过旧才回模拟线程重算一次并发布"。
+				 *
+				 * 单一图层接口（notes/167）：每一层单独一份，字段含义只有一种 ——
+				 *
+				 *	/mmtr-track-sections  Level 1 轨道区间（无方向、双向共用）—— **占用判定单位**
+				 *	/mmtr-block-sections  Level 2 行车区间（有方向、灯到灯）—— **授权单位**，带 L1 成员表
+				 *	/mmtr-lamps           每盏灯的**绑定**（它开的段 + 段的状态 + 显示）
+				 *	/mmtr-total-sections  **总区间**（地图上一条带 = 一个位置 + 覆盖它的各方向区间）
+				 *
+				 * `/mmtr-sections` 仍在（运营台在用），它是"区间图层"的综合包；这四个是新代码该用的入口。
+				 */
 				case "mmtr-command" -> {
 					final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 					final String command = jsonReader.getString("command", "");
@@ -669,6 +776,15 @@ public final class SystemMapServlet extends ServletBase {
 
 	private static JsonObject getMmtrTrains(Simulator simulator) {
 		final long currentMillis = System.currentTimeMillis();
+		/*
+		 * 一次建好、逐车查表的轨索引（notes/172 实测的优化）。
+		 *
+		 * <p>原来**每辆车**都要在 `simulator.rails` 里线性找"我脚下这根轨"，再在 `positionsToRail` 里
+		 * 线性找"这根轨的折线首端"——两次都要对世界里的每一条轨算一遍 `canonicalHex`（字符串拼接）。
+		 * 159 轨 / 6 辆车的 dev 世界里，这一路接口的**构建**因此要 179 ms（实测 warmAvg），
+		 * 即每刷新一次地图就吃掉三个多 tick；而它是地图页每一拍都在问的那一路。</p>
+		 */
+		final MmtrRailIndex railIndex = new MmtrRailIndex(simulator);
 		final com.google.gson.JsonArray trains = new com.google.gson.JsonArray();
 		final com.google.gson.JsonArray sidings = new com.google.gson.JsonArray();
 		simulator.sidings.forEach(siding -> {
@@ -713,9 +829,73 @@ public final class SystemMapServlet extends ServletBase {
 					final org.mtr.core.data.Rail nextRail = walker.peekNextRail();
 					final String nextRailHex = nextRail == null ? walker.railHex() : nextRail.getHexId();
 					train.addProperty("currentRail", String.valueOf(walker.railHex()));
+					/*
+					 * **车辆在图上画在哪**（2026-09-16 用户："读取车辆位置，在地图页显示"）。
+					 *
+					 * <p>{@code headX/headZ} 是引擎世界坐标里那个点（采样那一套，方块中心），而网页画轨时
+					 * 会把整条 path 按每条轨自己的校正量挪到**端点**上（见 `RailNodesLayer` 的注释：
+					 * "采样走方块中心、节点坐标走方块角"）—— 直接拿 headX/headZ 落点，车会偏半格，
+					 * 与刚修掉的"信号灯左右分布不均匀"是同一个坑。</p>
+					 *
+					 * <p>所以这里不发坐标，发**位置在轨上的读数**：{@code railHex}（规范形式，与
+					 * `/mmtr-topology` 的 rails[].hex 同一写法）+ {@code railArcM}（车头在**那根轨的弧空间**里的
+					 * 弧长）+ {@code railArcLengthM}。前端按 `railArcM / railArcLengthM` 在**它已经画出来的那条
+					 * 折线**上插值 —— 曲线轨也对得上，且不用自己认坐标系。</p>
+					 *
+					 * <p>弧空间的口径：`Rail.mmtrArcOfEndNode` 给某个端点的弧长（≈0 或 ≈轨长），
+					 * 而 walker 的 {@code offsetM} 是"**从入口节点往前方**"量的 —— 所以车头弧 = 入口弧 + 偏移，
+					 * 入口在远端时换成 轨长 − 偏移。{@code arcIncreasing} 说清行进方向与弧增方向是否一致
+					 * （前端画箭头/车头朝向用）。</p>
+					 */
+					/*
+					 * 报出去的弧必须是**沿 /mmtr-topology 那条折线**量的。
+					 *
+					 * <p>三条坑叠在一起（实测 7 辆车错了 2 辆，探针把 `headX/headZ` 投到折线上才发现）：
+					 * ① `walker.currentRail()` 可能是**方向被翻过**的副本；② `enteredFromPosition()` 未必与轨的
+					 * 端点逐位相等；③ 更要命的是**弧空间本身**：拓扑发 path 时从"位置图先遇到的那个端点"
+					 * （`ends[0]`）开始走（见 getMmtrTopology 里的 `reversed`），而不是从 `railMath` 的弧零点
+					 * —— 两者对同一根轨可以差一个整长（那次就是这一条）。</p>
+					 *
+					 * <p>所以这里：位置靠**投影**（车头一定在轨上，实测距离 0.00 格），再按拓扑那同一个判据
+					 * 把弧**翻到折线方向上**；行进方向同样在这套空间里比大小。</p>
+					 */
+					final org.mtr.core.data.Rail headRail = walker.currentRail();
+					final String headHex = headRail == null ? "" : org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(headRail.getHexId());
+					final org.mtr.core.data.Rail graphRail = headHex.isEmpty() ? null : railIndex.railOr(headHex, headRail);
+					final double headRailLength = graphRail == null ? walker.currentRailLengthM() : graphRail.railMath.getLength();
+					// 与拓扑发 path 时同一个判据：折线是从 ends[0] 开始走的，那个端点在弧空间里不是 0 就说明整条倒着走
+					final org.mtr.core.data.Position pathStartNode = headHex.isEmpty() ? null : railIndex.firstEnd(headHex);
+					final double arcOfPathStart = graphRail == null || pathStartNode == null ? Double.NaN : graphRail.mmtrArcOfEndNode(pathStartNode);
+					final boolean pathFlipped = !Double.isNaN(arcOfPathStart) && arcOfPathStart > 0;
+					final double[] headXZ = mmtrHeadXZ(vehicle);
+					final double headArcInRailMath = graphRail == null || headXZ == null ? Double.NaN : mmtrArcOfPoint(graphRail, headXZ[0], headXZ[1]);
+					final org.mtr.core.data.Position aheadNode = walker.aheadNode();
+					final double aheadArcInRailMath = graphRail == null || aheadNode == null ? Double.NaN : mmtrArcOfPoint(graphRail, aheadNode.getX(), aheadNode.getZ());
+					final double headArcPath = pathFlipped ? headRailLength - headArcInRailMath : headArcInRailMath;
+					final double aheadArcPath = pathFlipped ? headRailLength - aheadArcInRailMath : aheadArcInRailMath;
+					// 认不出车头（离轨太远）就退回 walker 自己报的偏移；方向认不出时按"弧增"画
+					final double railArcM = Double.isNaN(headArcPath) ? walker.offsetM() : headArcPath;
+					final boolean arcIncreasing = Double.isNaN(aheadArcPath) || Double.isNaN(headArcPath) || aheadArcPath >= headArcPath;
+					train.addProperty("railHex", headHex);
+					train.addProperty("railArcLengthM", Math.round(headRailLength * 100.0) / 100.0);
+					train.addProperty("railArcM", Math.round(railArcM * 100.0) / 100.0);
+					train.addProperty("arcIncreasing", arcIncreasing);
+					/*
+					 * **每节车**（用户 2026-09-16："列车箭头以圆角箭头画，无动力车厢用矩形，货车用中空四边形"）。
+					 *
+					 * <p>要按节画就得知道每节车自己在**哪根轨、哪个弧**上 —— 编组体已经算好了：
+					 * `MmtrConsistBody.carCenterArcM(i)` 是"沿**主轴**（一串轨腿）从 A 端量的弧"，
+					 * 配 `legAtArcM` / `legOffsetM` 就能还原成"哪条腿 + 腿内偏移"，再按与车头**同一套判据**
+					 * 翻到折线空间（这条腿的入口节点是不是那根轨的折线首端）。
+					 * 长度与动力取自车自己的清单（`VehicleCar`），顺序与编组体一致（都是从 A 端数）。</p>
+					 *
+					 * <p>`forward`：这节车的"车头方向"是不是指向弧增方向（画箭头用）。
+					 * 编组体永远从 A 端往 B 端排腿，而车可能朝 A 端开 —— 所以要看 `travelsTowardB`。</p>
+					 */
+					train.add("cars", mmtrCarJson(vehicle, walker, railIndex));
 					if (nextRailHex != null) {
-						final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section> sections =
-							simulator.mmtrDirectionalBlocks.sectionsOfRail(nextRailHex);
+						final it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrSectionService.Section> sections =
+							simulator.mmtrSections.sectionsOfRail(nextRailHex);
 						/*
 						 * **同一根轨属于两个方向的区间** —— 报出来的必须是"本车这个方向"的那一个
 						 * （notes/155 §10 的读数陷阱）。
@@ -725,17 +905,17 @@ public final class SystemMapServlet extends ServletBase {
 						 * 是同一个"这种结论**根本是读数造成的**。判据用区间自己记的走向
 						 * （{@code RailSpan#matchesHeading}），与授权链同口径。
 						 */
-						final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section section =
+						final org.mtr.core.mmtr.signal.MmtrSectionService.Section section =
 							sectionMatchingTravel(sections, walker, nextRailHex);
 						if (section != null) {
 							train.addProperty("nextSection", section.id);
 							// 排除本车之后还占着吗 —— 这一问才是"前方真有车/邻车"的证据
 							train.addProperty("nextSectionOccupiedByOthers",
-								simulator.mmtrDirectionalBlocks.isOccupied(section, null, vehicle.getId()));
+								simulator.mmtrSections.isOccupied(section, null, vehicle.getId()));
 							train.addProperty("nextSectionOccupiedAtAll",
-								simulator.mmtrDirectionalBlocks.isOccupied(section, null, 0));
+								simulator.mmtrSections.isOccupied(section, null, 0));
 							final com.google.gson.JsonArray occupants = new com.google.gson.JsonArray();
-							for (final long occupant : simulator.mmtrDirectionalBlocks.occupantsOf(section, null, 0)) {
+							for (final long occupant : simulator.mmtrSections.occupantsOf(section, null, 0)) {
 								occupants.add(String.valueOf(occupant));
 							}
 							train.add("nextSectionOccupants", occupants);
@@ -859,8 +1039,8 @@ public final class SystemMapServlet extends ServletBase {
 	 * {@code sectionBoundaryAheadM}）同一口径：先按本车的行进方向（从入口节点指向前方节点）取；
 	 * 取不到（例如两节点的连线退化成一点）再退回"这根轨上的第一个区间"，至少不空。</p>
 	 */
-	private static org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.@Nullable Section sectionMatchingTravel(
-		it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section> sections,
+	private static org.mtr.core.mmtr.signal.MmtrSectionService.@Nullable Section sectionMatchingTravel(
+		it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.mmtr.signal.MmtrSectionService.Section> sections,
 		org.mtr.core.mmtr.segment.MmtrMotionPosition walker, String railHex) {
 		if (sections.isEmpty()) {
 			return null;
@@ -874,8 +1054,8 @@ public final class SystemMapServlet extends ServletBase {
 			if (norm > 1e-6) {
 				final double headingX = dx / norm;
 				final double headingZ = dz / norm;
-				for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.Section section : sections) {
-					for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : section.spans) {
+				for (final org.mtr.core.mmtr.signal.MmtrSectionService.Section section : sections) {
+					for (final org.mtr.core.mmtr.signal.MmtrSectionService.RailSpan span : section.spans) {
 						if (span.railHex.equals(railHex) && span.matchesHeading(headingX, headingZ)) {
 							return section;
 						}
@@ -968,9 +1148,469 @@ public final class SystemMapServlet extends ServletBase {
 	/** hex -> display aspect for every rail (shared by the rail feed and the signal registry feed). */
 	private static java.util.HashMap<String, String> computeRailAspectMap(Simulator simulator) {
 		final java.util.HashMap<String, String> aspects = new java.util.HashMap<>();
-		new org.mtr.core.mmtr.signal.MmtrSignalAspect(simulator, simulator.mmtrRoutes).aspectsForAllRails()
+		/*
+		 * **用 `Simulator` 缓存的那一份视图，不要在这里 new 一个**（notes/172 实测）。
+		 *
+		 * <p>`Simulator.mmtrSignalAspectView()` 是"进路 × 闭塞"的缓存视图（轨集签名一变才重建，
+		 * 每 tick 由 `mmtrRefreshSignalAspectView()` 维护），**车辆自己问信号显示用的就是它**。
+		 * 这里原来每请求 `new MmtrSignalAspect(simulator, simulator.mmtrRoutes)` —— 于是：
+		 * ①把缓存整个丢掉、每次请求从零重建（实测 `mmtr-trains` 在**一辆车都没有**的世界里要 147 ms，
+		 * 而它的世界级部分主要就是这一下）；②网页与游戏各算一套，两边可以不一致 ——
+		 * 而 notes/79 立的规矩正是"信号 = 进路 × 闭塞，**单一真源**"。</p>
+		 *
+		 * <p>线程：本方法只在模拟线程上被调用（快照的构建就在那里），与该视图的维护者同线程。</p>
+		 */
+		simulator.mmtrSignalAspectView().aspectsForAllRails()
 			.forEach((hex, aspect) -> aspects.put(hex, aspect.name()));
 		return aspects;
+	}
+
+	/**
+	 * 一段弧窗上的**采样点**（网页直接画那一段，不必自己实现 MTR 的轨道数学）。
+	 *
+	 * <p>区间可以落在轨的**一段**上（灯把轨切开），所以点必须按弧窗取，不能整根轨画。</p>
+	 */
+	private static com.google.gson.JsonArray pointsJson(Simulator simulator, String railHex, double fromM, double toM) {
+		final com.google.gson.JsonArray points = new com.google.gson.JsonArray();
+		if (toM <= fromM) {
+			return points;
+		}
+		final org.mtr.core.data.Rail rail = simulator.rails.stream().filter(candidate -> candidate.getHexId().equals(railHex)).findFirst().orElse(null);
+		if (rail == null) {
+			return points;
+		}
+		final int steps = 8;
+		for (int i = 0; i <= steps; i++) {
+			final org.mtr.core.tool.Vector point = rail.railMath.getPosition(fromM + (toM - fromM) * i / steps, false);
+			points.add(Math.round(point.x() * 100) / 100.0);
+			points.add(Math.round(point.z() * 100) / 100.0);
+		}
+		return points;
+	}
+
+	/**
+	 * **Level 1 轨道区间**（`/mmtr-track-sections`）：切点只由灯产生、**无方向**、双向共用 ——
+	 * **占用判定就在这一层**（一根轨就是一根轨）。
+	 *
+	 * <p>每条：{@code id / length / occupied / spans[{hex,from,to,points[]}]}。
+	 * 顶层还给 {@code count / busyCount / railCount}，一眼看出规模与忙闲。</p>
+	 */
+	static JsonObject getMmtrTrackSections(org.mtr.core.simulation.Simulator simulator) {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		final com.google.gson.JsonArray sections = new com.google.gson.JsonArray();
+		int busy = 0;
+		for (final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSection track : simulator.mmtrSections.allTrackSections()) {
+			final boolean occupied = simulator.mmtrSections.isOccupied(track, trees, 0);
+			if (occupied) {
+				busy++;
+			}
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", track.id);
+			out.addProperty("length", track.lengthM());
+			out.addProperty("occupied", occupied);
+			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSpan span : track.spans) {
+				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
+				s.addProperty("hex", span.railHex);
+				s.addProperty("from", span.arcFromM);
+				s.addProperty("to", span.arcToM);
+				s.add("points", pointsJson(simulator, span.railHex, span.arcFromM, span.arcToM));
+				spans.add(s);
+			}
+			out.add("spans", spans);
+			sections.add(out);
+		}
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("trackSections", sections);
+		result.addProperty("count", simulator.mmtrSections.trackSectionCount());
+		result.addProperty("busyCount", busy);
+		result.addProperty("railCount", simulator.rails.size());
+		return result;
+	}
+
+	/**
+	 * **Level 2 行车区间**（`/mmtr-block-sections`）：有方向、灯到灯、跨轨；无灯连通块整块一段 ——
+	 * **授权（显示与停车）的单位**。
+	 *
+	 * <p>每条：{@code id / entrySignal / exitSignal / next / aspect / occupied / length / direction /
+	 * uncovered（是不是补出来的无灯大区间）/ members[](它由哪些 L1 段拼成) / spans[{hex,from,to,dirOfTravel,points[]}]}。</p>
+	 */
+	static JsonObject getMmtrBlockSections(org.mtr.core.simulation.Simulator simulator) {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+		final com.google.gson.JsonArray sections = new com.google.gson.JsonArray();
+		int busy = 0;
+		for (final org.mtr.core.mmtr.signal.MmtrSectionService.SectionView view : simulator.mmtrSections.sectionViews(trees, restricted::contains)) {
+			if (view.occupied) {
+				busy++;
+			}
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", view.id);
+			out.addProperty("entrySignal", view.entrySignalKey);
+			out.addProperty("exitSignal", view.exitSignalKey);
+			out.addProperty("next", view.nextSectionId);
+			out.addProperty("aspect", view.aspect);
+			out.addProperty("occupied", view.occupied);
+			out.addProperty("length", view.lengthM);
+			// 补出来的无灯大区间（没有入口灯）：网页该画成"无信号区段"，不能当"绿灯"画
+			out.addProperty("uncovered", view.entrySignalKey == null || view.entrySignalKey.isEmpty());
+			final com.google.gson.JsonObject direction = new com.google.gson.JsonObject();
+			direction.addProperty("angle", view.direction.angle);
+			direction.addProperty("label", view.direction.label());
+			direction.addProperty("dx", view.direction.dx);
+			direction.addProperty("dz", view.direction.dz);
+			out.add("direction", direction);
+			final com.google.gson.JsonArray members = new com.google.gson.JsonArray();
+			view.memberTrackSectionIds.forEach(members::add);
+			out.add("members", members);
+			out.addProperty("memberCount", view.memberTrackSectionIds.size());
+			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.RailSpan span : view.spans) {
+				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
+				s.addProperty("hex", span.railHex);
+				s.addProperty("from", span.arcFromM);
+				s.addProperty("to", span.arcToM);
+				s.addProperty("dirOfTravel", span.matchesHeading(view.direction.dx, view.direction.dz));
+				// 走不到的腿（道岔当前位切掉的那一侧）：守着但不判断路，网页该标出来
+				s.addProperty("reachable", span.reachable);
+				s.add("points", pointsJson(simulator, span.railHex, span.arcFromM, span.arcToM));
+				spans.add(s);
+			}
+			out.add("spans", spans);
+			sections.add(out);
+		}
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("blockSections", sections);
+		result.addProperty("count", sections.size());
+		result.addProperty("busyCount", busy);
+		result.addProperty("lampCount", simulator.mmtrSignals.signals.size());
+		return result;
+	}
+
+	/**
+	 * **总区间**（`/mmtr-total-sections`）：地图上**每个位置只画一条带** —— 几何就是 L1 段，
+	 * 每条再带上"覆盖它的各方向行车区间"（含显示与占用）。
+	 *
+	 * <p>缘起（用户 2026-09-15）：「以错开的一段轨道区间为例，一辆车在其中间，代表着这辆车**既在上行
+	 * 区间中，也在下行区间中**，那么这时候就需要引出下一层了，叫做**总区间**，用于显示在地图上。」
+	 * 它不是第三层划分：两个方向的行车区间都是 L1 段的并，按"覆盖配对"分组的最大连段**恰好就是 L1 段
+	 * 本身**（相邻 L1 段之间必有灯，任一方向的灯都会换掉本方向的区间）。所以这里给的是
+	 * **L1 的几何 ＋ 各方向的归属**，不是又一套几何 —— 与 `/mmtr-track-sections` 同一批 id。</p>
+	 *
+	 * <p>每条：{@code id / length / occupied / directions(覆盖它的方向数) / staggered(错开) /
+	 * covers[{section,entrySignal,exitSignal,next,aspect,occupied,uncovered,length,direction}]
+	 * / spans[{hex,from,to,points[]}]}；顶层 {@code count / busyCount / staggeredCount}。</p>
+	 *
+	 * <p>占用只有一份判据（L1 那一条），{@code covers[].occupied} 是"这条区间自己有没有被压住"：
+	 * 错开处车压在同一根轨上，**两个方向的区间都会报 true** —— 于是"既在上行、也在下行"在数据里
+	 * 是可查的，而地图只画一条带。</p>
+	 */
+	static JsonObject getMmtrTotalSections(org.mtr.core.simulation.Simulator simulator) {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+		final com.google.gson.JsonArray sections = new com.google.gson.JsonArray();
+		int busy = 0;
+		int staggered = 0;
+		for (final org.mtr.core.mmtr.signal.MmtrSectionService.TotalView total : simulator.mmtrSections.totalSectionViews(trees, restricted::contains)) {
+			if (total.occupied) {
+				busy++;
+			}
+			if (total.staggered()) {
+				staggered++;
+			}
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", total.track.id);
+			out.addProperty("length", total.lengthM());
+			out.addProperty("occupied", total.occupied);
+			out.addProperty("directions", total.directionCount());
+			// 错开：上下行都照到这一处，但两个方向的区间不是同一段路（起止不重合）
+			out.addProperty("staggered", total.staggered());
+			final com.google.gson.JsonArray covers = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.SectionView cover : total.covers) {
+				final com.google.gson.JsonObject c = new com.google.gson.JsonObject();
+				c.addProperty("section", cover.id);
+				c.addProperty("entrySignal", cover.entrySignalKey);
+				c.addProperty("exitSignal", cover.exitSignalKey);
+				c.addProperty("next", cover.nextSectionId);
+				c.addProperty("aspect", cover.aspect);
+				c.addProperty("occupied", cover.occupied);
+				c.addProperty("uncovered", cover.entrySignalKey == null || cover.entrySignalKey.isEmpty());
+				c.addProperty("length", cover.lengthM());
+				final com.google.gson.JsonObject direction = new com.google.gson.JsonObject();
+				direction.addProperty("angle", cover.direction.angle);
+				direction.addProperty("label", cover.direction.label());
+				direction.addProperty("dx", cover.direction.dx);
+				direction.addProperty("dz", cover.direction.dz);
+				c.add("direction", direction);
+				covers.add(c);
+			}
+			out.add("covers", covers);
+			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSpan span : total.track.spans) {
+				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
+				s.addProperty("hex", span.railHex);
+				s.addProperty("from", span.arcFromM);
+				s.addProperty("to", span.arcToM);
+				s.add("points", pointsJson(simulator, span.railHex, span.arcFromM, span.arcToM));
+				spans.add(s);
+			}
+			out.add("spans", spans);
+			sections.add(out);
+		}
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("totalSections", sections);
+		result.addProperty("count", sections.size());
+		result.addProperty("busyCount", busy);
+		result.addProperty("staggeredCount", staggered);
+		return result;
+	}
+
+	/**
+	 * **信号灯状态**（`/mmtr-lamps`）：每盏灯的**绑定** —— 它守的轨、**它开出的行车区间**、
+	 * 这些段的占用、由段状态推出的显示、以及"未接入闭塞"。
+	 *
+	 * <p>这就是"把行车区间状态绑定至信号灯"的对外形态：网页只读这里，不自己算几何、也不去读轨。</p>
+	 */
+	static JsonObject getMmtrLamps(org.mtr.core.simulation.Simulator simulator) {
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
+		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.mmtr.signal.MmtrSectionService.LampBinding> bindings =
+			simulator.mmtrSections.lampBindings(trees, restricted::contains);
+		final com.google.gson.JsonArray lamps = new com.google.gson.JsonArray();
+		final java.util.TreeMap<String, org.mtr.core.mmtr.signal.MmtrSectionService.LampBinding> sorted = new java.util.TreeMap<>(bindings);
+		sorted.forEach((key, binding) -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("key", key);
+			final org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry entry = simulator.mmtrSignals.signals.get(key);
+			if (entry != null) {
+				out.addProperty("x", entry.x);
+				out.addProperty("y", entry.y);
+				out.addProperty("z", entry.z);
+				out.addProperty("angle", entry.angle);
+				out.addProperty("aspects", entry.aspects);
+				out.addProperty("mode", entry.mode);
+				out.addProperty("target", entry.target);
+				out.addProperty("boundExplicit", !entry.rails.isEmpty());
+			}
+			out.addProperty("aspect", binding.aspect);
+			out.addProperty("occupied", binding.occupied);
+			out.addProperty("unbound", binding.unbound);
+			out.addProperty("section", binding.sections.isEmpty() ? "" : binding.sections.get(0).id);
+			final com.google.gson.JsonArray sectionIds = new com.google.gson.JsonArray();
+			binding.sections.forEach(section -> sectionIds.add(section.id));
+			out.add("sections", sectionIds);
+			final com.google.gson.JsonArray nextIds = new com.google.gson.JsonArray();
+			binding.nextSectionIds(simulator.mmtrSections).forEach(nextIds::add);
+			out.add("nextSections", nextIds);
+			final com.google.gson.JsonArray rails = new com.google.gson.JsonArray();
+			binding.protectedRails.forEach(rails::add);
+			out.add("protectedRails", rails);
+			lamps.add(out);
+		});
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("lamps", lamps);
+		result.addProperty("count", lamps.size());
+		return result;
+	}
+
+	/**
+	 * 站台图层 feed: every platform with the station it belongs to, its number, its dwell time, the rail
+	 * it lies on, its two ends and its axis.
+	 *
+	 * <p><b>What a platform IS (engine side)</b>: a rail marked as a platform. {@link org.mtr.core.data.Rail#checkOrCreateSavedRailAndUpdateTiltAngles}
+	 * builds it from the rail's own two endpoints, and {@code SavedRailBase.mmtrGraphRail()} resolves it
+	 * back to that rail — so "which rails are platform rails" is the engine's answer, never re-derived
+	 * from geometry here (same rule as the points/section feeds).</p>
+	 *
+	 * <p>The console draws a station marker beside the platform and writes the station name + platform
+	 * number along the platform, so it needs three things this feed publishes: the NAME
+	 * (station + platform number), the AXIS (which way the platform runs, for the marker and the text
+	 * rotation) and the EXTENT (the two ends; the console takes the curve from {@code /mmtr-topology} by
+	 * {@code railHex} when it wants a curved line, and falls back to the straight ends when the rail is
+	 * missing).</p>
+	 *
+	 * <p>Note the axis is a two-way axis, not a travel direction: a platform serves trains from either
+	 * end, so the console normalises the sign before rotating text.</p>
+	 */
+	static JsonObject getMmtrPlatforms(org.mtr.core.simulation.Simulator simulator) {
+		final com.google.gson.JsonArray platforms = new com.google.gson.JsonArray();
+		simulator.platforms.forEach(platform -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("platformId", String.valueOf(platform.getId()));
+			out.addProperty("platformHex", platform.getHexId());
+			out.addProperty("platformName", platform.getName());
+			final org.mtr.core.data.AreaBase<?, ?> station = platform.area;
+			out.addProperty("stationId", station == null ? "" : String.valueOf(station.getId()));
+			out.addProperty("stationHex", station == null ? "" : station.getHexId());
+			out.addProperty("stationName", platform.getStationName());
+			out.addProperty("dwellMillis", platform.getDwellTime());
+			final org.mtr.core.data.Rail rail = platform.mmtrGraphRail();
+			// 规范 hex：与 /mmtr-topology 的 rails[].hex 同一写法，前端按它取那根轨的 path 才不会找不到。
+			out.addProperty("railHex", rail == null ? "" : org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(rail.getHexId()));
+			final org.mtr.core.data.Position[] ends = platform.mmtrOrderedPositions();
+			out.addProperty("x1", ends[0].getX());
+			out.addProperty("y1", ends[0].getY());
+			out.addProperty("z1", ends[0].getZ());
+			out.addProperty("x2", ends[1].getX());
+			out.addProperty("y2", ends[1].getY());
+			out.addProperty("z2", ends[1].getZ());
+			// 站台轴：两端之间的弦方向（归一成单位向量），角度用 MTR 那套 (0 = 南/+z, 90 = 西/−x)。
+			final double spanX = ends[1].getX() - ends[0].getX();
+			final double spanZ = ends[1].getZ() - ends[0].getZ();
+			final double length = Math.hypot(spanX, spanZ);
+			final double dx = length == 0 ? 0 : spanX / length;
+			final double dz = length == 0 ? 1 : spanZ / length;
+			final com.google.gson.JsonObject direction = new com.google.gson.JsonObject();
+			direction.addProperty("angle", org.mtr.core.mmtr.signal.MmtrSectionService.angleOfHeading(dx, dz));
+			direction.addProperty("label", Math.abs(dz) >= Math.abs(dx) ? (dz > 0 ? "南行" : "北行") : (dx > 0 ? "东行" : "西行"));
+			direction.addProperty("dx", dx);
+			direction.addProperty("dz", dz);
+			out.add("direction", direction);
+			out.addProperty("lengthM", Math.round(Math.hypot(spanX, spanZ) * 10) / 10.0);
+			platforms.add(out);
+		});
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("platforms", platforms);
+		result.addProperty("count", platforms.size());
+		return result;
+	}
+
+	/**
+	 * **规范 hex → 轨 / 折线首端节点**的一次性索引（notes/172）。
+	 *
+	 * <p>为什么必须成索引：`mmtr-trains` 是地图页每一拍都在问的那一路，而它**每辆车**都要问两件事 ——
+	 * "我脚下这根轨在图上是哪一条"（要与拓扑的 `path` 方向对齐，所以按**规范 hex** 认，不能按对象身份）
+	 * 与"那条折线从哪个端点开始走"。两问原来都是全表线性扫 + 逐条算 `canonicalHex`，
+	 * 于是这一路的成本是 O(车 × 轨)。实测（159 轨 / 6 车）：**构建一次 179 ms** —— 一次刷新吃掉三个多 tick。</p>
+	 *
+	 * <p>口径与逐次线性扫逐位一致：都按 `simulator.rails` / `positionsToRail` 的迭代顺序取**第一个**命中的
+	 * （`putIfAbsent`）。首端节点的判据与 `getMmtrTopology` 收集 `railEnds` 时**同一个判据、同一个顺序**：
+	 * 任何"沿折线量"的东西（车辆里程）都必须按这一端算，否则同一根轨会差一个整长
+	 * （实测踩过：7 辆车里 2 辆被画到轨的另一头）。</p>
+	 */
+	private static final class MmtrRailIndex {
+
+		private final Object2ObjectOpenHashMap<String, Rail> railByCanonicalHex = new Object2ObjectOpenHashMap<>();
+		private final Object2ObjectOpenHashMap<String, Position> firstEndByCanonicalHex = new Object2ObjectOpenHashMap<>();
+
+		private MmtrRailIndex(Simulator simulator) {
+			simulator.rails.forEach(rail -> railByCanonicalHex.putIfAbsent(org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(rail.getHexId()), rail));
+			simulator.positionsToRail.forEach((node, neighbourMap) -> neighbourMap.forEach((end, rail) -> firstEndByCanonicalHex.putIfAbsent(org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(rail.getHexId()), node)));
+		}
+
+		/** 图上那条轨；索引里没有就用调用方手上那一份（原来写的是 `.orElse(headRail)`）。 */
+		private Rail railOr(String canonicalHex, Rail fallback) {
+			final Rail indexed = railByCanonicalHex.get(canonicalHex);
+			return indexed == null ? fallback : indexed;
+		}
+
+		private @Nullable Position firstEnd(String canonicalHex) {
+			return firstEndByCanonicalHex.get(canonicalHex);
+		}
+	}
+
+	/**
+	 * **每节车**在图上画在哪：`[{index, railHex, railArcM, railArcLengthM, forward, lengthM, stockId, powered, capacity}]`。
+	 *
+	 * <p>几何来自编组体 {@code MmtrConsistBody}（车序从 A 端数、与 `VehicleCar` 清单同序）：
+	 * 车中心的主轴弧 → `legAtArcM` 得到轨与端点 → `legOffsetM` 得到腿内偏移 →
+	 * 按"这条腿的入口是不是那根轨的**折线首端**"翻到与车头同一套弧空间。
+	 * 弧空间那一层必须翻：不翻的话，同一根轨会整整差一个轨长（notes/170 §2 的第三个坑）。</p>
+	 *
+	 * <p>`forward` = 这节车的车头方向是否指向弧增方向：编组体的腿永远从 A 端排到 B 端，
+	 * 而车可能朝 A 端开（`travelsTowardB`）。前端拿它决定箭头朝哪边。</p>
+	 */
+	private static com.google.gson.JsonArray mmtrCarJson(Vehicle vehicle, org.mtr.core.mmtr.segment.MmtrMotionPosition walker, MmtrRailIndex railIndex) {
+		final com.google.gson.JsonArray cars = new com.google.gson.JsonArray();
+		final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker = vehicle.getMmtrConsistWalker();
+		if (consistWalker == null) {
+			return cars;
+		}
+		final org.mtr.core.mmtr.consist.MmtrConsistBody body = consistWalker.body();
+		// 车自己的清单（`VehicleCar` + 转向架位置），顺序与编组体一致：都从 A 端数
+		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<org.mtr.core.data.VehicleCar, it.unimi.dsi.fastutil.objects.ObjectArrayList<Vehicle.BogiePosition>>> vehicleCars = vehicle.getVehicleCarsAndPositions();
+		final boolean towardB = consistWalker.travelsTowardB();
+		for (int i = 0; i < body.carCount(); i++) {
+			final double centerArc = body.carCenterArcM(i);
+			final org.mtr.core.mmtr.consist.MmtrConsistBody.SpineLeg leg = body.legAtArcM(centerArc);
+			if (leg == null) {
+				continue;
+			}
+			final double offsetInLeg = body.legOffsetM(centerArc);
+			final String legHex = org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(leg.railHex());
+			final org.mtr.core.data.Position firstEnd = railIndex.firstEnd(legHex);
+			final boolean legForward = firstEnd != null && firstEnd.equals(leg.entryNode());
+			final double legLength = leg.lengthM();
+			final com.google.gson.JsonObject car = new com.google.gson.JsonObject();
+			car.addProperty("index", i);
+			car.addProperty("railHex", legHex);
+			car.addProperty("railArcM", Math.round((legForward ? offsetInLeg : legLength - offsetInLeg) * 100.0) / 100.0);
+			car.addProperty("railArcLengthM", Math.round(legLength * 100.0) / 100.0);
+			car.addProperty("forward", towardB == legForward);
+			car.addProperty("lengthM", Math.round(body.carLengthM(i) * 100.0) / 100.0);
+			if (i < vehicleCars.size()) {
+				final org.mtr.core.data.VehicleCar vehicleCar = vehicleCars.get(i).left();
+				car.addProperty("stockId", vehicleCar.getVehicleId());
+				car.addProperty("powered", vehicleCar.getMmtrPowered());
+				car.addProperty("capacity", vehicleCar.getCapacity());
+			}
+			cars.add(car);
+		}
+		return cars;
+	}
+
+	/**
+	 * 车头（前脸）的世界坐标 x/z：consist 用车体的前脸，老式车用 `getHeadPositionAndTiltAngle()`。
+	 * 认不出来返回 null。与 `mmtr-trains` 里 `headX/headZ` 两个字段同一份算法（那边是发给网页看的）。
+	 */
+	private static double[] mmtrHeadXZ(Vehicle vehicle) {
+		final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker = vehicle.getMmtrConsistWalker();
+		if (consistWalker != null) {
+			final org.mtr.core.mmtr.MmtrMotionSnapshot snapshot = org.mtr.core.mmtr.MmtrMotionSnapshot.ofConsistWalker(consistWalker);
+			return new double[]{snapshot.frontX, snapshot.frontZ};
+		}
+		final Vehicle.PositionAndTiltAngle head = vehicle.getHeadPositionAndTiltAngle();
+		return head == null ? null : new double[]{head.position().x(), head.position().z()};
+	}
+
+	/**
+	 * 把一个世界点投到某根轨的**弧空间**上：返回最近处的弧长（米）；离轨超过 3 格就当认不出来（NaN）。
+	 *
+	 * <p>为什么不用"入口节点 + 偏移"算位置：`walker.currentRail()` 可能是方向被翻过的副本，而
+	 * `enteredFromPosition()` 未必与轨的端点逐位相等 —— 两条都会让弧从另一端量起（实测 7 辆车错了 2 辆）。
+	 * 车头本身一定落在轨上（实测到采样折线距离 0.00 格），投影是可靠的那条路。</p>
+	 *
+	 * <p>粗扫 64 段 + 在最近的一段内再细扫 41 点：`railMath.getPosition` 是两段圆弧的解析解，很便宜，
+	 * 而一辆车一次请求只算两三回。</p>
+	 */
+	private static double mmtrArcOfPoint(org.mtr.core.data.Rail rail, double x, double z) {
+		final double length = rail.railMath.getLength();
+		if (length <= 0) {
+			return Double.NaN;
+		}
+		final int steps = 64;
+		double bestArc = 0;
+		double bestDistance = Double.MAX_VALUE;
+		for (int i = 0; i <= steps; i++) {
+			final double arc = length * i / steps;
+			final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
+			final double distance = Math.hypot(point.x() - x, point.z() - z);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				bestArc = arc;
+			}
+		}
+		final double span = length / steps;
+		for (int i = -20; i <= 20; i++) {
+			final double arc = Math.max(0, Math.min(length, bestArc + span * i / 20.0));
+			final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arc, false);
+			final double distance = Math.hypot(point.x() - x, point.z() - z);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				bestArc = arc;
+			}
+		}
+		return bestDistance > 3 ? Double.NaN : bestArc;
 	}
 
 	/**
@@ -987,7 +1627,7 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonArray sections = new com.google.gson.JsonArray();
 		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
 		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
-		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.SectionView view : simulator.mmtrDirectionalBlocks.sectionViews(trees, restricted::contains)) {
+		for (final org.mtr.core.mmtr.signal.MmtrSectionService.SectionView view : simulator.mmtrSections.sectionViews(trees, restricted::contains)) {
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
 			out.addProperty("id", view.id);
 			// 入口灯单列一份：区间 id 在"一灯多腿"时带 #n 后缀，前端不该拆字符串去还原它。
@@ -1010,7 +1650,7 @@ public final class SystemMapServlet extends ServletBase {
 			direction.addProperty("dz", view.direction.dz);
 			out.add("direction", direction);
 			final com.google.gson.JsonArray spans = new com.google.gson.JsonArray();
-			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : view.spans) {
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.RailSpan span : view.spans) {
 				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
 				s.addProperty("hex", span.railHex);
 				s.addProperty("from", span.arcFromM);
@@ -1052,8 +1692,8 @@ public final class SystemMapServlet extends ServletBase {
 		 */
 		final java.util.LinkedHashMap<String, com.google.gson.JsonObject> memberByKey = new java.util.LinkedHashMap<>();
 		final java.util.LinkedHashMap<String, java.util.List<com.google.gson.JsonObject>> membersByKey = new java.util.LinkedHashMap<>();
-		for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.SectionView view : simulator.mmtrDirectionalBlocks.sectionViews(trees, restricted::contains)) {
-			for (final org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.RailSpan span : view.spans) {
+		for (final org.mtr.core.mmtr.signal.MmtrSectionService.SectionView view : simulator.mmtrSections.sectionViews(trees, restricted::contains)) {
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.RailSpan span : view.spans) {
 				if (span.lengthM() <= 1e-9) {
 					continue;
 				}
@@ -1093,6 +1733,32 @@ public final class SystemMapServlet extends ServletBase {
 			byRail.add(entry.getValue());
 		}
 		result.add("byRail", byRail);
+		/*
+		 * Level 1 轨道区间（notes/166）：切点只由灯产生、**无方向**、双向共用 —— **占用判定的单位**。
+		 *
+		 * <p>一并发出来，运营台才能在图上把两层分开画：L2（`sections`，有方向、灯到灯）是**授权**单位，
+		 * L1 是**占用**单位。原来只发 L2，网页想画"占用"就只好去读 L2 的 occupied —— 双向线路上同一段
+		 * 要取两次，而无灯区的占用（补出来的大区间）根本没有地方表达。</p>
+		 */
+		final com.google.gson.JsonArray trackSections = new com.google.gson.JsonArray();
+		for (final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSection track : simulator.mmtrSections.allTrackSections()) {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", track.id);
+			out.addProperty("length", track.lengthM());
+			out.addProperty("occupied", simulator.mmtrSections.isOccupied(track, trees, 0));
+			final com.google.gson.JsonArray trackSpans = new com.google.gson.JsonArray();
+			for (final org.mtr.core.mmtr.signal.MmtrSectionService.TrackSpan span : track.spans) {
+				final com.google.gson.JsonObject s = new com.google.gson.JsonObject();
+				s.addProperty("hex", span.railHex);
+				s.addProperty("from", span.arcFromM);
+				s.addProperty("to", span.arcToM);
+				trackSpans.add(s);
+			}
+			out.add("spans", trackSpans);
+			trackSections.add(out);
+		}
+		result.add("trackSections", trackSections);
+		result.addProperty("trackSectionCount", simulator.mmtrSections.trackSectionCount());
 		/*
 		 * 区间图层 = **按方向划分的区间**（本函数上半部分已经发完：`sections` + `byRail`）。
 		 *
@@ -1225,7 +1891,7 @@ public final class SystemMapServlet extends ServletBase {
 			 * 网页按 hex 比对就永远不相等 ⇒ "点亮当前开通那条腿"整条功能静默失效，
 			 * 卡片里"接哪两条轨（坐标）"也退化成 hex 前缀（用户 2026-09-14 现场报的正是这个）。</p>
 			 */
-			o.addProperty("via", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(p.viaRailHex));
+			o.addProperty("via", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(p.viaRailHex));
 			o.addProperty("form", p.form.name());
 			/*
 			 * 物理道岔：一处道岔一个位置、两条互斥进路 —— 位置与"哪条进路禁止通行"都直接给出来，
@@ -1255,17 +1921,17 @@ public final class SystemMapServlet extends ServletBase {
 			if (turnout != null) {
 				o.addProperty("position", turnoutPosition);
 				// 与 via / legs 同一套规范写法：网页要拿这些 hex 去和地图上的轨比对（点亮当前开通那条腿）
-				o.addProperty("prohibited", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(prohibitedRailHex));
-				o.addProperty("stem", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(turnout.stemRailHex));
+				o.addProperty("prohibited", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(prohibitedRailHex));
+				o.addProperty("stem", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(turnout.stemRailHex));
 				// 三条轨都给出来：网页要能**独立于当前位置**说出"扳到 0 是接哪条、扳到 1 是接哪条"，
 				// 只给"当前禁行的那一条"的话，位置一变操作台就得靠猜另一条是哪根。
-				o.addProperty("far", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(turnout.farRailHex));
-				o.addProperty("branch", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(turnout.branchRailHex));
+				o.addProperty("far", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(turnout.farRailHex));
+				o.addProperty("branch", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(turnout.branchRailHex));
 			}
 			final com.google.gson.JsonArray legs = new com.google.gson.JsonArray();
 			for (final org.mtr.core.mmtr.point.MmtrPoint.MmtrPointLeg leg : p.legs) {
 				final com.google.gson.JsonObject legJson = new com.google.gson.JsonObject();
-				legJson.addProperty("hex", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(leg.railHex));
+				legJson.addProperty("hex", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(leg.railHex));
 				legJson.addProperty("kind", leg.kind.name());
 				// 这条腿当前是不是禁止通行（道岔没开通它）：网页/操作台据此画红叉或灰掉
 				legJson.addProperty("prohibited", turnout != null && leg.railHex.equals(prohibitedRailHex));
@@ -1299,20 +1965,21 @@ public final class SystemMapServlet extends ServletBase {
 	 * lights - the live aspect of the rail it reads.
 	 */
 	private static JsonObject getMmtrSignals(Simulator simulator) {
-		final java.util.HashMap<String, String> railAspects = computeRailAspectMap(simulator);
 		/*
-		 * v2 lamp aspects: the blockage layer already answers "what does the lamp at x,y,z show" through
-		 * `lampAspectNames` (it owns the section walk: a lamp's display is the depth of the section it opens,
-		 * with occupied / restricted sections counting as red). The console must render the ENGINE's
-		 * conclusion, not recompute it - so the feed hands the aspect over per lamp key.
-		 *
-		 * Before this the feed only filled `aspect` for BOUND signals (whose target is a rail hex); the 30
-		 * AUTO signals - the ones whose light is inferred from where they stand - came back with an empty
-		 * aspect, which is exactly the majority the console has to display.
+		 * notes/167：灯的显示**只读它自己的绑定**（见下），不再按 target 轨去查 per-rail 表 ——
+		 * 那条回路由 `computeRailAspectMap` 提供，仍供"轨的显示"那份 feed 使用。
 		 */
 		final it.unimi.dsi.fastutil.objects.ObjectArrayList<it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap<org.mtr.core.data.Position, org.mtr.core.data.VehiclePosition>>> trees = simulator.mmtrOccupancyTrees();
 		final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<String> restricted = org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(simulator, trees);
-		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, String> lampAspects = simulator.mmtrDirectionalBlocks.lampAspectNames(trees, restricted::contains);
+		/*
+		 * notes/167（用户：「需要将行车区间状态绑定至信号灯上」）：**每一盏灯都读同一份绑定** ——
+		 * 它开的区间（一灯多腿多条）、这些段的占用、以及由段状态推出的显示。
+		 *
+		 * 原来 BOUND 灯走的是另一条路：按 `target` 那条轨去查 per-rail 显示表 —— 那是"绑在轨上"的读法，
+		 * 于是同一盏灯在网页上是"轨的状态"、在游戏里是"段的状态"，两边可以不一致。
+		 */
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<String, org.mtr.core.mmtr.signal.MmtrSectionService.LampBinding> lampBindings =
+			simulator.mmtrSections.lampBindings(trees, restricted::contains);
 		final com.google.gson.JsonArray signals = new com.google.gson.JsonArray();
 		simulator.mmtrSignals.signals.forEach((key, entry) -> {
 			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
@@ -1324,15 +1991,27 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("aspects", entry.aspects);
 			out.addProperty("mode", entry.mode);
 			out.addProperty("target", entry.target);
-			if ("BOUND".equals(entry.mode) && !entry.target.isEmpty() && !entry.target.contains("|")) {
-				out.addProperty("aspect", railAspects.getOrDefault(entry.target, "GREEN"));
-			} else {
-				// AUTO (or a bound node/approach target): the blockage layer's per-lamp answer.
-				out.addProperty("aspect", lampAspects.getOrDefault(key, ""));
-			}
+			/*
+			 * 灯的状态 = **它开的那一段**的状态（绑定），不再按 target 轨去查 per-rail 表。
+			 * 未接入闭塞的灯 `unbound=true`、`aspect=""`：网页显示"未知"，不要画成绿。
+			 */
+			final org.mtr.core.mmtr.signal.MmtrSectionService.LampBinding binding = lampBindings.get(key);
+			final boolean unbound = binding == null || binding.unbound;
+			out.addProperty("unbound", unbound);
+			out.addProperty("aspect", binding == null ? "" : binding.aspect);
+			out.addProperty("occupied", binding != null && binding.occupied);
 			// Whether a lamp opens a section at all. A lamp the blockage layer does not know protects
 			// nothing, and the console shows that as "未接入" rather than painting it as if it were green.
-			out.addProperty("hasSection", simulator.mmtrDirectionalBlocks.sectionOfSignal(key) != null);
+			out.addProperty("hasSection", !unbound);
+			if (binding != null && !binding.sections.isEmpty()) {
+				out.addProperty("section", binding.sections.get(0).id);
+				final com.google.gson.JsonArray sectionIds = new com.google.gson.JsonArray();
+				binding.sections.forEach(section -> sectionIds.add(section.id));
+				out.add("sections", sectionIds);
+				final com.google.gson.JsonArray nextIds = new com.google.gson.JsonArray();
+				binding.nextSectionIds(simulator.mmtrSections).forEach(nextIds::add);
+				out.add("nextSections", nextIds);
+			}
 			/*
 			 * 点选绑定用：这盏灯**现在守哪几根轨**（boundRails）与**可以点哪几根**（candidateRails）。
 			 *
@@ -1344,12 +2023,12 @@ public final class SystemMapServlet extends ServletBase {
 			if (!entry.rails.isEmpty()) {
 				entry.rails.forEach(boundRails::add);
 			} else {
-				simulator.mmtrDirectionalBlocks.protectedRailsOf(entry).forEach(boundRails::add);
+				simulator.mmtrSections.protectedRailsOf(entry).forEach(boundRails::add);
 			}
 			out.add("boundRails", boundRails);
 			out.addProperty("boundExplicit", !entry.rails.isEmpty());
 			final com.google.gson.JsonArray candidateRails = new com.google.gson.JsonArray();
-			simulator.mmtrDirectionalBlocks.candidateRailsOf(entry).forEach(candidateRails::add);
+			simulator.mmtrSections.candidateRailsOf(entry).forEach(candidateRails::add);
 			out.add("candidateRails", candidateRails);
 			signals.add(out);
 		});
@@ -1465,7 +2144,7 @@ public final class SystemMapServlet extends ServletBase {
 			 * 页面点的轨和引擎绑的轨就成了两个字符串 —— 绑定会静默失败（实测踩过：
 			 * 接口回 ok、绑定列表却没变）。对外统一成规范形式，两边永远对得上。</p>
 			 */
-			o.addProperty("hex", org.mtr.core.mmtr.signal.MmtrDirectionalBlockService.canonicalHex(hex));
+			o.addProperty("hex", org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(hex));
 			o.addProperty("x1", ends[0].getX());
 			o.addProperty("y1", ends[0].getY());
 			o.addProperty("z1", ends[0].getZ());
@@ -1483,8 +2162,11 @@ public final class SystemMapServlet extends ServletBase {
 			 *
 			 * <p>Sampled at a fixed number of steps rather than by a metre interval: the console is a plan
 			 * view, so what matters is that the polyline is visually indistinguishable from the arc, and a
-			 * fixed step count bounds the payload (32 steps = ~8 KB of JSON for all 134 rails, rounded to
-			 * integers) while the angular error per segment stays a couple of degrees.</p>
+			 * fixed step count bounds the payload (32 steps × 159 rails ≈ 16 KB of JSON, two decimals per
+			 * coordinate) while the angular error per segment stays a couple of degrees.</p>
+			 *
+			 * <p><b>The samples are NOT integers</b> (see {@link #roundMmtrPathSample}) — rounding them
+			 * makes every arc a staircase again, which is exactly what a track display cannot afford.</p>
 			 *
 			 * <p>Sampled at arc distances, and the arc space starts at whichever endpoint sorts first - NOT
 			 * necessarily {@code ends[0]} here (that is just "the node the position map happened to visit
@@ -1502,9 +2184,9 @@ public final class SystemMapServlet extends ServletBase {
 					final double arcM = length * i / steps;
 					final org.mtr.core.tool.Vector point = rail.railMath.getPosition(arcM, reversed);
 					final com.google.gson.JsonArray sample = new com.google.gson.JsonArray();
-					sample.add(Math.round(point.x()));
-					sample.add(Math.round(point.y()));
-					sample.add(Math.round(point.z()));
+					sample.add(roundMmtrPathSample(point.x()));
+					sample.add(roundMmtrPathSample(point.y()));
+					sample.add(roundMmtrPathSample(point.z()));
 					path.add(sample);
 				}
 			}
