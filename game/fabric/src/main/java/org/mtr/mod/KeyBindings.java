@@ -28,6 +28,14 @@ public final class KeyBindings {
 		// B7.6h: per-side door keys in the cab (rail practice: open only the platform side).
 		MMTR_DOOR_LEFT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_left", GLFW.GLFW_KEY_Y, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		MMTR_DOOR_RIGHT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_right", GLFW.GLFW_KEY_U, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		// MMTR wiper: one key cycles 关 / 慢 / 快 while holding a cab. Deliberately NOT the rain's
+		// business - the driver decides when to wipe, exactly like the real stalk.
+		//
+		// J, not the obvious ' next to MTR's brake keys: ' is ALREADY MMTR_BRAKE_RELEASE above, and two
+		// mappings on one key means the brake release fires while the driver is trying to wipe. J is free
+		// in vanilla AND in MTR (MTR uses Z, B, and the two brake keys; the crew controls here use
+		// G/K/H/Y/U and the arrows).
+		MMTR_WIPER = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.wiper", GLFW.GLFW_KEY_J, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_1_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_1_NEGATIVE.key, GLFW.GLFW_KEY_KP_4, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_2_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_2_NEGATIVE.key, GLFW.GLFW_KEY_KP_5, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_3_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_3_NEGATIVE.key, GLFW.GLFW_KEY_KP_6, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
@@ -53,6 +61,8 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_AWS_ACK;
 	public static final KeyBinding MMTR_DOOR_LEFT;
 	public static final KeyBinding MMTR_DOOR_RIGHT;
+	/** One key, three positions: the windshield wiper stalk (关 / 慢 / 快). */
+	public static final KeyBinding MMTR_WIPER;
 	public static final KeyBinding DEBUG_1_NEGATIVE;
 	public static final KeyBinding DEBUG_2_NEGATIVE;
 	public static final KeyBinding DEBUG_3_NEGATIVE;

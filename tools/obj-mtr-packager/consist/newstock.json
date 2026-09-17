@@ -33,7 +33,7 @@
     },
     {
       "id": "saf101",
-      "name": "SAF101 双端机车",
+      "name": "SAF101 双端机车 v2",
       "color": "2E7D5B",
       "transportMode": "TRAIN",
       "carLengthBlocks": 16,
@@ -43,34 +43,50 @@
       "bogie2OffsetBlocks": 5,
       "couplingPadding1": 0,
       "couplingPadding2": 0,
-      "sourceObj": "${MC_ROOT}/assets/models/blender/saf101/pack/saf101.obj",
-      "textureDir": "${MC_ROOT}/assets/models/blender/saf101/pack",
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf101v2.0/SAF101v2.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf101v2.0",
       "rotationDegY": -90,
       "recenter": true,
       "flipTextureV": true,
       "groupMap": {
         "body": ["body"],
         "interior": ["BlockEntities"],
+        "glass": ["glass"],
         "anchor": ["mmtr_"]
+      },
+      "groupRename": {
+        "windshield1": "glass1",
+        "windshield2": "glass2"
       },
       "floor": true,
       "floorHeightBlocks": 1.0,
-      "extraDoorways": ["cabdoor_1_1", "cabdoor_1_2", "cabdoor_2_1", "cabdoor_2_2"],
+      "extraDoorways": [
+        "cabdoor_1_1", "cabdoor_1_2", "cabdoor_1_3",
+        "cabdoor_2_1", "cabdoor_2_2", "cabdoor_2_3"
+      ],
       "doorAnimationType": "STANDARD",
       "doorSlidePx": 14,
       "doorSlideByGroup": {
         "cabdoor_1_1": 14,
         "cabdoor_1_2": -14,
+        "cabdoor_1_3": 14,
         "cabdoor_2_1": -14,
-        "cabdoor_2_2": 14
+        "cabdoor_2_2": 14,
+        "cabdoor_2_3": -14
       },
+      "windshield": {
+        "windshield_1": { "sweepSign": 1 },
+        "windshield_2": { "sweepSign": 1 }
+      },
+      "soundBase": "saf101_snd",
+      "soundDir": "${MC_ROOT}/assets/sounds/saf101_snd",
       "hud": {
         "background": "#FF05080C",
         "widgets": [
           { "kind": "roundRect", "x": 0.005, "y": 0.05, "w": 0.99, "h": 0.90, "radius": 0.09, "color": "#FF0B1119" },
           { "kind": "speed", "x": 0.15, "y": 0.56, "size": 0.46, "color": "#FFFFFFFF", "align": "center" },
           { "kind": "text", "text": "km/h", "x": 0.15, "y": 0.15, "size": 0.14, "color": "#FF8FA6B8", "align": "center" },
-          { "kind": "line", "x1": 0.28, "y1": 0.14, "x2": 0.28, "y2": 0.86, "lineWidth": 0.03, "color": "#FF1E2A36" },
+          { "kind": "line", "x": 0.28, "y": 0.14, "x2": 0.28, "y2": 0.86, "lineWidth": 0.03, "color": "#FF1E2A36" },
           { "kind": "text", "text": "限速", "x": 0.34, "y": 0.66, "size": 0.17, "color": "#FF8FA6B8", "align": "left" },
           { "kind": "limit", "x": 0.34, "y": 0.36, "size": 0.30, "color": "#FFFFB03A", "align": "left" },
           { "kind": "text", "text": "SAF101", "x": 0.96, "y": 0.72, "size": 0.15, "color": "#FF3FE0FF", "align": "right" },

@@ -1110,20 +1110,43 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * 我按着的某处道岔上，是否**有别的车在排队等着**（{@code point why} 里那串 {@code queue=v…@0}）。
+	 * 我按着的某处道岔上，是否**有别人在排队等着"另一位"**（{@code point why} 里那串 {@code queue=v…@0}）。
 	 *
 	 * <p>用它做"没人比我更早时要不要让位"的判据：别人已经排在我按着的位置后面等着了，说明我挡着它 ——
 	 * 停着的车本来就不在用那处道岔，让出去环就解开了；没人排队时不让（避免"放掉又申请"的振荡）。</p>
+	 *
+	 * <h3>但**要同一位的**不算（2026-09-17 现场修：北段咽喉两班车轮流让位到死）</h3>
+	 * <p>现场：持有者按着位置 0，队列里排着两班 —— 一辆要 **1**、一辆要 **0**。要 0 的那班与持有者
+	 * **位置相容**：按着 0 一点没挡着它（它过不去的原因是**车体压在它前面那段区间里**，不是道岔位置）。
+	 * 原来这里只要"队列里有人"就让位，于是两班车**轮流**让位（日志每 20–40 秒一行，
+	 * {@code -544964743732613521} 与 {@code -5764088690191233245} 交替刷），谁也没走成。</p>
+	 *
+	 * <p>判据收紧为：**队列里有人要的是与我不同的位** —— 那才是真的在争这处道岔的两个位置。</p>
 	 */
 	private boolean someoneQueuedBehindMyHold(Simulator simulator) {
 		for (final long[] node : simulator.mmtrPointAuthority.physicalHoldNodesOf(mmtrPointOwner)) {
+			final int myPosition = simulator.mmtrPointAuthority.physicalPosition(node[0], node[1], node[2]);
 			for (final String queued : simulator.mmtrPointAuthority.physicalQueueSnapshot(node[0], node[1], node[2])) {
-				if (!queued.startsWith(mmtrPointOwner + "@")) {
-					return true;
+				if (queued.startsWith(mmtrPointOwner + "@")) {
+					continue;   // 我自己排的队不算
+				}
+				final int at = queued.lastIndexOf('@');
+				final int queuedPosition = at < 0 || at + 1 >= queued.length()
+					? Integer.MIN_VALUE : parseQueuePosition(queued.substring(at + 1));
+				if (queuedPosition != Integer.MIN_VALUE && queuedPosition != myPosition) {
+					return true;   // 有人要**另一位** ⇒ 我按着的位确实挡着它
 				}
 			}
 		}
 		return false;
+	}
+
+	private static int parseQueuePosition(String text) {
+		try {
+			return Integer.parseInt(text.trim());
+		} catch (NumberFormatException e) {
+			return Integer.MIN_VALUE;
+		}
 	}
 
 	/**
@@ -3707,9 +3730,32 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	/**
 	 * If a signal block is encountered, first check if the path after the entire block is clear. If so, reserve the signal block.
 	 *
+	 * <h3>MMTR 走行中的车**不再走这一道闸**（2026-09-17 现场：北段 S1/S2 双向占用测试班对向扣死）</h3>
+	 * <p>这是 MTR 原版的每轨闭塞：车到信号区段前先看**整段**之后是否清空，不清就停；预留走
+	 * {@code Rail.isBlocked} 的 {@code signalColors} 通道。它的粒度是**一根轨 / 一个颜色组**，
+	 * **不分行车方向** —— 于是"两列车即将在单线上对向相遇"时两边都认为前方被占，
+	 * **互相把对方停住**（用户现场原话："MTR 老逻辑会让即将碰上的列车互斥停下"）。</p>
+	 *
+	 * <p>而 MMTR 的两层区间模型（L1 轨道区间 + L2 行车区间，带 {@code excludeVehicleId}、带方向、
+	 * 带岔区净空 10 m、带敌对进路表）**本来就是这一层的替代品**，而且是唯一带方向的。
+	 * 两套并行只剩一种结果：MMTR 判"可以走"、老逻辑判"停下"，车停在一个**没有任何读数能解释**的位置
+	 * （{@code authority.reason} 写着"绿灯：无约束"，车却不动）。所以：</p>
+	 * <ul>
+	 *   <li><b>MMTR 走行中的车</b>（有走行体、由 MMTR 规划与授权）⇒ 本闸**不参与停车判定**，
+	 *       停车只由 MMTR 的区间占用 / 授权 / 岔区净空 / 敌对进路决定；</li>
+	 *   <li><b>其余（原版/旧路径的车）</b>⇒ 逐位保持 MTR 原语义，行为不变。</li>
+	 * </ul>
+	 * <p>预留本身（{@code CURRENTLY_RESERVE}）**保留**：游戏内原版信号仍按那条颜色通道显示占用，
+	 * 这里只关掉"它能不能让车停下"这一半。</p>
+	 *
 	 * @return if the vehicle should stop
 	 */
 	private boolean checkAndBlockSignal(int currentIndex, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, boolean reserveRail, boolean secondPass) {
+		if (isMmtrMotion()) {
+			// 有走行体 = MMTR 在开这列车：区间/授权层说了算（见上面说明）；预留照旧，停车不参与
+			vehicleExtraData.immutablePath.get(currentIndex).isSignalBlocked(id, Rail.BlockReservation.CURRENTLY_RESERVE);
+			return false;
+		}
 		final PathData firstPathData = vehicleExtraData.immutablePath.get(currentIndex);
 
 		if (secondPass) {

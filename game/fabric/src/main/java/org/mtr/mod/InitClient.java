@@ -462,7 +462,9 @@ public final class InitClient {
 
 		REGISTRY_CLIENT.eventRegistryClient.registerResourceReloadEvent(CustomResourceLoader::reload);
 
-		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(MmtrCabHudRenderer::render);
+		// MMTR: the screen-space cab HUD (MmtrCabHudRenderer) is disabled by the crew's call - the
+		// class and its render entry point are kept in the tree so a future console can be hung back
+		// here with one line, but nothing is drawn on the screen for now.
 
 		Config.init(MinecraftClient.getInstance().getRunDirectoryMapped());
 

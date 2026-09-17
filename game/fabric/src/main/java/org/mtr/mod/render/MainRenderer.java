@@ -19,6 +19,7 @@ import org.mtr.mod.data.IGui;
 import org.mtr.mod.entity.EntityRendering;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.render.panel.MmtrPanelTexture;
+import org.mtr.mod.render.panel.MmtrWindshield;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -112,6 +113,8 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			org.mtr.mod.client.MmtrCabInteraction.tick();
 			// C7: the "aim at a train and press K to couple/uncouple" interaction.
 			org.mtr.mod.client.MmtrCoupleInteraction.tick();
+			// Windshield wiper stalk (关 / 慢 / 快): a driver input, so it is ticked with the other keys.
+			MmtrWindshield.tick();
 			ArrivalsCacheClient.INSTANCE.tick();
 		}
 
@@ -154,6 +157,9 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 							break;
 						case EXTERIOR_TRANSLUCENT:
 							renderLayer = MoreRenderLayers.getExteriorTranslucent(key);
+							break;
+						case EXTERIOR_TRANSLUCENT_DOUBLE:
+							renderLayer = MoreRenderLayers.getExteriorTranslucentDoubleSided(key);
 							break;
 						case LINES:
 							renderLayer = RenderLayer.getLines();

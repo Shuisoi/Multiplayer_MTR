@@ -44,6 +44,13 @@ public final class MmtrCabInteraction {
 	private static final double REACH_M = 5.0;
 	/** How far off the crosshair (degrees) a cab door may be and still be "aimed at". */
 	private static final double MAX_AIM_ANGLE_DEGREES = 40;
+	/**
+	 * Standard Minecraft eye height: the riding Y is a FOOT position and the camera sits this far above
+	 * it, so a seat anchor (authored at eye height) has to come down by this much to become a foot Y.
+	 */
+	private static final double CAB_SEAT_EYE_HEIGHT_M = 1.62;
+	/** Fallback drop from {@code cabView.y} when the model has no {@code mmtr_seat} anchor. */
+	private static final double CAB_SEAT_FLOOR_DROP_M = 0.05;
 	/** How often the action bar prompt is refreshed, in ticks. */
 	private static final int PROMPT_INTERVAL_TICKS = 10;
 
@@ -74,6 +81,14 @@ public final class MmtrCabInteraction {
 		return heldVehicleId != 0 && heldVehicleId == vehicleId;
 	}
 
+	/**
+	 * Whether this client holds ANY cab. Used by driver-workstation inputs that do not care which train
+	 * they are in (the wiper stalk), so a passenger cannot reach them.
+	 */
+	public static boolean holdsAnyCab() {
+		return heldVehicleId != 0;
+	}
+
 	public static void tick() {
 		final boolean pressed = KeyBindings.MMTR_CAB_INTERACT.isPressed();
 		final boolean justPressed = pressed && !lastPressed;
@@ -86,8 +101,19 @@ public final class MmtrCabInteraction {
 
 		logVehicleDebug(player);
 
+		// Hard-bind boarding. Runs BEFORE the cab key handling so that pressing G while standing at the
+		// door works on a player who has just been put on board, and so that a misaligned resource-pack
+		// box can never again be the difference between "can board" and "cannot board" (see MmtrBoarding).
+		MmtrBoarding.tick();
+
 		// Forget a stale hold as soon as the player is no longer riding that consist.
-		if (heldVehicleId != 0 && !VehicleRidingMovement.isRiding(heldVehicleId)) {
+		//
+		// "No longer riding" is judged by the CAB LOCK, not by `isRiding` alone. The riding state is
+		// cleared by things that have nothing to do with leaving the seat - a floor probe missing for a
+		// tick, the vehicle stream stuttering - and releasing the key on those made the driver loss look
+		// like "上车一会就被判定为下车": the ride recovered by itself and the key did not. The cab lock is
+		// only cleared when the rider is genuinely out (see VehicleRidingMovement.markLeftTrain).
+		if (heldVehicleId != 0 && !VehicleRidingMovement.isRiding(heldVehicleId) && !VehicleRidingMovement.mmtrHasCabLock()) {
 			forget(player, null);
 		} else {
 			// 钥匙归属: the client only claims a cab the engine actually gave it. The key holder is
@@ -202,11 +228,20 @@ public final class MmtrCabInteraction {
 	}
 
 	/**
-	 * Checks the local cab claim against the authoritative mirrored cab state of the vehicle. The
-	 * server mirrors {@code mmtrActiveCab} / {@code mmtrCabKeyHolder} / {@code mmtrCabCrew} with every
-	 * update, so this needs no extra packet: if the cab is no longer ours (the engine refused the key,
-	 * another crew member took it, or the consist changed ends under us), the claim is dropped and the
-	 * player is told why instead of silently driving nothing.
+	 * Checks the local cab claim against the authoritative mirrored cab state of the vehicle.
+	 *
+	 * <p>The server mirrors {@code mmtrActiveCab} / {@code mmtrCabKeyHolder} / {@code mmtrCabCrew} with
+	 * every update, so a REFUSED claim is corrected without an extra packet.</p>
+	 *
+	 * <p>What it must NOT do is treat an imperfect mirror as a refusal. The previous version dropped the
+	 * key the moment the mirror did not match exactly, and the mirror is not exact while a claim is still
+	 * settling, while the consist changes ends, or while a vehicle update is in flight. The player was then
+	 * sitting in the driver's seat with no key - reported as "在驾驶位上按 J 提示需要坐在驾驶座上", because
+	 * the wiper stalk (and everything else keyed on the cab) reads the local hold.</p>
+	 *
+	 * <p>So: another crew member holding the key is decisive and the claim is dropped. Anything else that
+	 * disagrees is treated as "not yet settled" and the claim is simply SENT AGAIN, at most once per
+	 * {@link #CLAIM_RETRY_MILLIS}.</p>
 	 */
 	private static void reconcile(ClientPlayerEntity player) {
 		if (heldVehicleId == 0 || System.currentTimeMillis() - claimMillis < CLAIM_GRACE_MILLIS) {
@@ -223,15 +258,45 @@ public final class MmtrCabInteraction {
 		final String localUuid = player.getUuid() == null ? "" : player.getUuid().toString();
 		final boolean sameCar = vehicle.getMmtrCabCarIndexFromSync() == heldCarNumber + 1;
 		if (activeCab.equals(expectedCab) && sameCar && "CREW".equals(holder) && (crew.isEmpty() || crew.equals(localUuid))) {
+			// Everything agrees: the claim stands.
 			return;
 		}
 		if (activeCab.isEmpty() && holder.isEmpty()) {
 			// No cab state mirrored at all (legacy path vehicle / older server): keep the old behaviour.
 			return;
 		}
-		final String reason = "CREW".equals(holder) ? "钥匙在 " + crew : "SYSTEM".equals(holder) ? "自动运行持有钥匙" : activeCab.isEmpty() || "NONE".equals(activeCab) ? "无人持钥匙" : "已换到 " + activeCab;
-		forget(player, "驾驶室已不属于你（" + reason + "）");
+		if ("CREW".equals(holder) && !crew.isEmpty() && !crew.equals(localUuid)) {
+			// Another crew member really does hold this cab. That is decisive.
+			forget(player, "驾驶室已不属于你（钥匙在 " + crew + "）");
+			return;
+		}
+		// Nothing contradicts us except the mirror being behind. Re-assert rather than give up.
+		reclaim(player);
 	}
+
+	/**
+	 * Sends the cab claim again, throttled. Used when the mirror has not caught up yet: the alternative is
+	 * to give up a cab the player is physically sitting in, which is strictly worse than a repeated
+	 * request.
+	 */
+	private static void reclaim(ClientPlayerEntity player) {
+		final long now = System.currentTimeMillis();
+		if (now - lastReclaimMillis < CLAIM_RETRY_MILLIS) {
+			return;
+		}
+		lastReclaimMillis = now;
+		claimMillis = now;
+		final String cabName = (heldCarNumber + 1) + (heldCab == 2 ? "B" : "A");
+		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(heldVehicleId, PacketMmtrCabOp.Op.ENTER, cabName));
+		if (player != null) {
+			player.sendMessage(new Text(TextHelper.literal("重新认领驾驶室 " + cabName + " / re-claiming cab").data), true);
+		}
+	}
+
+	/** When the last re-claim was sent, so a persistent mismatch cannot become a packet storm. */
+	private static long lastReclaimMillis;
+	/** How often a disagreeing mirror may be answered with another claim. */
+	private static final long CLAIM_RETRY_MILLIS = 2000;
 
 	@Nullable
 	private static VehicleExtension findVehicle(long vehicleId) {
@@ -300,9 +365,28 @@ public final class MmtrCabInteraction {
 				carRotation.yaw,
 				yawDegrees
 		);
-		// The driver is fixed at the seat: no walking around inside the cab.
-		VehicleRidingMovement.mmtrSetCabLock(true);
+		// The driver is fixed at the seat: no walking around inside the cab, AND their eye height comes
+		// from the seat anchor rather than from the resource pack's floor box.
+		//
+		// Two Y values, because two different questions are being answered:
+		//   view.y        = where the car's FLOOR is, which is what the floor-box search must probe at
+		//   seat anchor   = where the driver's EYES go, which is what the camera must sit at
+		// Passing only the second made the driver dismount on the next tick, because the floor search
+		// looked for a floor at eye height.
+		VehicleRidingMovement.mmtrLockSeatAndPin(mmtrSeatFootY(anchors, end, view), view.y);
 		return true;
+	}
+
+	/**
+	 * The car-local FOOT Y of the cab's seat: the {@code mmtr_seat_<cab>} anchor (authored at EYE height)
+	 * one eye height down, or the floor-derived point when the model has no seat anchor.
+	 *
+	 * <p>Kept next to the cab code rather than inside {@link MmtrVehicleAnchors} because it mixes the two
+	 * halves deliberately: the anchor gives the eye height, the fallback gives the floor.</p>
+	 */
+	private static double mmtrSeatFootY(ObjectArrayList<MmtrVehicleAnchors.Anchor> anchors, int end, CabView view) {
+		final MmtrVehicleAnchors.Anchor seat = MmtrVehicleAnchors.findSeat(anchors, view.mirrored ? 1 : end);
+		return seat == null ? view.y - CAB_SEAT_FLOOR_DROP_M : seat.position.y() - CAB_SEAT_EYE_HEIGHT_M;
 	}
 
 	/** C6 cab naming: car index (1-based) + end, e.g. {@code 第3节 A 端驾驶室} = "3A". */

@@ -42,13 +42,25 @@ public final class MmtrEnemyRoutes {
 		public final String detail;
 		/** 两边是否都已经 SET（两条 SET 进路敌对 = 联锁在说谎，最该被看见的一种）。 */
 		public final boolean bothSet;
+		/**
+		 * 争用的那根轨（只有 {@code OPPOSING} 有；{@code TURNOUT} 是 {@code null}）。
+		 *
+		 * <p>给敌对裁决的"**先出清**"档用：谁的车身压在这根轨上，谁先走（见
+		 * {@code MmtrRouteRegistry#enemyBlockReason}）。</p>
+		 */
+		public final @org.jspecify.annotations.Nullable String sharedRailHex;
 
 		private Conflict(long vehicleA, long vehicleB, String kind, String detail, boolean bothSet) {
+			this(vehicleA, vehicleB, kind, detail, bothSet, null);
+		}
+
+		private Conflict(long vehicleA, long vehicleB, String kind, String detail, boolean bothSet, @org.jspecify.annotations.Nullable String sharedRailHex) {
 			this.vehicleA = vehicleA;
 			this.vehicleB = vehicleB;
 			this.kind = kind;
 			this.detail = detail;
 			this.bothSet = bothSet;
+			this.sharedRailHex = sharedRailHex;
 		}
 
 		@Override
@@ -129,7 +141,7 @@ public final class MmtrEnemyRoutes {
 			}
 			out.add(new Conflict(a.getVehicleId(), b.getVehicleId(), "OPPOSING",
 				"共用轨 " + hex + " 且方向相反：v" + a.getVehicleId() + " 与 v" + b.getVehicleId() + " 是对向 movement",
-				bothSet));
+				bothSet, hex));
 		}
 	}
 

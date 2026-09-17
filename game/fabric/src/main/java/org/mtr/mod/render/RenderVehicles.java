@@ -19,6 +19,7 @@ import org.mtr.mod.client.*;
 import org.mtr.mod.config.Config;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.render.panel.MmtrCabDashboard;
+import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.resource.Interpolation;
 import org.mtr.mod.resource.VehicleResource;
 import org.mtr.mod.resource.VehicleResourceCache;
@@ -255,6 +256,11 @@ public class RenderVehicles implements IGui {
 
 						// MMTR B7.6e: 2D cab panel on the model's mmtr_hud face (one texture, one quad)
 						MmtrCabDashboard.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations, absoluteVehicleCarPositionAndRotation.position);
+
+						// MMTR: windshield - the precipitation layer plus its wiper, on mmtr_windshield[_<n>].
+						// Cosmetic and client-only; it reads the local weather and the mirrored speed and
+						// changes nothing about how the train runs.
+						MmtrWindshield.render(vehicleCarDetails.left().getVehicleId(), carNumber, storedMatrixTransformations, vehicle.getSpeed());
 
 						vehicleResource.iterateModels(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), (modelIndex, model) -> {
 							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, openDoorways, fromResourcePackCreator);

@@ -57,6 +57,8 @@ public final class MmtrVehicleAnchors {
 		CABDOOR,
 		DOOR,
 		SEAT,
+		/** MMTR: the rain/wiper plane (a bare windscreen face with no dashboard texture on it). */
+		WINDSHIELD,
 		OTHER
 	}
 
@@ -223,6 +225,40 @@ public final class MmtrVehicleAnchors {
 	}
 
 	/**
+	 * MMTR: EVERY windshield (rain/wiper) anchor of {@code modelCar}, in file order. A car can carry
+	 * more than one ({@code mmtr_windshield_1} = cab 1's screen, {@code mmtr_windshield_2} = cab 2's),
+	 * and each one gets its own precipitation layer and its own wiper, so the renderer draws them
+	 * individually. {@code cab} follows the same meaning as everywhere else: 1 = A end, 2 = B end.
+	 */
+	public static ObjectArrayList<Anchor> findWindshields(ObjectArrayList<Anchor> anchors, int modelCar) {
+		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar) {
+				result.add(anchor);
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * The windshield of one specific cab, or {@code null} when the model has none for it. Use this when
+	 * a decision is cab-specific (only the manned cab's wiper should run, say); the renderer at large
+	 * draws every windshield of the car.
+	 *
+	 * @param cab 1 = A-end cab, 2 = B-end cab; {@code <= 0} means "unspecified" (single-cab model)
+	 */
+	@Nullable
+	public static Anchor findWindshield(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+		final int wantedCab = cab <= 0 ? 1 : cab;
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar && (anchor.cab <= 0 ? 1 : anchor.cab) == wantedCab) {
+				return anchor;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * The point a driver ends up at when taking a cab: an explicit {@code mmtr_seat_<cab>} anchor
 	 * wins, otherwise the seat is placed behind the dashboard along the dashboard's own normal, with
 	 * the feet at the door sill. MTR forces the riding Y onto the floor every tick, so the X/Z of the
@@ -284,8 +320,20 @@ public final class MmtrVehicleAnchors {
 		);
 	}
 
+	/**
+	 * The explicit {@code mmtr_seat_<cab>} anchor of a cab, or {@code null} when the model has none.
+	 *
+	 * <p>Its POSITION is where the driver's eyes go - that is what the anchor is authored for - so a
+	 * caller that wants to put a camera exactly there uses this, while {@link #cabView} hands back the
+	 * FLOOR-derived point instead (it deliberately discards the seat's own Y, because MTR forces a
+	 * rider's Y onto the floor every tick and a seat modelled at eye height would drop them out).</p>
+	 *
+	 * <p>Both callers must mirror cab 2 onto cab 1 when the model is single-ended:
+	 * {@code cabView(anchors, 2)} uses {@code findSeat(anchors, 1)} for a mirrored model. Passing a raw
+	 * 2 there returns null and silently sends the caller down the dashboard-derived fallback.</p>
+	 */
 	@Nullable
-	private static Anchor findSeat(ObjectArrayList<Anchor> anchors, int cab) {
+	public static Anchor findSeat(ObjectArrayList<Anchor> anchors, int cab) {
 		for (final Anchor anchor : anchors) {
 			if (anchor.kind == Kind.SEAT && anchor.cab == cab) {
 				return anchor;
@@ -365,7 +413,8 @@ public final class MmtrVehicleAnchors {
 		return new Vector(-vector.x(), vector.y(), -vector.z());
 	}
 
-	private static Kind parseKind(String kind) {		switch (kind) {
+	private static Kind parseKind(String kind) {
+		switch (kind) {
 			case "hud":
 				return Kind.HUD;
 			case "cabdoor":
@@ -374,6 +423,8 @@ public final class MmtrVehicleAnchors {
 				return Kind.DOOR;
 			case "seat":
 				return Kind.SEAT;
+			case "windshield":
+				return Kind.WINDSHIELD;
 			default:
 				return Kind.OTHER;
 		}

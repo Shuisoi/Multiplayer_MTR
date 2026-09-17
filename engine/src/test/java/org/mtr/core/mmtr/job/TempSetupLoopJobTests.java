@@ -53,9 +53,14 @@ public final class TempSetupLoopJobTests {
 	}
 
 	private static MmtrJobStep railStep(String id, Rail rail, String note) {
+		return railStep(id, rail, 1.0, note);
+	}
+
+	/** 带**明确的停车比例**的轨目标步（用户 2026-09-17：停在 (-170,-478) 就是"目标轨的进站端" = 0.0）。 */
+	private static MmtrJobStep railStep(String id, Rail rail, double fraction, String note) {
 		final MmtrJobStep step = step(id, MmtrJobStep.StepType.MOVE_TO, 0, note);
 		step.targetRailHex = rail.getHexId();
-		step.targetRailFraction = 1.0;   // 开到头（按行车方向的远端），正好留给下一步换端
+		step.targetRailFraction = fraction;
 		return step;
 	}
 
@@ -167,12 +172,108 @@ public final class TempSetupLoopJobTests {
 		"TT-LOOP-1-3-D", "TT-LOOP-1-3-E", "TT-LOOP-1-3-F",
 	};
 
-	/** 三班车一起造（收尾方式见 {@link #LOOP_FLEET}）。 */
+	/* ------------------------------------------------------------------ *
+	 * 信号/双向占用测试单（用户 2026-09-17 现场布置的新站）
+	 * ------------------------------------------------------------------ */
+
+	/** 用户新加的 S2 站台（轨 (-162,-798)→(-162,-778)，挂在 (-170,-764)↔(-170,-812) 的会让环上）。 */
+	private static final long SIG_S2_PLATFORM = 757923074738358348L;
+	/** 用户新加的 S1 站台（轨 (-160,-721)→(-160,-697)，挂在 (-170,-667)↔(-170,-736) 的会让环上）。 */
+	private static final long SIG_S1_PLATFORM = -4832233127307968578L;
+	/** `-170,-60,-478`：用户指定"掉头回去后在这里停车换端"的节点（= 站3/1 台轨的北端）。 */
+	private static final Position P3_NORTH_END = new Position(-170, -60, -478);
+	private static final Position P3_PLATFORM_SOUTH = new Position(-170, -60, -458);
+
+	/**
+	 * **信号 / 双向占用测试单**（用户口径）：随便挑两辆车，一辆开到 S2、一辆开到 S1，各停一次并掉头；
+	 * 掉头回来后**在 {@code -170,-60,-478} 停车换端**，再去 {@code -176,-60,-564} 换端。
+	 *
+	 * <p>要测的两件事：</p>
+	 * <ol>
+	 *   <li><b>行车区间的双向占用</b>：这两班车的去程往北、回程往南，走的是同一条 A 线（单线），
+	 *       中间还各挂一个会让环（S1/S2 就挂在环上）。对向行车时区间占用、灯色、以及"谁先过"必须自洽；</li>
+	 *   <li><b>信号按"预计到达时刻"分配</b>：两班车都要经过 {@code -170,-60,-478}，到达时刻不同 ——
+	 *       那处的灯（与它背后的道岔/进路）应当按计划时刻给更早的那班，而不是先到先得或来回抢。</li>
+	 * </ol>
+	 *
+	 * <p>收尾一步是**回库**：这条 A 线是单线、北端 (-176,-564) 又是死头，测试车跑完必须让出主线，
+	 * 否则会把还在环线上跑的另外 4 班堵死。</p>
+	 *
+	 * @param viaS2 true = 这班跑 S2，false = 跑 S1
+	 */
+	public static MmtrConsistJob buildSignalTestJob(Simulator sim, String jobId, long sidingId, long startTimeOfDayMs, boolean viaS2) {
+		final long platformId = viaS2 ? SIG_S2_PLATFORM : SIG_S1_PLATFORM;
+		final String place = viaS2 ? "S2" : "S1";
+		final Rail p3Platform = findRail(sim, P3_NORTH_END, P3_PLATFORM_SOUTH);
+		final Rail southDeadEnd = findRail(sim, SOUTH_A, SOUTH_B);
+		if (p3Platform == null || southDeadEnd == null) {
+			throw new IllegalStateException("找不到目标轨：站3/1 台轨=" + (p3Platform != null) + " (-176,-564) 支线=" + (southDeadEnd != null));
+		}
+		final MmtrConsistJob job = new MmtrConsistJob();
+		job.jobId = jobId;
+		job.depotId = DEPOT_987654;
+		job.sidingId = sidingId;
+		job.startTimeOfDayMs = startTimeOfDayMs;
+		job.repeatDaily = true;
+		job.loop = false;                    // 单程测试：跑完回库停着，不循环
+		job.loopEveryMs = LOOP_EVERY_MS;
+		final MmtrCarSpec car = new MmtrCarSpec();
+		car.vehicleId = "saf101";
+		car.length = 16;
+		car.width = 5;
+		car.bogie1Position = -5;
+		car.bogie2Position = 5;
+		car.powered = true;
+		job.cars.add(car);
+
+		job.steps.add(step("m1", MmtrJobStep.StepType.MOVE_TO, platformId, "出库北上，开到 " + place + " 站台"));
+		job.steps.add(step("s1", MmtrJobStep.StepType.SERVE, platformId, place + " 停一次（开门停站）"));
+		job.steps.add(step("ce1", MmtrJobStep.StepType.CHANGE_ENDS, 0, place + " 掉头（换端）"));
+		job.steps.add(railStep("m2", p3Platform, 0.0, "回程南下，在 -170,-60,-478（站3/1 台轨的北端）停车"));
+		job.steps.add(step("ce2", MmtrJobStep.StepType.CHANGE_ENDS, 0, "在 -170,-60,-478 换端"));
+		job.steps.add(railStep("m3", southDeadEnd, 1.0, "再北上，开到 (-176,-564) 尽头支线远端"));
+		job.steps.add(step("ce3", MmtrJobStep.StepType.CHANGE_ENDS, 0, "在 -176,-60,-564 换端"));
+		/*
+		 * **出支线走 B 线直股**（2026-09-17 现场修：车在 (-176,-564) 支线里出不去）。
+		 *
+		 * <p>支线 (-176,-564) 那处道岔：位置 0 = 支线↔B 线往南 (-176,-511)，位置 1 = 支线↔斜渡线去 A 线。
+		 * 原来 ce3 之后直接 `mh`（回库），规划器自己挑了**走斜渡线**那条 —— 而 A 线上正排着一串等
+		 * 对向进路的车，于是这班车"进路 SET、却停在红灯前"出不去，道岔也一直被那串车里的另一班按在 1。
+		 * 现在先明确派一步"到站3/2"（B 线台轨，在 (-176,-478)→(-176,-458)），路线就必然走**直股 0**，
+		 * 从源头避开 A 线那串对向车；再回库。</p>
+		 */
+		job.steps.add(step("m3b", MmtrJobStep.StepType.MOVE_TO, 538294557107521739L, "出支线走 B 线直股，先到站3/2（避开 A 线对向车流）"));
+		job.steps.add(step("mh", MmtrJobStep.StepType.MOVE_TO, sidingId, "回库：让出单线主线，别把环线上的车堵死"));
+		int n = 0;
+		for (final MmtrJobStep s : job.steps) {
+			n++;
+			System.out.println("[SETUP] " + jobId + " 步骤 " + String.format("%02d", n) + " " + s.stepId + " " + s.type
+				+ (s.targetRailHex == null || s.targetRailHex.isEmpty() ? " 目标=" + s.targetId : " 轨目标=" + s.targetRailHex.substring(0, 8) + "… @" + s.targetRailFraction)
+				+ " " + s.note);
+		}
+		return job;
+	}
+
+	/** 两班测试车用的股道与发车时刻（第 5、6 条股道让出来做这个测试）。 */
+	public static final long[][] SIG_TEST_FLEET = {
+		{3518737612429408379L, 5_000L},      // 987654/5 —— 跑 S2
+		{139388029583209177L, 15_000L},      // 987654/3 —— 跑 S1（与上一班只差 10 s：故意让两班在 A 线上对向相遇）
+	};
+
+	/**
+	 * 这一版的现场车队：**4 班环线 + 2 班信号/双向占用测试**。
+	 *
+	 * <p>用户 2026-09-17："将目前 6 辆车里面随便选 2 辆，一辆添加 S2 停一次掉头、一辆添加 S1 停一次掉头，
+	 * 掉头回去后在 -170,-60,-478 处停车换端，然后再去 -176,-60,-564 换端" ⇒ 前 4 条股道继续跑环线，
+	 * 第 5/3 条股道那两辆改跑 {@link #buildSignalTestJob}。</p>
+	 */
 	public static java.util.List<MmtrConsistJob> buildFleet(Simulator sim) {
 		final java.util.List<MmtrConsistJob> jobs = new java.util.ArrayList<>();
-		for (int i = 0; i < LOOP_JOB_IDS.length; i++) {
+		for (int i = 0; i < 4; i++) {
 			jobs.add(buildJob(sim, LOOP_JOB_IDS[i], LOOP_FLEET[i][0], LOOP_FLEET[i][1], LOOP_FLEET[i][2] != 0));
 		}
+		jobs.add(buildSignalTestJob(sim, "TT-SIG-S2", SIG_TEST_FLEET[0][0], SIG_TEST_FLEET[0][1], true));
+		jobs.add(buildSignalTestJob(sim, "TT-SIG-S1", SIG_TEST_FLEET[1][0], SIG_TEST_FLEET[1][1], false));
 		return jobs;
 	}
 

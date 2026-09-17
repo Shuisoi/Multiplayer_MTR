@@ -1,0 +1,40 @@
+{
+  "id": "saf101",
+  "name": "SAF101 双端机车",
+  "color": "2E7D5B",
+  "transportMode": "TRAIN",
+  "carLengthBlocks": 16,
+  "carWidthBlocks": 5,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -5,
+  "bogie2OffsetBlocks": 5,
+  "couplingPadding1": 0,
+  "couplingPadding2": 0,
+  "sourceObj": "${MC_ROOT}/assets/models/blender/saf101/pack/saf101.obj",
+  "textureDir": "${MC_ROOT}/assets/models/blender/saf101/pack",
+  "rotationDegY": -90,
+  "recenter": true,
+  "flipTextureV": true,
+  "groupMap": {
+    "body": ["body"],
+    "interior": ["BlockEntities"],
+    "anchor": ["mmtr_"]
+  },
+  "floor": true,
+  "floorHeightBlocks": 1.0,
+  "extraDoorways": ["cabdoor_1_1", "cabdoor_1_2", "cabdoor_2_1", "cabdoor_2_2"],
+  "doorAnimationType": "STANDARD",
+  "doorSlidePx": 14,
+  "doorSlideByGroup": {
+    "cabdoor_1_1": 14,
+    "cabdoor_1_2": -14,
+    "cabdoor_2_1": -14,
+    "cabdoor_2_2": 14
+  },
+  "soundBase": "saf101_snd",
+  "soundDir": "${MC_ROOT}/assets/sounds/saf101_snd",
+  "outputPackName": "SAF101_snd_probe",
+  "outputDir": "${MC_ROOT}/artifacts/packs",
+  "packFormat": 18,
+  "flipAnchorNormalByGroup": ["mmtr_hud"]
+}

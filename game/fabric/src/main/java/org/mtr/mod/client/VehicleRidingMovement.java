@@ -66,8 +66,42 @@ public class VehicleRidingMovement {
 	private static boolean prevAwsAckPressed;
 	/** True once the engine has been told this client occupies a cab driver seat this ride. */
 	private static boolean mmtrDriverSynced;
-	/** True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk. */
+	/**
+	 * True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk.
+	 * Set when a cab is taken and cleared when it is left (or when the ride ends).
+	 *
+	 * <p>Purely about WALKING. It no longer owns the eye-height latch - see
+	 * {@link #mmtrPinSeatFootY(double)} for why conflating the two broke boarding.</p>
+	 */
 	private static boolean mmtrCabLocked;
+	/**
+	 * The car-local FOOT Y a rider's view is pinned to, or {@link Double#NaN} when the resource pack's
+	 * floor boxes decide it.
+	 *
+	 * <p>It exists because {@code movePlayer} OVERWRITES the Y from the floor-clamp box every tick, and
+	 * that clamp is fed by the resource pack's floor boxes. When those boxes do not match the model -
+	 * which is exactly what happens when a consist is raised to platform height - the rider's eye height
+	 * is dragged to the wrong place, reported as "视角过于低". A seat's Y comes from the model's own
+	 * {@code mmtr_seat_<cab>} anchor, which moves with the model, so once someone is seated it wins.</p>
+	 *
+	 * <p>Deliberately NOT applied everywhere: a standing passenger's Y SHOULD come from the floors,
+	 * because that is what keeps them on the car and what dismounts them when they walk off it.</p>
+	 */
+	private static double mmtrLockedSeatFootY = Double.NaN;
+
+	/**
+	 * The Y to PROBE the resource pack's floor/doorway boxes at, i.e. where the boxes actually are.
+	 *
+	 * <p>Usually maintained automatically: {@code bestPosition} adopts a box's own top whenever the direct
+	 * probe misses. The entry paths seed it with their best guess so the FIRST tick does not have to fall
+	 * back, and {@link Double#NaN} means "no idea, ask the boxes".</p>
+	 *
+	 * <p>It exists because the rider's Y and the boxes can disagree by more than a block: saf101's model
+	 * floor sits at 2.47 while its floor box is at 1.0, because the model was raised and the resource pack
+	 * was not. Anything that asks "is the rider on a floor?" using the rider's Y answers no, and the
+	 * caller dismounts them.</p>
+	 */
+	private static double mmtrFloorProbeY = Double.NaN;
 	/**
 	 * MMTR 取证计数器（notes/177）：客户端把玩家"按"到车内绝对坐标的次数。
 	 *
@@ -91,13 +125,18 @@ public class VehicleRidingMovement {
 		if (ridingVehicleCooldown < RIDING_COOLDOWN && shiftHoldingTicks < SHIFT_ACTIVATE_TICKS) {
 			ridingVehicleCooldown++;
 		} else {
-			// If no vehicles are updating the player's position, dismount the player
+			// If no vehicles are updating the player's position, dismount the player.
+			//
+			// The PIN is not cleared here on purpose. This branch fires on a single quiet tick - a lag
+			// spike, a chunk not loaded, the vehicle stream stuttering - and `ridingVehicleCooldown` is the
+			// only thing that has to recover. Clearing the pin made the camera drop to the floor for those
+			// ticks and then snap back, which is the "it works then it falls" flicker. The pin belongs to
+			// the RIDE, so it is cleared at the two real exits instead (see markLeftTrain).
 			sendUpdate(true);
 			ridingDepotId = 0;
 			ridingSidingId = 0;
 			ridingVehicleId = 0;
-			mmtrDriverSynced = false;
-			mmtrCabLocked = false;
+			markLeftTrain();
 		}
 
 		if (ridingPositionCache != null) {
@@ -284,6 +323,7 @@ public class VehicleRidingMovement {
 					ridingDepotId = 0;
 					ridingSidingId = 0;
 					ridingVehicleId = 0;
+					markLeftTrain();
 				} else {
 					if (ridingVehicleZ + movementZ > 1) {
 						// If player has left the gangway (in the +Z direction), convert back to non-gangway positioning for ridingVehicleX and Z
@@ -342,7 +382,19 @@ public class VehicleRidingMovement {
 					ridingVehicleZ = thisCarGangwayMovementPositions2.getPercentageZ(ridingVehicleZ + movementZ);
 					ridingPositionCache = null;
 				} else {
-					// Calculate and store all the offsets that should be applied to the player to keep them in bounds of the floors
+					// Calculate and store all the offsets that should be applied to the player to keep them in bounds of the floors.
+					//
+					// MMTR: the Y used to FIND the floor is the floor's own Y, never the pinned seat Y. This
+					// is load-bearing. `bestPosition` rejects a floor whose top is more than a block from the
+					// Y it is handed, and `boxContains` needs the Y to be inside the box at all - so asking
+					// "is there a floor here?" at the pinned seat height (which is deliberately ABOVE the
+					// floor, because the anchor is at eye height minus... nothing) answered "no floor" for a
+					// player sitting perfectly well in a cab, and the dismount below fired one tick after
+					// boarding. That was the 9.6-block server correction in the log.
+					//
+					// The two questions are genuinely different and must be asked separately:
+					//   "is the player on a floor?"     -> the resource pack's boxes, at the floor's Y
+					//   "how high is the camera?"       -> the model's seat anchor (the pin)
 					final ObjectArrayList<Vector3d> offsets = new ObjectArrayList<>();
 					clampPosition(floorsAndDoorways, ridingVehicleX + movementX - RenderVehicleHelper.HALF_PLAYER_WIDTH, ridingVehicleZ + movementZ - RenderVehicleHelper.HALF_PLAYER_WIDTH, offsets);
 					clampPosition(floorsAndDoorways, ridingVehicleX + movementX + RenderVehicleHelper.HALF_PLAYER_WIDTH, ridingVehicleZ + movementZ - RenderVehicleHelper.HALF_PLAYER_WIDTH, offsets);
@@ -350,11 +402,19 @@ public class VehicleRidingMovement {
 					clampPosition(floorsAndDoorways, ridingVehicleX + movementX - RenderVehicleHelper.HALF_PLAYER_WIDTH, ridingVehicleZ + movementZ + RenderVehicleHelper.HALF_PLAYER_WIDTH, offsets);
 
 					if (offsets.isEmpty()) {
-						// Player is not standing on any floor, dismount player
+						// Player is not standing on any floor, dismount player.
+						//
+						// MMTR: this is also where a PINNED rider gets thrown off, so it reports the search
+						// that failed before it does. The pinned Y is deliberately above the resource pack's
+						// floor boxes, so a search that probes at the wrong Y finds nothing and dismounts a
+						// player who is sitting perfectly well - which is exactly what happened once.
+						logFloorMissOnce();
 						sendUpdate(true);
 						ridingDepotId = 0;
 						ridingSidingId = 0;
 						ridingVehicleId = 0;
+						// A new cab lock will re-latch; a stale one must not pin the next ride's Y.
+						markLeftTrain();
 					} else {
 						// Find the highest amounts to clamp the player movement in both the X and Z direction and apply the clamps
 						double clampX = 0;
@@ -370,8 +430,20 @@ public class VehicleRidingMovement {
 							}
 						}
 						ridingVehicleX += movementX + clampX;
-						ridingVehicleY = maxY;
+						// MMTR: a rider whose view is pinned to a modelled seat keeps the Y that seat
+						// anchor implies. The clamp above still decides whether they are on the train at all
+						// (an empty `offsets` dismounts) and the X/Z clamp still applies - only the Y,
+						// which comes from the resource pack's floor box, is overridden.
+						//
+						// Note this is keyed on the LATCH alone, NOT on mmtrCabLocked: a boarded player is
+						// deliberately free to walk (not locked), and gating on the lock made the latch
+						// unreachable. See mmtrPinSeatFootY.
+						//
+						// mmtrFloorProbeY is remembered separately so the NEXT tick's floor search still
+						// probes where the boxes are, instead of at the raised seat. See mmtrFloorProbeY.
+						mmtrFloorProbeY = maxY;						ridingVehicleY = Double.isNaN(mmtrLockedSeatFootY) ? maxY : mmtrLockedSeatFootY;
 						ridingVehicleZ += movementZ + clampZ;
+						logFloorClamp(maxY, ridingVehicleX, ridingVehicleY, ridingVehicleZ);
 					}
 
 					ridingPositionCache = new Vector3d(ridingVehicleX, ridingVehicleY, ridingVehicleZ);
@@ -419,10 +491,191 @@ public class VehicleRidingMovement {
 	 * MMTR: while the crew holds a cab the driver is fixed at the seat and cannot walk around; the
 	 * passenger compartment stays freely walkable. Set when a cab is taken and cleared when it is
 	 * left (or when the ride ends).
+	 *
+	 * @param locked also latches/clears the seat's eye height; see {@link #mmtrLockedSeatFootY}
+	 */
+	/**
+	 * True while the crew is seated in a cab: the driver is fixed at the seat and cannot walk.
+	 * Set when a cab is taken and cleared when it is left (or when the ride ends).
+	 *
+	 * <p>Purely about WALKING. It deliberately does NOT touch the eye-height pin any more: releasing the
+	 * lock must not drop the camera, and coupling the two is what made the view flip between the seat and
+	 * the floor every tick (the cab-key reconciliation releases the lock repeatedly while the player is
+	 * sitting in the seat). See {@link #mmtrPinSeatFootY(double, double)} for the pin's own lifecycle.</p>
 	 */
 	public static void mmtrSetCabLock(boolean locked) {
 		mmtrCabLocked = locked;
 	}
+
+	/**
+	 * Whether a cab has been taken by key (as opposed to merely boarded). The two entry paths into the same
+	 * seat have to be able to tell each other apart: an explicit cab claim is the intentional one and wins.
+	 */
+	public static boolean mmtrHasCabLock() {
+		return mmtrCabLocked;
+	}
+
+	/**
+	 * Pin the Y to a modelled seat's foot height AND record where the car's floor actually is, then clear
+	 * the cab lock so the rider stays free to walk.
+	 *
+	 * <p><b>Pin</b> = "this rider's eye height comes from the model's seat anchor".<br>
+	 * <b>Lock</b> = "this rider may not walk around".</p>
+	 *
+	 * <p>They are separate ideas and must not be conflated. Conflating them has now cost two rounds: first
+	 * the pin was gated ON the lock (so it could never apply to a boarder, who is deliberately unlocked),
+	 * then releasing the lock also cleared the pin (so the cab-key reconciliation dropped the camera to the
+	 * floor several times a second). The pin's lifecycle is now its own: set here or by
+	 * {@link #mmtrLockSeatAndPin(double, double)}, and cleared only by {@link #markLeftTrain()}.</p>
+	 *
+	 * <p>A boarded player gets the pin but not the lock; a driver who took the cab by key gets both.</p>
+	 */
+	/**
+	 * Pin the Y to a modelled seat's foot height, and record where the car's floor actually is.
+	 *
+	 * <p><b>Only the pin.</b> {@code mmtrCabLocked} is deliberately NOT touched, and neither is anything
+	 * else about the ride. An earlier version cleared the cab lock here so a boarded player could walk, and
+	 * that was a per-frame bug once the pin became self-healing: {@code MmtrBoarding.tick()} re-asserts the
+	 * pin every tick, so every tick cleared the lock, so the driver-key check downstream saw "not seated"
+	 * and stopped reporting the key to the server - which then revoked the cab. The visible result was
+	 * "上车一会就被判定为下车了" (the HUD drops the cab), while the player was still sitting in it.</p>
+	 *
+	 * <p>Whether the rider may walk is {@link #mmtrLockSeatAndPin(double, double)} /
+	 * {@link #mmtrSetCabLock(boolean)}'s business, and it is set once at the door rather than every tick.</p>
+	 */
+	public static void mmtrPinSeatFootY(double footY, double floorY) {
+		setSeatFootY(footY, "硬绑上车 mmtrPinSeatFootY");
+		mmtrFloorProbeY = floorY;
+	}
+
+	/**
+	 * Pin the Y to a modelled seat's foot height AND lock the rider in place.
+	 *
+	 * <p>The paired form exists so a caller cannot get the order wrong: the two are set together rather
+	 * than by a caller that has to remember the sequence.</p>
+	 *
+	 * @param footY  the car-local foot Y the camera is pinned to (seat anchor minus eye height)
+	 * @param floorY the car-local floor Y the floor boxes sit at
+	 */
+	public static void mmtrLockSeatAndPin(double footY, double floorY) {
+		setSeatFootY(footY, "进驾驶室 mmtrLockSeatAndPin");
+		mmtrFloorProbeY = floorY;
+		mmtrCabLocked = true;
+	}
+
+	/**
+	 * The single place that ends a ride: the player is no longer on the train, so the seat pin and the cab
+	 * lock go with it.
+	 *
+	 * <p>Every path that removes the rider must call this rather than clearing the pin by hand, because the
+	 * pin has to outlive everything ELSE that touches the riding state (a floor probe that misses for a
+	 * tick, a cab-key reconciliation releasing the lock) and only die with the ride itself.</p>
+	 */
+	private static void markLeftTrain() {
+		// The cab lock is what keeps the driver's key alive in MmtrCabInteraction, so whoever clears it had
+		// better say so: "the cab key vanished while I was sitting in the seat" is otherwise unattributable.
+		final StackTraceElement caller = new Throwable().getStackTrace()[1];
+		org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 离开列车（{}#{}）车辆={} 车内={} 座位锁存={}",
+				caller.getClassName().substring(caller.getClassName().lastIndexOf('.') + 1), caller.getMethodName(),
+				ridingVehicleId, ridingVehicleCarNumber,
+				Double.isNaN(mmtrLockedSeatFootY) ? "无" : round3(mmtrLockedSeatFootY));
+		mmtrDriverSynced = false;
+		mmtrCabLocked = false;
+		setSeatFootY(Double.NaN, "离开列车");
+		mmtrFloorProbeY = Double.NaN;
+	}
+
+	/** Throttle for the floor-clamp diagnostic. */
+	private static long mmtrLastFloorClampLogMillis;
+
+	/** Why the last floor search came up empty, for the diagnostic. Null once one succeeds. */
+	private static String mmtrFloorMiss;
+
+	private static void recordFloorMiss(ObjectArrayList<ObjectBooleanImmutablePair<Box>> floorsAndDoorways, double x, double z) {
+		if (mmtrFloorMiss != null) {
+			return;
+		}
+		final StringBuilder builder = new StringBuilder();
+		builder.append("probe=(").append(round3(x)).append(", ").append(round3(mmtrFloorProbeY)).append(", ").append(round3(z)).append(")");
+		builder.append(" 瞄准锁存=").append(Double.isNaN(mmtrLockedSeatFootY) ? "无" : round3(mmtrLockedSeatFootY));
+		builder.append(" 盒子 ").append(floorsAndDoorways.size()).append(" 个:");
+		int shown = 0;
+		for (final ObjectBooleanImmutablePair<Box> entry : floorsAndDoorways) {
+			if (shown++ >= 6) {
+				builder.append(" …");
+				break;
+			}
+			final Box box = entry.left();
+			builder.append(String.format(" [%s x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f]",
+					entry.rightBoolean() ? "地板" : "门洞",
+					box.getMinXMapped(), box.getMaxXMapped(),
+					box.getMinYMapped(), box.getMaxYMapped(),
+					box.getMinZMapped(), box.getMaxZMapped()));
+		}
+		mmtrFloorMiss = builder.toString();
+	}
+
+	/**
+	 * Every write to {@link #mmtrLockedSeatFootY} goes through here.
+	 *
+	 * <p>"It works for a moment and then the view drops" has exactly one shape of cause: something
+	 * CLEARS the pin a tick or two after it is set, and the floor clamp takes back over. Guessing which
+	 * of the four clear sites does it costs a game launch each time; naming the caller in the log costs
+	 * nothing.</p>
+	 */
+	private static void setSeatFootY(double footY, String source) {
+		final double previous = mmtrLockedSeatFootY;
+		mmtrLockedSeatFootY = footY;
+		if (Double.isNaN(previous) != Double.isNaN(footY) || !Double.isNaN(previous) && Math.abs(previous - footY) > 1.0E-6) {
+			org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 座位锁存 {} → {} （来源 {}）",
+					Double.isNaN(previous) ? "无" : round3(previous),
+					Double.isNaN(footY) ? "无" : round3(footY), source);
+		}
+	}
+
+	/**
+	 * Reports the floor clamp's verdict against the pinned seat height, a couple of times a second.
+	 *
+	 * <p>"The floor is still limiting it" is otherwise indistinguishable from "the pin was never set",
+	 * "the pin was set then cleared", and "the clamp is fine and something else moves the camera". This
+	 * prints the numbers that separate those cases: where the boxes are ({@link #mmtrFloorProbeY}), what
+	 * the clamp wanted, what was used, and whether a pin is in force at all.</p>
+	 */
+	private static void logFloorClamp(double floorWantedY, double x, double y, double z) {
+		mmtrFloorMiss = null;
+		final long now = System.currentTimeMillis();		if (now - mmtrLastFloorClampLogMillis < 500) {
+			return;
+		}
+		mmtrLastFloorClampLogMillis = now;
+		org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 地板盒在 y={} 钳制想要 y={} 实际用 y={} 座位锁存={} 驾驶位锁={} local=({}, {}, {})",
+				round3(mmtrFloorProbeY), round3(floorWantedY), round3(y),
+				Double.isNaN(mmtrLockedSeatFootY) ? "无" : round3(mmtrLockedSeatFootY),
+				mmtrCabLocked,
+				round3(x), round3(y), round3(z));
+	}
+
+	private static double round3(double value) {
+		return Math.round(value * 1000) / 1000.0;
+	}
+
+	/**
+	 * Reports why the floor search failed, once per half second.
+	 *
+	 * <p>"No floor under the player" has several causes that need opposite fixes: the probe Y being outside
+	 * every box (a pin interaction), the probe X/Z being outside every box (position), or the car having no
+	 * boxes at all (a resource pack problem). Printing the probe and the boxes separates them immediately
+	 * instead of costing a round trip per hypothesis.</p>
+	 */
+	private static void logFloorMissOnce() {
+		final long now = System.currentTimeMillis();
+		if (mmtrFloorMiss == null || now - mmtrLastFloorMissLogMillis < 500) {
+			return;
+		}
+		mmtrLastFloorMissLogMillis = now;
+		org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 找不到地板 → 下车：{}", mmtrFloorMiss);
+	}
+
+	private static long mmtrLastFloorMissLogMillis;
 
 	/**
 	 * MMTR B7.6d: puts the player inside a specific car at a fixed car-local point without requiring
@@ -528,16 +781,25 @@ public class VehicleRidingMovement {
 	}
 
 	/**
-	 * Find an intersecting floor or doorway from the player position.
-	 * If there are multiple intersecting floors or doorways, get the one with the highest Y level.
-	 * If there are no intersecting floors or doorways, find the closest floor or doorway instead.
+	 * Find an intersecting floor or doorway for a rider standing at {@code (x, z)}.
+	 *
+	 * <p>Probed at {@link #mmtrFloorProbeY}, which is where the boxes actually are. Then, if that finds
+	 * nothing, a <b>second pass probes each box at its own top</b> and accepts the first one whose X/Z
+	 * contains the rider.</p>
+	 *
+	 * <p>That second pass is the load-bearing part. The riding Y and the resource pack's floor boxes can
+	 * disagree by a lot - a model raised to platform height moves its anchors up while the floor boxes stay
+	 * put (measured on saf101: model floor 2.47, floor box 1.0, a 1.47 m gap) - and the first pass then
+	 * misses, the caller sees an empty offset list, and it DISMOUNTS a player who is sitting perfectly
+	 * well. Probing each box at its own top removes the assumption that anyone can name the right Y in
+	 * advance: the boxes answer for themselves.</p>
 	 */
 	@Nullable
-	private static ObjectBooleanImmutablePair<Box> bestPosition(ObjectArrayList<ObjectBooleanImmutablePair<Box>> floorsOrDoorways, double x, double y, double z) {
-		return floorsOrDoorways.stream()
-				.filter(floorOrDoorway -> RenderVehicleHelper.boxContains(floorOrDoorway.left(), x, y, z))
+	private static ObjectBooleanImmutablePair<Box> bestPosition(ObjectArrayList<ObjectBooleanImmutablePair<Box>> floorsOrDoorways, double x, double z) {
+		final ObjectBooleanImmutablePair<Box> direct = floorsOrDoorways.stream()
+				.filter(floorOrDoorway -> RenderVehicleHelper.boxContains(floorOrDoorway.left(), x, mmtrFloorProbeY, z))
 				.max(Comparator.comparingDouble(floorOrDoorway -> floorOrDoorway.left().getMaxYMapped()))
-				.orElse(floorsOrDoorways.stream().filter(floorOrDoorway -> Math.abs(floorOrDoorway.left().getMaxYMapped() - ridingVehicleY) <= 1).min(Comparator.comparingDouble(floorOrDoorway -> {
+				.orElse(floorsOrDoorways.stream().filter(floorOrDoorway -> Math.abs(floorOrDoorway.left().getMaxYMapped() - mmtrFloorProbeY) <= 1).min(Comparator.comparingDouble(floorOrDoorway -> {
 					final Box box = floorOrDoorway.left();
 					final double minX = box.getMinXMapped();
 					final double maxX = box.getMaxXMapped();
@@ -545,10 +807,29 @@ public class VehicleRidingMovement {
 					final double maxZ = box.getMaxZMapped();
 					return (Utilities.isBetween(x, minX, maxX) ? 0 : Math.min(Math.abs(minX - x), Math.abs(maxX - x))) + (Utilities.isBetween(z, minZ, maxZ) ? 0 : Math.min(Math.abs(minZ - z), Math.abs(maxZ - z)));
 				})).orElse(null));
+		if (direct != null) {
+			return direct;
+		}
+		// Second pass: ask each box whether it contains the rider AT ITS OWN TOP.
+		ObjectBooleanImmutablePair<Box> best = null;
+		for (final ObjectBooleanImmutablePair<Box> entry : floorsOrDoorways) {
+			final Box box = entry.left();
+			if (!RenderVehicleHelper.boxContains(box, x, box.getMaxYMapped(), z)) {
+				continue;
+			}
+			if (best == null || box.getMaxYMapped() > best.left().getMaxYMapped()) {
+				best = entry;
+			}
+		}
+		if (best != null) {
+			// Adopt this box's height as the probe, so the following ticks take the direct path again.
+			mmtrFloorProbeY = best.left().getMaxYMapped();
+		}
+		return best;
 	}
 
 	private static void clampPosition(ObjectArrayList<ObjectBooleanImmutablePair<Box>> floorsAndDoorways, double x, double z, ObjectArrayList<Vector3d> offsets) {
-		final ObjectBooleanImmutablePair<Box> floorOrDoorway = bestPosition(floorsAndDoorways, x, ridingVehicleY, z);
+		final ObjectBooleanImmutablePair<Box> floorOrDoorway = bestPosition(floorsAndDoorways, x, z);
 
 		if (floorOrDoorway != null) {
 			if (floorOrDoorway.rightBoolean()) {
@@ -558,11 +839,21 @@ public class VehicleRidingMovement {
 						floorOrDoorway.left().getMaxYMapped(),
 						MathUtils.clamp(z, floorOrDoorway.left().getMinZMapped(), floorOrDoorway.left().getMaxZMapped()) - z
 				));
-			} else if (RenderVehicleHelper.boxContains(floorOrDoorway.left(), x, ridingVehicleY, z)) {
+			} else if (RenderVehicleHelper.boxContains(floorOrDoorway.left(), x, mmtrFloorProbeY, z)) {
 				// If the intersecting or closest floor or doorway is a doorway, then don't force the player to be in bounds
 				// Dismount if the player is not intersecting the doorway
+				//
+				// Probed at mmtrFloorProbeY, NOT at ridingVehicleY: the question here is "is the rider inside
+				// the doorway box", and a pinned rider's Y is deliberately above where the boxes are. Testing
+				// at the pinned Y answers "no" for a rider standing in a doorway on a raised model, and the
+				// empty offset list then dismounts them.
 				offsets.add(new Vector3d(0, floorOrDoorway.left().getMaxYMapped(), 0));
 			}
+		} else {
+			// Nothing found for this probe: remember it, so logFloorClamp can report WHY the dismount below
+			// is about to happen. "No floor" has several distinct causes (probe Y outside every box, probe
+			// X/Z outside every box, or no boxes at all) and they need different fixes.
+			recordFloorMiss(floorsAndDoorways, x, z);
 		}
 	}
 
@@ -591,6 +882,12 @@ public class VehicleRidingMovement {
 	}
 
 	private static void sendUpdate(boolean dismount) {
+		if (dismount) {
+			final StackTraceElement caller = new Throwable().getStackTrace()[1];
+			org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 发出下车包（{}#{}）车辆={} 车内={}",
+					caller.getClassName().substring(caller.getClassName().lastIndexOf('.') + 1),
+					caller.getMethodName(), ridingVehicleId, ridingVehicleCarNumber);
+		}
 		if (ridingVehicleId != 0) {
 			InitClient.REGISTRY_CLIENT.sendPacketToServer(PacketUpdateVehicleRidingEntities.create(ridingSidingId, ridingVehicleId, dismount ? -1 : ridingVehicleCarNumber, ridingVehicleX, ridingVehicleY, ridingVehicleZ, isOnGangway, isHoldingDriverKey, pressingAccelerateTicks == 1, pressingBrakeTicks == 1, pressingDoorsTicks == 1, pressingAtoTicks == 1, doorOverrideTicks > 1));
 			sendPositionUpdateTime = 0;

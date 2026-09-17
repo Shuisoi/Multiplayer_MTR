@@ -27,7 +27,7 @@ import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
 import org.mtr.mod.packet.PacketTurnOnBlockEntity;
-import org.mtr.mod.render.MmtrCabHudRenderer;
+
 import org.mtr.mod.resource.VehicleResource;
 
 import javax.annotation.Nullable;
@@ -230,7 +230,8 @@ public class VehicleExtension extends Vehicle implements Utilities {
 				}));
 			}
 
-			MmtrCabHudRenderer.setVehicle(this);
+			// MMTR: used to hand this vehicle to the screen-space cab HUD (MmtrCabHudRenderer.setVehicle).
+			// The overlay is disabled; the hook returns when a replacement console exists.
 		}
 
 		// Check for sensors

@@ -14,6 +14,7 @@ import org.mtr.mod.config.Config;
 import org.mtr.mod.render.panel.MmtrHudLayout;
 import org.mtr.mod.render.panel.MmtrPanelFont;
 import org.mtr.mod.render.panel.MmtrPanelTexture;
+import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.resource.*;
 
 import java.io.InputStream;
@@ -94,6 +95,8 @@ public class CustomResourceLoader {
 		MmtrHudLayout.clearCache();
 		MmtrPanelFont.reset();
 		MmtrPanelTexture.clear();
+		// MMTR: windshield precipitation/wiper state (per-anchor drops and the generated rain image)
+		MmtrWindshield.clear();
 		TEST_DURATION = 0;
 
 		final ObjectArrayList<SignResource> defaultSigns = new ObjectArrayList<>();

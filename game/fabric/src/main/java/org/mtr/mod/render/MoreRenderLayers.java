@@ -15,6 +15,7 @@ public class MoreRenderLayers {
 	private static final Object2ObjectOpenHashMap<Identifier, RenderLayer> INTERIOR_TRANSLUCENT_CACHE = new Object2ObjectOpenHashMap<>();
 	private static final Object2ObjectOpenHashMap<Identifier, RenderLayer> EXTERIOR_CACHE = new Object2ObjectOpenHashMap<>();
 	private static final Object2ObjectOpenHashMap<Identifier, RenderLayer> EXTERIOR_TRANSLUCENT_CACHE = new Object2ObjectOpenHashMap<>();
+	private static final Object2ObjectOpenHashMap<Identifier, RenderLayer> EXTERIOR_TRANSLUCENT_DOUBLE_CACHE = new Object2ObjectOpenHashMap<>();
 
 	public static void removeFromCache(Identifier identifier) {
 		LIGHT_CACHE.remove(identifier);
@@ -24,6 +25,7 @@ public class MoreRenderLayers {
 		INTERIOR_TRANSLUCENT_CACHE.remove(identifier);
 		EXTERIOR_CACHE.remove(identifier);
 		EXTERIOR_TRANSLUCENT_CACHE.remove(identifier);
+		EXTERIOR_TRANSLUCENT_DOUBLE_CACHE.remove(identifier);
 	}
 
 	public static RenderLayer getLight(Identifier texture, boolean isTranslucent) {
@@ -48,6 +50,11 @@ public class MoreRenderLayers {
 
 	public static RenderLayer getExteriorTranslucent(Identifier texture) {
 		return checkCache(texture, () -> RenderLayer.getEntityTranslucentCull(texture), EXTERIOR_TRANSLUCENT_CACHE);
+	}
+
+	/** Translucent with NO back-face culling, so one quad is visible from both sides. */
+	public static RenderLayer getExteriorTranslucentDoubleSided(Identifier texture) {
+		return checkCache(texture, () -> RenderLayer.getEntityTranslucent(texture), EXTERIOR_TRANSLUCENT_DOUBLE_CACHE);
 	}
 
 	private static RenderLayer checkCache(Identifier identifier, Supplier<RenderLayer> supplier, Object2ObjectOpenHashMap<Identifier, RenderLayer> cache) {

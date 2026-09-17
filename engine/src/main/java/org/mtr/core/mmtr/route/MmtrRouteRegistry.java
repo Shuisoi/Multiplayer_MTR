@@ -27,6 +27,30 @@ public final class MmtrRouteRegistry {
 	private final Map<Long, MmtrRoute> byVehicle = new HashMap<>();
 
 	/**
+	 * 只读：某列车**现在压在哪根轨上**（{@code null} = 查不出来）。用于敌对进路的"先出清"档。
+	 *
+	 * <p>为什么要有它（2026-09-17 现场：北段 S1/S2 双向占用测试班三班车互相扣死）：
+	 * 纯排名比较的 T5 有一个**物理环**——赢家（SET）被"输家的车体正占着它要进的区间"堵在信号前，
+	 * 而输家已经按规则退出⇒谁也不动。判"谁的车身压在争用轨上"必须有车辆位置，而登记表没有
+	 * Simulator，所以由 {@code Simulator} 在构造时挂进来（与权限层的几个挂钩同一写法）。</p>
+	 */
+	public interface VehicleRailLookup {
+		@org.jspecify.annotations.Nullable String railHexOf(long vehicleId);
+	}
+
+	/** 挂上"这列车现在在哪根轨上"的查询；不挂 = 这一档失效（老语义逐位不变，测试夹具就是这样）。 */
+	public MmtrRouteRegistry withVehicleRailLookup(@org.jspecify.annotations.Nullable VehicleRailLookup lookup) {
+		this.vehicleRailLookup = lookup;
+		return this;
+	}
+
+	private @org.jspecify.annotations.Nullable VehicleRailLookup vehicleRailLookup;
+
+	private @org.jspecify.annotations.Nullable String vehicleRailHex(long vehicleId) {
+		return vehicleRailLookup == null ? null : vehicleRailLookup.railHexOf(vehicleId);
+	}
+
+	/**
 	 * Install the route of a train. A re-plan (different movement) replaces the previous route; a
 	 * repeat of the SAME movement keeps the live object, so a mission whose self-arm retries while
 	 * it waits for the interlocking does not churn the route identity every tick.
@@ -215,6 +239,30 @@ public final class MmtrRouteRegistry {
 			final MmtrRoute other = byVehicle.get(otherId);
 			if (other == null || !outranks(other, route)) {
 				continue;
+			}
+			/*
+			 * **"先出清"排在排名之前**（2026-09-17 现场：北段 S1/S2 测试班三班车互相扣死）。
+			 *
+			 * <p>现场：赢家（SET 的那条进路）停在信号前，理由是"前方区间被占"——占着它的**正是**
+			 * 压住我的那条进路的车；而那条车已经按 T5 退出（PENDING），于是它不动、我也不动。
+			 * 三班车这样串成一个**物理环**（车体占位，不是持有互等）：谁都不持有任何东西，
+			 * 所以原来的"纯排名"判据看不出环；但实际就是死锁。</p>
+			 *
+			 * <p>判据（与道岔层"岔内优先出清"同一条道理）：**谁的车身压在争用的那根轨上，谁先走**。
+			 * 车已经在那根轨上、它就是这条单线区段里唯一的移动者——它往前开一步（或开出去）就把
+			 * 这段让出来了；而在岔外等的那条车本来也只能等。两者都在争用轨上（或都不在）时，
+			 * 回到原来的排名比较，行为不变。</p>
+			 */
+			final String sharedRail = conflict.sharedRailHex;
+			if (sharedRail != null && !sharedRail.isEmpty()) {
+				final String mineRail = vehicleRailHex(route.getVehicleId());
+				final String otherRail = vehicleRailHex(otherId);
+				final boolean mineOnShared = sharedRail.equals(mineRail);
+				final boolean otherOnShared = sharedRail.equals(otherRail);
+				if (otherOnShared != mineOnShared) {
+					// 只有一方压在争用轨上：那一方先走 —— 我不是被压住的那条
+					return null;
+				}
 			}
 			return "敌对进路：与 v" + otherId + " " + conflict.detail + "；对方优先（"
 				+ (other.getPlannedMillis() == Long.MAX_VALUE ? "到达序在先" : "计划时刻更早") + "），本车退出（只有最优先的一条能 SET）";

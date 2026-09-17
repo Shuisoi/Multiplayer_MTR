@@ -41,6 +41,9 @@ fs.mkdirSync(path.join(workDir, 'zips'), { recursive: true });
 const vehicles = [];
 const ids = [];
 const seenIds = new Set();
+// Sound-event registrations merged across cars: a per-car sounds.json would otherwise be clobbered
+// by the next car, and MTR resolves every vehicle id out of one shared assets/mtr tree.
+const soundEvents = {};
 
 for (let i = 0; i < cars.length; i++) {
 	const car = cars[i];
@@ -73,6 +76,13 @@ for (let i = 0; i < cars.length; i++) {
 			}
 			continue;
 		}
+		if (entry === 'sounds.json') {
+			const parsed = JSON.parse(fs.readFileSync(from, 'utf8'));
+			for (const event in parsed) {
+				soundEvents[event] = parsed[event];
+			}
+			continue;
+		}
 		fs.cpSync(from, path.join(stageMtr, entry), { recursive: true });
 	}
 	console.log('merged car ' + id);
@@ -80,6 +90,10 @@ for (let i = 0; i < cars.length; i++) {
 
 // One resource json for the whole pack: MTR reads every vehicle id from it.
 fs.writeFileSync(path.join(stageMtr, 'mtr_custom_resources.json'), JSON.stringify({ vehicles: vehicles, signs: [], rails: [], objects: [], lifts: [] }));
+if (Object.keys(soundEvents).length) {
+	fs.writeFileSync(path.join(stageMtr, 'sounds.json'), JSON.stringify(soundEvents));
+	console.log('sound events:', Object.keys(soundEvents).length);
+}
 fs.writeFileSync(path.join(stage, 'pack.mcmeta'), JSON.stringify({ pack: { pack_format: config.packFormat || 18, description: config.description || (packName + ' auto pack') } }));
 
 const zipOut = path.join(config.outputDir || '.', packName + '.zip');

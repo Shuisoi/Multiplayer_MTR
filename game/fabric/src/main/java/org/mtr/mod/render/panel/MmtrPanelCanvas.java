@@ -30,12 +30,12 @@ import java.awt.image.DataBufferInt;
  */
 public final class MmtrPanelCanvas {
 
-	private final BufferedImage image;
-	private final Graphics2D graphics;
+	private BufferedImage image;
+	private Graphics2D graphics;
 	private final double widthM;
 	private final double heightM;
-	private final double scaleX;
-	private final double scaleY;
+	private double scaleX;
+	private double scaleY;
 
 	/** Panels are small; anything bigger than this is a modelling mistake, so clamp instead of exploding. */
 	private static final int MAX_PIXELS = 512;
@@ -66,6 +66,45 @@ public final class MmtrPanelCanvas {
 
 	public static MmtrPanelCanvas create(double widthM, double heightM, int pxPerMetre) {
 		return new MmtrPanelCanvas(widthM, heightM, pxPerMetre);
+	}
+
+	/**
+	 * A canvas whose backing image is exactly the requested pixel size, measured in metres. Used by the
+	 * MMTR windshield: the precipitation layer is a full-surface image that the client regenerates every
+	 * few frames, and it wants a predictable pixel count at the glass's own aspect ratio rather than the
+	 * square-ish density {@link #create} derives from the longer side.
+	 */
+	public static MmtrPanelCanvas createPixels(double widthM, double heightM, int widthPx) {
+		final double safeWidthM = Math.max(widthM, 1.0E-3);
+		final double safeHeightM = Math.max(heightM, 1.0E-3);
+		final double aspect = safeWidthM / safeHeightM;
+		final int clampedWidthPx = Math.min(MAX_PIXELS, Math.max(MIN_PIXELS, widthPx));
+		final int heightPx = Math.max(1, (int) Math.round(clampedWidthPx / aspect));
+		final MmtrPanelCanvas canvas = new MmtrPanelCanvas(safeWidthM, safeHeightM);
+		canvas.scaleX = clampedWidthPx / safeWidthM;
+		canvas.scaleY = heightPx / safeHeightM;
+		canvas.replaceImage(clampedWidthPx, heightPx);
+		return canvas;
+	}
+
+	private MmtrPanelCanvas(double widthM, double heightM) {
+		this.widthM = widthM;
+		this.heightM = heightM;
+		this.scaleX = 1;
+		this.scaleY = 1;
+		image = null;
+		graphics = null;
+	}
+
+	private void replaceImage(int widthPx, int heightPx) {
+		if (graphics != null) {
+			graphics.dispose();
+		}
+		image = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+		graphics = image.createGraphics();
+		graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+		graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 	}
 
 	public double widthM() {
@@ -153,6 +192,32 @@ public final class MmtrPanelCanvas {
 		final double r = radius * Math.min(scaleX, scaleY);
 		graphics.fill(new java.awt.geom.Ellipse2D.Double(px(cx) - r, py(cy) - r, r * 2, r * 2));
 		return this;
+	}
+
+	/**
+	 * A filled pie slice centred on {@code (cx, cy)}, from {@code startDegrees} to {@code endDegrees}
+	 * (degrees, counter clockwise from +X in the panel's own y-up space).
+	 *
+	 * <p>Used by the windshield for the film the wiper blade drags: the swept sector IS the trail, so
+	 * there is nothing to age or expire - it is rebuilt from the arm's own two angles every frame.</p>
+	 */
+	public MmtrPanelCanvas fillSector(double cx, double cy, double radius, double startDegrees, double endDegrees, int color) {
+		if (radius <= 0 || Math.abs(endDegrees - startDegrees) < 1.0E-6) {
+			return this;
+		}
+		final int steps = arcSteps(startDegrees, endDegrees);
+		final double[] xs = new double[steps + 2];
+		final double[] ys = new double[steps + 2];
+		xs[0] = cx;
+		ys[0] = cy;
+		for (int i = 0; i <= steps; i++) {
+			final double angle = Math.toRadians(startDegrees + (endDegrees - startDegrees) * i / steps);
+			xs[i + 1] = cx + radius * Math.cos(angle);
+			ys[i + 1] = cy + radius * Math.sin(angle);
+		}
+		// fillPolygon would close the path straight from the last arc point back to the centre, which is
+		// exactly the two radii - so the fan is a filled sector, not a chord cut off the arc.
+		return fillPolygon(xs, ys, color);
 	}
 
 	/**

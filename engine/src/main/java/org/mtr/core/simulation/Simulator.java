@@ -282,7 +282,19 @@ public class Simulator extends Data implements Utilities {
 	/** S5 进路登记表 (route registry): the live route object per train (rails + turnouts + SET/PENDING
 	 * state), derived from {@link #mmtrPointAuthority}. The signal layer (A2) reads it to decide whether
 	 * a proceed aspect may be shown; the ops feed shows it per train. */
-	public final org.mtr.core.mmtr.route.MmtrRouteRegistry mmtrRoutes = new org.mtr.core.mmtr.route.MmtrRouteRegistry();
+	public final org.mtr.core.mmtr.route.MmtrRouteRegistry mmtrRoutes = new org.mtr.core.mmtr.route.MmtrRouteRegistry()
+		/*
+		 * 敌对进路裁决要判"**谁的车身压在争用的那根轨上**"（"先出清"档，2026-09-17 现场修：
+		 * 北段 S1/S2 双向占用测试班三班车互相扣死）。登记表没有 Simulator，所以位置查询由这里喂进去。
+		 */
+		.withVehicleRailLookup(this::mmtrVehicleRailHex);
+
+	/** 某列车现在压在哪根轨上（找不到车 = {@code null}）；敌对进路"先出清"档只读它。 */
+	public @org.jspecify.annotations.Nullable String mmtrVehicleRailHex(long vehicleId) {
+		final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		final org.mtr.core.mmtr.segment.MmtrMotionPosition walker = vehicle == null ? null : vehicle.getMmtrMotionWalker();
+		return walker == null ? null : walker.railHex();
+	}
 	/**
 	 * 闭塞区间（两层模型，notes/166）：Level 1 轨道区间（无方向、占用判定的唯一单位）＋
 	 * Level 2 行车区间（有方向，灯到灯；无灯连通块整块一个大区间）。

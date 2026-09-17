@@ -6,7 +6,7 @@ const {writeZip}=require('./zip.js');
 const {resolveRoot}=require('./paths.js');
 const params=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 // 配置里的路径可以写 ${MC_ROOT} 占位符（见 paths.js），这样配置文件能入库而不带机器相关绝对路径。
-for(const key of ['sourceObj','textureDir','outputDir','extraAnchors','stagingDir']){
+for(const key of ['sourceObj','textureDir','outputDir','extraAnchors','stagingDir','soundDir','hudLayout']){
   if(params[key]) params[key]=resolveRoot(params[key]);
 }
 const id=params.id;
@@ -20,6 +20,44 @@ fs.mkdirSync(sub,{recursive:true});
 // so the OBJ/MTL/PNG file names in the pack MUST be lowercase or the model silently loads as "".
 const srcBase=path.basename(params.sourceObj).toLowerCase();
 const raw=fs.readFileSync(params.sourceObj,'utf8');
+// The model file name may contain AT MOST ONE dot (the extension). MTR builds the resource path with
+// CustomResourceTools.formatIdentifier, which does `identifierString.split(".")[0]` and then appends the
+// extension - so "saf101v2.0.obj" is looked up as "saf101/saf101v2.obj", which does not exist. The pack
+// then builds fine, passes every zip check, and the model silently never loads (`obj=0 chars` in the
+// client log, and "0/N part conditions have optimized geometry" while rendering). Rename the file.
+{
+  const extraDots=(path.basename(params.sourceObj).match(/\./g)||[]).length-1;
+  if(extraDots>0){
+    console.warn('WARNING: sourceObj base name "'+path.basename(params.sourceObj)+'" contains '+extraDots+' extra dot(s).');
+    console.warn('         MTR truncates the resource path at the FIRST dot, so it will look for "'+
+      path.basename(params.sourceObj).split('.')[0]+'.'+path.extname(params.sourceObj).slice(1)+'"');
+    console.warn('         and read 0 chars - the model will NOT display. Rename it to a single dot.');
+  }
+}
+// Sanity check the source before anything else: an OBJ written without "Write Normals" / "Include UVs"
+// still parses, still packages, and still validates - it just renders as a completely untextured black
+// blob in game, because every face's vt/vn index points at nothing. That failure is invisible at build
+// time and expensive to diagnose in game, so it is called out here. (Blender's Wavefront exporter has
+// these as SEPARATE checkboxes from "Write Materials"; leaving them off is the usual cause.)
+{
+  const attr={v:0,vt:0,vn:0,f:0};
+  for(const line of raw.split('\n')){
+    const t=line.trim();
+    if(t.startsWith('v '))attr.v++;
+    else if(t.startsWith('vt '))attr.vt++;
+    else if(t.startsWith('vn '))attr.vn++;
+    else if(t.startsWith('f '))attr.f++;
+  }
+  if(attr.f>0&&attr.vt===0){
+    console.warn('WARNING: '+params.sourceObj+' has '+attr.f+' faces but NO "vt" UV lines.');
+    console.warn('         The exported pack will render UNTEXTURED/black. Re-export with "Include UVs".');
+  }
+  if(attr.f>0&&attr.vn===0){
+    console.warn('WARNING: '+params.sourceObj+' has '+attr.f+' faces but NO "vn" normal lines.');
+    console.warn('         Lighting will be wrong. Re-export with "Write Normals".');
+  }
+  console.log('source obj: v='+attr.v+' vt='+attr.vt+' vn='+attr.vn+' f='+attr.f);
+}
 // parse lines preserving structure; transform v/vn lines
 const deg=params.rotationDegY||0, rad=deg*Math.PI/180, cs=Math.cos(rad), sn=Math.sin(rad);
 const out=[]; const vpos=[];
@@ -34,6 +72,38 @@ if(params.recenter!==false && vpos.length){
   cx=(mnX+mxX)/2; cz=(mnZ+mxZ)/2;
 }
 const groupMap=params.groupMap||{};
+// A pattern in groupMap can be a SUBSTRING of another role's pattern, and roleOf() picks the LONGEST
+// match. That silently steals names from the other role: adding "glass": ["windshield"] makes
+// "mmtr_windshield_1" match "windshield" (9 chars) over the anchor prefix "mmtr_" (5), so the windshield
+// stops being an anchor - no error, just two missing anchors and no wipers in game. Warn about the
+// overlap instead of letting it happen quietly.
+{
+  // roleOf() picks the LONGEST matching pattern. Names are prefixed with the anchor pattern (usually
+  // "mmtr_"), so the dangerous case is narrow and specific: a NON-anchor pattern that reproduces the
+  // word an anchor name use AFTER the prefix - the anchor KINDS. For example with
+  // "glass": ["windshield"], the object "mmtr_windshield_1" matches "windshield" (9 chars) over the
+  // anchor prefix "mmtr_" (5), so it silently stops being an anchor: no error, two missing anchors,
+  // and no wipers in game. Patterns like "BlockEntities" cannot do this, because no anchor is named
+  // "mmtr_BlockEntities" - so they are not reported.
+  const ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','door'];
+  const patterns=[];
+  for(const role of Object.keys(groupMap)) for(const pat of (groupMap[role]||[])) patterns.push({role:role,pat:String(pat)});
+  for(const other of patterns){
+    if(other.role==='anchor') continue;
+    for(const kind of ANCHOR_KINDS){
+      if(other.pat===kind||other.pat.indexOf(kind)>=0||kind.indexOf(other.pat)>=0){
+        // Longer than the anchor prefix? Then it wins and the anchor vanishes.
+        const anchorLength=Math.min(...patterns.filter(p=>p.role==='anchor').map(p=>p.pat.length));
+        if(other.pat.length>anchorLength){
+          console.warn('WARNING: groupMap role "'+other.role+'" pattern "'+other.pat+'" swallows the anchor kind "'+kind+'".');
+          console.warn('         An object named "mmtr_'+kind+'" would match "'+other.pat+'" ('+other.pat.length+' chars)');
+          console.warn('         over the anchor prefix ('+anchorLength+' chars), so it becomes a VISIBLE "'+other.role+'" part');
+          console.warn('         and the ANCHOR DISAPPEARS. Rename the object or the pattern so they do not overlap.');
+        }
+      }
+    }
+  }
+}
 // Optional source-name -> canonical-name map, applied before role matching. Blender exports often
 // carry names that clash with the pack's conventions (e.g. "mmtr_door_l_1" would otherwise match the
 // mmtr_ anchor prefix, and a reversed cab car needs its anchors moved to the other cab). Renaming
@@ -146,9 +216,14 @@ function buildAnchors(){
     //   cabdoor_1_2  = 驾驶室1 的第2扇门   hud_2 = 驾驶室2 的仪表   seat_1 = 驾驶室1 座位
     //   cab 1 = A 端 (CAB_A), cab 2 = B 端 (CAB_B); no cab = single-cab model (defaults to 1)
     const m=/^(hud|seat|cabdoor|ack)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
-    const kind=m?m[1]:rawName;
-    const cab=m&&m[2]?+m[2]:null;
-    const door=m&&m[3]?+m[3]:null;
+    // mmtr_windshield[_<cab>]: the rain/wiper plane. <cab> means a CAB NUMBER, exactly as it does for
+    // hud/seat/cabdoor - a double-ended locomotive must be able to say which cab a screen belongs to.
+    // The wiper's pivot and park direction come from the quad's own geometry (centre and "right" edge),
+    // so there is no second index to spend here.
+    const wsm=/^windshield(?:_(\d+))?$/.exec(rawName);
+    const kind=wsm?'windshield':(m?m[1]:rawName);
+    const cab=wsm?(wsm[1]?+wsm[1]:1):(m&&m[2]?+m[2]:null);
+    const door=wsm?null:(m&&m[3]?+m[3]:null);
     anchors.push({name:rawName,kind:kind,cab:cab,door:door,car:params.carIndex||0,
       x:+c[0].toFixed(5), y:+c[1].toFixed(5), z:+c[2].toFixed(5),
       normal:n.map(x=>+x.toFixed(6)), up:up.map(x=>+x.toFixed(6)), right:right.map(x=>+x.toFixed(6)),
@@ -157,6 +232,67 @@ function buildAnchors(){
   return anchors;
 }
 const anchors=buildAnchors();
+// MMTR windshield: the rain/wiper plane(s). The client draws a procedurally-generated precipitation
+// layer on the mmtr_windshield face and sweeps a wiper arm over it. The client owns all the defaults,
+// so a model with a bare mmtr_windshield still works - this block only forwards what the config says.
+//
+// params.windshield accepts BOTH shapes:
+//   keyed object (natural, and what consist/newstock.json uses):
+//       "windshield": { "windshield_1": { "sweepSign": -1 }, "windshield_2": {} }
+//   array (for when the key has to be derived):
+//       "windshield": [ { "anchor": "mmtr_windshield_1", ... }, { "index": 2, ... } ]
+// Every field the client reads is listed below; an unknown field is dropped rather than silently ignored.
+//
+// KEEP THIS IN STEP WITH MmtrWindshield.WindshieldConfig. A field the client reads but this list omits is
+// DROPPED AT PACK TIME and the config looks like it was ignored in game - that was the real cause of the
+// "sweepSign has no effect" bug (notes/179 §9.4 #3), and the "droplet physics has no effect" repeat of it.
+const WINDSHIELD_FIELDS=['raindrops','fallMps','maxStreakM','wiper','dualWiper','armM','parkAngleDeg',
+                         'sweepDeg','sweepSign','periodS','pivotU','pivotV','bladeWidthM','colour','armColour','snow','twoSided',
+                         'creepMps','jitterMps','minBeadRadiusM','maxBeadRadiusM','growthMps','spawnPerSecond'];
+function buildWindshieldConfig(){
+  const byAnchor={};
+  const put=(key,entry)=>{
+    const values={};
+    for(const field of WINDSHIELD_FIELDS){
+      if(entry&&entry[field]!==undefined) values[field]=entry[field];
+    }
+    // Name anything that is about to be dropped, so the next new field is caught here instead of in game.
+    for(const field of Object.keys(entry||{})){
+      if(field!=='anchor'&&field!=='index'&&!WINDSHIELD_FIELDS.includes(field)){
+        console.warn(`windshield["${key}"]: unknown field "${field}" will NOT reach the client - add it to WINDSHIELD_FIELDS if it is meant to do something`);
+      }
+    }
+    byAnchor[key]=values;
+  };
+  const ws=params.windshield;
+  if(ws!==undefined&&ws!==null){
+    if(Array.isArray(ws)){
+      for(const entry of ws){
+        let key=null;
+        if(entry&&entry.anchor){
+          const mn=/^mmtr_(windshield(?:_\d+)?)$/.exec(String(entry.anchor));
+          if(mn) key=mn[1];
+        }
+        if(!key&&entry&&entry.index!==undefined) key='windshield_'+entry.index;
+        if(!key){ console.warn('windshield array entry has no usable anchor/index, ignored'); continue; }
+        put(key,entry);
+      }
+    } else {
+      // Keyed by anchor name, with or without the "mmtr_" prefix.
+      for(const rawKey of Object.keys(ws)){
+        const mn=/^(?:mmtr_)?(windshield(?:_\d+)?)$/.exec(String(rawKey));
+        if(!mn){ console.warn('windshield key "'+rawKey+'" is not a windshield anchor name, ignored'); continue; }
+        put(mn[1],ws[rawKey]);
+      }
+    }
+  }
+  // Models that have windshields but no authored block still get an entry, so the file shows where to tune.
+  for(const anchor of anchors){
+    if(anchor.kind==='windshield'&&!byAnchor[anchor.name]) byAnchor[anchor.name]={};
+  }
+  return byAnchor;
+}
+const windshieldConfig=buildWindshieldConfig();
 // Blender empties are NOT exported to OBJ, so point-like anchors (seat/ack) can come from a sidecar
 // file instead: params.extraAnchors, or <textureDir>/mmtr_anchors_extra.json. Coordinates are in the
 // SOURCE file space (same as the OBJ before rotation) and are rotated/recentred like vertices here.
@@ -179,7 +315,8 @@ if(fs.existsSync(extraAnchorsPath)){
     const right=[up[1]*n[2]-up[2]*n[1], up[2]*n[0]-up[0]*n[2], up[0]*n[1]-up[1]*n[0]];
     const rawName=(a.name||'anchor').replace(/^mmtr_/,'')||'anchor';
     const m=/^(hud|seat|cabdoor|ack)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
-    anchors.push({name:rawName,kind:a.kind||(m?m[1]:rawName),cab:a.cab!==undefined?a.cab:(m&&m[2]?+m[2]:null),door:a.door!==undefined?a.door:(m&&m[3]?+m[3]:null),car:params.carIndex||0,
+    const wsm=/^windshield(?:_(\d+))?$/.exec(rawName);
+    anchors.push({name:rawName,kind:a.kind||(wsm?'windshield':(m?m[1]:rawName)),cab:a.cab!==undefined?a.cab:(wsm?(wsm[1]?+wsm[1]:1):(m&&m[2]?+m[2]:null)),door:a.door!==undefined?a.door:(wsm?null:(m&&m[3]?+m[3]:null)),car:params.carIndex||0,
       x:+px.toFixed(5), y:+(a.y||0).toFixed(5), z:+pz.toFixed(5),
       normal:n.map(x=>+x.toFixed(6)), up:up.map(x=>+x.toFixed(6)), right:right.map(x=>+x.toFixed(6)),
       widthM:+(a.widthM||0).toFixed(4), heightM:+(a.heightM||0).toFixed(4)});
@@ -272,12 +409,48 @@ mtl=mtl.split('\n').map(l=>{
 if(!mtl.includes('door_mat')) mtl+= '\nnewmtl door_mat\nKd 1 1 1\n';
 fs.writeFileSync(path.join(sub,srcBase.replace(/\.obj$/i,'')+'.mtl'), mtl, 'utf8');
 for(const [from,to] of pngNames){ const s=path.join(texDir,from); if(fs.existsSync(s)) fs.copyFileSync(s,path.join(sub,to)); }
+
+// ---- Sound (BVE): params.soundBase names the set, params.soundDir holds its source files -------
+// The game builds every sound-event id as "<soundBase>_<value>" where <value> is the file name a
+// sound.cfg line points at with its extension stripped (BveVehicleSoundConfig.audioBaseName +
+// BveConfigFile). The files themselves live at assets/mtr/sounds/<soundBase>/<value>.ogg, so a NEW
+// sound set must ALSO register those ids in assets/mtr/sounds.json - Minecraft's SoundSystem logs
+// "Unable to play unknown soundEvent" and silently drops anything unregistered. Stock MTR sets ship
+// pre-registered ids, which is why packs that only replace their .ogg files need no sounds.json.
+const soundBase=params.soundBase||null;
+const soundNames={};
+if(soundBase){
+  const soundSrc=params.soundDir||path.join(MTR_ROOT,'assets','sounds',soundBase);
+  if(!fs.existsSync(soundSrc)) throw new Error('soundDir not found: '+soundSrc);
+  const destDir=path.join(aMtr,'sounds',soundBase);
+  fs.mkdirSync(destDir,{recursive:true});
+  // Only real .ogg files become events: [MTR] scalars (DoorCloseSoundLength=1, RegenerationLimit=7.5)
+  // and [Motor] / [Run] indices are numeric keys, not file names, and must not be registered.
+  const available=new Set();
+  for(const entry of fs.readdirSync(soundSrc,{withFileTypes:true})){
+    if(entry.isFile()){
+      fs.copyFileSync(path.join(soundSrc,entry.name),path.join(destDir,entry.name));
+      if(/\.ogg$/i.test(entry.name)) available.add(entry.name.toLowerCase().replace(/\.ogg$/i,''));
+    }
+  }
+  // Register one event per name a sound.cfg line points at (mirrors BveConfigFile's parsing: strip
+  // comments, lower-case, drop the path prefix and any ".wav" suffix - the shipped files are .ogg).
+  const cfgPath=path.join(soundSrc,'sound.cfg');
+  if(!fs.existsSync(cfgPath)) throw new Error('sound.cfg not found in soundDir: '+soundSrc);
+  for(const line of fs.readFileSync(cfgPath,'utf8').split(/[\r\n]+/)){
+    const clean=line.trim().replace(/\s*(;|#|\/\/).+$/,'');
+    const m=/^(.+?)=(.*)$/.exec(clean);
+    if(!m) continue;
+    const name=m[2].trim().toLowerCase().replace(/\\/g,'/').replace(/\.wav|\s|.+\//g,'');
+    if(name&&available.has(name)) soundNames[soundBase+'_'+name]='mtr:'+soundBase+'/'+name;
+  }
+}
 // json entry
 const length=params.carLengthBlocks||15, width=params.carWidthBlocks||5;
 const bc=params.bogieCount||2;
 let b1=params.bogieOffsetBlocks, b2=params.bogie2OffsetBlocks;
 if(b1===undefined&&bc===2){ b1=-length/2+1.5; b2=length/2-1.5; } if(b1===undefined)b1=0; if(b2===undefined)b2=0;
-const custom={vehicles:[{id:id,name:params.name||id,color:params.color||'7FA8CC',transportMode:params.transportMode||'TRAIN',length:length,width:width,bogie1Position:b1,bogie2Position:b2,couplingPadding1:params.couplingPadding1||0,couplingPadding2:params.couplingPadding2||0,models:[{modelResource:'mtr:'+id+'/'+srcBase,textureResource:'minecraft:textures/misc/white.png',modelPropertiesResource:'mtr:properties_'+id+'.json',positionDefinitionsResource:'mtr:definition_'+id+'.json',flipTextureV:params.flipTextureV!==false}]}],signs:[],rails:[],objects:[],lifts:[]};
+const custom={vehicles:[{id:id,name:params.name||id,color:params.color||'7FA8CC',transportMode:params.transportMode||'TRAIN',length:length,width:width,bogie1Position:b1,bogie2Position:b2,couplingPadding1:params.couplingPadding1||0,couplingPadding2:params.couplingPadding2||0,bveSoundBaseResource:soundBase||undefined,models:[{modelResource:'mtr:'+id+'/'+srcBase,textureResource:'minecraft:textures/misc/white.png',modelPropertiesResource:'mtr:properties_'+id+'.json',positionDefinitionsResource:'mtr:definition_'+id+'.json',flipTextureV:params.flipTextureV!==false}]}],signs:[],rails:[],objects:[],lifts:[]};
 const parts=[]; const slide=params.doorSlidePx!==undefined?params.doorSlidePx:14;
 if(used.body) parts.push({names:['body'],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
 if(used.interior) parts.push({names:['interior'],positionDefinitions:['p0'],renderStage:'INTERIOR_TRANSLUCENT',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
@@ -324,11 +497,19 @@ if(!hudLayout&&hudLayoutPath){
   hudLayout=parsed.hud||parsed;
 }
 if(anchors.length){
-  const anchorFile={anchors:anchors,hud:hudLayout||DEFAULT_HUD_LAYOUT};
+  const anchorFile={anchors:anchors,hud:hudLayout||DEFAULT_HUD_LAYOUT,windshield:windshieldConfig};
   fs.writeFileSync(path.join(aMtr,'mmtr_anchors_'+id+'.json'), JSON.stringify(anchorFile));
   console.log('hud layout: '+(hudLayout?'authored':'default')+' widgets='+(anchorFile.hud.widgets||[]).length);
 }
 console.log('anchors:', JSON.stringify(anchors));
+if(soundBase){
+  const soundJson={};
+  for(const event in soundNames){
+    soundJson[event]={sounds:[{name:soundNames[event],attenuation_distance:32}]};
+  }
+  fs.writeFileSync(path.join(aMtr,'sounds.json'), JSON.stringify(soundJson));
+  console.log('sound set: '+soundBase+' events='+Object.keys(soundJson).length);
+}
 fs.writeFileSync(path.join(stage,'pack.mcmeta'), JSON.stringify({pack:{pack_format:params.packFormat||18,description:(params.name||id)+' auto pack'}}));
 // zip
 // Written here rather than with Compress-Archive: Windows PowerShell 5.1's Compress-Archive stores
