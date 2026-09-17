@@ -122,8 +122,7 @@ public final class MmtrInteractPrompt {
 		}
 		logRegisteredOnce();
 
-		final ObjectArrayList<Candidate> candidates = collect(player);
-		if (candidates.isEmpty()) {
+		final ObjectArrayList<Candidate> candidates = collect(player);		if (candidates.isEmpty()) {
 			return;
 		}
 		// The projection constants are per-frame, not per-prompt, and reading them means reflection into
@@ -236,7 +235,7 @@ public final class MmtrInteractPrompt {
 		if (point == null) {
 			return;
 		}
-		logProjection(window, candidate, point);
+		logProjection(window, candidate, point, projectionSource());
 
 		final String text = candidate.text;
 		final int textWidth = GraphicsHolder.getTextWidth(text);
@@ -257,19 +256,10 @@ public final class MmtrInteractPrompt {
 	}
 
 	/**
-	 * Throttled diagnostic, so "the label is a bit off the door" can be answered with numbers.
-	 *
-	 * <p>Repeats every second rather than once: a single line is easy to miss in the log and impossible to
-	 * correlate with "and now I moved the camera". Everything needed to recompute the projection by hand is
-	 * printed, so an unexplained offset can be arithmetic instead of another round of guessing.</p>
-	 */
-	private static long lastProjectionLogMillis;
-
-	/**
 	 * One line proving the layer is alive, printed the first time it actually runs.
 	 *
-	 * <p>Without it, "I see nothing in the log" has two indistinguishable causes: the layer never ran
-	 * (hook not registered / no player), or it ran and found nothing to draw. This separates them.</p>
+	 * <p>Without it, "I see nothing in the log" has two indistinguishable causes: the layer never ran (hook
+	 * not registered / no player), or it ran and found nothing to draw. This separates them.</p>
 	 */
 	private static boolean registrationLogged;
 
@@ -282,24 +272,29 @@ public final class MmtrInteractPrompt {
 				MinecraftClientData.getInstance().vehicles.size());
 	}
 
-	private static void logProjection(Window window, Candidate candidate, ScreenPoint point) {
-		final long now = System.currentTimeMillis();
-		if (now - lastProjectionLogMillis < 1000) {
+	/**
+	 * Diagnostic, printed when it is useful rather than on a timer: the first frame a prompt is drawn, and
+	 * again whenever the projection SOURCE changes (which is how a silent fallback announces itself).
+	 *
+	 * <p>An earlier version printed every second, which is both noisy and still easy to miss when it
+	 * matters. Keyed on the source instead, the log gains one line per state change - so
+	 * "投影=FOV 重建" appearing where "投影=矩阵" was expected is impossible to overlook.</p>
+	 */
+	private static String lastLoggedProjectionSource;
+
+	private static void logProjection(Window window, Candidate candidate, ScreenPoint point, String projectionSource) {
+		if (projectionSource.equals(lastLoggedProjectionSource)) {
 			return;
 		}
-		lastProjectionLogMillis = now;
+		lastLoggedProjectionSource = projectionSource;
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
-		final double dx = candidate.x - camera.getPos().getXMapped();
-		final double dy = candidate.y - camera.getPos().getYMapped();
-		final double dz = candidate.z - camera.getPos().getZMapped();
-		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {} 屏幕=({},{}) 中心=({},{}) 窗口={}x{} 投影={} 相机=({},{},{}) yaw={} pitch={} 目标=({},{},{}) 位移=({},{},{})",
+		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {} 屏幕=({},{}) 中心=({},{}) 窗口={}x{} 投影={} 相机=({},{},{}) yaw={} pitch={} 目标=({},{},{})",
 				candidate.text, point.x, point.y, window.getScaledWidth() / 2, window.getScaledHeight() / 2,
-				window.getScaledWidth(), window.getScaledHeight(), projectionSource(),
+				window.getScaledWidth(), window.getScaledHeight(), projectionSource,
 				round(camera.getPos().getXMapped()), round(camera.getPos().getYMapped()), round(camera.getPos().getZMapped()),
 				Math.round(camera.getYaw() * 100) / 100.0, Math.round(camera.getPitch() * 100) / 100.0,
-				round(candidate.x), round(candidate.y), round(candidate.z),
-				round(dx), round(dy), round(dz));
+				round(candidate.x), round(candidate.y), round(candidate.z));
 	}
 
 	private static double round(double value) {
@@ -327,9 +322,23 @@ public final class MmtrInteractPrompt {
 		final double forwardX = -sinYaw * cosPitch;
 		final double forwardY = -sinPitch;
 		final double forwardZ = cosYaw * cosPitch;
-		// right = normalize(cross((0,1,0), forward)) = normalize((forward.z, 0, -forward.x))
-		double rightX = forwardZ;
-		double rightZ = -forwardX;
+		// Camera basis in world space. Derived once and pinned by the unit checks in
+		// mmtr/tools/projection-check, because THREE sign choices in here are all invisible at the screen
+		// centre and each one was wrong in a shipped version:
+		//
+		//   forward = (-sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch))
+		//   right   = normalize(cross(forward, worldUp))     worldUp = (0,1,0)
+		//   up      = cross(forward, right)
+		//
+		//   * right = cross(worldUp, forward) NEGATES the horizontal axis: turning the view left dragged
+		//     the label further left. It ALSO reproduced the logged screen position (482 vs the logged
+		//     483), so matching a screenshot could not have caught it.
+		//   * up = cross(right, forward) NEGATES the vertical axis: the label sinks when you look up.
+		//     Measured directly - at yaw 0 pitch 0 it evaluates to (0,-1,0) instead of (0,1,0).
+		//
+		// Known case: at yaw 0 the camera faces +Z, so `right` must be (-1,0,0) and `up` (0,1,0). Both do.
+		double rightX = -forwardZ;
+		double rightZ = forwardX;
 		final double rightLength = Math.sqrt(rightX * rightX + rightZ * rightZ);
 		if (rightLength < 1.0E-6) {
 			// Looking straight up or down: any "right" is arbitrary and nothing horizontal is in view.
@@ -337,10 +346,19 @@ public final class MmtrInteractPrompt {
 		}
 		rightX /= rightLength;
 		rightZ /= rightLength;
-		// up = cross(forward, right)
-		final double upX = forwardY * rightZ;
-		final double upY = forwardZ * rightX - forwardX * rightZ;
-		final double upZ = -forwardY * rightX;
+		// up = cross(right, forward). Written out by hand from the definition rather than derived on the
+		// fly, because BOTH cross-product orders have been wrong in this file at different times and each
+		// one silently mirrored an axis. Working it through for this exact `right` and `forward`:
+		//
+		//   up = right x forward
+		//      = ((ry*fz - rz*fy), (rz*fx - rx*fz), (rx*fy - ry*fx))     ry = 0
+		//      = (-rz*fy,          (rz*fx - rx*fz), rx*fy)
+		//
+		// which at yaw 0, pitch 0 gives (0, 1, 0) as it must, and slopes correctly for pitch. The other
+		// order, forward x right, is the negative of this and inverts the vertical axis.
+		final double upX = -rightZ * forwardY;
+		final double upY = rightZ * forwardX - rightX * forwardZ;
+		final double upZ = rightX * forwardY;
 
 		final double deltaX = candidate.x - camera.getPos().getXMapped();
 		final double deltaY = candidate.y - camera.getPos().getYMapped();
@@ -418,10 +436,32 @@ public final class MmtrInteractPrompt {
 			// is exactly the "worse towards the screen edges" error this method exists to remove.)
 			lastProjectionSource = "矩阵 m00=" + Math.round(m00 * 1000) / 1000.0 + " m11=" + Math.round(m11 * 1000) / 1000.0;
 			return new double[] {m00, m11};
-		} catch (Exception e) {
-			lastProjectionSource = "FOV 重建（" + e.getClass().getSimpleName() + "）";
+		} catch (Throwable e) {
+			// Throwable, not Exception, and the type is NAMED: a reflective failure here was swallowed
+			// silently once already (the log said "FOV 重建" with no reason, which is indistinguishable
+			// from the method not existing).
+			lastProjectionSource = "FOV 重建（" + describeFailure(e) + "）";
 			return null;
 		}
+	}
+
+	/** One-line description of a reflective failure, including the root cause. */
+	private static String describeFailure(Throwable throwable) {
+		final StringBuilder description = new StringBuilder(throwable.getClass().getSimpleName());
+		final String message = throwable.getMessage();
+		if (message != null) {
+			description.append(':').append(message.replace('\n', ' '));
+		}
+		Throwable cause = throwable.getCause();
+		int depth = 0;
+		while (cause != null && depth++ < 3) {
+			description.append(" <- ").append(cause.getClass().getSimpleName());
+			if (cause.getMessage() != null) {
+				description.append(':').append(cause.getMessage().replace('\n', ' '));
+			}
+			cause = cause.getCause();
+		}
+		return description.length() > 200 ? description.substring(0, 200) : description.toString();
 	}
 
 	/**
