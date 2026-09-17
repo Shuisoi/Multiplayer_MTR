@@ -390,25 +390,27 @@ public final class MmtrInteractPrompt {
 		try {
 			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
 			final Object camera = minecraftClient.getGameRendererMapped().getCamera().data;
-			java.lang.reflect.Method fovMethod = null;
-			for (final java.lang.reflect.Method method : gameRenderer.getClass().getMethods()) {
-				if (method.getName().equals("getFov") && method.getParameterCount() == 3) {
-					fovMethod = method;
-					break;
-				}
-			}
-			if (fovMethod == null) {
+
+			// Find the methods BY SHAPE, not by an exact parameter-type list. The first version asked for
+			// getBasicProjectionMatrix(float) and getFov(Camera, float, boolean) exactly, and BOTH lookups
+			// failed - seen in the log as "投影=FOV 重建" - because MC declares them with a double FOV and a
+			// float tickDelta, or similar. Matching on arity and number-convertibility survives that.
+			final java.lang.reflect.Method fovMethod = findMethod(gameRenderer, "getFov", 3, 1);
+			final java.lang.reflect.Method projectionMethod = findMethod(gameRenderer, "getBasicProjectionMatrix", 1, 1);
+			if (fovMethod == null || projectionMethod == null) {
+				lastProjectionSource = "FOV 重建（找不到 " + (fovMethod == null ? "getFov" : "getBasicProjectionMatrix") + "）";
 				return null;
 			}
-			fovMethod.setAccessible(true);
+
 			final float fov = ((Number) fovMethod.invoke(gameRenderer, camera, 1.0F, true)).floatValue();
-			final java.lang.reflect.Method projectionMethod = gameRenderer.getClass().getMethod("getBasicProjectionMatrix", float.class);
-			projectionMethod.setAccessible(true);
-			final Object matrix = projectionMethod.invoke(gameRenderer, fov);
-			final java.lang.reflect.Field matrixField = matrix.getClass().getField("m00");
-			final float m00 = matrixField.getFloat(matrix);
+			// The FOV parameter may be declared float or double; convert for whichever it is.
+			final Object matrix = projectionMethod.getParameterTypes()[0] == double.class
+					? projectionMethod.invoke(gameRenderer, (double) fov)
+					: projectionMethod.invoke(gameRenderer, fov);
+			final float m00 = matrix.getClass().getField("m00").getFloat(matrix);
 			final float m11 = matrix.getClass().getField("m11").getFloat(matrix);
 			if (m00 <= 0 || m11 <= 0) {
+				lastProjectionSource = "FOV 重建（矩阵对角为 " + m00 + "," + m11 + "）";
 				return null;
 			}
 			// The matrix is in NDC-per-unit, so no aspect correction belongs here. (Multiplying by the
@@ -417,10 +419,43 @@ public final class MmtrInteractPrompt {
 			lastProjectionSource = "矩阵 m00=" + Math.round(m00 * 1000) / 1000.0 + " m11=" + Math.round(m11 * 1000) / 1000.0;
 			return new double[] {m00, m11};
 		} catch (Exception e) {
-			lastProjectionSource = "fov fallback";
+			lastProjectionSource = "FOV 重建（" + e.getClass().getSimpleName() + "）";
 			return null;
 		}
 	}
+
+	/**
+	 * Finds a method by name, parameter count, and how many of its parameters must accept a number
+	 * (the rest are objects). Returns null when there is no unique match.
+	 */
+	@Nullable
+	private static java.lang.reflect.Method findMethod(Object target, String name, int parameterCount, int numberParameterCount) {
+		java.lang.reflect.Method found = null;
+		for (final java.lang.reflect.Method method : target.getClass().getMethods()) {
+			if (!method.getName().equals(name) || method.getParameterCount() != parameterCount) {
+				continue;
+			}
+			int numbers = 0;
+			for (final Class<?> type : method.getParameterTypes()) {
+				if (type == float.class || type == double.class || type == int.class || type == long.class) {
+					numbers++;
+				}
+			}
+			if (numbers != numberParameterCount) {
+				continue;
+			}
+			if (found != null) {
+				// Ambiguous (an overload we cannot choose between): refuse rather than guess.
+				return null;
+			}
+			found = method;
+		}
+		if (found != null) {
+			found.setAccessible(true);
+		}
+		return found;
+	}
+
 
 	private static String lastProjectionSource = "?";
 
