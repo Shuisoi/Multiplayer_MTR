@@ -76,13 +76,11 @@ public final class MmtrInteractPrompt {
 	/** Screen-space margin (pixels) outside which a projected prompt is dropped. */
 	private static final double OFF_SCREEN_MARGIN_PX = 64;
 	/**
-	 * How far above the anchor (blocks) the label floats.
-	 *
-	 * <p>Small on purpose. The anchor of a {@code mmtr_cabdoor} is the door's CENTRE, so a large lift puts
-	 * the label above the whole door, which reads as "not on the door" - the first version used 0.9 m and
-	 * that is exactly what it looked like. 0.35 m clears the anchor's own box without leaving the door.</p>
+	 * How far above the anchor (blocks) the label floats. Zero = exactly on the anchor, which for a
+	 * {@code mmtr_cabdoor} anchor is the CENTRE of the door - what the user asked for. Raise it if the
+	 * label ends up covering something it should not.
 	 */
-	private static final double LABEL_LIFT_M = 0.35;
+	private static final double LABEL_LIFT_M = 0.0;
 	/** Show the key in brackets and the action after it. */
 	private static final int BACKGROUND_COLOR = 0xC0000000;
 	private static final int TEXT_COLOR = 0xFFFFFFFF;
@@ -122,6 +120,7 @@ public final class MmtrInteractPrompt {
 		if (player == null || minecraftClient.getCurrentScreenMapped() != null) {
 			return;
 		}
+		logRegisteredOnce();
 
 		final ObjectArrayList<Candidate> candidates = collect(player);
 		if (candidates.isEmpty()) {
@@ -237,7 +236,7 @@ public final class MmtrInteractPrompt {
 		if (point == null) {
 			return;
 		}
-		logProjectionOnce(window, candidate, point);
+		logProjection(window, candidate, point);
 
 		final String text = candidate.text;
 		final int textWidth = GraphicsHolder.getTextWidth(text);
@@ -257,33 +256,50 @@ public final class MmtrInteractPrompt {
 		graphicsHolder.drawText(text, point.x - halfWidth, textTop, candidate.action.live ? TEXT_COLOR : TEXT_COLOR_INACTIVE, true, GraphicsHolder.getDefaultLight());
 	}
 
-	/** One-shot diagnostic, so "the label is a bit off the door" can be answered with numbers. */
-	private static boolean projectionLogged;
+	/**
+	 * Throttled diagnostic, so "the label is a bit off the door" can be answered with numbers.
+	 *
+	 * <p>Repeats every second rather than once: a single line is easy to miss in the log and impossible to
+	 * correlate with "and now I moved the camera". Everything needed to recompute the projection by hand is
+	 * printed, so an unexplained offset can be arithmetic instead of another round of guessing.</p>
+	 */
+	private static long lastProjectionLogMillis;
 
-	private static void logProjectionOnce(Window window, Candidate candidate, ScreenPoint point) {
-		if (projectionLogged) {
+	/**
+	 * One line proving the layer is alive, printed the first time it actually runs.
+	 *
+	 * <p>Without it, "I see nothing in the log" has two indistinguishable causes: the layer never ran
+	 * (hook not registered / no player), or it ran and found nothing to draw. This separates them.</p>
+	 */
+	private static boolean registrationLogged;
+
+	private static void logRegisteredOnce() {
+		if (registrationLogged) {
 			return;
 		}
-		projectionLogged = true;
-		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
-		org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
-		final StringBuilder log = new StringBuilder();
-		log.append(candidate.text).append(" 屏幕=(").append(point.x).append(',').append(point.y).append(')');
-		log.append(" 屏幕中心=(").append(window.getScaledWidth() / 2).append(',').append(window.getScaledHeight() / 2).append(')');
-		log.append(" 窗口=").append(window.getScaledWidth()).append('x').append(window.getScaledHeight());
-		log.append(" FOV=").append(Math.round(fovDegrees(minecraftClient) * 100) / 100.0).append('(').append(lastFovSource).append(')');
-		log.append(" 投影=").append(projectionSource());
-		log.append(" 相机=(").append(round(camera.getPos().getXMapped())).append(',').append(round(camera.getPos().getYMapped())).append(',').append(round(camera.getPos().getZMapped())).append(')');
-		log.append(" yaw=").append(Math.round(camera.getYaw() * 100) / 100.0).append(" pitch=").append(Math.round(camera.getPitch() * 100) / 100.0);
-		log.append(" 目标世界=(").append(round(candidate.x)).append(',').append(round(candidate.y)).append(',').append(round(candidate.z)).append(')');
-		// The player's own eye, for a cross-check on which entity the camera is following.
-		final org.mtr.mapping.holder.ClientPlayerEntity player = minecraftClient.getPlayerMapped();
-		if (player != null) {
-			log.append(" 玩家=(").append(round(player.getX())).append(',').append(round(player.getY())).append(',').append(round(player.getZ())).append(')');
-			log.append(" 玩家朝向 yaw=").append(Math.round(org.mtr.mapping.mapper.EntityHelper.getYaw(new org.mtr.mapping.holder.Entity(player.data)) * 100) / 100.0);
-			log.append(" pitch=").append(Math.round(org.mtr.mapping.mapper.EntityHelper.getPitch(new org.mtr.mapping.holder.Entity(player.data)) * 100) / 100.0);
+		registrationLogged = true;
+		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] 交互提示层已运行（GUI 钩子生效；{} 台车已知）",
+				MinecraftClientData.getInstance().vehicles.size());
+	}
+
+	private static void logProjection(Window window, Candidate candidate, ScreenPoint point) {
+		final long now = System.currentTimeMillis();
+		if (now - lastProjectionLogMillis < 1000) {
+			return;
 		}
-		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {}", log);
+		lastProjectionLogMillis = now;
+		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
+		final org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
+		final double dx = candidate.x - camera.getPos().getXMapped();
+		final double dy = candidate.y - camera.getPos().getYMapped();
+		final double dz = candidate.z - camera.getPos().getZMapped();
+		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {} 屏幕=({},{}) 中心=({},{}) 窗口={}x{} 投影={} 相机=({},{},{}) yaw={} pitch={} 目标=({},{},{}) 位移=({},{},{})",
+				candidate.text, point.x, point.y, window.getScaledWidth() / 2, window.getScaledHeight() / 2,
+				window.getScaledWidth(), window.getScaledHeight(), projectionSource(),
+				round(camera.getPos().getXMapped()), round(camera.getPos().getYMapped()), round(camera.getPos().getZMapped()),
+				Math.round(camera.getYaw() * 100) / 100.0, Math.round(camera.getPitch() * 100) / 100.0,
+				round(candidate.x), round(candidate.y), round(candidate.z),
+				round(dx), round(dy), round(dz));
 	}
 
 	private static double round(double value) {
