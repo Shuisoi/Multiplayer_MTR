@@ -69,8 +69,14 @@ public final class MmtrInteractPrompt {
 	private static final double MAX_VIEW_ANGLE_DEGREES = 50;
 	/** Screen-space margin (pixels) outside which a projected prompt is dropped. */
 	private static final double OFF_SCREEN_MARGIN_PX = 64;
-	/** How far above the anchor (blocks) the label floats, so it does not sit inside the door. */
-	private static final double LABEL_LIFT_M = 0.9;
+	/**
+	 * How far above the anchor (blocks) the label floats.
+	 *
+	 * <p>Small on purpose. The anchor of a {@code mmtr_cabdoor} is the door's CENTRE, so a large lift puts
+	 * the label above the whole door, which reads as "not on the door" - the first version used 0.9 m and
+	 * that is exactly what it looked like. 0.35 m clears the anchor's own box without leaving the door.</p>
+	 */
+	private static final double LABEL_LIFT_M = 0.35;
 	/** Show the key in brackets and the action after it. */
 	private static final int BACKGROUND_COLOR = 0xC0000000;
 	private static final int TEXT_COLOR = 0xFFFFFFFF;
@@ -222,6 +228,7 @@ public final class MmtrInteractPrompt {
 		if (point == null) {
 			return;
 		}
+		logProjectionOnce(window, candidate, point);
 
 		final String text = candidate.text;
 		final int textWidth = GraphicsHolder.getTextWidth(text);
@@ -239,6 +246,29 @@ public final class MmtrInteractPrompt {
 		guiDrawing.finishDrawingRectangle();
 
 		graphicsHolder.drawText(text, point.x - halfWidth, textTop, candidate.action.live ? TEXT_COLOR : TEXT_COLOR_INACTIVE, true, GraphicsHolder.getDefaultLight());
+	}
+
+	/** One-shot diagnostic, so "the label is a bit off the door" can be answered with numbers. */
+	private static boolean projectionLogged;
+
+	private static void logProjectionOnce(Window window, Candidate candidate, ScreenPoint point) {
+		if (projectionLogged) {
+			return;
+		}
+		projectionLogged = true;
+		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
+		final org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
+		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {} 屏幕=({},{}) 屏幕中心=({},{}) FOV={} 窗口={}x{} 相机=({},{},{}) yaw={} pitch={} 目标世界=({},{},{})",
+				candidate.text, point.x, point.y, window.getScaledWidth() / 2, window.getScaledHeight() / 2,
+				Math.round(fovDegrees(minecraftClient) * 10) / 10.0,
+				window.getScaledWidth(), window.getScaledHeight(),
+				round(camera.getPos().getXMapped()), round(camera.getPos().getYMapped()), round(camera.getPos().getZMapped()),
+				Math.round(camera.getYaw() * 10) / 10.0, Math.round(camera.getPitch() * 10) / 10.0,
+				round(candidate.x), round(candidate.y), round(candidate.z));
+	}
+
+	private static double round(double value) {
+		return Math.round(value * 100) / 100.0;
 	}
 
 	/**
@@ -353,16 +383,29 @@ public final class MmtrInteractPrompt {
 	 */
 	private static double fovDegrees(MinecraftClient minecraftClient) {
 		try {
+			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
+			final java.lang.reflect.Method getFov = gameRenderer.getClass().getMethod("getFov", net.minecraft.client.render.Camera.class, float.class, boolean.class);
+			final Object value = getFov.invoke(gameRenderer, minecraftClient.getGameRendererMapped().getCamera().data, 1.0F, true);
+			if (value instanceof Double doubleValue) {
+				return doubleValue;
+			}
+			if (value instanceof Number number) {
+				return number.doubleValue();
+			}
+		} catch (Exception ignored) {
+			// Fall through to the option value.
+		}
+		try {
 			final Object options = minecraftClient.getOptionsMapped().data;
 			final java.lang.reflect.Field field = options.getClass().getField("fov");
 			final Object simpleOption = field.get(options);
 			final java.lang.reflect.Method getValue = simpleOption.getClass().getMethod("getValue");
 			final Object value = getValue.invoke(simpleOption);
-			if (value instanceof Integer integer) {
-				return integer;
-			}
-			if (value instanceof Double doubleValue) {
-				return doubleValue;
+			if (value instanceof Number number) {
+				// Match the game's own clamp: GameRenderer.getFov() clamps the option to 30..110 and
+				// multiplies by 0.1, so using the raw slider value is off by ~10% and shifts every prompt
+				// away from the screen centre as you look around.
+				return Math.max(30, Math.min(110, number.doubleValue())) * 0.1;
 			}
 		} catch (Exception ignored) {
 			// Fall through to the default.
