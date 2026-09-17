@@ -8,34 +8,24 @@ public final class KeyBindings {
 
 	static {
 		LIFT_MENU = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_LIFT_MENU.key, GLFW.GLFW_KEY_Z, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		TRAIN_ACCELERATE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_ACCELERATE.key, GLFW.GLFW_KEY_UP, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		TRAIN_BRAKE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_BRAKE.key, GLFW.GLFW_KEY_DOWN, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		TRAIN_TOGGLE_DOORS = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_TRAIN_TOGGLE_DOORS.key, GLFW.GLFW_KEY_R, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		// MMTR separated controls (raw keys until translations are added)
-		MMTR_REVERSER_UP = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser_up", GLFW.GLFW_KEY_LEFT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_REVERSER_DOWN = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser_down", GLFW.GLFW_KEY_RIGHT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_BRAKE_APPLY = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake_apply", GLFW.GLFW_KEY_SEMICOLON, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_BRAKE_RELEASE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake_release", GLFW.GLFW_KEY_APOSTROPHE, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		// B7.6c: press F to enter/leave the cab (classic "enter vehicle" key).
-		// G (not F): F is vanilla's "swap item with offhand", which the crew hits constantly in the cab.
-		MMTR_CAB_INTERACT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.cab_interact", GLFW.GLFW_KEY_G, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		// C7: aim at a train and press K to couple onto it / cut a coupler in front of the aimed car.
-		MMTR_COUPLE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.couple", GLFW.GLFW_KEY_K, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		// A3: AWS point-warning acknowledge (the yellow/black cancel button on a real desk). An
-		// unacknowledged warning becomes a SPAD emergency stop after ~2.5 s, so this key is part of
-		// the driver workflow, not an optional extra.
-		MMTR_AWS_ACK = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.aws_ack", GLFW.GLFW_KEY_H, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		// B7.6h: per-side door keys in the cab (rail practice: open only the platform side).
-		MMTR_DOOR_LEFT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_left", GLFW.GLFW_KEY_Y, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_DOOR_RIGHT = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.door_right", GLFW.GLFW_KEY_U, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
+		 * ⚠️ The train-driving key set (accelerate / brake / toggle doors / reverser / brake apply+release /
+		 * AWS acknowledge / per-side door keys / cab interact) is GONE, together with the riding layer that
+		 * consumed it (notes/185). They are deleted from here rather than left registered, because a
+		 * registered key with no reader still shows up in the controls menu and silently does nothing -
+		 * the worst of both worlds while the driving layer is rebuilt.
+		 *
+		 * MTR's own TRAIN_* bindings are deleted with them for the same reason: their only reader was the
+		 * same tick. Rebuild steps B2/B5/B6 bring back the ones the new ride session needs.
+		 */
 		// MMTR wiper: one key cycles 关 / 慢 / 快 while holding a cab. Deliberately NOT the rain's
 		// business - the driver decides when to wipe, exactly like the real stalk.
 		//
-		// J, not the obvious ' next to MTR's brake keys: ' is ALREADY MMTR_BRAKE_RELEASE above, and two
-		// mappings on one key means the brake release fires while the driver is trying to wipe. J is free
-		// in vanilla AND in MTR (MTR uses Z, B, and the two brake keys; the crew controls here use
-		// G/K/H/Y/U and the arrows).
+		// (It is `static` in MmtrWindshield.tick() only for now: the "am I in a cab" gate went with the
+		// deleted cab interaction, so the stalk reports "需要先坐上驾驶位" until rebuild step B2.)
 		MMTR_WIPER = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.wiper", GLFW.GLFW_KEY_J, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		// C7: aim at a train and press K to couple onto it / cut a coupler in front of the aimed car.
+		MMTR_COUPLE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.couple", GLFW.GLFW_KEY_K, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_1_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_1_NEGATIVE.key, GLFW.GLFW_KEY_KP_4, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_2_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_2_NEGATIVE.key, GLFW.GLFW_KEY_KP_5, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_3_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_3_NEGATIVE.key, GLFW.GLFW_KEY_KP_6, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
@@ -47,20 +37,8 @@ public final class KeyBindings {
 	}
 
 	public static final KeyBinding LIFT_MENU;
-	public static final KeyBinding TRAIN_ACCELERATE;
-	public static final KeyBinding TRAIN_BRAKE;
-	public static final KeyBinding TRAIN_TOGGLE_DOORS;
-	public static final KeyBinding MMTR_REVERSER_UP;
-	public static final KeyBinding MMTR_REVERSER_DOWN;
-	public static final KeyBinding MMTR_BRAKE_APPLY;
-	public static final KeyBinding MMTR_BRAKE_RELEASE;
-	public static final KeyBinding MMTR_CAB_INTERACT;
 	/** C7: the coupling interaction key. */
 	public static final KeyBinding MMTR_COUPLE;
-	/** A3: the AWS acknowledge (cancel) key. */
-	public static final KeyBinding MMTR_AWS_ACK;
-	public static final KeyBinding MMTR_DOOR_LEFT;
-	public static final KeyBinding MMTR_DOOR_RIGHT;
 	/** One key, three positions: the windshield wiper stalk (关 / 慢 / 快). */
 	public static final KeyBinding MMTR_WIPER;
 	public static final KeyBinding DEBUG_1_NEGATIVE;

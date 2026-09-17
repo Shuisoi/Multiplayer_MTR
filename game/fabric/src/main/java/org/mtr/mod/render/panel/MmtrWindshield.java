@@ -20,7 +20,6 @@ import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.KeyBindings;
 import org.mtr.mod.client.IDrawing;
-import org.mtr.mod.client.MmtrCabInteraction;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
 import org.mtr.mod.data.IGui;
@@ -124,7 +123,7 @@ public final class MmtrWindshield {
 		if (player == null) {
 			return;
 		}
-		if (!MmtrCabInteraction.holdsAnyCab()) {
+		if (!driverOnBoardAnyCab()) {
 			// Not our train to switch: say so instead of silently ignoring the key.
 			player.sendMessage(new Text(TextHelper.literal("需要先坐上驾驶位 / take a cab first").data), true);
 			return;
@@ -326,21 +325,22 @@ public final class MmtrWindshield {
 	 * language: the cab key is held against a numeric vehicle id, while the render path carries the
 	 * resource id the model was loaded from. A consist can mix models, so this asks the client's own
 	 * vehicle list for the driven vehicle and compares its car models.</p>
+	 *
+	 * <p>⚠️ TEMPORARILY ALWAYS FALSE while the riding logic is being rebuilt (notes/185). The cab
+	 * interaction that used to answer this was deleted with the rest of the boarding layer, so the wiper
+	 * stalk has nothing to gate on yet. The wiper still DRAWS (parked); pressing the stalk key reports
+	 * "需要先坐上驾驶位" because there is no way to take a cab at this checkpoint. Restore this when the new
+	 * ride session can answer "which cab am I in" (rebuild step B2).</p>
 	 */
 	private static boolean driverOnBoard(String resourceId) {
-		if (!MmtrCabInteraction.holdsAnyCab()) {
-			return false;
-		}
-		for (final org.mtr.mod.data.VehicleExtension vehicle : org.mtr.mod.client.MinecraftClientData.getInstance().vehicles) {
-			if (!MmtrCabInteraction.holdsCab(vehicle.getId())) {
-				continue;
-			}
-			for (final org.mtr.core.data.VehicleCar car : vehicle.vehicleExtraData.immutableVehicleCars) {
-				if (resourceId.equals(car.getVehicleId())) {
-					return true;
-				}
-			}
-		}
+		return false;
+	}
+
+	/**
+	 * Whether this client holds ANY cab, for the wiper stalk. Stubbed to false with {@link #driverOnBoard}
+	 * while the ride logic is rebuilt (notes/185).
+	 */
+	private static boolean driverOnBoardAnyCab() {
 		return false;
 	}
 

@@ -109,8 +109,6 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			MmtrPanelTexture.tick();
 			// Tick the riding cool down (dismount player if they are no longer riding a vehicle) and store the player offset cache
 			VehicleRidingMovement.tick();
-			// B7.6c: the "press F to enter/leave the cab" interaction.
-			org.mtr.mod.client.MmtrCabInteraction.tick();
 			// C7: the "aim at a train and press K to couple/uncouple" interaction.
 			org.mtr.mod.client.MmtrCoupleInteraction.tick();
 			// Windshield wiper stalk (关 / 慢 / 快): a driver input, so it is ticked with the other keys.

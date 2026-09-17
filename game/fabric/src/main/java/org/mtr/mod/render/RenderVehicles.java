@@ -210,14 +210,17 @@ public class RenderVehicles implements IGui {
 						final double oscillationAmount = vehicle.persistentVehicleData.getOscillation(carNumber).getAmount() * Config.getClient().getVehicleOscillationMultiplier();
 
 						if (canRide) {
-							final ObjectArrayList<Box> openFloorsAndDoorways = new ObjectArrayList<>();
-
+							// ⚠️ TRAIN BOARDING IS DELETED (notes/185). This block used to build
+							// `openFloorsAndDoorways` and call VehicleRidingMovement.startRiding(), which
+							// was the ONLY way to get on a train. It is gone on purpose: the riding logic is
+							// being rebuilt (notes/184/185) and until then the player cannot board.
+							//
+							// What remains below is the FLOOR/DOORWAY DEBUG RENDER and the gangway geometry
+							// collection, which are MTR rendering concerns and are kept so the rest of the
+							// render path (culling, gangway positions, door rendering) is untouched.
 							if (vehicleResourceCache != null) {
 								vehicleResourceCache.floors.forEach(floor -> {
 									floorsAndDoorways.add(new ObjectBooleanImmutablePair<>(floor, true));
-									// MMTR: floors are for movement only - boarding happens through open
-									// doorways (below), so the crew is not sucked in by walking inside and
-									// the shift dismount is not undone by an instant re-mount.
 									RenderVehicleHelper.renderFloorOrDoorway(floor, ARGB_WHITE, playerPosition, vehicleCarRenderingPositionAndRotation, offsetVector == null);
 									// Find the floors with the lowest and highest Z values to be used to define where the gangways are
 									gangwayMovementPositions1.check(floor);
@@ -228,14 +231,8 @@ public class RenderVehicles implements IGui {
 							openDoorways.forEach(openDoorway -> {
 								final Box doorway = openDoorway.left();
 								floorsAndDoorways.add(new ObjectBooleanImmutablePair<>(doorway, false));
-								if (MmtrCabPermissions.canBoard(clientPlayerEntity, vehicle.getId())) {
-									openFloorsAndDoorways.add(doorway);
-								}
 								RenderVehicleHelper.renderFloorOrDoorway(doorway, 0xFFFF0000, playerPosition, vehicleCarRenderingPositionAndRotation, offsetVector == null);
 							});
-
-							// Check and mount player
-							VehicleRidingMovement.startRiding(openFloorsAndDoorways, vehicle.vehicleExtraData.getDepotId(), vehicle.vehicleExtraData.getSidingId(), vehicle.getId(), carNumber, playerPosition.getXMapped(), playerPosition.getYMapped(), playerPosition.getZMapped(), absoluteVehicleCarPositionAndRotation.yaw);
 						}
 
 						// Play vehicle sounds
@@ -370,18 +367,11 @@ public class RenderVehicles implements IGui {
 							}
 						});
 
-						if (canRide) {
-							// Main logic for player movement inside the car
-							VehicleRidingMovement.movePlayer(
-									millisElapsed, vehicle.getId(), carNumber,
-									floorsAndDoorways,
-									vehicleResource.hasGangway1() ? previousGangwayMovementPositions.gangwayMovementPositions : null,
-									vehicleResource.hasGangway1() ? gangwayMovementPositions1 : null,
-									vehicleResource.hasGangway2() ? gangwayMovementPositions2 : null,
-									absoluteVehicleCarPositionAndRotation
-							);
-						}
-
+						// ⚠️ TRAIN MOVEMENT IS DELETED (notes/185). VehicleRidingMovement.movePlayer() used
+						// to be called here every frame for every car, and it was the ONLY thing that kept a
+						// rider glued to a train. With boarding gone there is nothing to move, so the call is
+						// gone too: this is the second half of "you cannot be inside a train" at this
+						// checkpoint. The lift path still calls its own movePlayer.
 						previousGangwayMovementPositions.gangwayMovementPositions = gangwayMovementPositions2;
 					});
 				}
