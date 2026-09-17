@@ -40,9 +40,15 @@ import javax.annotation.Nullable;
  *   right   = normalize(cross(worldUp, forward))     // worldUp = (0,1,0)
  *   up      = cross(forward, right)                  // already unit if forward is
  *   camera  = (delta . right, delta . up, delta . forward)
- *   screenX = width/2  + camera.x / (camera.z * tan(fov/2) * aspect) * width/2
- *   screenY = height/2 - camera.y / (camera.z * tan(fov/2))          * height/2
+ *   ndcX    = camera.x / (camera.z * m00)
+ *   ndcY    = camera.y / (camera.z * m11)
+ *   screenX = width/2  + ndcX * width/2
+ *   screenY = height/2 - ndcY * height/2
  * </pre>
+ *
+ * <p>{@code m00} and {@code m11} are the diagonal terms of the game's own projection matrix (read
+ * reflectively in {@link #projectionScale}), NOT a hand-derived {@code tan(fov/2)}: see that method for
+ * why guessing at the FOV semantics is what produced a prompt that drifted towards the screen edges.</p>
  *
  * <p>Nothing is drawn when the point is behind the camera, which is why the {@code . forward} component
  * is tested first - a negative depth would otherwise project a mirror-image prompt onto the screen.</p>
@@ -121,6 +127,9 @@ public final class MmtrInteractPrompt {
 		if (candidates.isEmpty()) {
 			return;
 		}
+		// The projection constants are per-frame, not per-prompt, and reading them means reflection into
+		// the renderer - so they are resolved once here rather than once per label.
+		refreshProjection();
 
 		final Window window = minecraftClient.getWindow();
 		final GuiDrawing guiDrawing = new GuiDrawing(graphicsHolder);
@@ -257,14 +266,24 @@ public final class MmtrInteractPrompt {
 		}
 		projectionLogged = true;
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
-		final org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
-		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {} 屏幕=({},{}) 屏幕中心=({},{}) FOV={} 窗口={}x{} 相机=({},{},{}) yaw={} pitch={} 目标世界=({},{},{})",
-				candidate.text, point.x, point.y, window.getScaledWidth() / 2, window.getScaledHeight() / 2,
-				Math.round(fovDegrees(minecraftClient) * 10) / 10.0,
-				window.getScaledWidth(), window.getScaledHeight(),
-				round(camera.getPos().getXMapped()), round(camera.getPos().getYMapped()), round(camera.getPos().getZMapped()),
-				Math.round(camera.getYaw() * 10) / 10.0, Math.round(camera.getPitch() * 10) / 10.0,
-				round(candidate.x), round(candidate.y), round(candidate.z));
+		org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
+		final StringBuilder log = new StringBuilder();
+		log.append(candidate.text).append(" 屏幕=(").append(point.x).append(',').append(point.y).append(')');
+		log.append(" 屏幕中心=(").append(window.getScaledWidth() / 2).append(',').append(window.getScaledHeight() / 2).append(')');
+		log.append(" 窗口=").append(window.getScaledWidth()).append('x').append(window.getScaledHeight());
+		log.append(" FOV=").append(Math.round(fovDegrees(minecraftClient) * 100) / 100.0).append('(').append(lastFovSource).append(')');
+		log.append(" 投影=").append(projectionSource());
+		log.append(" 相机=(").append(round(camera.getPos().getXMapped())).append(',').append(round(camera.getPos().getYMapped())).append(',').append(round(camera.getPos().getZMapped())).append(')');
+		log.append(" yaw=").append(Math.round(camera.getYaw() * 100) / 100.0).append(" pitch=").append(Math.round(camera.getPitch() * 100) / 100.0);
+		log.append(" 目标世界=(").append(round(candidate.x)).append(',').append(round(candidate.y)).append(',').append(round(candidate.z)).append(')');
+		// The player's own eye, for a cross-check on which entity the camera is following.
+		final org.mtr.mapping.holder.ClientPlayerEntity player = minecraftClient.getPlayerMapped();
+		if (player != null) {
+			log.append(" 玩家=(").append(round(player.getX())).append(',').append(round(player.getY())).append(',').append(round(player.getZ())).append(')');
+			log.append(" 玩家朝向 yaw=").append(Math.round(org.mtr.mapping.mapper.EntityHelper.getYaw(new org.mtr.mapping.holder.Entity(player.data)) * 100) / 100.0);
+			log.append(" pitch=").append(Math.round(org.mtr.mapping.mapper.EntityHelper.getPitch(new org.mtr.mapping.holder.Entity(player.data)) * 100) / 100.0);
+		}
+		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {}", log);
 	}
 
 	private static double round(double value) {
@@ -317,21 +336,112 @@ public final class MmtrInteractPrompt {
 
 		final double cameraX = deltaX * rightX + deltaZ * rightZ;
 		final double cameraY = deltaX * upX + deltaY * upY + deltaZ * upZ;
-		// The FOV option is reached through `data`: MTR's GameOptions wrapper does not re-export it, and
-		// going through the raw client is the only way to stay in step with the player's actual setting.
-		// A full-screen "quake pro" FOV is deliberately not modelled; `fov` is what the projection uses.
-		final double tanHalfFov = Math.tan(Math.toRadians(fovDegrees(minecraftClient)) / 2);
-		final double aspect = (double) window.getScaledWidth() / window.getScaledHeight();
-		final double halfWidth = window.getScaledWidth() / 2.0;
-		final double halfHeight = window.getScaledHeight() / 2.0;
 
-		final double screenX = halfWidth + cameraX / (depth * tanHalfFov * aspect) * halfWidth;
-		final double screenY = halfHeight - cameraY / (depth * tanHalfFov) * halfHeight;
-		if (screenX < -OFF_SCREEN_MARGIN_PX || screenX > window.getScaledWidth() + OFF_SCREEN_MARGIN_PX
-				|| screenY < -OFF_SCREEN_MARGIN_PX || screenY > window.getScaledHeight() + OFF_SCREEN_MARGIN_PX) {
+		// Magnification: the per-frame values refreshed in render(). See refreshProjection().
+		final double scaleX = scaleXForFrame;
+		final double scaleY = scaleYForFrame;
+		final double width = window.getScaledWidth();
+		final double height = window.getScaledHeight();
+
+		final double screenX = width / 2 + cameraX / (depth * scaleX) * (width / 2);
+		final double screenY = height / 2 - cameraY / (depth * scaleY) * (height / 2);
+		if (screenX < -OFF_SCREEN_MARGIN_PX || screenX > width + OFF_SCREEN_MARGIN_PX
+				|| screenY < -OFF_SCREEN_MARGIN_PX || screenY > height + OFF_SCREEN_MARGIN_PX) {
 			return null;
 		}
 		return new ScreenPoint((int) Math.round(screenX), (int) Math.round(screenY));
+	}
+
+	// ---- projection -------------------------------------------------------------------------------
+
+	/**
+	 * The projection's two diagonal scale terms, read from the matrix the game actually renders with.
+	 *
+	 * <p>This exists because deriving the magnification by hand from an FOV number is a guess about
+	 * semantics - which FOV, which aspect, GUI scale or framebuffer scale - and a wrong guess has one
+	 * signature: the prompt is right at the screen centre and drifts further off towards the edges. That
+	 * is exactly the bug this replaces, so the number is now taken from
+	 * {@code GameRenderer.getBasicProjectionMatrix(fov)} instead of reconstructed.</p>
+	 *
+	 * <p>{@code Matrix4f} is column-major and {@code perspective()} writes its diagonal as
+	 * {@code m00 = m11 / aspect} and {@code m11 = 1 / tan(fov/2)}. Those two are already in NDC-per-unit,
+	 * so the pixel transform is {@code half + (camera / depth / m) * half}.</p>
+	 *
+	 * @return {m00, m11} in framebuffer pixels per NDC unit, or null when it could not be read
+	 */
+	@Nullable
+	private static double[] projectionScale(MinecraftClient minecraftClient) {
+		try {
+			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
+			final Object camera = minecraftClient.getGameRendererMapped().getCamera().data;
+			java.lang.reflect.Method fovMethod = null;
+			for (final java.lang.reflect.Method method : gameRenderer.getClass().getMethods()) {
+				if (method.getName().equals("getFov") && method.getParameterCount() == 3) {
+					fovMethod = method;
+					break;
+				}
+			}
+			if (fovMethod == null) {
+				return null;
+			}
+			fovMethod.setAccessible(true);
+			final float fov = ((Number) fovMethod.invoke(gameRenderer, camera, 1.0F, true)).floatValue();
+			final java.lang.reflect.Method projectionMethod = gameRenderer.getClass().getMethod("getBasicProjectionMatrix", float.class);
+			projectionMethod.setAccessible(true);
+			final Object matrix = projectionMethod.invoke(gameRenderer, fov);
+			final java.lang.reflect.Field matrixField = matrix.getClass().getField("m00");
+			final float m00 = matrixField.getFloat(matrix);
+			final float m11 = matrix.getClass().getField("m11").getFloat(matrix);
+			if (m00 <= 0 || m11 <= 0) {
+				return null;
+			}
+			// The matrix is in NDC-per-unit, so no aspect correction belongs here. (Multiplying by the
+			// aspect - as an earlier version of this method did - scales the horizontal axis by ~1.78 and
+			// is exactly the "worse towards the screen edges" error this method exists to remove.)
+			lastProjectionSource = "矩阵 m00=" + Math.round(m00 * 1000) / 1000.0 + " m11=" + Math.round(m11 * 1000) / 1000.0;
+			return new double[] {m00, m11};
+		} catch (Exception e) {
+			lastProjectionSource = "fov fallback";
+			return null;
+		}
+	}
+
+	private static String lastProjectionSource = "?";
+
+	/** The two diagonal terms in force this frame, refreshed once per render pass. */
+	private static double scaleXForFrame = 1;
+	private static double scaleYForFrame = 1;
+
+	/**
+	 * Resolves the projection constants once per frame: the two NDC-per-unit diagonal terms and, for the
+	 * diagnostic, where they came from.
+	 *
+	 * <p>Preference order matters. The game's own matrix is authoritative; the FOV reconstruction is a
+	 * guess about which FOV and which aspect, and a wrong guess shows up as a prompt that is correct at the
+	 * screen centre and drifts towards the edges - so the source is recorded and logged rather than
+	 * silently chosen.</p>
+	 */
+	private static void refreshProjection() {
+		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
+		final Window window = minecraftClient.getWindow();
+		final double width = window.getScaledWidth();
+		final double height = window.getScaledHeight();
+		final double[] scale = projectionScale(minecraftClient);
+		if (scale != null) {
+			scaleXForFrame = scale[0];
+			scaleYForFrame = scale[1];
+		} else {
+			// Reconstruct from the FOV. scaleY = 1/tan(fov/2); scaleX carries the aspect, because the
+			// matrix's m00 is m11/aspect and the GUI is wider than it is tall.
+			final double tanHalfFov = Math.tan(Math.toRadians(fovDegrees(minecraftClient)) / 2);
+			scaleYForFrame = tanHalfFov;
+			scaleXForFrame = tanHalfFov * width / height;
+			lastProjectionSource = "FOV 重建";
+		}
+	}
+
+	private static String projectionSource() {
+		return lastProjectionSource + " scaleX=" + Math.round(scaleXForFrame * 10000) / 10000.0 + " scaleY=" + Math.round(scaleYForFrame * 10000) / 10000.0;
 	}
 
 	// ---- helpers ----------------------------------------------------------------------------------
@@ -381,35 +491,55 @@ public final class MmtrInteractPrompt {
 	 * hard dependency on {@code net.minecraft.client.option.GameOptions} would tie this renderer to one
 	 * MC version. A wrong FOV only shifts prompts slightly, so the fallback is safe.</p>
 	 */
+	/**
+	 * The player's VERTICAL field of view in degrees.
+	 *
+	 * <p>This is the single number that decides the projection's magnification, and getting it wrong
+	 * produces exactly one symptom: the prompt is correct near the screen centre and drifts further off
+	 * towards the edges. It is therefore worth being explicit about where it comes from.</p>
+	 *
+	 * <p>{@code GameRenderer.getFov(camera, tickDelta, changingFov)} is the authoritative value - it is
+	 * what builds the projection matrix the world is drawn with - so it is tried first. Everything else is
+	 * a fallback and is LOGGED with its source, because a silent fallback here is indistinguishable from
+	 * a correct FOV that happens to be wrong.</p>
+	 */
+	private static double lastFovDegrees;
+	private static String lastFovSource = "?";
+
 	private static double fovDegrees(MinecraftClient minecraftClient) {
+		// 1. The game's own value, which is what the projection actually uses.
 		try {
 			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
-			final java.lang.reflect.Method getFov = gameRenderer.getClass().getMethod("getFov", net.minecraft.client.render.Camera.class, float.class, boolean.class);
-			final Object value = getFov.invoke(gameRenderer, minecraftClient.getGameRendererMapped().getCamera().data, 1.0F, true);
-			if (value instanceof Double doubleValue) {
-				return doubleValue;
-			}
-			if (value instanceof Number number) {
-				return number.doubleValue();
+			for (final java.lang.reflect.Method method : gameRenderer.getClass().getMethods()) {
+				if (method.getName().equals("getFov") && method.getParameterCount() == 3) {
+					method.setAccessible(true);
+					final Object value = method.invoke(gameRenderer, minecraftClient.getGameRendererMapped().getCamera().data, 1.0F, true);
+					if (value instanceof Number number && number.doubleValue() > 1) {
+						lastFovSource = "GameRenderer.getFov";
+						return number.doubleValue();
+					}
+				}
 			}
 		} catch (Exception ignored) {
-			// Fall through to the option value.
+			// Fall through.
 		}
+
+		// 2. The option value. NOTE the game does not use this raw: `GameRenderer.getFov()` clamps it to
+		//    30..110 and MULTIPLIES BY 0.1, so a slider at 70 is 7 degrees, not 70. Getting that factor
+		//    wrong is a 10x magnification error, which is why this fallback is reported in the log.
 		try {
 			final Object options = minecraftClient.getOptionsMapped().data;
-			final java.lang.reflect.Field field = options.getClass().getField("fov");
-			final Object simpleOption = field.get(options);
-			final java.lang.reflect.Method getValue = simpleOption.getClass().getMethod("getValue");
-			final Object value = getValue.invoke(simpleOption);
+			final Object simpleOption = options.getClass().getField("fov").get(options);
+			final Object value = simpleOption.getClass().getMethod("getValue").invoke(simpleOption);
 			if (value instanceof Number number) {
-				// Match the game's own clamp: GameRenderer.getFov() clamps the option to 30..110 and
-				// multiplies by 0.1, so using the raw slider value is off by ~10% and shifts every prompt
-				// away from the screen centre as you look around.
+				lastFovSource = "option*0.1";
 				return Math.max(30, Math.min(110, number.doubleValue())) * 0.1;
 			}
 		} catch (Exception ignored) {
-			// Fall through to the default.
+			// Fall through.
 		}
+
+		lastFovSource = "default";
 		return 70;
 	}
 
