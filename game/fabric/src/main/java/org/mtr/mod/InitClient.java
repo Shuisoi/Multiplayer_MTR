@@ -466,6 +466,11 @@ public final class InitClient {
 		// class and its render entry point are kept in the tree so a future console can be hung back
 		// here with one line, but nothing is drawn on the screen for now.
 
+		// MMTR: the world-anchored interaction prompt ("[G] 进入驾驶室1" floating over the cab door).
+		// Registered on the GUI hook rather than drawn from the world pass, because a screen-space black
+		// box with white text is a HUD element even when it tracks a world position.
+		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(MmtrInteractPrompt::render);
+
 		Config.init(MinecraftClient.getInstance().getRunDirectoryMapped());
 
 		BlockTactileMap.BlockEntity.updateSoundSource = TACTILE_MAP_SOUND_INSTANCE::setPos;
