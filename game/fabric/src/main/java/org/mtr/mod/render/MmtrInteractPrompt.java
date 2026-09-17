@@ -420,8 +420,7 @@ public final class MmtrInteractPrompt {
 				return null;
 			}
 
-			final float fov = ((Number) fovMethod.invoke(gameRenderer, camera, 1.0F, true)).floatValue();
-			// The FOV parameter may be declared float or double; convert for whichever it is.
+			final float fov = ((Number) fovMethod.invoke(gameRenderer, camera, 1.0F, true)).floatValue();			// The FOV parameter may be declared float or double; convert for whichever it is.
 			final Object matrix = projectionMethod.getParameterTypes()[0] == double.class
 					? projectionMethod.invoke(gameRenderer, (double) fov)
 					: projectionMethod.invoke(gameRenderer, fov);
@@ -500,6 +499,7 @@ public final class MmtrInteractPrompt {
 	private static String lastProjectionSource = "?";
 
 	/** The two diagonal terms in force this frame, refreshed once per render pass. */
+	private static double[] projectionScaleForFrame;
 	private static double scaleXForFrame = 1;
 	private static double scaleYForFrame = 1;
 
@@ -508,9 +508,9 @@ public final class MmtrInteractPrompt {
 	 * diagnostic, where they came from.
 	 *
 	 * <p>Preference order matters. The game's own matrix is authoritative; the FOV reconstruction is a
-	 * guess about which FOV and which aspect, and a wrong guess shows up as a prompt that is correct at the
-	 * screen centre and drifts towards the edges - so the source is recorded and logged rather than
-	 * silently chosen.</p>
+	 * guess about which FOV and which GUI scale, and a wrong guess shows up as a prompt that is correct at
+	 * one FOV setting and drifts as the player changes it - so the source is recorded and logged rather
+	 * than silently chosen.</p>
 	 */
 	private static void refreshProjection() {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
@@ -519,14 +519,18 @@ public final class MmtrInteractPrompt {
 		final double height = window.getScaledHeight();
 		final double[] scale = projectionScale(minecraftClient);
 		if (scale != null) {
+			projectionScaleForFrame = scale;
 			scaleXForFrame = scale[0];
 			scaleYForFrame = scale[1];
-		} else {
-			// Reconstruct from the FOV. scaleY = 1/tan(fov/2); scaleX carries the aspect, because the
-			// matrix's m00 is m11/aspect and the GUI is wider than it is tall.
-			final double tanHalfFov = Math.tan(Math.toRadians(fovDegrees(minecraftClient)) / 2);
-			scaleYForFrame = tanHalfFov;
-			scaleXForFrame = tanHalfFov * width / height;
+			return;
+		}
+		projectionScaleForFrame = null;
+		// Reconstruct from the FOV. scaleY = 1/tan(fov/2); scaleX carries the aspect, because the matrix's
+		// m00 is m11/aspect and the GUI is wider than it is tall.
+		final double tanHalfFov = Math.tan(Math.toRadians(fovDegrees(minecraftClient)) / 2);
+		scaleYForFrame = tanHalfFov;
+		scaleXForFrame = tanHalfFov * width / height;
+		if (!lastProjectionSource.startsWith("FOV 重建")) {
 			lastProjectionSource = "FOV 重建";
 		}
 	}
@@ -576,29 +580,58 @@ public final class MmtrInteractPrompt {
 	}
 
 	/**
-	 * The player's vertical field of view in degrees, defaulting to vanilla's 70 when it cannot be read.
+	 * The player's vertical field of view in degrees.
 	 *
-	 * <p>Read reflectively because MTR's {@code GameOptions} wrapper does not re-export {@code fov}, and a
-	 * hard dependency on {@code net.minecraft.client.option.GameOptions} would tie this renderer to one
-	 * MC version. A wrong FOV only shifts prompts slightly, so the fallback is safe.</p>
+	 * <p>This is the single number that decides the projection's magnification, and getting it WRONG
+	 * produces a signature symptom: the prompt lines up at one FOV setting and drifts as the player
+	 * changes it. Reported in-game as "FOV 60 is perfect, but turning it up does not adapt".</p>
+	 *
+	 * <p>The value is taken from {@code GameOptions.fov}'s own value, which the bytecode of
+	 * {@code GameRenderer.getFov} confirms is <b>already in degrees</b>:</p>
+	 *
+	 * <pre>
+	 *   11: ldc2_w 70.0d                       // default 70
+	 *   27: GameOptions.getFov().getValue()    // Integer - straight into the local, no scaling
+	 *   42: dload_4 ; lerp(1, fovMultiplier) ; dmul   // sprint / spyglass only
+	 * </pre>
+	 *
+	 * <p>An earlier version multiplied this by 0.1 (on the belief that the slider stored a tenth of the
+	 * angle). It does not, so every prompt was magnified about ten times too much - which happens to look
+	 * CORRECT at exactly one setting (the 70-degree default: tan(35) there is 0.700, matching the log
+	 * line) and drifts at every other, including the 60 the user tested.</p>
+	 *
+	 * <p>{@code fovMultiplier} (sprint / spyglass / nausea) is deliberately not modelled: this is a static
+	 * prompt, and matching a transient zoom would make it swim.</p>
 	 */
-	/**
-	 * The player's VERTICAL field of view in degrees.
-	 *
-	 * <p>This is the single number that decides the projection's magnification, and getting it wrong
-	 * produces exactly one symptom: the prompt is correct near the screen centre and drifts further off
-	 * towards the edges. It is therefore worth being explicit about where it comes from.</p>
-	 *
-	 * <p>{@code GameRenderer.getFov(camera, tickDelta, changingFov)} is the authoritative value - it is
-	 * what builds the projection matrix the world is drawn with - so it is tried first. Everything else is
-	 * a fallback and is LOGGED with its source, because a silent fallback here is indistinguishable from
-	 * a correct FOV that happens to be wrong.</p>
-	 */
-	private static double lastFovDegrees;
 	private static String lastFovSource = "?";
 
 	private static double fovDegrees(MinecraftClient minecraftClient) {
-		// 1. The game's own value, which is what the projection actually uses.
+		// Read the OPTION, not GameRenderer.getFov. The bytecode of getFov is:
+		//
+		//   11: ldc2_w 70.0d                       // value = 70
+		//   16: iload_3 ; ifeq 60                  // if (!changingFov) return 70   <-- !!
+		//   20..40: value = GameOptions.getFov().getValue()   // the player's setting, in degrees
+		//   42..57: value *= lerp(1, fovMultiplier)           // sprint / spyglass only
+		//
+		// So `changingFov = false` does NOT mean "skip the transient multiplier", it means "return the
+		// hardcoded 70" - the parameter is a whether-to-apply-the-player's-setting flag. Passing false (as
+		// an earlier version did, to avoid the sprint zoom) pinned every prompt to a 70-degree projection,
+		// which is exactly the reported "perfect at one FOV, does not adapt when I raise it". The option
+		// value is used directly instead: it is already the angle, and it carries no transient multiplier,
+		// which is what this prompt wants.
+		try {
+			final Object options = minecraftClient.getOptionsMapped().data;
+			final Object simpleOption = options.getClass().getField("fov").get(options);
+			final Object value = simpleOption.getClass().getMethod("getValue").invoke(simpleOption);
+			if (value instanceof Number number && number.doubleValue() > 1) {
+				lastFovSource = "option";
+				return Math.max(30, Math.min(110, number.doubleValue()));
+			}
+		} catch (Exception ignored) {
+			// Fall through.
+		}
+
+		// Fallback: ask the renderer, WITH changingFov = true so it actually reads the player's setting.
 		try {
 			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
 			for (final java.lang.reflect.Method method : gameRenderer.getClass().getMethods()) {
@@ -606,25 +639,10 @@ public final class MmtrInteractPrompt {
 					method.setAccessible(true);
 					final Object value = method.invoke(gameRenderer, minecraftClient.getGameRendererMapped().getCamera().data, 1.0F, true);
 					if (value instanceof Number number && number.doubleValue() > 1) {
-						lastFovSource = "GameRenderer.getFov";
+						lastFovSource = "getFov(true)";
 						return number.doubleValue();
 					}
 				}
-			}
-		} catch (Exception ignored) {
-			// Fall through.
-		}
-
-		// 2. The option value. NOTE the game does not use this raw: `GameRenderer.getFov()` clamps it to
-		//    30..110 and MULTIPLIES BY 0.1, so a slider at 70 is 7 degrees, not 70. Getting that factor
-		//    wrong is a 10x magnification error, which is why this fallback is reported in the log.
-		try {
-			final Object options = minecraftClient.getOptionsMapped().data;
-			final Object simpleOption = options.getClass().getField("fov").get(options);
-			final Object value = simpleOption.getClass().getMethod("getValue").invoke(simpleOption);
-			if (value instanceof Number number) {
-				lastFovSource = "option*0.1";
-				return Math.max(30, Math.min(110, number.doubleValue())) * 0.1;
 			}
 		} catch (Exception ignored) {
 			// Fall through.

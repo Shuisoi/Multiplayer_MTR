@@ -33,8 +33,32 @@ public final class ProjectionCheck {
 	private static final double TARGET_Z = -132.49;
 	private static final int WIDTH = 960;
 	private static final int HEIGHT = 561;
-	private static final double SCALE_X = 1.1982;
-	private static final double SCALE_Y = 0.7002;
+	/** The FOV that was in force for the logged frame, derived from its scale (0.7002 = tan(35)). */
+	private static final double LOGGED_FOV = 70;
+
+	/**
+	 * Projection scale for a given FOV: scaleY = tan(fov/2), scaleX = scaleY * aspect.
+	 *
+	 * <p>Kept as a parameter rather than a constant because "does it adapt when the FOV changes" is a real
+	 * failure mode with a real cause: an FOV that is wrong by a FACTOR looks perfect at exactly one setting
+	 * and drifts everywhere else. The in-game report was "FOV 60 is perfect, turning it up does not adapt",
+	 * and the cause was an extra x0.1 on the option value (see MmtrInteractPrompt.fovDegrees).</p>
+	 */
+	private static double[] scaleFor(double fovDegrees) {
+		final double scaleY = Math.tan(Math.toRadians(fovDegrees) / 2);
+		return new double[] {scaleY * WIDTH / HEIGHT, scaleY};
+	}
+
+	/** Sanity table: the scale must move with the FOV, and match the logged line at one setting. */
+	private static void printScaleTable() {
+		System.out.println("== 5. Projection scale must follow the FOV setting ==");
+		for (final double fov : new double[] {30, 60, 70, 90, 110}) {
+			final double[] scale = scaleFor(fov);
+			System.out.printf("  FOV %5.1f  scaleY=%.4f  scaleX=%.4f%n", fov, scale[1], scale[0]);
+		}
+		System.out.println("  logged line was FOV 70: scaleY=0.7002 scaleX=1.1982  (matches the FOV 70 row)");
+		System.out.println("  a WRONG-BY-A-FACTOR fov matches at one row only, which is the reported symptom");
+	}
 
 	public static void main(String[] args) {
 		System.out.println("== 1. Unit checks (yaw 0, pitch 0): camera faces +Z, so right=(-1,0,0), up=(0,1,0) ==");
@@ -70,6 +94,9 @@ public final class ProjectionCheck {
 			System.out.printf("  %-18s screen=(%.1f, %.1f)%n", order, screen[0], screen[1]);
 		}
 		System.out.println("  log = (483, 354)   <- the basis that ALSO passes 1-3 is the one to ship");
+		System.out.println();
+
+		printScaleTable();
 	}
 
 	private enum Order {
@@ -130,9 +157,10 @@ public final class ProjectionCheck {
 		final double depth = deltaX * forwardX + deltaY * forwardY + deltaZ * forwardZ;
 		final double cameraX = deltaX * rightX + deltaZ * rightZ;
 		final double cameraY = deltaX * upX + deltaY * upY + deltaZ * upZ;
+		final double[] scale = scaleFor(LOGGED_FOV);
 		return new double[] {
-				WIDTH / 2.0 + cameraX / (depth * SCALE_X) * (WIDTH / 2.0),
-				HEIGHT / 2.0 - cameraY / (depth * SCALE_Y) * (HEIGHT / 2.0)
+				WIDTH / 2.0 + cameraX / (depth * scale[0]) * (WIDTH / 2.0),
+				HEIGHT / 2.0 - cameraY / (depth * scale[1]) * (HEIGHT / 2.0)
 		};
 	}
 }
