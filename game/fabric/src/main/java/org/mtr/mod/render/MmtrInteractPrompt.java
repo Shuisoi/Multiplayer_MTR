@@ -467,27 +467,40 @@ public final class MmtrInteractPrompt {
 	 * Finds a method by name, parameter count, and how many of its parameters must accept a number
 	 * (the rest are objects). Returns null when there is no unique match.
 	 */
+	/**
+	 * Finds a method by name, parameter count, and how many of its parameters are numbers.
+	 *
+	 * <p>Walks DECLARED methods up the class hierarchy, <b>not</b> {@code getMethods()}. That was the bug:
+	 * {@code getMethods()} returns only public members, and the methods this needs are private
+	 * ({@code GameRenderer.getFov} and {@code getBasicProjectionMatrix} are both private in 1.20.4), so the
+	 * lookup silently found nothing and the caller fell back - reported in-game as
+	 * "投影=FOV 重建（找不到 getFov）".</p>
+	 *
+	 * <p>Ambiguity refuses rather than guesses: two candidates with the same shape means the signature is
+	 * not distinctive enough to pick safely, and picking wrong here produces a wrong projection.</p>
+	 */
 	@Nullable
 	private static java.lang.reflect.Method findMethod(Object target, String name, int parameterCount, int numberParameterCount) {
 		java.lang.reflect.Method found = null;
-		for (final java.lang.reflect.Method method : target.getClass().getMethods()) {
-			if (!method.getName().equals(name) || method.getParameterCount() != parameterCount) {
-				continue;
-			}
-			int numbers = 0;
-			for (final Class<?> type : method.getParameterTypes()) {
-				if (type == float.class || type == double.class || type == int.class || type == long.class) {
-					numbers++;
+		for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
+			for (final java.lang.reflect.Method method : type.getDeclaredMethods()) {
+				if (!method.getName().equals(name) || method.getParameterCount() != parameterCount) {
+					continue;
 				}
+				int numbers = 0;
+				for (final Class<?> parameterType : method.getParameterTypes()) {
+					if (parameterType == float.class || parameterType == double.class || parameterType == int.class || parameterType == long.class) {
+						numbers++;
+					}
+				}
+				if (numbers != numberParameterCount) {
+					continue;
+				}
+				if (found != null) {
+					return null;
+				}
+				found = method;
 			}
-			if (numbers != numberParameterCount) {
-				continue;
-			}
-			if (found != null) {
-				// Ambiguous (an overload we cannot choose between): refuse rather than guess.
-				return null;
-			}
-			found = method;
 		}
 		if (found != null) {
 			found.setAccessible(true);
@@ -536,7 +549,32 @@ public final class MmtrInteractPrompt {
 	}
 
 	private static String projectionSource() {
-		return lastProjectionSource + " scaleX=" + Math.round(scaleXForFrame * 10000) / 10000.0 + " scaleY=" + Math.round(scaleYForFrame * 10000) / 10000.0;
+		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
+		return lastProjectionSource
+				+ " scaleX=" + Math.round(scaleXForFrame * 10000) / 10000.0
+				+ " scaleY=" + Math.round(scaleYForFrame * 10000) / 10000.0
+				+ " FOV=" + Math.round(fovDegrees(minecraftClient) * 100) / 100.0
+				+ '(' + lastFovSource + ")"
+				+ " 选项原值=" + rawFovOption(minecraftClient);
+	}
+
+	/**
+	 * The fov option's stored value, printed verbatim for the diagnostic.
+	 *
+	 * <p>Two DIFFERENT numbers have been wrong in this file (a x0.1 that the option does not need, and a
+	 * changingFov=false that pinned the value to 70), and both times the log could not tell them apart from
+	 * a correct read. Printing the raw option next to the value actually used means the next disagreement
+	 * is arithmetic instead of another round of guessing.</p>
+	 */
+	private static String rawFovOption(MinecraftClient minecraftClient) {
+		try {
+			final Object options = minecraftClient.getOptionsMapped().data;
+			final Object simpleOption = options.getClass().getField("fov").get(options);
+			final Object value = simpleOption.getClass().getMethod("getValue").invoke(simpleOption);
+			return String.valueOf(value);
+		} catch (Exception e) {
+			return describeFailure(e);
+		}
 	}
 
 	// ---- helpers ----------------------------------------------------------------------------------
@@ -634,14 +672,12 @@ public final class MmtrInteractPrompt {
 		// Fallback: ask the renderer, WITH changingFov = true so it actually reads the player's setting.
 		try {
 			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
-			for (final java.lang.reflect.Method method : gameRenderer.getClass().getMethods()) {
-				if (method.getName().equals("getFov") && method.getParameterCount() == 3) {
-					method.setAccessible(true);
-					final Object value = method.invoke(gameRenderer, minecraftClient.getGameRendererMapped().getCamera().data, 1.0F, true);
-					if (value instanceof Number number && number.doubleValue() > 1) {
-						lastFovSource = "getFov(true)";
-						return number.doubleValue();
-					}
+			final java.lang.reflect.Method fovMethod = findMethod(gameRenderer, "getFov", 3, 1);
+			if (fovMethod != null) {
+				final Object value = fovMethod.invoke(gameRenderer, minecraftClient.getGameRendererMapped().getCamera().data, 1.0F, true);
+				if (value instanceof Number number && number.doubleValue() > 1) {
+					lastFovSource = "getFov(true)";
+					return number.doubleValue();
 				}
 			}
 		} catch (Exception ignored) {
