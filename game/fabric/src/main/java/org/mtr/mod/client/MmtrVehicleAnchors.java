@@ -63,6 +63,43 @@ public final class MmtrVehicleAnchors {
 	}
 
 	/**
+	 * One FACET of a folded dashboard, in the raw OBJ coordinate space (the same space
+	 * {@code MmtrPanelQuad} places the panel in).
+	 *
+	 * <p>A dashboard modelled as a bent surface carries several facets; a flat one carries none and is
+	 * drawn by the original single-quad path. {@code u0,v0,u1,v1} is the facet's rectangle inside the
+	 * SHARED canvas the packager computes by unfolding the surface along the crease, so the painted
+	 * image is continuous across the fold. {@code v0} is the TOP edge (texture row 0 is the top of the
+	 * image, which is also where the single-quad path puts it).</p>
+	 */
+	public static final class Facet {
+
+		public final Vector position;
+		public final Vector normal;
+		public final Vector up;
+		public final Vector right;
+		public final double widthM;
+		public final double heightM;
+		public final double u0;
+		public final double v0;
+		public final double u1;
+		public final double v1;
+
+		private Facet(Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, double u0, double v0, double u1, double v1) {
+			this.position = position;
+			this.normal = normal;
+			this.up = up;
+			this.right = right;
+			this.widthM = widthM;
+			this.heightM = heightM;
+			this.u0 = u0;
+			this.v0 = v0;
+			this.u1 = u1;
+			this.v1 = v1;
+		}
+	}
+
+	/**
 	 * One named face of the model. {@code car} is the car index inside the vehicle model, and
 	 * {@code cab} is the 1-based cab number for cab anchors ({@code 0} when not cab specific).
 	 *
@@ -92,8 +129,17 @@ public final class MmtrVehicleAnchors {
 		public final int panelPxPerMetre;
 		/** Draw the panel on both sides of the face (diagnostics); normally only the driver's side is drawn. */
 		public final boolean panelTwoSided;
+		/**
+		 * Every face of a FOLDED dashboard, in file order, with the uv rectangle each one owns in the
+		 * shared unfolded canvas. EMPTY for a single-face dashboard, which keeps the original
+		 * one-quad path - so a model that was fine before this existed behaves exactly as it did.
+		 */
+		public final ObjectArrayList<Facet> facets;
+		/** Unfolded canvas size of a folded dashboard, in blocks; {@code 0} when there are no facets. */
+		public final double canvasWidthM;
+		public final double canvasHeightM;
 
-		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided) {
+		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM) {
 			this.name = name;
 			this.kind = kind;
 			this.cab = cab;
@@ -111,6 +157,9 @@ public final class MmtrVehicleAnchors {
 			this.panelFlipU = panelFlipU;
 			this.panelPxPerMetre = panelPxPerMetre;
 			this.panelTwoSided = panelTwoSided;
+			this.facets = facets;
+			this.canvasWidthM = canvasWidthM;
+			this.canvasHeightM = canvasHeightM;
 		}
 	}
 
@@ -389,7 +438,10 @@ public final class MmtrVehicleAnchors {
 						getDouble(object, "heightM", 0),
 						getBoolean(object, "panelFlipU", false),
 						getInt(object, "panelPxPerMetre", 0),
-						getBoolean(object, "panelTwoSided", false)
+						getBoolean(object, "panelTwoSided", false),
+						getFacets(object),
+						getDouble(object, "canvasWidthM", 0),
+						getDouble(object, "canvasHeightM", 0)
 				));
 			}
 		} catch (Exception e) {
@@ -428,6 +480,39 @@ public final class MmtrVehicleAnchors {
 			default:
 				return Kind.OTHER;
 		}
+	}
+
+	/**
+	 * The {@code faces} array of a folded dashboard, or an empty list for a flat one.
+	 *
+	 * <p>An empty list is what keeps the original single-quad path alive, so a resource pack built
+	 * before facets existed needs no repacking.</p>
+	 */
+	private static ObjectArrayList<Facet> getFacets(JsonObject object) {
+		final ObjectArrayList<Facet> facets = new ObjectArrayList<>();
+		final JsonElement element = object.get("faces");
+		if (element == null || !element.isJsonArray()) {
+			return facets;
+		}
+		for (final JsonElement faceElement : element.getAsJsonArray()) {
+			if (!faceElement.isJsonObject()) {
+				continue;
+			}
+			final JsonObject faceObject = faceElement.getAsJsonObject();
+			facets.add(new Facet(
+					getVector(faceObject, "x", "y", "z"),
+					getVector(faceObject, "normal"),
+					getVector(faceObject, "up"),
+					getVector(faceObject, "right"),
+					getDouble(faceObject, "widthM", 0),
+					getDouble(faceObject, "heightM", 0),
+					getDouble(faceObject, "u0", 0),
+					getDouble(faceObject, "v0", 0),
+					getDouble(faceObject, "u1", 1),
+					getDouble(faceObject, "v1", 1)
+			));
+		}
+		return facets;
 	}
 
 	private static String getString(JsonObject object, String key, String fallback) {

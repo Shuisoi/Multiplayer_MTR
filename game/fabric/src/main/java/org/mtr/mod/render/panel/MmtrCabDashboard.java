@@ -102,22 +102,36 @@ public final class MmtrCabDashboard {
 			final MmtrPanelTexture slot = MmtrPanelTexture.get(vehicle.getId() + ":" + carNumber + ":" + hud.name);
 
 			if (slot.needsRedraw(signature)) {
-				final MmtrPanelCanvas canvas = MmtrPanelCanvas.create(hud.widthM, hud.heightM, hud.panelPxPerMetre > 0 ? hud.panelPxPerMetre : DEFAULT_PX_PER_METRE);
+				// A FOLDED dashboard is painted on ONE canvas covering the whole surface UNFOLDED along
+				// its crease (canvasWidthM/canvasHeightM), then drawn as one quad per facet, each
+				// sampling only its own rectangle. A flat dashboard has no facets and keeps the original
+				// canvas and one-quad path exactly.
+				final double canvasWidthM = hud.canvasWidthM > 0 ? hud.canvasWidthM : hud.widthM;
+				final double canvasHeightM = hud.canvasHeightM > 0 ? hud.canvasHeightM : hud.heightM;
+				final MmtrPanelCanvas canvas = MmtrPanelCanvas.create(canvasWidthM, canvasHeightM, hud.panelPxPerMetre > 0 ? hud.panelPxPerMetre : DEFAULT_PX_PER_METRE);
 				layout.paint(canvas, speedKmh, limitKmh);
 				slot.redraw(canvas, signature);
 			}
 
-			MmtrPanelQuad.draw(slot.identifier(), hud, carTransform, hud.widthM, hud.heightM);
+			if (hud.facets.isEmpty()) {
+				MmtrPanelQuad.draw(slot.identifier(), hud, carTransform, hud.widthM, hud.heightM);
+			} else {
+				for (final MmtrVehicleAnchors.Facet facet : hud.facets) {
+					MmtrPanelQuad.drawFacet(slot.identifier(), hud, facet, carTransform);
+				}
+			}
 		}
 	}
 
 	/**
 	 * Every value the panel displays must appear here, otherwise it keeps showing stale numbers. The
-	 * layout id changes when the authored layout changes, and the geometry (modelled face size and
-	 * pixel density) so a reloaded model repaints at the new size.
+	 * layout id changes when the authored layout changes, and the geometry (modelled face size, the
+	 * unfolded canvas of a folded dashboard, and pixel density) so a reloaded model repaints at the
+	 * new size.
 	 */
 	private static String signature(Anchor hud, MmtrHudLayout layout, int speedKmh, long limitKmh) {
-		return layout.id() + "|" + speedKmh + "|" + limitKmh + "|" + hud.widthM + "x" + hud.heightM + "@" + hud.panelPxPerMetre;
+		return layout.id() + "|" + speedKmh + "|" + limitKmh + "|" + hud.widthM + "x" + hud.heightM + "@" + hud.panelPxPerMetre
+				+ "|canvas" + hud.canvasWidthM + "x" + hud.canvasHeightM + "|facets" + hud.facets.size();
 	}
 
 	/** Index of a consist car inside its own model (a model can be used several times). */

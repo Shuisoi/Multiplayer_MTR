@@ -1,0 +1,71 @@
+# MMTR anchor-check fixture: a FOLDED dashboard (two quads sharing one crease).
+#
+# This is a synthetic vehicle that exists so the multi-facet HUD path can be verified offline without
+# a real folded model. It is deliberately trivial: a body box, a driver seat point, and a
+# mmtr_hud_1 made of TWO faces that meet at a crease, folded 45 degrees from flat.
+#
+# Profile in the XY plane, extruded along Z (panel width 3.0 m):
+#
+#        (0.212132, 1.212132)        <- upper facet, 0.3 m, leaning back 45 degrees
+#              /
+#             /   upper facet (the tilted screen)
+#            /
+#   (0, 1.0) o---------------- o  <- THE CREASE (shared vertex indices below)
+#           |                 |
+#           |  lower facet    |     <- lower facet, 0.5 m, vertical (the fascia)
+#           |                 |
+#   (0, 0.5) o---------------- o
+#
+# Face indices are GLOBAL, as they are in a real Blender export: the hud's vertices are 9..14 even
+# though its faces are the first thing a human would number 1..6.
+#
+# The two facets share vertices 11 and 12, which is what the packager's chain walk needs: a crease is
+# a pair of SHARED VERTEX INDICES, so a mesh that is not welded has no crease as far as it is
+# concerned (and its facets fall back to the old single quad with a warning).
+#
+# Expected result: anchors[mmtr_hud_1] gains canvasWidthM=3.0, canvasHeightM=0.8 (the UNFOLDED
+# height: 0.5 + 0.3) and two facets whose v ranges meet exactly at 0.375. The legacy
+# widthM/heightM stay the PROJECTED extents, i.e. heightM = 0.5 + 0.3*cos(45) = 0.7121 - which is
+# exactly the flat-quad height that made a folded dashboard impossible before.
+#
+# v is measured from the IMAGE TOP (row 0 of the painted canvas is the top of the panel), so the
+# upper, tilted facet owns the top of the image (v 0 .. 0.375) and the vertical fascia the bottom
+# (v 0.375 .. 1).
+#
+# rotationDegY is 0 in foldfix.json on purpose: a Y rotation preserves world +Y, which is the only
+# thing the packager's "up = the edge most aligned with world +Y" rule depends on, so the fold logic
+# is exercised exactly as it is for a real vehicle.
+mtllib foldfix.mtl
+
+o body
+v -0.2  0.0 -1.5
+v -0.2  0.0  1.5
+v -0.2  2.0  1.5
+v -0.2  2.0 -1.5
+v  0.8  0.0 -1.5
+v  0.8  0.0  1.5
+v  0.8  2.0  1.5
+v  0.8  2.0 -1.5
+f 1 2 3 4
+f 5 8 7 6
+f 1 5 6 2
+f 2 6 7 3
+f 3 7 8 4
+f 4 8 5 1
+
+o mmtr_hud_1
+v 0.0 0.5 -1.5
+v 0.0 0.5  1.5
+v 0.0 1.0  1.5
+v 0.0 1.0 -1.5
+v 0.212132 1.212132 -1.5
+v 0.212132 1.212132  1.5
+f 9 10 11 12
+f 12 11 14 13
+
+o mmtr_seat_1
+v 0.5 1.0 0.0
+v 0.5 1.0 0.2
+v 0.5 1.2 0.2
+v 0.5 1.2 0.0
+f 15 16 17 18

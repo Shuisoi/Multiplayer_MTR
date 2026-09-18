@@ -1,0 +1,4 @@
+# Build output of the folded-dashboard fixture. Regenerate with:
+#   node mmtr/tools/obj-mtr-packager/pack_vehicle.js mmtr/tools/anchor-check/fixture/foldfix.json
+out/
+stage/

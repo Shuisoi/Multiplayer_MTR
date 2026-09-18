@@ -171,13 +171,212 @@ for(const line of raw.split('\n')){
 const objMain=out.join('\n');
 
 // ---- MMTR cab HUD anchors: centre + orthonormal frame + size of each mmtr_hud* quad ----------
+//
+// A mmtr_hud* object is normally ONE flat quad, and that is all the client needs. A dashboard can
+// however be a FOLDED surface - several faces meeting at a crease - and one flat quad cannot follow
+// it: the quad would sit at the average of every vertex, be sized to the whole folded extent, and
+// end up half buried in the shell and half floating in front of it.
+//
+// So a multi-face hud group ALSO emits one FACET per face, each with its own frame and its true
+// in-plane size, plus a uv sub-rectangle into ONE shared canvas. The canvas is the surface
+// UNFOLDED about the crease: a facet's coordinate along the folding direction is its own in-plane
+// distance from the crease, accumulated from the reference facet along the chain of SHARED EDGES,
+// so two neighbouring facets agree exactly on the crease they share. That is what makes the painted
+// image continuous across the fold (a poster folded along its edge) instead of squashed.
+//
+// The group-level x/y/z + normal/up/right + widthM/heightM keep their old meaning - the reference
+// face, projected over every vertex - so a single-face model is byte-identical to before, and a
+// group that is not a usable folded surface (a box, a broken chain, a twisted pair) emits no facet
+// data at all and falls back to that same old quad.
+const MAX_FOLD_DEG = 89;       // past this the "unfold" is meaningless - and it means the group is a box
+const MAX_FACET_COUNT = 16;    // more faces than this is not a dashboard
+const ALIGN_DOT = 0.999;       // |dot(a, b)| above this counts as "the same axis"
+
+const rc=i=>{ const v=vpos[i-1]; return [v[0]-cx, v[1], v[2]-cz]; };
+const vSub=(a,c)=>[a[0]-c[0], a[1]-c[1], a[2]-c[2]];
+const vAdd=(a,b)=>[a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const vScl=(a,s)=>[a[0]*s, a[1]*s, a[2]*s];
+const vCross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const vNorm=v=>{ const l=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/l,v[1]/l,v[2]/l]; };
+const vDot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const vRound=(v,d)=>v.map(x=>+x.toFixed(d));
+const vAverage=pts=>{ const s=[0,0,0]; for(const p of pts){ s[0]+=p[0]; s[1]+=p[1]; s[2]+=p[2]; } return vScl(s,1/pts.length); };
+
+// Newell normal + area, measured about the polygon's own centroid so the result does not depend on
+// where the group origin happens to be. Returns a unit normal (or +Z for a degenerate polygon).
+const faceNormalArea=points=>{
+  let nx=0,ny=0,nz=0;
+  for(let i=0;i<points.length;i++){ const a=points[i], b=points[(i+1)%points.length]; nx+=(a[1]-b[1])*(a[2]+b[2]); ny+=(a[2]-b[2])*(a[0]+b[0]); nz+=(a[0]-b[0])*(a[1]+b[1]); }
+  const area=Math.hypot(nx,ny,nz)/2;
+  return {n: area>0 ? vNorm([nx,ny,nz]) : [0,0,1], area:area};
+};
+
+// The packager's own frame rule: "up" is the face edge with the largest |Y|, orthogonalised
+// against the normal; "right" completes the right-handed frame (right = up x normal).
+const faceFrame=(points,normal)=>{
+  const e1=vSub(points[1],points[0]), e2=vSub(points[2],points[1]);
+  const upRaw=Math.abs(e1[1])>=Math.abs(e2[1]) ? e1 : e2;
+  const up=vNorm(vSub(upRaw,vScl(normal,vDot(upRaw,normal))));
+  return {up:up, right:vNorm(vCross(up,normal))};
+};
+
+/**
+ * Per-facet data of a FOLDED mmtr_hud* group, or null when the group is not a usable folded
+ * surface and the old single quad should be used instead.
+ *
+ * @param g   the anchor group ({name, faces} with faces = arrays of OBJ vertex indices)
+ * @param ctx {kind, refFace, refNormal, refUp, refRight, groupCentroid, flip, rawName}
+ */
+function buildFacets(g,ctx){
+  if(ctx.kind!=='hud' || g.faces.length<2) return null;
+  if(g.faces.length>MAX_FACET_COUNT){ console.warn('WARNING: '+(g.name||'mmtr_hud')+' has '+g.faces.length+' faces; a dashboard that folded is not - no facet data, the old single quad is used.'); return null; }
+
+  const facets=[];
+  for(const f of g.faces){
+    if(f.length<3) return null;
+    if(f.length!==4) console.warn('WARNING: a face of '+(g.name||'mmtr_hud')+' has '+f.length+' vertices; a HUD face must be a QUAD, otherwise the rectangle the client draws will not fit it.');
+    const points=f.map(rc);
+    const centre=vAverage(points);
+    const raw=faceNormalArea(points);
+    if(raw.area<=0) return null;
+    // The same winding decision the group normal gets, so every facet faces the same way.
+    const normal=ctx.flip ? vScl(raw.n,-1) : raw.n;
+    const frame=faceFrame(points,normal);
+    let wMin=Infinity,wMax=-Infinity,hMin=Infinity,hMax=-Infinity;
+    for(const p of points){
+      const d=vSub(p,centre), dr=vDot(d,frame.right), dh=vDot(d,frame.up);
+      if(dr<wMin)wMin=dr; if(dr>wMax)wMax=dr;
+      if(dh<hMin)hMin=dh; if(dh>hMax)hMax=dh;
+    }
+    facets.push({
+      ids:f, points:points, area:raw.area,
+      // Placed by the bounding-box CENTRE, not the vertex average, so an irregular quad is still
+      // covered by the rectangle the client draws.
+      position:vAdd(centre,vAdd(vScl(frame.right,(wMin+wMax)/2),vScl(frame.up,(hMin+hMax)/2))),
+      normal:normal, up:frame.up, right:frame.right,
+      widthM:wMax-wMin, heightM:hMax-hMin, off:0
+    });
+  }
+
+  const refIndex=g.faces.indexOf(ctx.refFace);
+  if(refIndex<0) return null;
+  const ref=facets[refIndex];
+  // Everything below measures against the REFERENCE FACET'S OWN frame, not the group frame. The
+  // group frame comes from a three-vertex cross about the average of EVERY vertex of the group, so
+  // on a folded group its normal is off the reference plane by a couple of degrees (measured: 2.7
+  // degrees on a 45-degree fold). That is harmless for the legacy single quad but fatal for the
+  // axis test, which asks whether all facets share an axis to within 0.1%.
+  // Safety: the facet normal comes from the face winding while the group normal was built from a
+  // three-vertex cross, so they must agree in sign. If they do not, the mesh winding is not
+  // consistent and every facet's "front" would be a guess.
+  if(vDot(ref.normal,ctx.refNormal)<0.9){ console.warn('WARNING: '+(g.name||'mmtr_hud')+' face winding disagrees with the anchor normal; no facet data.'); return null; }
+
+  let maxFold=0,maxDev=0;
+  for(const f of facets){
+    maxFold=Math.max(maxFold,Math.acos(Math.max(-1,Math.min(1,vDot(f.normal,ref.normal))))*180/Math.PI);
+    for(const p of f.points) maxDev=Math.max(maxDev,Math.abs(vDot(vSub(p,ref.position),ref.normal)));
+  }
+  if(maxFold>MAX_FOLD_DEG){ console.warn('WARNING: '+(g.name||'mmtr_hud')+' contains faces '+maxFold.toFixed(0)+' degrees apart (a box, not a folded surface); no facet data, the old single quad is used.'); return null; }
+  // Coplanar faces (a quad exported as two triangles, say): the old single quad is already exact.
+  if(maxFold<1.5 && maxDev<0.002) return null;
+
+  // A fold about `right` keeps `right` and turns `up`; a fold about `up` does the opposite. Anything
+  // else (two axes turning at once) is a twisted surface, which cannot be unfolded into one canvas.
+  const shareRight=facets.every(f=>Math.abs(vDot(f.right,ref.right))>ALIGN_DOT);
+  const shareUp=facets.every(f=>Math.abs(vDot(f.up,ref.up))>ALIGN_DOT);
+  const foldAboutRight=shareRight&&!shareUp;
+  const foldAboutUp=shareUp&&!shareRight;
+  if(!foldAboutRight&&!foldAboutUp){ console.warn('WARNING: '+(g.name||'mmtr_hud')+' facets do not share a fold axis (a twisted surface); no facet data, the old single quad is used.'); return null; }
+  const localAxis=f=>foldAboutRight ? f.up : f.right;
+
+  // Chain of shared edges, and the offset recurrence. A facet's local coordinate is measured from
+  // its own quad centre along the folding axis: L(f, x) = dot(x - f.position, localAxis(f)) + f.off.
+  // The shared crease is perpendicular to the folding axis, so L is CONSTANT along it on both sides
+  // and continuity reduces to matching that constant.
+  const edgeKey=(a,b)=>a<b ? a+'_'+b : b+'_'+a;
+  const edges=new Map();
+  facets.forEach((f,fi)=>{
+    const ids=[...new Set(f.ids)];
+    for(let i=0;i<ids.length;i++){
+      const key=edgeKey(ids[i],ids[(i+1)%ids.length]);
+      if(!edges.has(key)) edges.set(key,[]);
+      edges.get(key).push(fi);
+    }
+  });
+  const neighboursOf=fi=>{
+    const out=[], ids=[...new Set(facets[fi].ids)];
+    for(let i=0;i<ids.length;i++) for(const j of (edges.get(edgeKey(ids[i],ids[(i+1)%ids.length]))||[])) if(j!==fi&&!out.includes(j)) out.push(j);
+    return out;
+  };
+
+  const visited=new Set([refIndex]), queue=[refIndex];
+  while(queue.length){
+    const i=queue.shift();
+    for(const j of neighboursOf(i)){
+      if(visited.has(j)) continue;
+      const idSet=new Set(facets[i].ids);
+      const shared=facets[j].ids.filter(x=>idSet.has(x));
+      if(shared.length<2) continue;
+      const X=vAverage(shared.map(rc));
+      facets[j].off=facets[i].off
+        +vDot(vSub(X,facets[i].position),localAxis(facets[i]))
+        -vDot(vSub(X,facets[j].position),localAxis(facets[j]));
+      visited.add(j); queue.push(j);
+    }
+  }
+  if(visited.size!==facets.length){ console.warn('WARNING: '+(g.name||'mmtr_hud')+' facets are not one connected chain of shared edges; no facet data, the old single quad is used.'); return null; }
+
+  // The shared axis is ONE affine function over the whole group, hence continuous by construction;
+  // the folding axis comes from each facet's local coordinate plus its accumulated offset.
+  const sharedCoord=p=>foldAboutRight ? vDot(vSub(p,ref.position),ref.right) : vDot(vSub(p,ref.position),ref.up);
+  const foldCoord=(f,p)=>vDot(vSub(p,f.position),localAxis(f))+f.off;
+  let sharedMin=Infinity,sharedMax=-Infinity,foldMin=Infinity,foldMax=-Infinity;
+  for(const f of facets) for(const p of f.points){
+    const u=sharedCoord(p), s=foldCoord(f,p);
+    if(u<sharedMin)sharedMin=u; if(u>sharedMax)sharedMax=u;
+    if(s<foldMin)foldMin=s; if(s>foldMax)foldMax=s;
+  }
+  const sharedSpan=sharedMax-sharedMin, foldSpan=foldMax-foldMin;
+  if(sharedSpan<=1e-6||foldSpan<=1e-6) return null;
+
+  const faces=facets.map(f=>{
+    let sharedMin2=Infinity,sharedMax2=-Infinity,sMin=Infinity,sMax=-Infinity;
+    for(const p of f.points){
+      const s=foldCoord(f,p), u=sharedCoord(p);
+      if(s<sMin)sMin=s; if(s>sMax)sMax=s;
+      if(u<sharedMin2)sharedMin2=u; if(u>sharedMax2)sharedMax2=u;
+    }
+    // u runs left to right in image space, so it is just the normalized shared coordinate (or the
+    // normalized folding coordinate, when the fold is about `up`).
+    const uA=(sharedMin2-sharedMin)/sharedSpan, uB=(sharedMax2-sharedMin)/sharedSpan;
+    const sA=(sMin-foldMin)/foldSpan, sB=(sMax-foldMin)/foldSpan;
+    // v runs TOP TO BOTTOM in image space: row 0 of the painted canvas is the top of the panel, and
+    // the client puts texture v=0 on the quad's +Y edge. So the folding coordinate - which grows
+    // along each facet's own "up" - has to be flipped, or the dashboard reads upside down.
+    const vA=1-sB, vB=1-sA;
+    const face=foldAboutRight
+      ? {u0:uA, u1:uB, v0:vA, v1:vB}
+      : {u0:sA, u1:sB, v0:vA, v1:vB};
+    return {
+      x:+f.position[0].toFixed(5), y:+f.position[1].toFixed(5), z:+f.position[2].toFixed(5),
+      normal:vRound(f.normal,6), up:vRound(f.up,6), right:vRound(f.right,6),
+      widthM:+f.widthM.toFixed(4), heightM:+f.heightM.toFixed(4),
+      u0:+face.u0.toFixed(6), v0:+face.v0.toFixed(6), u1:+face.u1.toFixed(6), v1:+face.v1.toFixed(6)
+    };
+  });
+
+  console.log('hud facets: '+ctx.rawName+' faces='+faces.length+' fold='+maxFold.toFixed(1)+'deg about '+(foldAboutRight?'right':'up')
+    +' canvas='+(foldAboutRight?sharedSpan:foldSpan).toFixed(3)+' x '+(foldAboutRight?foldSpan:sharedSpan).toFixed(3)+'m');
+  return {
+    canvasWidthM:+((foldAboutRight ? sharedSpan : foldSpan)).toFixed(4),
+    canvasHeightM:+((foldAboutRight ? foldSpan : sharedSpan)).toFixed(4),
+    faces:faces
+  };
+}
+
 function buildAnchors(){
   const anchors=[];
-  const rc=i=>{ const v=vpos[i-1]; return [v[0]-cx, v[1], v[2]-cz]; };
-  const sub=(a,c)=>[a[0]-c[0], a[1]-c[1], a[2]-c[2]];
-  const cr=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const nz=v=>{ const l=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/l,v[1]/l,v[2]/l]; };
-  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const sub=vSub, cr=vCross, nz=vNorm, dot=vDot;
   for(const g of anchorFaces){
     const ids=[];
     for(const f of g.faces) for(const i of f) if(!ids.includes(i)) ids.push(i);
@@ -224,10 +423,15 @@ function buildAnchors(){
     const kind=wsm?'windshield':(m?m[1]:rawName);
     const cab=wsm?(wsm[1]?+wsm[1]:1):(m&&m[2]?+m[2]:null);
     const door=wsm?null:(m&&m[3]?+m[3]:null);
-    anchors.push({name:rawName,kind:kind,cab:cab,door:door,car:params.carIndex||0,
+    const anchor={name:rawName,kind:kind,cab:cab,door:door,car:params.carIndex||0,
       x:+c[0].toFixed(5), y:+c[1].toFixed(5), z:+c[2].toFixed(5),
       normal:n.map(x=>+x.toFixed(6)), up:up.map(x=>+x.toFixed(6)), right:right.map(x=>+x.toFixed(6)),
-      widthM:+(wMax-wMin).toFixed(4), heightM:+(hMax-hMin).toFixed(4)});
+      widthM:+(wMax-wMin).toFixed(4), heightM:+(hMax-hMin).toFixed(4)};
+    // A folded dashboard adds canvasWidthM/canvasHeightM + one entry per face. The fields above keep
+    // their old meaning, so a client that does not know about facets still draws the old quad.
+    const facetFields=buildFacets(g,{kind:kind,refFace:f0,refNormal:n,refUp:up,refRight:right,groupCentroid:c,flip:flipThis,rawName:rawName});
+    if(facetFields) for(const key of Object.keys(facetFields)) anchor[key]=facetFields[key];
+    anchors.push(anchor);
   }
   return anchors;
 }

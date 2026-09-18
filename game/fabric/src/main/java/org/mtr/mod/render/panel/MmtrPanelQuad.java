@@ -8,6 +8,7 @@ import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mod.Init;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
+import org.mtr.mod.client.MmtrVehicleAnchors.Facet;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.QueuedRenderLayer;
@@ -44,21 +45,41 @@ public final class MmtrPanelQuad {
 	private static final ObjectOpenHashSet<String> DEBUG_LOGGED = new ObjectOpenHashSet<>();
 
 	public static void draw(Identifier texture, Anchor anchor, StoredMatrixTransformations carTransform, double widthM, double heightM) {
+		drawFrame(texture, anchor.name, anchor.filePosition, anchor.fileNormal, anchor.fileUp, anchor.fileRight, widthM, heightM, 0, 0, 1, 1, anchor.panelFlipU, anchor.panelTwoSided, carTransform);
+	}
+
+	/**
+	 * Draws ONE facet of a folded dashboard: its own frame and size, sampling only its rectangle of the
+	 * shared unfolded canvas.
+	 *
+	 * <p>{@code u0,v0,u1,v1} is that rectangle, and {@code v0} is the TOP edge - the same edge the
+	 * single-quad path puts texture row 0 on - so the image stays the right way up across every facet
+	 * and meets exactly at the creases.</p>
+	 *
+	 * <p>The driver's-side test runs PER FACET here: a bent dashboard's facets point in different
+	 * directions, and testing the group's average normal against the group's average position would
+	 * pick one side for the whole surface.</p>
+	 */
+	public static void drawFacet(Identifier texture, Anchor anchor, Facet facet, StoredMatrixTransformations carTransform) {
+		drawFrame(texture, anchor.name, facet.position, facet.normal, facet.up, facet.right, facet.widthM, facet.heightM, facet.u0, facet.v0, facet.u1, facet.v1, anchor.panelFlipU, anchor.panelTwoSided, carTransform);
+	}
+
+	private static void drawFrame(Identifier texture, String name, Vector filePosition, Vector fileNormal, Vector fileUp, Vector fileRight, double widthM, double heightM, double u0, double v0, double u1, double v1, boolean flipU, boolean forceTwoSided, StoredMatrixTransformations carTransform) {
 		if (texture == null || widthM <= 0 || heightM <= 0) {
 			return;
 		}
 
-		final Vector position = toModelSpace(anchor.filePosition);
-		final Vector normal = toModelSpace(anchor.fileNormal).normalize();
-		final Vector up = orthonormalise(toModelSpace(anchor.fileUp).normalize(), normal);
+		final Vector position = toModelSpace(filePosition);
+		final Vector normal = toModelSpace(fileNormal).normalize();
+		final Vector up = orthonormalise(toModelSpace(fileUp).normalize(), normal);
 		final Vector right = cross(up, normal).normalize();
 		final double halfWidthM = widthM / 2;
 		final double halfHeightM = heightM / 2;
-		final int chosenSide = anchor.panelTwoSided ? 0 : facingSide(anchor);
+		final int chosenSide = forceTwoSided ? 0 : facingSide(position, normal);
 
-		if (DEBUG_LOGGED.add(texture.toString())) {
-			Init.LOGGER.info("[MMTR-DBG] panel {} anchor={} modelPos={} modelNormal={} modelUp={} modelRight={} chosenSide={} (model space = OBJ file space (x, -y, -z))",
-					texture, anchor.name, format(position), format(normal), format(up), format(right), chosenSide);
+		if (DEBUG_LOGGED.add(texture + "#" + name + "#" + u0 + "," + v0)) {
+			Init.LOGGER.info("[MMTR-DBG] panel {} anchor={} uv=({},{})-({},{}) modelPos={} modelNormal={} modelUp={} modelRight={} chosenSide={} (model space = OBJ file space (x, -y, -z))",
+					texture, name, u0, v0, u1, v1, format(position), format(normal), format(up), format(right), chosenSide);
 			for (final int side : new int[]{1, -1}) {
 				final Vector sideNormal = scale(normal, side);
 				Init.LOGGER.info("[MMTR-DBG]   side {} yaw={} pitch={} roll={} flipU={} offset={}",
@@ -66,7 +87,7 @@ public final class MmtrPanelQuad {
 						round(Math.toDegrees(Math.atan2(sideNormal.x(), sideNormal.z()))),
 						round(Math.toDegrees(Math.asin(clamp(-up.y())))),
 						round(Math.toDegrees(Math.atan2(up.x(), up.y()))),
-						flipU(anchor),
+						flipU,
 						SURFACE_OFFSET_M);
 			}
 		}
@@ -91,7 +112,9 @@ public final class MmtrPanelQuad {
 			// -Z, which mirrored every face whose dashboard points the other way in model space (a
 			// B-end cab, and the new double-ended SAF101 loco). panelFlipU in the anchor JSON remains
 			// the escape hatch for a face the modeller authored the other way round.
-			final boolean mirrorU = flipU(anchor);
+			// A facet's uv rectangle mirrors about the canvas centre for the same reason: u -> 1 - u.
+			final float uLeft = (float) (flipU ? 1 - u0 : u0);
+			final float uRight = (float) (flipU ? 1 - u1 : u1);
 
 			final StoredMatrixTransformations transformations = carTransform.copy();
 			transformations.add(graphicsHolder -> graphicsHolder.translate(position.x(), position.y(), position.z()));
@@ -112,19 +135,17 @@ public final class MmtrPanelQuad {
 				// dashboard (Minecraft culls back faces and RenderLayer.getText keeps culling enabled),
 				// which is exactly how the panel ends up hidden behind its own dashboard.
 				// Corner order is bottom-left, bottom-right, top-right, top-left, and MTR's 12-float
-				// drawTexture assigns the four UV pairs as (u1,v2) (u2,v2) (u2,v1) (u1,v1) - i.e. v2 is
-				// the TOP edge and v1 the bottom, the opposite of the rectangle overload's naming. So
-				// v1=0 (image top) belongs to the top corners: pass 0 for v1 and 1 for v2 to keep the
-				// panel upright.
-				final float uLeft = mirrorU ? 1 : 0;
-				final float uRight = mirrorU ? 0 : 1;
+				// drawTexture assigns the four UV pairs as (u1,v2) (u2,v2) (u2,v1) (u1,v1) - i.e. v1 is
+				// the TOP edge and v2 the bottom, the opposite of the rectangle overload's naming. So
+				// v0 (the facet's top edge) belongs to the top corners: pass v0 for v1 and v1 for v2 to
+				// keep the panel upright.
 				IDrawing.drawTexture(
 						graphicsHolder,
 						0, 0, 0,
 						(float) widthM, 0, 0,
 						(float) widthM, (float) heightM, 0,
 						0, (float) heightM, 0,
-						uLeft, 0, uRight, 1,
+						uLeft, (float) v0, uRight, (float) v1,
 						Direction.UP, IGui.ARGB_WHITE, GraphicsHolder.getDefaultLight()
 				);
 				graphicsHolder.pop();
@@ -133,11 +154,20 @@ public final class MmtrPanelQuad {
 	}
 
 	/**
-	 * Whether the panel image must be mirrored horizontally on the quad. The quad frame already puts
-	 * the panel's local +X towards the driver's right, so only an anchor that asks for it is flipped.
+	 * @return {@code 1} or {@code -1} for the side of the face the driver sits on, {@code 0} when it
+	 * cannot be decided. In model space the car is centred on the origin, so the car's interior is the
+	 * direction from the face towards the origin; the driver's side is the one whose normal points
+	 * that way. This keeps a single panel instead of two back-to-back copies.
+	 *
+	 * <p>Decided per FRAME (anchor or facet): a bent dashboard's facets point different ways, so the
+	 * group's average normal would pick one side for the whole surface.</p>
 	 */
-	private static boolean flipU(Anchor anchor) {
-		return anchor.panelFlipU;
+	private static int facingSide(Vector position, Vector normal) {
+		final double horizontal = normal.x() * -position.x() + normal.z() * -position.z();
+		if (Math.abs(horizontal) < 1.0E-4) {
+			return 0;
+		}
+		return horizontal > 0 ? 1 : -1;
 	}
 
 	/**
@@ -146,22 +176,6 @@ public final class MmtrPanelQuad {
 	 */
 	public static Vector toModelSpace(Vector fileVector) {
 		return new Vector(fileVector.x(), -fileVector.y(), -fileVector.z());
-	}
-
-	/**
-	 * @return {@code 1} or {@code -1} for the side of the face the driver sits on, {@code 0} when it
-	 * cannot be decided. In model space the car is centred on the origin, so the car's interior is the
-	 * direction from the anchor towards the origin; the driver's side is the one whose normal points
-	 * that way. This keeps a single panel instead of two back-to-back copies.
-	 */
-	private static int facingSide(Anchor anchor) {
-		final Vector position = toModelSpace(anchor.filePosition);
-		final Vector normal = toModelSpace(anchor.fileNormal).normalize();
-		final double horizontal = normal.x() * -position.x() + normal.z() * -position.z();
-		if (Math.abs(horizontal) < 1.0E-4) {
-			return 0;
-		}
-		return horizontal > 0 ? 1 : -1;
 	}
 
 	private static Vector orthonormalise(Vector vector, Vector normal) {
