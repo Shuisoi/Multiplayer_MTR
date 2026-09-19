@@ -485,16 +485,17 @@ function fitWipersweep(group, domain){
       apexes=[conventional];
     }
   }
-  if(apexes.length!==1){
-    console.warn('WARNING: '+label+' must be a TRIANGLE FAN (one vertex shared by every face), but '+
-      apexes.length+' vertices are shared by all of them and they do not agree on a first vertex - '+
-      'the wiper action sector is ignored. Draw the sector with at least three triangles, or start '+
-      'every triangle with the pivot.');
-    return null;
-  }
-  const apex=apexes[0];
-  const pivot=domain.toRightUp(rc(apex));
-  const rim=[...new Set(group.faces.flat())].filter(i=>i!==apex);
+  // The apex is now OPTIONAL. It is only needed for the legacy "angular sector" reading (a model with no
+  // modelled blade), because the region's BOUNDARY is what the mechanism solve uses - and a boundary is a
+  // property of the outline, not of a shared vertex. That matters because an IDEAL parallelogram moves its
+  // blade purely by translation, so its two extreme positions are PARALLEL, their "apex" is at infinity,
+  // and a triangle fan simply cannot express the region. A quad band can, and so can any polygon.
+  const apex=apexes.length===1 ? apexes[0] : null;
+  const allVertices=[...new Set(group.faces.flat())];
+  const pivot=apex===null
+    ? vAverage(allVertices.map(i=>domain.toRightUp(rc(i))))
+    : domain.toRightUp(rc(apex));
+  const rim=apex===null ? allVertices : allVertices.filter(i=>i!==apex);
   if(rim.length<2){ console.warn('WARNING: '+label+' has fewer than two rim vertices - ignored.'); return null; }
 
   let armM=0;
@@ -540,14 +541,18 @@ function fitWipersweep(group, domain){
   // fitWiperMechanism pick by testing which one the blade actually LIES ON. A plain angular sector (rim
   // points all at the same radius from the apex) has no such edges, and then the outline's own span is
   // the only boundary - the older meaning, kept so models that only draw a sweep sector keep working.
+  // THE OUTLINE: an edge that belongs to exactly ONE face. A triangle fan's spokes belong to two faces,
+  // so they drop out on their own - no apex needed, and the same rule accepts a quad band or any polygon.
+  const edgeUse=new Map();
+  const edgeKey=(a,b)=>a<b?a+'_'+b:b+'_'+a;
+  for(const f of group.faces) for(let i=0;i<f.length;i++){ const k=edgeKey(f[i],f[(i+1)%f.length]); edgeUse.set(k,(edgeUse.get(k)||0)+1); }
   const boundaryEdges=[];
   for(const f of group.faces){
     for(let i=0;i<f.length;i++){
       const a=f[i], b=f[(i+1)%f.length];
-      if(a===apex||b===apex) continue;
+      if(edgeUse.get(edgeKey(a,b))!==1) continue;
       const pa=domain.toRightUp(rc(a)), pb=domain.toRightUp(rc(b));
-      const length=Math.hypot(pb[0]-pa[0], pb[1]-pa[1]);
-      if(length<=0.02) continue;
+      if(Math.hypot(pb[0]-pa[0], pb[1]-pa[1])<=0.02) continue;
       const angle=Math.atan2(pb[1]-pa[1], pb[0]-pa[0])*180/Math.PI;
       if(!boundaryEdges.some(edge=>Math.abs(normaliseLineAngle(angle-edge.angle))<0.5)) {
         boundaryEdges.push({a:pa, b:pb, angle:angle});
