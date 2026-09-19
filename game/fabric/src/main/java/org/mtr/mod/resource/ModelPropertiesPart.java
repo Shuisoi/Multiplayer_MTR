@@ -19,6 +19,7 @@ import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.generated.resource.ModelPropertiesPartSchema;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.MmtrDoorSides;
+import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.StoredMatrixTransformations;
 
@@ -212,9 +213,9 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				case NORMAL:
 					final ObjectIntImmutablePair<QueuedRenderLayer> renderProperties = getRenderProperties(renderStage, light, vehicle);
 					if (OptimizedRenderer.hasOptimizedRendering()) {
-						MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, renderProperties, openDoorways, light, graphicsHolder, offset));
+						MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, carNumber, renderProperties, openDoorways, light, graphicsHolder, offset));
 					} else {
-						MainRenderer.scheduleRender(texture, false, renderProperties.left(), (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, renderProperties, openDoorways, light, graphicsHolder, offset));
+						MainRenderer.scheduleRender(texture, false, renderProperties.left(), (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, carNumber, renderProperties, openDoorways, light, graphicsHolder, offset));
 					}
 					break;
 				case DISPLAY:
@@ -313,7 +314,13 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		return doorXMultiplier != 0 || doorZMultiplier != 0;
 	}
 
-	private void renderNormal(StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, ObjectIntImmutablePair<QueuedRenderLayer> renderProperties, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, int light, GraphicsHolder graphicsHolder, Vector3d offset) {
+	/** The model's RESOURCE id for one car of a consist - what the anchors and wiper states are keyed by. */
+	private static String vehicleIdFor(VehicleExtension vehicle, int carNumber) {
+		final var cars = vehicle.getVehicleCarsAndPositions();
+		return carNumber < 0 || carNumber >= cars.size() ? null : cars.get(carNumber).left().getVehicleId();
+	}
+
+	private void renderNormal(StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, ObjectIntImmutablePair<QueuedRenderLayer> renderProperties, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, int light, GraphicsHolder graphicsHolder, Vector3d offset) {
 		storedMatrixTransformations.transform(graphicsHolder, offset);
 		final boolean flashOn = flashOnTime + flashOffTime == 0 || (System.currentTimeMillis() % (flashOnTime + flashOffTime)) > flashOffTime;
 		partDetailsList.forEach(partDetails -> {
@@ -370,7 +377,17 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 					graphicsHolder.pop();
 				}
 			} else {
+				// W4: a modelled wiper part is moved by the mechanism's own kinematics, applied as a matrix
+				// around the part's draw - the same shape as MTR's own 180 degree flip - so the optimized
+				// model's baked geometry is untouched. False for every other part, which is the common case.
+				// getId() is the NUMERIC vehicle id; the anchors and the wiper states are keyed by the
+				// model's RESOURCE id, which is what the consist reports for this car.
+				final String vehicleResourceId = vehicle == null ? null : vehicleIdFor(vehicle, carNumber);
+				final boolean wiperMoved = vehicleResourceId != null && MmtrWindshield.pushPartTransform(graphicsHolder, names, vehicleResourceId, carNumber);
 				partDetails.modelParts.forEach(modelPart -> modelPart.render(graphicsHolder, x, y, z, partDetails.flipped ? (float) Math.PI : 0, renderProperties.rightInt(), OverlayTexture.getDefaultUvMapped()));
+				if (wiperMoved) {
+					graphicsHolder.pop();
+				}
 			}
 		});
 		graphicsHolder.pop();
@@ -752,3 +769,6 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		void accept(double x, double y, double z, boolean flipped);
 	}
 }
+
+
+

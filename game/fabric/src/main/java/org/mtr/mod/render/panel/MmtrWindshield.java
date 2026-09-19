@@ -17,9 +17,12 @@ import org.mtr.mapping.holder.Vector3d;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mapping.mapper.ResourceManagerHelper;
 import org.mtr.mapping.mapper.TextHelper;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.mtr.mod.Init;
 import org.mtr.mod.KeyBindings;
 import org.mtr.mod.client.IDrawing;
+import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
 import org.mtr.mod.data.IGui;
@@ -317,6 +320,116 @@ public final class MmtrWindshield {
 			state.advance(now, rainGradient, vehicleSpeedMetersPerMs, mode);
 			state.draw(carTransform);
 		}
+	}
+
+	/**
+	 * W4: pushes the rigid transform of a MODELLED wiper part, or returns false when this part is not one.
+	 * The caller must {@code pop()} exactly when this returns true.
+	 *
+	 * <p>The parts are named independently (docs §1.4④) and each moves differently, which is the whole
+	 * reason the mechanism had to be fitted rather than assumed:</p>
+	 * <ul>
+	 *   <li>{@code wiperarm_<cab>_<pane>} - the crank, so it rotates about the SPINDLE.</li>
+	 *   <li>{@code wiperrod_<cab>_<pane>} - the follower, rotating about the SECOND pivot.</li>
+	 *   <li>{@code wiper_<cab>_<pane>} - the blade, carried by its two pins: rotate about the parked pin by
+	 *       the angle the pin pair turned through, then translate that pin onto its current position. On a
+	 *       single-axis wiper that degenerates to a rotation about the spindle and on a parallel linkage to
+	 *       a pure translation, which is exactly right for both.</li>
+	 * </ul>
+	 *
+	 * <p>Applied as matrix-stack operations around the part's draw - the same shape as MTR's own 180 degree
+	 * flip - so the optimized model's baked geometry is untouched and nothing has to be re-uploaded.</p>
+	 */
+	/** Matches the independently named mechanism parts: wiper_ / wiperarm_ / wiperrod_ <cab>_<pane>. */
+	private static final Pattern WIPER_PART = Pattern.compile("^wiper(arm|rod)?_(\\d+)_(\\d+)$", Pattern.CASE_INSENSITIVE);
+
+	public static boolean pushPartTransform(GraphicsHolder graphicsHolder, Iterable<String> partNames, String vehicleId, int carNumber) {
+		for (final String name : partNames) {
+			final Matcher matcher = WIPER_PART.matcher(name);
+			if (!matcher.matches()) {
+				continue;
+			}
+			final int cab = Integer.parseInt(matcher.group(2));
+			final int pane = Integer.parseInt(matcher.group(3));
+			final Anchor anchor = MmtrVehicleAnchors.findWindshield(MmtrVehicleAnchors.get(vehicleId), carNumber, cab, pane);
+			if (anchor == null) {
+				return false;
+			}
+			final WindshieldConfig config = WindshieldConfig.get(vehicleId, anchor.name);
+			if (!config.hasBlade) {
+				return false;
+			}
+			final Plane plane = Plane.of(anchor);
+			if (plane == null) {
+				return false;
+			}
+			final State state = STATES.get(vehicleId + ":" + carNumber + ":" + anchor.name);
+			final double angleDeg = state == null ? config.parkAngleDeg : state.wiperAngleDeg;
+			final double theta = (angleDeg - config.parkAngleDeg) * config.sweepSign;
+			final double widthM = anchor.widthM;
+			final double heightM = anchor.heightM;
+			final boolean isArm = "arm".equals(matcher.group(1));
+			final boolean isRod = "rod".equals(matcher.group(1));
+			if (isArm || isRod) {
+				final double pivotX = (isArm ? config.pivotU : config.pivot2U) * widthM;
+				final double pivotY = (isArm ? config.pivotV : config.pivot2V) * heightM;
+				applyRotation(graphicsHolder, plane, pivotX, pivotY, theta);
+			} else {
+				// The blade: rotate about the PARKED arm pin by the angle the pin pair turned, then move
+				// that pin onto where it is now. (m0 -> m, with the rotation the pair went through.)
+				final double[] m0 = {config.pinAU * widthM, config.pinAV * heightM};
+				final double[] br0 = {config.pinBU * widthM, config.pinBV * heightM};
+				final double radians = Math.toRadians(theta);
+				final double cos = Math.cos(radians), sin = Math.sin(radians);
+				final double[] m = {config.pivotU * widthM + (m0[0] - config.pivotU * widthM) * cos - (m0[1] - config.pivotV * heightM) * sin,
+						config.pivotV * heightM + (m0[0] - config.pivotU * widthM) * sin + (m0[1] - config.pivotV * heightM) * cos};
+				final double[] p2 = {config.pivot2U * widthM, config.pivot2V * heightM};
+				final boolean coaxial = Math.abs(p2[0] - config.pivotU * widthM) < 1.0E-9 && Math.abs(p2[1] - config.pivotV * heightM) < 1.0E-9;
+				double turn = theta;
+				if (!coaxial) {
+					final double spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
+					final double followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
+					// The mode is read off the PARK configuration - its park crank pin is m0, not br0.
+					final int mode = config.assemblyMode(m0, p2, br0, spanM, followerM);
+					final double[] br = config.followerEndFor(m, p2, spanM, followerM, mode);
+					if (br != null) {
+						turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
+					}
+				}
+				graphicsHolder.push();
+				graphicsHolder.translate(m[0], m[1], 0);
+				applyPlaneRotation(graphicsHolder, plane, Math.toDegrees(turn));
+				graphicsHolder.translate(-m0[0], -m0[1], 0);
+				return true;
+			}
+			return true;
+		}
+		return false;
+	}
+
+	/** Rotates about {@code (pivotX, pivotY)} within the glass plane, by {@code angleDeg}. */
+	private static void applyRotation(GraphicsHolder graphicsHolder, Plane plane, double pivotX, double pivotY, double angleDeg) {
+		graphicsHolder.push();
+		graphicsHolder.translate(pivotX, pivotY, 0);
+		applyPlaneRotation(graphicsHolder, plane, angleDeg);
+		graphicsHolder.translate(-pivotX, -pivotY, 0);
+	}
+
+	/**
+	 * A rotation about the glass's NORMAL, by mapping the plane's own frame onto the world axes, turning
+	 * about local Z (which that mapping sends to the normal), and mapping back.
+	 *
+	 * <p>MTR's GraphicsHolder only rotates about X/Y/Z, so an arbitrary axis has to be reached this way -
+	 * the same frame solve {@link MmtrPanelQuad} uses to place a panel on a modelled face.</p>
+	 */
+	private static void applyPlaneRotation(GraphicsHolder graphicsHolder, Plane plane, double angleDeg) {
+		graphicsHolder.rotateYDegrees((float) plane.yaw);
+		graphicsHolder.rotateXDegrees((float) plane.pitch);
+		graphicsHolder.rotateZDegrees((float) plane.roll);
+		graphicsHolder.rotateZDegrees((float) angleDeg);
+		graphicsHolder.rotateZDegrees((float) -plane.roll);
+		graphicsHolder.rotateXDegrees((float) -plane.pitch);
+		graphicsHolder.rotateYDegrees((float) -plane.yaw);
 	}
 
 	private static boolean configAllowsWiper(State state) {
@@ -1766,6 +1879,17 @@ public final class MmtrWindshield {
 		 * largest arm that still fits inside the plane the author drew - so a correctly sized wiper face
 		 * needs no {@code armM} at all.
 		 */
+		/** The follower's pin at a given crank pin, for the part transform. See bladeSegmentM for the maths. */
+		@Nullable
+		double[] followerEndFor(double[] crankPin, double[] pivot, double spanM, double followerM, int mode) {
+			return followerEnd(crankPin, pivot, spanM, followerM, mode);
+		}
+
+		/** The assembly mode, read off the PARK configuration (its crank pin is m0, not br0). */
+		int assemblyMode(double[] parkCrankPin, double[] pivot, double[] parkFollowerPin, double spanM, double followerM) {
+			return followMode(null, pivot, parkCrankPin, parkFollowerPin, spanM, followerM);
+		}
+
 		private double armM(Anchor anchor) {
 			return armMConfigured > 0 ? armMConfigured : Math.max(0.05, Math.min(anchor.widthM, anchor.heightM) / 2);
 		}
@@ -1994,3 +2118,5 @@ public final class MmtrWindshield {
 		}
 	}
 }
+
+
