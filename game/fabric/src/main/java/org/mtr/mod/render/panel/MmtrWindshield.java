@@ -294,14 +294,17 @@ public final class MmtrWindshield {
 		final boolean precipitating = rainGradient > 0.02F;
 		final long now = System.currentTimeMillis();
 
-		// The wiper is drawn ONLY on the train this client actually drives. Every other train in the
-		// world keeps its blades parked, which is also what stops a passenger's key from wiping anything.
-		final WiperMode mode = driverOnBoard(vehicleId, carNumber) ? wiperMode : WiperMode.OFF;
-
+		// The wiper is drawn ONLY on the cab this client is actually sitting in. Every other cab, and every
+		// other train, keeps its blades parked - which is also what stops a passenger's key from wiping
+		// anything. The decision is per PANE and not per car, because a model may put cab 1 and cab 2 on the
+		// SAME car: the real saf101 model does exactly that (windshield_1 at z = +7.79 m, windshield_2 at
+		// z = -7.78 m), so "which car am I in" cannot tell the two ends of one car apart and both blades
+		// would sweep together.
 		for (final Anchor anchor : MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(vehicleId), carNumber)) {
 			if (anchor.widthM <= 0 || anchor.heightM <= 0) {
 				continue;
 			}
+			final WiperMode mode = driverOnBoard(vehicleId, carNumber, anchor) ? wiperMode : WiperMode.OFF;
 
 			final String key = vehicleId + ":" + carNumber + ":" + anchor.name;
 			State state = STATES.get(key);
@@ -454,11 +457,16 @@ public final class MmtrWindshield {
 	 * question nothing answered. It is answered here from the ride session - the client's own record of
 	 * which car of which vehicle the player is inside.</p>
 	 *
-	 * <p>The cab is identified by the CAR: in every MMTR model a cab is a car of its own (one at each end
-	 * of a set), so "which car am I in" IS "which cab am I in". A car carrying two cabs would wipe both;
-	 * nothing is modelled that way.</p>
+	 * <p>WHICH CAB is decided by the player's position ALONG the car, compared against the panes' own
+	 * positions, and NOT by the car number. The earlier version assumed a cab is always a car of its own -
+	 * and the real model falsifies that: saf101 carries cab 1 (windshield_1, z = +7.79 m) and cab 2
+	 * (windshield_2, z = -7.78 m) on car 0. Matching on the car alone therefore closed BOTH blades at once,
+	 * which is the exact failure this has to avoid. Both quantities are in MTR's riding space (anchors are
+	 * converted by {@code MmtrVehicleAnchors.toRidingSpace}, the ride offset is already in it), so they are
+	 * directly comparable, and the nearest pane wins - no front/back convention is assumed, and a model with
+	 * more than two cabs still resolves.</p>
 	 */
-	private static boolean driverOnBoard(String resourceId, int carNumber) {
+	private static boolean driverOnBoard(String resourceId, int carNumber, Anchor anchor) {
 		final VehicleExtension ridingVehicle = ridingVehicle();
 		if (ridingVehicle == null || resourceId == null) {
 			return false;
@@ -470,7 +478,20 @@ public final class MmtrWindshield {
 		final int ridingCarNumber = ridingCar.leftInt();
 		// The resource id is per CAR (ModelPropertiesPart does the same lookup), so a consist whose cars
 		// carry different models still matches only the car the player is actually inside.
-		return ridingCarNumber == carNumber && resourceId.equals(resourceIdFor(ridingVehicle, ridingCarNumber));
+		if (ridingCarNumber != carNumber || !resourceId.equals(resourceIdFor(ridingVehicle, ridingCarNumber))) {
+			return false;
+		}
+		final double playerZ = ridingCar.right().left().getZMapped();
+		double nearestM = Double.MAX_VALUE;
+		int nearestCab = anchor.cab;
+		for (final Anchor other : MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(resourceId), carNumber)) {
+			final double distanceM = Math.abs(playerZ - other.position.z());
+			if (distanceM < nearestM) {
+				nearestM = distanceM;
+				nearestCab = other.cab;
+			}
+		}
+		return nearestCab == anchor.cab;
 	}
 
 	/**

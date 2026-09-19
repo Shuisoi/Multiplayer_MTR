@@ -110,3 +110,55 @@ final double angleDeg = Math.toDegrees(Math.atan2(-deltaY, deltaX));   // 旧
 
 **未做**：这两条都**没有离线判据**（客户端渲染没有测试台），只能靠上面的帧约定推导 +
 进游戏目视验收。
+
+## 7. 更正：`driverOnBoard` 的"哪个驾驶室"判据错了，已改对（2026-09-18）
+
+上一版（§3）把"哪个驾驶室"判成"**哪节车**"，并断言"每个 MMTR 模型一个驾驶室独占一节车，
+所以我在哪节车就是我在哪个驾驶室"。**真实模型推翻了这个断言。**
+
+实测带雨刷的真车包 `MMTR_NewStock_v1.zip` 里的 `mmtr_anchors_saf101.json`：
+
+```
+windshield_1  cab=1  car=0   pos = (0, 3.76162,  7.78634)   normal z = -0.959
+windshield_2  cab=2  car=0   pos = (0, 3.7476,  -7.78299)   normal z = +0.959
+```
+
+两个驾驶室都在 **car=0**（同一节车的两端），而 `cab` 的含义是 **1 = A 端、2 = B 端**
+（`MmtrVehicleAnchors` 原文：`cab` follows the same meaning as everywhere else: 1 = A end, 2 = B end）。
+
+**后果**：只比车厢号 ⇒ 坐在这一节车里时**两个驾驶室的刀片会一起扫** —— 正是本目标
+括号里点名要避免的那个失败。
+
+**修法**：判据改成**玩家沿车长的位置** vs **该车各块玻璃自己的位置**，取最近的那块玻璃所属的 cab：
+
+- 两个量都在 MTR 的 riding space 里（anchor 经 `MmtrVehicleAnchors.toRidingSpace` 转到该空间；
+  骑行 offset 本来就在该空间），所以可以直接比较；
+- 用"最近"而不是正负号判断，因此**不假设前后约定**，而且多于两个驾驶室的模型也能解；
+- 判据从"每节车算一次"改成"**每块玻璃算一次**"（移进 `render` 的 anchor 循环内），
+  因为同一节车上不同玻璃的答案不同。
+
+## 8. 覆盖面与遗留（诚实说明）
+
+1. **三个真车判据不覆盖风挡路径**：`hst_h` / `saf101_snd` / `br101` 三个配置的模型
+   实测都**没有** `mmtr_windshield` 组（`assets/models/blender/saf101/pack/saf101.obj` = 0 个），
+   所以"三个真车锚点逐字节不变"这条判据**只覆盖非风挡路径**。风挡路径的离线覆盖来自
+   `wipefix` 合成夹具；真正带雨刷的真车（`saf101v2.0/SAF101v2.obj`，含
+   `mmtr_windshield_1` / `mmtr_windshield_2`）在仓库里**没有对应配置**，本轮无法重打包验证。
+2. **实体部件动画的门控是间接的**：`pushPartTransform` 本身不查驾驶/驾驶室，
+   但它读的是**每块玻璃自己的 `State` 角度**，而 `State` 只在被驱动的那块玻璃上被推进
+   （`mode == OFF` 时停在停放位）。所以"只有你所在驾驶室的部件会动"是成立的，
+   但这条依赖**门控经由 State 传递**这一事实 —— 改动 State 的生命周期时要一起想。
+3. **先前就存在、本轮未动**：`render(vehicleId, carNumber, …)` 用**编组车厢号**去匹配 anchor 的
+   **模型内车厢号**（`anchor.car`）。对"一节 OBJ 的单车模型"（`anchor.car` 恒为 0），
+   多节编组里只有 `carNumber == 0` 那节能匹配到玻璃 —— 即多节编组的其它车厢可能根本不画风挡。
+   saf101 是单车（probe），所以从未暴露。不在本目标范围内，留作待办。
+
+## 9. 本轮验收证据
+
+| 项 | 结果 |
+|---|---|
+| `:fabric:compileJava`（JDK 21） | **BUILD SUCCESSFUL** |
+| `verify_windshield` | **PASS**：6 玻璃 / 4 拟合作用面 / 4 实体雨刷 |
+| `selftest` | **21/21** 注入故障全被抓 |
+| 三个真车 zip 整体 SHA256（旧打包器 fa9ab8e vs 现打包器） | HST_H_v12 / SAF101_snd_probe / BR101_v1 **逐字节不变** |
+| 进游戏看雨刷只动所在驾驶室 | **待用户验收**（我无法观察画面） |
