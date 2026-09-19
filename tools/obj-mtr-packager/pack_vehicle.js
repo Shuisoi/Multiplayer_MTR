@@ -715,6 +715,21 @@ function fitWiperMechanism(sweepFit, glass, domain){
   if(!domain){ console.warn('WARNING: '+blade.name+' cannot be fitted - its glass has no 2D domain.'); return null; }
 
   const ends=barEnds(blade.faces, domain);
+  // How far a point is from the blade's GEOMETRY (not from its centre line).
+  //
+  // A real blade is not a bare bar: it carries a CARRIER PLATE - the triangle the rods bolt to - and that
+  // plate is part of the same rigid `wiper_` mesh. Measuring a pin against the centre line therefore reports
+  // a CORRECT wiper as broken: on the real BR101 the arm's pin is 63 mm from the line and the rod's 124 mm,
+  // while BOTH are 28 mm from the blade's own geometry.
+  const bladePoints=[...new Set(blade.faces.flat())].map(i=>domain.toRightUp(rc(i)));
+  const offBladeBody=point=>{
+    let min=distanceToSegment(point, ends[0], ends[1]);
+    for(const p of bladePoints){
+      const d=Math.hypot(p[0]-point[0], p[1]-point[1]);
+      if(d<min) min=d;
+    }
+    return min;
+  };
   const rod=partFaces.find(p=>p.name.toLowerCase()==='wiperrod_'+glass.cab+'_'+pane&&p.faces.length);
   const arm=partFaces.find(p=>p.name.toLowerCase()==='wiperarm_'+glass.cab+'_'+pane&&p.faces.length);
 
@@ -758,9 +773,9 @@ function fitWiperMechanism(sweepFit, glass, domain){
     p2=near0<=near1 ? rodEnds[1] : rodEnds[0];
     rodPin=near0<=near1 ? rodEnds[0] : rodEnds[1];
     family='parallel linkage';
-    const attachmentGap=Math.min(near0, near1);
-    if(attachmentGap>0.03){
-      console.warn('WARNING: '+rod.name+' does not reach the blade ('+attachmentGap.toFixed(3)+' m away); check that the rod is modelled from its pivot to the blade carrier.');
+    const attachmentGap=Math.min(offBladeBody(rodEnds[0]), offBladeBody(rodEnds[1]));
+    if(attachmentGap>0.05){
+      console.warn('WARNING: '+rod.name+' is '+attachmentGap.toFixed(3)+' m off the blade geometry; check that the rod is modelled from its pivot to the blade carrier.');
     }
   }
 
@@ -862,6 +877,14 @@ function fitWiperMechanism(sweepFit, glass, domain){
   let parkAngleDeg=sweepFit.parkAngleDeg;
   let solved=false;
 
+  // Pick the GLOBAL best match, not the first edge that happens to match.
+  //
+  // A swept band's rim is its arc tessellated into ~100 chords, so MANY edges match within the residual bar,
+  // and a chord's best phi can sit on the OTHER side of park from the real cap. Breaking on the first edge
+  // that matched therefore wrote the opposite sweepSign on 3 of the 4 panes of the real BR101 - the wiper
+  // would have swept the wrong way in game. The verifier has always taken the global minimum; the packager
+  // must agree with it, and with the client, which rotates by (angle-park)*sweepSign.
+  let best=null;
   for(const edge of edges){
     // Do NOT exclude an edge just because its DIRECTION is close to park: in a real linkage the far blade
     // is only a couple of degrees away from the parked one - that is exactly what "slight fan" means - so
@@ -884,14 +907,16 @@ function fitWiperMechanism(sweepFit, glass, domain){
 
     // |phi| near zero means this edge IS the parked blade, not the far one.
     if(candidate===null||onEdge>0.005||Math.abs(candidate)<0.2) continue;
-    strokeDeg=Math.abs(candidate);
-    strokeSign=candidate<0?-1:1;
+    if(best===null||onEdge<best.onEdge) best={onEdge, candidate, edge};
+  }
+  if(best!==null){
+    strokeDeg=Math.abs(best.candidate);
+    strokeSign=best.candidate<0?-1:1;
     parkAngleDeg=parkDir;
     solved=true;
     console.log('wiper mechanism: '+glass.name+' stroke solved as '+strokeDeg.toFixed(2)+' deg from the fan edge at '+
-      normaliseLineAngle(edge.angle).toFixed(2)+' deg (blade on it to within '+(onEdge*1000).toFixed(1)+' mm); '+
-      'the blade is within '+(onEdge*1000).toFixed(1)+' mm of that edge');
-    break;
+      normaliseLineAngle(best.edge.angle).toFixed(2)+' deg (blade on it to within '+(best.onEdge*1000).toFixed(1)+' mm); '+
+      'the blade is within '+(best.onEdge*1000).toFixed(1)+' mm of that edge');
   }
   if(!solved){
     console.warn('WARNING: '+glass.name+' could not recover a stroke from '+mmtr_sweepLabel(glass)+
@@ -944,9 +969,9 @@ function fitWiperMechanism(sweepFit, glass, domain){
   // arm on one side (which is how they are built) is correct, and demanding it end at A0 flags every
   // real wiper.
   if(arm&&armTip){
-    const bladeGap=distanceToSegment(armTip, a0, b0);
-    if(bladeGap>0.03){
-      console.warn('WARNING: '+arm.name+' reaches to '+bladeGap.toFixed(3)+' m off the blade; check the arm against '+
+    const bladeGap=offBladeBody(armTip);
+    if(bladeGap>0.05){
+      console.warn('WARNING: '+arm.name+' is '+bladeGap.toFixed(3)+' m off the blade geometry; check the arm against '+
         mmtr_sweepLabel(glass)+'.');
     }
   }
