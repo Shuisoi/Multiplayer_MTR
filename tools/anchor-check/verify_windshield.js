@@ -280,6 +280,109 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
   };
 }
 
+/**
+ * THE PIN-BASED KINEMATICS - the target form, and the reason the current one is wrong for a real arm.
+ *
+ * A real wiper pins its arm to the blade's MIDDLE (so the blade is pressed evenly) and its rod near an
+ * end. The two POINTS a linkage actually drives are therefore the pins, not the blade's ends:
+ *
+ *   M(theta)  = P1 + R(theta)(M0  - P1)       the arm's pin
+ *   Br(theta) = P2 + R(theta)(Br0 - P2)       the rod's pin
+ *   T         = the rigid motion taking M0->M(theta) and Br0->Br(theta)
+ *   blade ends = T(A0), T(B0)
+ *
+ * The current code instead rotates the BLADE'S END nearest the spindle about P1, i.e. it assumes a link of
+ * length |A0-P1| where the real link is |M0-P1|. Harmless for a single-axis wiper (a rigid body rotating
+ * about P1 is described equally well by any of its points), but it scales a linkage's blade translation
+ * wrongly.
+ */
+function pinMotion(p1, p2, m0, br0, a0, b0, thetaDeg) {
+  const radians = thetaDeg * Math.PI / 180;
+  const cos = Math.cos(radians), sin = Math.sin(radians);
+  const rotate = (pivot, point) => {
+    const dx = point[0] - pivot[0], dy = point[1] - pivot[1];
+    return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos];
+  };
+  const m = rotate(p1, m0);
+  const br = rotate(p2, br0);
+  // A rotation by the angle the pin PAIR turned through, plus the translation that puts M0 on M(theta).
+  // For a parallelogram the pin pair keeps its direction, so this is a pure translation - which is
+  // exactly what "the blade does not turn" means.
+  const phi = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
+  const c = Math.cos(phi), s = Math.sin(phi);
+  const apply = point => {
+    const dx = point[0] - m0[0], dy = point[1] - m0[1];
+    return [m[0] + dx * c - dy * s, m[1] + dx * s + dy * c];
+  };
+  return [apply(a0), apply(b0)];
+}
+
+/**
+ * A unit check of the pin kinematics on SYNTHETIC, exactly-known geometry - an ideal parallelogram with
+ * the arm pinned at the blade's MIDDLE, which no fixture covers yet.
+ *
+ * The second assertion is the point of the whole exercise: it fails if the kinematics is switched back to
+ * rotating the blade's END, so this is a regression test for the bug rather than a description of it.
+ */
+function checkPinKinematics(fail, note) {
+  const DEG = Math.PI / 180;
+  const P1 = [0, 0], P2 = [0, 0.3];
+  const LINK = [0.5, 0.12];                        // the ARM's link vector
+  const M0 = [P1[0] + LINK[0], P1[1] + LINK[1]];   // the arm's pin, at the blade's middle
+  const BR0 = [P2[0] + LINK[0], P2[1] + LINK[1]];  // the rod's pin: the SAME vector => ideal parallelogram
+  const ALONG = [(BR0[0] - M0[0]) / 0.3, (BR0[1] - M0[1]) / 0.3];
+  const A0 = [M0[0] - ALONG[0] * 0.15, M0[1] - ALONG[1] * 0.15];   // the pin is 0.15 m from this end
+  const B0 = [BR0[0] + ALONG[0] * 0.05, BR0[1] + ALONG[1] * 0.05];
+
+  // (1) An ideal parallelogram moves the blade by pure translation: its direction must not change.
+  const parkDirection = Math.atan2(B0[1] - A0[1], B0[0] - A0[0]) * 180 / Math.PI;
+  let worstTurn = 0;
+  for (let step = 0; step <= 20; step++) {
+    const [a, b] = pinMotion(P1, P2, M0, BR0, A0, B0, 50 * step / 20);
+    let turn = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI - parkDirection;
+    while (turn > 90) turn -= 180;
+    while (turn <= -90) turn += 180;
+    worstTurn = Math.max(worstTurn, Math.abs(turn));
+  }
+  if (worstTurn > 0.05) {
+    fail('pin kinematics', 'the pin-driven blade turns ' + worstTurn.toFixed(3) + ' deg on an IDEAL parallelogram - it must only translate');
+  }
+
+  // (2) ...and that translation must equal the PIN's displacement. THIS is what the end-based form fails.
+  const theta = 50;
+  const [pinAt] = pinMotion(P1, P2, M0, BR0, M0, BR0, theta);
+  const pinShift = Math.hypot(pinAt[0] - M0[0], pinAt[1] - M0[1]);
+  const [bladeAt] = pinMotion(P1, P2, M0, BR0, A0, B0, theta);
+  const bladeShift = Math.hypot(bladeAt[0] - A0[0], bladeAt[1] - A0[1]);
+  if (Math.abs(bladeShift - pinShift) > 1.0E-9) {
+    fail('pin kinematics', 'the blade moves ' + bladeShift.toFixed(4) + ' m while its pin moves ' + pinShift.toFixed(4) + ' m - a rigid translation moves every point equally');
+  }
+  const cos = Math.cos(theta * DEG), sin = Math.sin(theta * DEG);
+  const oldA = [P1[0] + (A0[0] - P1[0]) * cos - (A0[1] - P1[1]) * sin, P1[1] + (A0[0] - P1[0]) * sin + (A0[1] - P1[1]) * cos];
+  const error = Math.abs(Math.hypot(oldA[0] - A0[0], oldA[1] - A0[1]) - pinShift);
+  if (error < 0.01) {
+    fail('pin kinematics', 'the end-based and pin-based forms agree to ' + (error * 1000).toFixed(1) +
+      ' mm on this geometry, so nothing can tell them apart - move the pin further from the blade end');
+  }
+  note('pin kinematics: an ideal parallelogram translates the blade by the pin displacement (' + bladeShift.toFixed(4) +
+    ' m); the end-based form would move it ' + Math.hypot(oldA[0] - A0[0], oldA[1] - A0[1]).toFixed(4) +
+    ' m instead - a ' + (error * 1000).toFixed(0) + ' mm error, which is the bug this covers');
+
+  // (3) Degeneration: with the pin AT the blade end the two forms must agree exactly - which is why every
+  // existing fixture (pin == end) passes either way.
+  let worstGap = 0;
+  for (let step = 0; step <= 10; step++) {
+    const rad = 50 * step / 10 * DEG, c = Math.cos(rad), s = Math.sin(rad);
+    const [pinned] = pinMotion(P1, P2, A0, BR0, A0, B0, 50 * step / 10);
+    const rotated = [P1[0] + (A0[0] - P1[0]) * c - (A0[1] - P1[1]) * s, P1[1] + (A0[0] - P1[0]) * s + (A0[1] - P1[1]) * c];
+    worstGap = Math.max(worstGap, Math.hypot(pinned[0] - rotated[0], pinned[1] - rotated[1]));
+  }
+  if (worstGap > 1.0E-9) {
+    fail('pin kinematics', 'with the pin at the blade end the two forms differ by ' + worstGap.toFixed(9) + ' m - the pin form must be a strict generalisation');
+  }
+  note('pin kinematics: with the pin at the blade end the pin form equals the rotation form to ' + (worstGap * 1e9).toFixed(3) + ' nm (strict generalisation)');
+}
+
 /** A clean, dependency-free re-derivation of the fitted sector, from the fan's own vertices. */
 function fitSector(group, domain, vpos) {
   const counts = new Map();
@@ -362,6 +465,9 @@ function main() {
   const groupsOf = new Map();
   const props = fs.existsSync(propertiesFile) ? JSON.parse(fs.readFileSync(propertiesFile, 'utf8')) : { parts: [] };
   (props.parts || []).forEach((part, index) => (part.names || []).forEach(name => groupsOf.set(name, index)));
+
+  // Unit-level: the pin kinematics, on synthetic geometry no fixture covers yet.
+  checkPinKinematics(fail, message => notes.push(message));
 
   console.log('config   : ' + configPath);
   console.log('source   : ' + config.sourceObj);
