@@ -87,8 +87,32 @@ function fan(name, planeX, centreY, centreZ, apex, rim) {
   }
 }
 
-const polar = (from, radius, degrees) => [
-  from[0] + radius * Math.cos(degrees * DEG),
+/**
+ * The region the blade sweeps when the linkage keeps it PARALLEL: a BAND, not a fan.
+ *
+ * A PERFECT parallelogram translates the blade without turning it, so the two extreme blade positions are
+ * PARALLEL lines. A triangle fan then has no apex to name - the line intersection degenerates, the apex
+ * falls back onto a rim vertex, every edge touching it is skipped, and the rim collapses to two edges.
+ * That collapse is what the first attempt at a middle-pin fixture ran into, and it is why "the region the
+ * blade sweeps" has to be a general polygon rather than "a fan".
+ *
+ * The honest description of a band is a strip of quads along the stroke. Consecutive quads SHARE their
+ * vertices on purpose: the packager reads the region's outline as the edges used by exactly ONE face, so
+ * duplicating the step vertices would make every interior edge look like part of the rim.
+ */
+function sweptRegionBand(name, planeX, centreY, centreZ, p1, p2, a0, b0, strokeDeg, m0, br0, steps = 24) {
+  lines.push('o ' + name);
+  let previous = null;
+  for (let i = 0; i <= steps; i++) {
+    const [a, b] = carriedBlade(p1, p2, m0, br0, a0, b0, strokeDeg * i / steps);
+    const ia = v(planeX, centreY + a[1], centreZ + a[0]);
+    const ib = v(planeX, centreY + b[1], centreZ + b[0]);
+    if (previous) lines.push('f ' + [previous[0], previous[1], ib, ia].join(' '));
+    previous = [ia, ib];
+  }
+}
+
+const polar = (from, radius, degrees) => [  from[0] + radius * Math.cos(degrees * DEG),
   from[1] + radius * Math.sin(degrees * DEG)
 ];
 
