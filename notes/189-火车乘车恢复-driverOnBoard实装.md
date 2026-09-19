@@ -205,3 +205,24 @@ riding=1234 ridingCar=0 panes=2 stalk=SLOW | windshield_1 cab=1 paneZ=7.79 drive
 
 代码部分（(1) 门控实装 + 每驾驶室判定、(2) 雨滴两处口径修复）已完成并编译通过，
 离线判据全绿、三个真车 zip 逐字节不变。**只剩进游戏目视验收**，这一步只能由用户完成。
+
+## 13. 恢复乘车后暴露的一个现实障碍：手动门车没有开门的键
+
+W4 的目视验收要"走进开着的门"上车，而**门怎么开**在清空阶段被改掉了一半：
+
+- **普通车（`isMmtrDoorManual` 为假）**：走 MTR 原路径（`RenderVehicles` 第 180 行起）——
+  门在**停靠站台**（靠近站台方块/屏蔽门/自动闸机）时自动打开，玩家可走进门里上车 ✓。
+  验收可行。
+- **手动门车（`isMmtrDoorManual` 为真）**：门只由 `getMmtrDoorLeft()` / `getMmtrDoorRight()` 决定
+  （第 151-174 行，"驾驶室用手开关门"模式），而这两个标志原本由 **Y / U 键**驱动 ——
+  `MMTR_DOOR_LEFT/RIGHT` 已随驾驶室层在 notes/185 一并删除，**现在没有任何键能开它们**。
+
+⇒ 手动门车**当前无法上车**，因此也无法做雨刷验收。
+
+**这不是本次改动引入的**，是"删干净再重建"的必然结果：门机构（`MmtrDoorSides`、
+`clipToOpenSide`、`isMmtrDoorManual`）都保留着，缺的只是**司机侧的那两个按键**。
+包里的 `PacketUpdateVehicleRidingEntities.create(...)` 也仍然带着 `manualToggleDoors` 参数
+（`sendUpdate` 目前恒传 `false`），所以管道是通的，缺的只是入口。
+
+**未做**：补回开门键属于"驾驶室层"（本目标范围之外），而且同样无法离线验证。
+若验收时发现门打不开，再决定是否补一个最小的手动门键（左/右）。
