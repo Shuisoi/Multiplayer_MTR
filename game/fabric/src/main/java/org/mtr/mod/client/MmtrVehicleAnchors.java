@@ -112,6 +112,11 @@ public final class MmtrVehicleAnchors {
 		public final String name;
 		public final Kind kind;
 		public final int cab;
+		/**
+		 * Which glass pane of the cab this is: 1 = the main screen, higher = side windows and the rest
+		 * (docs §1.4①). Only the windscreen family has one; it is 1 when the anchor file omits it.
+		 */
+		public final int pane;
 		public final int car;
 		public final Vector position;
 		public final Vector normal;
@@ -139,10 +144,11 @@ public final class MmtrVehicleAnchors {
 		public final double canvasWidthM;
 		public final double canvasHeightM;
 
-		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM) {
+		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM, int pane) {
 			this.name = name;
 			this.kind = kind;
 			this.cab = cab;
+			this.pane = pane <= 0 ? 1 : pane;
 			this.car = car;
 			this.filePosition = position;
 			this.fileNormal = normal;
@@ -290,21 +296,58 @@ public final class MmtrVehicleAnchors {
 	}
 
 	/**
-	 * The windshield of one specific cab, or {@code null} when the model has none for it. Use this when
-	 * a decision is cab-specific (only the manned cab's wiper should run, say); the renderer at large
-	 * draws every windshield of the car.
+	 * MMTR: every glass pane of ONE cab, in file order. Use THIS (not {@link #findWindshield}) for any
+	 * cab-wide decision - the wiper stalk, "is the driver aboard", an indicator lamp. A cab with a
+	 * three-pane screen has three anchors, and acting on only the first would leave the other two
+	 * un-wiped while looking perfectly correct in the log.
 	 *
 	 * @param cab 1 = A-end cab, 2 = B-end cab; {@code <= 0} means "unspecified" (single-cab model)
 	 */
-	@Nullable
-	public static Anchor findWindshield(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+	public static ObjectArrayList<Anchor> findWindshields(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
 		final int wantedCab = cab <= 0 ? 1 : cab;
 		for (final Anchor anchor : anchors) {
 			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar && (anchor.cab <= 0 ? 1 : anchor.cab) == wantedCab) {
+				result.add(anchor);
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * The windshield of one cab and one PANE, or {@code null} when the model has none.
+	 *
+	 * <p>Pane 1 is the main screen. The pane number defaults to 1 and is only written into the anchor
+	 * file when it is not 1 (see docs §1.4①), which is what keeps single-pane models byte-identical.
+	 * Prefer {@link #findWindshields(ObjectArrayList, int, int)} for anything about the whole cab.</p>
+	 *
+	 * @param cab  1 = A-end cab, 2 = B-end cab; {@code <= 0} means "unspecified" (single-cab model)
+	 * @param pane 1 = main screen; {@code <= 0} means pane 1
+	 */
+	@Nullable
+	public static Anchor findWindshield(ObjectArrayList<Anchor> anchors, int modelCar, int cab, int pane) {
+		final int wantedCab = cab <= 0 ? 1 : cab;
+		final int wantedPane = pane <= 0 ? 1 : pane;
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar
+					&& (anchor.cab <= 0 ? 1 : anchor.cab) == wantedCab
+					&& anchor.pane == wantedPane) {
 				return anchor;
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The MAIN (pane 1) windshield of one cab, or {@code null} when the model has none for it.
+	 *
+	 * <p>This used to hand back "the first windshield of this cab". That is the same anchor for every
+	 * model built before multi-pane glass existed, and a different one only when a cab has several
+	 * panes - in which case "whichever came first in the file" was never what the caller meant.</p>
+	 */
+	@Nullable
+	public static Anchor findWindshield(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+		return findWindshield(anchors, modelCar, cab, 1);
 	}
 
 	/**
@@ -441,7 +484,8 @@ public final class MmtrVehicleAnchors {
 						getBoolean(object, "panelTwoSided", false),
 						getFacets(object),
 						getDouble(object, "canvasWidthM", 0),
-						getDouble(object, "canvasHeightM", 0)
+						getDouble(object, "canvasHeightM", 0),
+						getInt(object, "pane", 1)
 				));
 			}
 		} catch (Exception e) {
