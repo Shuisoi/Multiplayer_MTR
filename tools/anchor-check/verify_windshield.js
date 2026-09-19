@@ -143,9 +143,43 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
     const dx = point[0] - pivot[0], dy = point[1] - pivot[1];
     return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos];
   };
-  // Mirrors the CLIENT, which currently uses the PARALLELOGRAM form (both ends rotate by the same angle).
-  // The general four-bar loop closure is designed but not enabled - see notes/187.
-  return [rotate(p1, a0), rotate(p2, b0)];
+  // ONE pivot means the blade rides the arm: a rigid rotation about the spindle, and the loop closure
+  // degenerates to exactly this (a pin pair turning about a common centre turns by the crank angle).
+  const coaxial = Math.abs(p2[0] - p1[0]) < 1.0E-9 && Math.abs(p2[1] - p1[1]) < 1.0E-9;
+  if (coaxial) {
+    return [rotate(p1, a0), rotate(p2, b0)];
+  }
+  // TWO pivots: the FOUR-BAR loop closure. The blade is rigid, so the distance between its two PINS cannot
+  // change - that is what fixes the follower's angle, and assuming it equals the crank's (which an ideal
+  // parallelogram happens to satisfy) contradicts the rigidity as soon as the link vectors differ.
+  const solutions = crankPin => {
+    const dx = p2[0] - crankPin[0], dy = p2[1] - crankPin[1];
+    const distance = Math.hypot(dx, dy);
+    const spanM = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+    const followerM = Math.hypot(b0[0] - p2[0], b0[1] - p2[1]);
+    if (distance < 1.0E-9 || distance > spanM + followerM || distance < Math.abs(spanM - followerM)) return null;
+    const along = (distance * distance + spanM * spanM - followerM * followerM) / (2 * distance);
+    const height = Math.sqrt(Math.max(0, spanM * spanM - along * along));
+    const ux = dx / distance, uy = dy / distance;
+    const base = [crankPin[0] + ux * along, crankPin[1] + uy * along];
+    return [[base[0] - uy * height, base[1] + ux * height], [base[0] + uy * height, base[1] - ux * height]];
+  };
+  // The assembly mode is decided ONCE, from the parked configuration: choosing per angle lets the linkage
+  // flip to its mirror branch at a toggle position, which is a real failure mode of this mechanism.
+  const park = solutions(a0);
+  if (park === null) return [rotate(p1, a0), rotate(p2, b0)];
+  const mode = Math.hypot(park[0][0] - b0[0], park[0][1] - b0[1]) <= Math.hypot(park[1][0] - b0[0], park[1][1] - b0[1]) ? 0 : 1;
+  const now = solutions(rotate(p1, a0));
+  if (now === null) return [rotate(p1, a0), rotate(p2, b0)];
+  const m = rotate(p1, a0);
+  const br = now[mode];
+  const turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(b0[1] - a0[1], b0[0] - a0[0]);
+  const c = Math.cos(turn), s = Math.sin(turn);
+  const apply = point => {
+    const dx = point[0] - a0[0], dy = point[1] - a0[1];
+    return [m[0] + dx * c - dy * s, m[1] + dx * s + dy * c];
+  };
+  return [apply(a0), apply(b0)];
 }
 
 /** The mechanism's assembly mode: constant, so it is read off the parked configuration. */
@@ -253,14 +287,11 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
     }
   }
 
-  const bladeAt = phi => {
-    const radians = phi * Math.PI / 180, cos = Math.cos(radians), sin = Math.sin(radians);
-    const rotate = (pivot, point) => {
-      const dx = point[0] - pivot[0], dy = point[1] - pivot[1];
-      return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos];
-    };
-    return [rotate(p1, a0), rotate(p2, b0)];
-  };
+  // Mirrors the packager and the client. The PINS are taken to be the blade's ends, which is exactly what
+  // the fixture models (arm pinned at one end, rod at the other); a model with the arm pinned to the
+  // blade's MIDDLE needs the pins passed in, and until such a fixture exists the synthetic unit check
+  // checkPinKinematics is what covers that case.
+  const bladeAt = phi => bladeSegment(p1, p2, a0, b0, phi);
 
   let best = null;
   for (const edge of edges) {
@@ -597,7 +628,7 @@ function main() {
     let referenceDirection = null;
     let maxDirectionDrift = 0, maxLengthDrift = 0;
     for (let step = 0; step <= 20; step++) {
-      const theta = park + sweepDeg * step / 20;
+      const theta = sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
       const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta);
       const direction = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
       if (referenceDirection === null) referenceDirection = direction;
@@ -638,7 +669,7 @@ function main() {
         // case of the general linkage rather than a separate code path.
         let worst = 0;
         for (let step = 0; step <= 20; step++) {
-          const theta = park + sweepDeg * step / 20;
+          const theta = sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
           const rounded = [
             [pivot1[0] + Math.cos(theta * Math.PI / 180) * (a0[0] - pivot1[0]) - Math.sin(theta * Math.PI / 180) * (a0[1] - pivot1[1]),
              pivot1[1] + Math.sin(theta * Math.PI / 180) * (a0[0] - pivot1[0]) + Math.cos(theta * Math.PI / 180) * (a0[1] - pivot1[1])],
@@ -681,8 +712,8 @@ function main() {
     // step). The client therefore uses the exact angular sector for one pivot and this band for two, and
     // asserting the band on a rotating blade would demand something the client deliberately does not do.
     if (!coaxial) {
-      const fromTheta = park + sweepDeg * 0.30;
-      const toTheta = park + sweepDeg * 0.40;
+      const fromTheta = sweepDeg * 0.30;
+      const toTheta = sweepDeg * 0.40;
       const from = bladeSegment(pivot1, pivot2, a0, b0, fromTheta);
       const to = bladeSegment(pivot1, pivot2, a0, b0, toTheta);
       let pathMisses = 0;
@@ -758,3 +789,4 @@ function main() {
 }
 
 main();
+

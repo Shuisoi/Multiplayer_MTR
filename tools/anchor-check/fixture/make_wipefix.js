@@ -119,9 +119,57 @@ function lineIntersection(p, dp, q, dq) {
  * then the blade's own two extreme directions, so the packager can recover the ARM's stroke from
  * "which rotation of the linkage puts the blade along the far edge".
  */
+/**
+ * The FOLLOWER's pin after the crank has turned - the FOUR-BAR LOOP CLOSURE.
+ *
+ * The blade is rigid, so the distance between its two pins cannot change. That is the constraint the
+ * follower's angle must satisfy, and it makes the position unique:
+ *
+ *   M(theta)  = P1 + R(theta)(M0 - P1)                              the crank (driven)
+ *   Br(theta) = circle(P2, |Br0-P2|) n circle(M(theta), |Br0-M0|)    the follower (SOLVED)
+ *
+ * Rotating Br0 about P2 by theta instead - which an IDEAL parallelogram happens to satisfy - contradicts
+ * the rigidity the moment the two link vectors differ, and the contradiction appears as a few millimetres.
+ * Note the radius order: the first radius belongs to the circle about the FIRST point (here M).
+ */
+function followerPin(p1, p2, m0, br0, thetaDeg) {
+  const solutionsAt = (crankPin, spanM, followerM) => {
+    const dx = p2[0] - crankPin[0], dy = p2[1] - crankPin[1];
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1.0e-9 || distance > spanM + followerM || distance < Math.abs(spanM - followerM)) return null;
+    const along = (distance * distance + spanM * spanM - followerM * followerM) / (2 * distance);
+    const height = Math.sqrt(Math.max(0, spanM * spanM - along * along));
+    const ux = dx / distance, uy = dy / distance;
+    const base = [crankPin[0] + ux * along, crankPin[1] + uy * along];
+    return [
+      [base[0] - uy * height, base[1] + ux * height],
+      [base[0] + uy * height, base[1] - ux * height]
+    ];
+  };
+  const followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
+  const spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
+  // THE ASSEMBLY MODE, decided ONCE from the PARK configuration and then kept for every angle. Picking
+  // "the candidate nearest the parked pin" at EVERY angle is wrong: the two branches cross at a toggle
+  // position, so the linkage flips to its mirror image part way through the stroke. That flip was
+  // measured here - the fan came out on one branch and the packager solved onto the other.
+  const park = solutionsAt(m0, spanM, followerM);
+  if (park === null) throw new Error('the linkage cannot be assembled at park');
+  const mode = Math.hypot(park[0][0] - br0[0], park[0][1] - br0[1]) <=
+               Math.hypot(park[1][0] - br0[0], park[1][1] - br0[1]) ? 0 : 1;
+  const m = rotateAbout(p1, m0, thetaDeg);
+  const now = solutionsAt(m, spanM, followerM);
+  if (now === null) throw new Error('the linkage cannot be assembled at ' + thetaDeg + ' degrees (pin span is not conserved)');
+  return now[mode];
+}
+
 function sweptRegionFan(name, planeX, centreY, centreZ, p1, p2, a0, b0, strokeDeg) {
   const a1 = rotateAbout(p1, a0, strokeDeg);
-  const b1 = rotateAbout(p2, b0, strokeDeg);
+  // ONE pivot means the blade rides the arm (single axis), so both ends turn about the spindle. TWO pivots
+  // means a linkage, and there the follower end must be SOLVED - rotating it independently is the very
+  // assumption this fixture exists to catch.
+  const b1 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) < 1.0e-9
+    ? rotateAbout(p2, b0, strokeDeg)
+    : followerPin(p1, p2, a0, b0, strokeDeg);
   const apex = lineIntersection(a0, [b0[0] - a0[0], b0[1] - a0[1]], a1, [b1[0] - a1[0], b1[1] - a1[1]]) || a0;
   fan(name, planeX, centreY, centreZ, apex, [a0, b0, b1, a1]);
   return apex;

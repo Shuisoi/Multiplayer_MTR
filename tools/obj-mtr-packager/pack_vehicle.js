@@ -659,6 +659,27 @@ function distanceToSegment(p, a, b){
  * @returns extra fields for the glass's windshield block, or null when the model has no blade part
  *   (in which case the client keeps drawing its own synthetic blade, exactly as before)
  */
+/**
+ * Where a circle of radius {@code radiusA} about {@code a} meets one of radius {@code radiusB} about
+ * {@code pivot} - the two assembly solutions of a two-link chain, or null when they do not meet.
+ *
+ * <p>The first radius belongs to the circle about the FIRST point. Getting that pair the wrong way round
+ * silently returns the two intersections of the wrong circles, which look plausible and are metres out.</p>
+ */
+function circleCircle(a,pivot,radiusA,radiusB){
+  const dx=pivot[0]-a[0], dy=pivot[1]-a[1];
+  const distance=Math.hypot(dx,dy);
+  if(distance<1.0E-9||distance>radiusA+radiusB||distance<Math.abs(radiusA-radiusB)) return null;
+  const along=(distance*distance+radiusA*radiusA-radiusB*radiusB)/(2*distance);
+  const height=Math.sqrt(Math.max(0,radiusA*radiusA-along*along));
+  const ux=dx/distance, uy=dy/distance;
+  const base=[a[0]+ux*along, a[1]+uy*along];
+  return [
+    [base[0]-uy*height, base[1]+ux*height],
+    [base[0]+uy*height, base[1]-ux*height]
+  ];
+}
+
 function fitWiperMechanism(sweepFit, glass, domain){
   const pane=glass.pane||1;
   const blade=partFaces.find(p=>p.name.toLowerCase()==='wiper_'+glass.cab+'_'+pane&&p.faces.length);
@@ -737,19 +758,65 @@ function fitWiperMechanism(sweepFit, glass, domain){
   const pinAPoint=armTip||a0;
   const pinBPoint=rodPin||b0;
 
+  // ---- THE FOUR-BAR LOOP CLOSURE ----------------------------------------------------------------
+  // The blade is RIGID, so the distance between its two PINS cannot change. That single fact is the
+  // constraint the follower's angle has to satisfy, and it makes that angle unique:
+  //
+  //   M(phi)  = P1 + R(phi)(M0 - P1)                              the crank (driven, rigid)
+  //   Br(phi) = circle(P2, |Br0-P2|) n circle(M(phi), |Br0-M0|)    the follower (SOLVED, not assumed)
+  //
+  // "Both pins turn by phi" - what an ideal parallelogram does - violates the rigidity as soon as the two
+  // link vectors differ, and the contradiction was measured at 4.5 mm on this fixture. The pins are only
+  // usable once this is solved, which is why the loop closure comes FIRST.
+  const pinSpan=Math.hypot(pinBPoint[0]-pinAPoint[0], pinBPoint[1]-pinAPoint[1]);
+  const followerM=Math.hypot(pinBPoint[0]-p2[0], pinBPoint[1]-p2[1]);
+  let assemblyMode=0;
+  if(rod){
+    // Which of the two intersections is the parked one: the ASSEMBLY MODE, constant while the mechanism
+    // moves, so it is read off the PARK configuration rather than decided per frame.
+    const probe=circleCircle(pinAPoint, p2, pinSpan, followerM);
+    if(probe){
+      assemblyMode=Math.hypot(probe[0][0]-pinBPoint[0],probe[0][1]-pinBPoint[1])<=
+        Math.hypot(probe[1][0]-pinBPoint[0],probe[1][1]-pinBPoint[1]) ? 0 : 1;
+    } else {
+      console.warn('WARNING: '+glass.name+' the two links cannot be assembled at park (|Br0-M0| = '+pinSpan.toFixed(3)+
+        ' m is unreachable for the follower) - check the arm/rod form a closed linkage.');
+    }
+  }
+  const rotateLocal=(pivot,point,cos,sin)=>{
+    const dx=point[0]-pivot[0], dy=point[1]-pivot[1];
+    return [pivot[0]+dx*cos-dy*sin, pivot[1]+dx*sin+dy*cos];
+  };
+  /** The two pins at a crank angle, or null when the linkage cannot be assembled there. */
+  const pinPairAt=phi=>{
+    const radians=phi*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
+    const m=rotateLocal(p1,pinAPoint,cos,sin);
+    if(!rod) return [m, m];
+    const solutions=circleCircle(m, p2, pinSpan, followerM);
+    return solutions ? [m, solutions[assemblyMode]] : null;
+  };
+
   const bladeAt=phi=>{
     const radians=phi*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
     const rotate=(pivot,point)=>{
       const dx=point[0]-pivot[0], dy=point[1]-pivot[1];
       return [pivot[0]+dx*cos-dy*sin, pivot[1]+dx*sin+dy*cos];
     };
-    // NOT the pin-pair rigid motion. That was tried and MEASURED WRONG here (4.5 mm on this fixture): the
-    // two pins move on two different circles, so "both rotate by the same phi" does not preserve the
-    // distance between them - which the blade's rigidity requires - unless the link vectors are equal
-    // (i.e. unless it is exactly a parallelogram). The pins are therefore only usable once the FOLLOWER'S
-    // ANGLE IS SOLVED from the four-bar loop closure instead of assumed equal to the crank's. Until then
-    // the blade's ends are rotated directly, which is at least self-consistent.
-    return [rotate(p1,a0), rotate(p2,b0)];
+    // No linkage: the blade rides the arm, so a rigid rotation about the spindle is exact.
+    if(!rod) return [rotate(p1,a0), rotate(p2,b0)];
+    const pair=pinPairAt(phi);
+    if(pair===null) return [rotate(p1,a0), rotate(p2,b0)];
+    const m=pair[0], br=pair[1];
+    // T: rotate the PARK pin pair onto the current one. The two distances now agree BY CONSTRUCTION -
+    // that is exactly what the loop closure enforces - so this rigid motion is well defined. (With the
+    // follower angle assumed equal to the crank's they did NOT agree, and T was ill-defined.)
+    const turn=Math.atan2(br[1]-m[1],br[0]-m[0])-Math.atan2(pinBPoint[1]-pinAPoint[1],pinBPoint[0]-pinAPoint[0]);
+    const tc=Math.cos(turn), ts=Math.sin(turn);
+    const apply=point=>{
+      const dx=point[0]-pinAPoint[0], dy=point[1]-pinAPoint[1];
+      return [m[0]+dx*tc-dy*ts, m[1]+dx*ts+dy*tc];
+    };
+    return [apply(a0), apply(b0)];
   };
 
   let strokeDeg=sweepFit.sweepDeg;
@@ -795,7 +862,31 @@ function fitWiperMechanism(sweepFit, glass, domain){
   // The blade's OWN rotation over the stroke, now that the stroke is known: this is the fan's opening, and
   // the number that says whether this really is a parallel linkage (a couple of degrees) or a plain
   // single-axis wiper (it turns by the whole stroke).
-  bladeTurnDeg=Math.abs(normaliseLineAngle(directionAt(strokeSign*strokeDeg)-directionAt(0)));
+  // The blade's OWN rotation over the stroke, measured on the REAL mechanism (bladeAt, i.e. through the
+  // loop closure) rather than on the old "both ends rotate together" shortcut. The two differ - 3.95 deg
+  // against 2.13 deg on the swept-region fixture - and the real one is what the linkage actually does.
+  {
+    const directionOf=pair=>Math.atan2(pair[1][1]-pair[0][1],pair[1][0]-pair[0][0])*180/Math.PI;
+    bladeTurnDeg=Math.abs(normaliseLineAngle(directionOf(bladeAt(strokeSign*strokeDeg))-directionOf(bladeAt(0))));
+  }
+
+  // THE SUCCESS CRITERION for the loop closure: the pin span must not change, at ANY angle. The blade is
+  // rigid, so a linkage that fails this is not describing the mechanism the modeller built - and if it
+  // fails, everything downstream (the stroke, the wiped band, the part rotation) is built on sand.
+  if(rod){
+    let worstSpan=0, unreachable=false;
+    for(let phi=-180;phi<=180;phi+=2.5){
+      const pair=pinPairAt(phi);
+      if(pair===null){ unreachable=true; break; }
+      worstSpan=Math.max(worstSpan,Math.abs(Math.hypot(pair[1][0]-pair[0][0],pair[1][1]-pair[0][1])-pinSpan));
+    }
+    if(unreachable){
+      console.warn('WARNING: '+glass.name+' the linkage cannot be assembled at every angle - check the arm and rod lengths against the pivot spacing.');
+    } else {
+      console.log('wiper linkage: '+glass.name+' pin span '+pinSpan.toFixed(4)+' m conserved to '+(worstSpan*1e6).toFixed(3)+
+        ' um over a full revolution'+(worstSpan<1.0E-9?'':' *** THE BLADE IS RIGID, SO THIS MUST BE ZERO ***'));
+    }
+  }
 
   // The arm, when modelled, is a cross-check: the end that is NOT the spindle should land ON the blade
   // segment. NOT on A0 - a real arm is bolted to the blade's MIDDLE, so a blade that extends past the
@@ -1294,3 +1385,5 @@ if(fs.existsSync(zipOut)) fs.unlinkSync(zipOut);
 writeZip(stage,zipOut);
 console.log('zip',zipOut,fs.statSync(zipOut).size+' bytes');
 console.log('roles:', JSON.stringify(Object.keys(used)));
+
+
