@@ -1077,12 +1077,13 @@ public final class MmtrWindshield {
 				final double dropX = drop.x * widthM;
 				final double dropY = drop.y * heightM;
 				if (canWipe) {
+					// Both wipe tests are NON-NEGATIVE by contract: 0 means "the blade has not touched this
+					// bead", and such a bead must still be DRAWN. (The sector test used to answer -1 for
+					// "beyond the arm's reach", and the branch that used to sit here then skipped the draw -
+					// deleting exactly the beads the blade could not reach.)
 					final double wipe = bandWipe
 							? wipeFactorBand(dropX, dropY, bladeFrom, bladeTo)
 							: wipeFactor(dropX, dropY, pivotX, pivotY);
-					if (wipe < 0) {
-						continue;
-					}
 					if (wipe > 0) {
 						// The blade knocks the bead off the glass and leaves a film where it was. The bead
 						// is not deleted, it is knocked back and grows in again: that slow re-wetting
@@ -1156,11 +1157,24 @@ public final class MmtrWindshield {
 			final double deltaY = pointY - pivotY;
 			final double reach = config.armM(anchor);
 			if (deltaX * deltaX + deltaY * deltaY > reach * reach) {
-				return -1;
+				// NOT -1. The caller reads a negative factor as "do not draw this bead at all", so returning
+				// -1 here made every bead BEYOND the arm's reach vanish the moment the wiper was switched
+				// on - beads the blade cannot even touch. A bead out of reach is simply not wiped, and is
+				// still drawn; see the contract on wipeFactorBand, which never returns a negative for the
+				// same reason.
+				return 0;
 			}
-			// Sheet v grows DOWNWARD and the face's up grows the other way, so the vertical component is
-			// negated here to put the angle back in the face's own frame (0 = right edge, + = up).
-			final double angleDeg = Math.toDegrees(Math.atan2(-deltaY, deltaX));
+			// The angle is taken directly in the panel's own frame, which is Y-UP: MmtrPanelCanvas
+			// documents its angles as counter clockwise from +X in that space, panelDown() returns {0,-1}
+			// ("down is negative up"), drop.y grows upward, and parkAngleDeg/sweepDeg come from the
+			// packager in that same y-up frame.
+			//
+			// This used to negate the vertical component ("sheet v grows downward"), which mirrored the
+			// whole wipe test about the pivot's horizontal line so the blade cleared the WRONG half of the
+			// glass. Nothing caught it because the sector path had never run in game: the drawn blade was
+			// gated on a driverOnBoard() that always returned false (notes/189). Note the two film paths and
+			// wipeFactorBand never negate, so the sector test was also disagreeing with its own film.
+			final double angleDeg = Math.toDegrees(Math.atan2(deltaY, deltaX));
 			// How far this point is along the arm's travel, measured from park.
 			final double fromParkDeg = normaliseSigned(angleDeg - config.parkAngleDeg) * config.sweepSign;
 			final double sweptDeg = normaliseSigned(wiperAngleDeg - config.parkAngleDeg) * config.sweepSign;
@@ -1173,11 +1187,6 @@ public final class MmtrWindshield {
 			}
 			// The leading edge: not touched at the far side of the fade, fully wiped at the blade.
 			return 1 - (fromParkDeg - sweptDeg) / WIPE_FADE_DEG;
-		}
-
-		/** Whether a point is being cleared at all; kept for readability at the call site. */
-		private boolean wasWiped(double pointX, double pointY, double pivotX, double pivotY) {
-			return wipeFactor(pointX, pointY, pivotX, pivotY) > 0;
 		}
 
 		/**
