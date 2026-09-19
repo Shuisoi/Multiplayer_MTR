@@ -152,10 +152,17 @@ function followerPin(p1, p2, m0, br0, thetaDeg) {
   // "the candidate nearest the parked pin" at EVERY angle is wrong: the two branches cross at a toggle
   // position, so the linkage flips to its mirror image part way through the stroke. That flip was
   // measured here - the fan came out on one branch and the packager solved onto the other.
+  //
+  // It is decided by HANDEDNESS (the sign of the parked triangle's area), not by proximity, because the
+  // packager recovers its pins from mesh geometry and mine are exact constants: near a toggle the two
+  // mirror candidates are almost equidistant, so a proximity test lets a sub-micron input difference pick
+  // the mirror branch and move the blade by centimetres. This mirror has to be able to disagree with the
+  // subject for a real reason, not because it computed "nearer" on slightly different numbers.
+  const handedness = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
   const park = solutionsAt(m0, spanM, followerM);
   if (park === null) throw new Error('the linkage cannot be assembled at park');
-  const mode = Math.hypot(park[0][0] - br0[0], park[0][1] - br0[1]) <=
-               Math.hypot(park[1][0] - br0[0], park[1][1] - br0[1]) ? 0 : 1;
+  const parkSign = handedness(p2, m0, br0) >= 0 ? 1 : -1;
+  const mode = (handedness(p2, m0, park[0]) >= 0 ? 1 : -1) === parkSign ? 0 : 1;
   const m = rotateAbout(p1, m0, thetaDeg);
   const now = solutionsAt(m, spanM, followerM);
   if (now === null) throw new Error('the linkage cannot be assembled at ' + thetaDeg + ' degrees (pin span is not conserved)');

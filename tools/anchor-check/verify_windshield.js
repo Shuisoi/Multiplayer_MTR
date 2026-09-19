@@ -168,7 +168,7 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
   // flip to its mirror branch at a toggle position, which is a real failure mode of this mechanism.
   const park = solutions(a0);
   if (park === null) return [rotate(p1, a0), rotate(p2, b0)];
-  const mode = Math.hypot(park[0][0] - b0[0], park[0][1] - b0[1]) <= Math.hypot(park[1][0] - b0[0], park[1][1] - b0[1]) ? 0 : 1;
+  const mode = branchIndex(p2, a0, b0, park);
   const now = solutions(rotate(p1, a0));
   if (now === null) return [rotate(p1, a0), rotate(p2, b0)];
   const m = rotate(p1, a0);
@@ -182,6 +182,27 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
   return [apply(a0), apply(b0)];
 }
 
+/** Twice the signed area of (a, b, c). The sign is the branch test every implementation shares. */
+function handedness(a, b, c) {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+/**
+ * Which of the two solution indices is the real one: the branch whose HANDEDNESS about the pivot matches
+ * the parked configuration's. Deciding it by "which candidate is nearer the parked pin" is not
+ * equivalent: the candidates are mirror images across the pivot->crank-pin line, so their handedness
+ * signs always differ while their distances can be all but equal near a toggle position. There a
+ * sub-micron input difference (the packager recovers these pins from mesh geometry, this verifier uses
+ * the modelled constants) silently selects the MIRROR branch and moves the blade by centimetres. That is
+ * the difference between a mirror that can disagree with its subject for a real reason and one that
+ * disagrees only because it computed "nearer" on slightly different numbers.
+ */
+function branchIndex(pivot, parkCrankPin, parkFollowerPin, park) {
+  const parkSign = handedness(pivot, parkCrankPin, parkFollowerPin);
+  if (parkSign === 0) return 0;
+  return (handedness(pivot, parkCrankPin, park[0]) > 0) === (parkSign > 0) ? 0 : 1;
+}
+
 /** The mechanism's assembly mode: constant, so it is read off the parked configuration. */
 function followerMode(p1, p2, a0, b0) {
   const followerM = Math.hypot(b0[0] - p2[0], b0[1] - p2[1]);
@@ -189,7 +210,11 @@ function followerMode(p1, p2, a0, b0) {
   const plus = followerEnd(a0, p2, followerM, bladeM, 1);
   const minus = followerEnd(a0, p2, followerM, bladeM, -1);
   if (plus === null || minus === null) return 1;
-  return Math.hypot(plus[0] - b0[0], plus[1] - b0[1]) <= Math.hypot(minus[0] - b0[0], minus[1] - b0[1]) ? 1 : -1;
+  // followerEnd's parametrisation gives a candidate of mode m the handedness -d*h*m, so "the same sign as
+  // the parked configuration" means "the same mode". Same rule as branchIndex, same rule as the client.
+  const parkSign = handedness(p2, a0, b0);
+  if (parkSign === 0) return 1;
+  return (handedness(p2, a0, plus) > 0) === (parkSign > 0) ? 1 : -1;
 }
 
 function followerEnd(a, pivot, followerM, bladeM, mode) {

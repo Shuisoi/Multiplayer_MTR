@@ -2000,6 +2000,17 @@ public final class MmtrWindshield {
 		 * than decided per frame: deciding per frame (nearest to the last position, say) lets the blade
 		 * flip to its mirror position at a toggle point part way through the stroke. That flip is not
 		 * hypothetical - it is exactly what made the fixture's fan and the packager's solve disagree.</p>
+		 *
+		 * <p>It is decided by <b>handedness</b> - the sign of the parked triangle's area - and not by
+		 * "which candidate sits nearer the parked pin". The two candidates are mirror images across the
+		 * {@code p2 -> m0} line, so their handedness signs always differ while their distances can be all
+		 * but equal: near a toggle position the circles are nearly tangent and "nearer" turns on a
+		 * sub-micron difference. The packager recovers these pins from mesh geometry (PCA) rather than
+		 * reading constants, so small input error is the normal case, and a proximity test then silently
+		 * selects the MIRROR branch and moves the blade by centimetres. The handedness of the parked
+		 * configuration cannot flip that way, so packager, fixture and client all resolve the same branch
+		 * from the same geometry. Note the sign: for this {@link #followerEnd} parametrisation a candidate
+		 * of mode {@code m} has handedness {@code -d*h*m}, hence "same sign as park" means "same mode".</p>
 		 */
 		private static int followMode(double[] p1, double[] p2, double[] m0, double[] br0, double spanM, double followerM) {
 			final double[] plus = followerEnd(m0, p2, spanM, followerM, 1);
@@ -2007,7 +2018,16 @@ public final class MmtrWindshield {
 			if (plus == null || minus == null) {
 				return 1;
 			}
-			return Math.hypot(plus[0] - br0[0], plus[1] - br0[1]) <= Math.hypot(minus[0] - br0[0], minus[1] - br0[1]) ? 1 : -1;
+			final double parkSign = handedness(p2, m0, br0);
+			if (parkSign == 0.0D) {
+				return 1;
+			}
+			return handedness(p2, m0, plus) == 0.0D || (handedness(p2, m0, plus) > 0.0D) == (parkSign > 0.0D) ? 1 : -1;
+		}
+
+		/** Twice the signed area of the triangle {@code (a, b, c)} - the branch test of {@link #followMode}. */
+		private static double handedness(double[] a, double[] b, double[] c) {
+			return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 		}
 
 		/**

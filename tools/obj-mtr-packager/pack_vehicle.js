@@ -774,10 +774,20 @@ function fitWiperMechanism(sweepFit, glass, domain){
   if(rod){
     // Which of the two intersections is the parked one: the ASSEMBLY MODE, constant while the mechanism
     // moves, so it is read off the PARK configuration rather than decided per frame.
+    //
+    // It is read off by HANDEDNESS - the sign of the parked triangle's area - and NOT by "which candidate
+    // is nearer the parked pin". The two candidates are mirror images across the P2->M0 line, so their
+    // handedness signs always differ while their distances can be nearly equal: near a toggle position the
+    // circles are almost tangent and "nearer" flips on a sub-micron difference. The pins here are recovered
+    // from mesh geometry (PCA), not read from constants, so a hair of error is the normal case - and a
+    // proximity test then picks the MIRROR branch, which moves the blade by centimetres. The handedness of
+    // the parked configuration cannot flip that way, so the generator, this packager and the client all
+    // resolve the same branch from the same geometry.
+    const handedness=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
     const probe=circleCircle(pinAPoint, p2, pinSpan, followerM);
     if(probe){
-      assemblyMode=Math.hypot(probe[0][0]-pinBPoint[0],probe[0][1]-pinBPoint[1])<=
-        Math.hypot(probe[1][0]-pinBPoint[0],probe[1][1]-pinBPoint[1]) ? 0 : 1;
+      const parkSign=handedness(p2,pinAPoint,pinBPoint)>=0 ? 1 : -1;
+      assemblyMode=(handedness(p2,pinAPoint,probe[0])>=0 ? 1 : -1)===parkSign ? 0 : 1;
     } else {
       console.warn('WARNING: '+glass.name+' the two links cannot be assembled at park (|Br0-M0| = '+pinSpan.toFixed(3)+
         ' m is unreachable for the follower) - check the arm/rod form a closed linkage.');
