@@ -1658,6 +1658,17 @@ public final class MmtrWindshield {
 		private final double bladeAV;
 		private final double bladeBU;
 		private final double bladeBV;
+		/**
+		 * Where the links are bolted to the BLADE. A real wiper pins its arm to the blade's MIDDLE and its
+		 * rod near an end, so these are generally NOT the blade's ends - and using an end instead scales the
+		 * blade's translation by |end-P1|/|pin-P1|. They default to the blade's ends, which is what a pack
+		 * written before the pins existed contains and is exactly right for a single-axis or end-pinned
+		 * mechanism.
+		 */
+		private final double pinAU;
+		private final double pinAV;
+		private final double pinBU;
+		private final double pinBV;
 
 		// --- droplet physics (all optional; the defaults are tuned for a raked main windscreen) -------
 		/** Ceiling on the upward creep the airflow produces at line speed (m/s). */
@@ -1722,6 +1733,10 @@ public final class MmtrWindshield {
 			// single-axis wiper - so a missing pivot2 is not a special case anywhere in the maths.
 			pivot2U = getDouble(json, "pivot2U", pivotU);
 			pivot2V = getDouble(json, "pivot2V", pivotV);
+			pinAU = getDouble(json, "pinAU", bladeAU);
+			pinAV = getDouble(json, "pinAV", bladeAV);
+			pinBU = getDouble(json, "pinBU", bladeBU);
+			pinBV = getDouble(json, "pinBV", bladeBV);
 			creepMps = Math.max(0, getDouble(json, "creepMps", 0.09));
 			jitterMps = Math.max(0, getDouble(json, "jitterMps", 0.008));
 			minBeadRadiusM = Math.max(0.0005, getDouble(json, "minBeadRadiusM", 0.0035));
@@ -1803,66 +1818,98 @@ public final class MmtrWindshield {
 			final double heightM = anchor.heightM;
 			final double[] p1 = {pivotU * widthM, pivotV * heightM};
 			final double[] p2 = {pivot2U * widthM, pivot2V * heightM};
+			// The PINS are where the links are bolted to the BLADE - a real arm is pinned to the blade's
+			// middle, so these are not the blade's ends. A pack without them falls back to the ends, which
+			// is what every fixture models and what the parallelogram case needs anyway.
+			final double[] m0 = {pinAU * widthM, pinAV * heightM};
+			final double[] br0 = {pinBU * widthM, pinBV * heightM};
 			final double[] a0 = {bladeAU * widthM, bladeAV * heightM};
 			final double[] b0 = {bladeBU * widthM, bladeBV * heightM};
 			final double radians = Math.toRadians(theta);
 			final double cos = Math.cos(radians);
 			final double sin = Math.sin(radians);
-			// BOTH ENDS ROTATE BY THE SAME ANGLE - i.e. this is the PARALLELOGRAM (the parallel double
-			// link), which is what the offline verifier checks against the modelled mechanism.
-			//
-			// The general FOUR-BAR is designed and deliberately NOT enabled yet: it replaces this with the
-			// loop closure (B = circle(P2, |B0-P2|) intersect circle(A(theta), |A0-B0|), on the parked
-			// assembly mode), which would also cover a linkage that is NOT a parallelogram - one whose
-			// follower lags or leads the crank. A first implementation did not reproduce the degenerate
-			// case (the verifier reported the blade turning 53 deg where the parallelogram turns 2), so it
-			// is backed out until it has its own offline harness. See notes/187.
-			final double[] a = rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin);
-			return new double[][]{a, rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
+			final boolean coaxial = Math.abs(p2[0] - p1[0]) < 1.0E-9 && Math.abs(p2[1] - p1[1]) < 1.0E-9;
+			final double[] m = rotateAbout(p1[0], p1[1], m0[0], m0[1], cos, sin);
+			// ONE pivot: the blade rides the arm, so a rigid rotation about the spindle is exact - and the
+			// loop closure degenerates to exactly this, because a pin pair turning about a common centre
+			// turns by the crank angle.
+			if (coaxial) {
+				return new double[][]{rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin), rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
+			}
+			// TWO pivots: the FOUR-BAR LOOP CLOSURE. The blade is RIGID, so the distance between its two pins
+			// cannot change - that is what fixes the follower's angle:
+			//   M(theta)  = P1 + R(theta)(M0 - P1)                                the crank (driven)
+			//   Br(theta) = circle(P2, |Br0-P2|) n circle(M(theta), |Br0-M0|)      the follower (SOLVED)
+			// "Both pins turn by theta" - what an ideal parallelogram does - contradicts the rigidity as soon
+			// as the two link vectors differ (measured: 4.5 mm on the fixture). NOTE the argument order of
+			// followerEnd: its first radius is the one about its first point.
+			final double spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
+			final double followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
+			final double[] br = followerEnd(m, p2, spanM, followerM, followMode(p1, p2, m0, br0, spanM, followerM));
+			if (br == null) {
+				// The linkage cannot reach that angle: keep the blade drawn and moving rather than making it
+				// vanish. The offline verifier is what reports the real problem.
+				return new double[][]{rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin), rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
+			}
+			// The blade is the rigid body through its two pins, so its ends follow from the rigid motion that
+			// takes the park pin pair onto the current one. The two distances agree BY CONSTRUCTION now.
+			final double turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
+			final double turnCos = Math.cos(turn);
+			final double turnSin = Math.sin(turn);
+			return new double[][]{
+					carried(m, m0, a0, turnCos, turnSin),
+					carried(m, m0, b0, turnCos, turnSin)
+			};
+		}
+
+		/** A point of the blade under the rigid motion that puts the park pin M0 onto the current pin M. */
+		private static double[] carried(double[] m, double[] m0, double[] point, double cos, double sin) {
+			final double dx = point[0] - m0[0];
+			final double dy = point[1] - m0[1];
+			return new double[]{m[0] + dx * cos - dy * sin, m[1] + dx * sin + dy * cos};
 		}
 
 		/**
-		 * UNUSED until the four-bar loop closure is enabled (see bladeSegmentM). Kept because the four-bar
-		 * is designed, its inputs are already fitted, and this is the piece that was wrong.
-		 *
 		 * Which of the follower's two solution circles is the real one - the mechanism's ASSEMBLY MODE.
 		 *
 		 * <p>It never changes while the linkage moves, so it is read off the PARKED configuration rather
 		 * than decided per frame: deciding per frame (nearest to the last position, say) lets the blade
-		 * flip to its mirror position part way through a stroke.</p>
+		 * flip to its mirror position at a toggle point part way through the stroke. That flip is not
+		 * hypothetical - it is exactly what made the fixture's fan and the packager's solve disagree.</p>
 		 */
-		private static int followMode(double[] p1, double[] p2, double[] a0, double[] b0, double cos, double sin) {
-			final double[] a = rotateAbout(p1[0], p1[1], a0[0], a0[1], 1, 0);
-			final double followerM = Math.hypot(b0[0] - p2[0], b0[1] - p2[1]);
-			final double bladeM = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
-			final double[] plus = followerEnd(a, p2, followerM, bladeM, 1);
-			final double[] minus = followerEnd(a, p2, followerM, bladeM, -1);
+		private static int followMode(double[] p1, double[] p2, double[] m0, double[] br0, double spanM, double followerM) {
+			final double[] plus = followerEnd(m0, p2, spanM, followerM, 1);
+			final double[] minus = followerEnd(m0, p2, spanM, followerM, -1);
 			if (plus == null || minus == null) {
 				return 1;
 			}
-			return Math.hypot(plus[0] - b0[0], plus[1] - b0[1]) <= Math.hypot(minus[0] - b0[0], minus[1] - b0[1]) ? 1 : -1;
+			return Math.hypot(plus[0] - br0[0], plus[1] - br0[1]) <= Math.hypot(minus[0] - br0[0], minus[1] - br0[1]) ? 1 : -1;
 		}
 
 		/**
-		 * The follower's end: where a circle of radius {@code followerM} about {@code pivot} meets a circle
-		 * of radius {@code bladeM} about the crank's end {@code a}, on the side {@code mode} says.
+		 * The follower's end: where a circle of radius {@code radiusAboutA} about {@code a} meets a circle of
+		 * radius {@code radiusAboutPivot} about {@code pivot}, on the side {@code mode} says.
 		 *
 		 * <p>This IS the loop closure of the four-bar. A parallelogram satisfies those two circle
-		 * conditions with {@code pivot + R(theta)*(B0-pivot)}, so it comes out of the same expression -
+		 * conditions with {@code pivot + R(theta)*(Br0-pivot)}, so it comes out of the same expression -
 		 * the parallel double link is the degenerate case, not a special case.</p>
+		 *
+		 * <p><b>The parameter names matter:</b> the FIRST radius belongs to the circle about the FIRST
+		 * point. Passing them the other way round returns the two intersections of the wrong pair of
+		 * circles - plausible-looking points that are metres away from the real ones.</p>
 		 *
 		 * @return null when the circles do not meet (the linkage cannot reach that angle)
 		 */
 		@Nullable
-		private static double[] followerEnd(double[] a, double[] pivot, double followerM, double bladeM, int mode) {
+		private static double[] followerEnd(double[] a, double[] pivot, double radiusAboutA, double radiusAboutPivot, int mode) {
 			final double dx = pivot[0] - a[0];
 			final double dy = pivot[1] - a[1];
 			final double distance = Math.hypot(dx, dy);
-			if (distance < 1.0E-9 || distance > followerM + bladeM || distance < Math.abs(followerM - bladeM)) {
+			if (distance < 1.0E-9 || distance > radiusAboutA + radiusAboutPivot || distance < Math.abs(radiusAboutA - radiusAboutPivot)) {
 				return null;
 			}
-			final double along = (distance * distance + followerM * followerM - bladeM * bladeM) / (2 * distance);
-			final double height = Math.sqrt(Math.max(0, followerM * followerM - along * along));
+			final double along = (distance * distance + radiusAboutA * radiusAboutA - radiusAboutPivot * radiusAboutPivot) / (2 * distance);
+			final double height = Math.sqrt(Math.max(0, radiusAboutA * radiusAboutA - along * along));
 			final double ux = dx / distance;
 			final double uy = dy / distance;
 			return new double[]{
