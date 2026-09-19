@@ -242,3 +242,24 @@ doors <vehicleId> [open|close|toggle] [left|right|both]      # 缺省 toggle / b
 同一行还列出了其它乘务指令：`changeends <id>`、`cab <id> <A|B|out>`、`shunt …`、`couple/uncouple`、`trace`。
 
 ⇒ 手动门车打不开门不再阻塞验收：车停稳后用 `doors <id> open` 开门，再走进去上车。
+
+## 15. 客户端链路离线核对（决定"如果不动"该查哪里）
+
+为了在验收失败时能立刻定位，把整条链路离线读了一遍，四个环节**都有接线**：
+
+| 环节 | 位置 | 结论 |
+|---|---|---|
+| 按键 -> 门控 | `MainRenderer:115` 调 `MmtrWindshield.tick()` | `J` 键会到达门控 ✓ |
+| 门控 -> 画布 | `RenderVehicles:272` 调 `MmtrWindshield.render(…)` | 判定与绘制在这里 ✓ |
+| 角度 -> 实体部件 | `ModelPropertiesPart:386` 调 `pushPartTransform(…)` | 建模雨刷部件的刚体变换在这里 ✓ |
+| 角度推进 | `State.advance(…)` -> `advanceWiper(elapsedSeconds, mode)` | 只依赖 `mode` 与 `config.wiper`，**不依赖是否下雨** ✓ |
+
+最后一条很关键：**晴天也能验收刀片扫动**（雨只决定雨滴与"刮掉"的视觉效果）。
+所以验收可以拆成两步，互不干扰：
+
+1. **先验门控与角度**：不必等雨，按 `J` 循环 关/慢/快，看刀片是否随档位扫、关档是否停在当前位置；
+2. **再验雨滴口径**：有雨时看雨滴被刮掉，以及**臂展以外**的雨滴是否仍然在（§6 的两处修复）。
+
+另外：`saf101` 只有两块风挡、**没有建模雨刷部件**，所以刀片由客户端自绘（`drawBlade`）——
+这次验收主要验的是门控 + 角度推进 + 雨滴；建模部件（`wiper_/wiperarm_/wiperrod_`）的运动路径
+仍由离线夹具（`wipefix` 的 pane 3/4/5）覆盖。
