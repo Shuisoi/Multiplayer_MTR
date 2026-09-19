@@ -951,7 +951,13 @@ function fitWiperMechanism(sweepFit, glass, domain){
     }
 
     // |phi| near zero means this edge IS the parked blade, not the far one.
-    if(candidate===null||onEdge>0.005||Math.abs(candidate)<0.2) continue;
+    // The residual bar is 30 mm, not 5: it asks "is the blade lying on this rim edge", and the blade's modelled
+    // position sits a few mm INSIDE the region (the region is drawn with a small margin so no sliver is left
+    // unwiped). On the real BR101 that margin is ~6 mm, which was just over a 5 mm bar - so cab 2's two panes
+    // silently gave up and fell back to reading the region as an angular sector (298.96 deg / 0.30 deg of
+    // nonsense written into the pack), while cab 1's two panes, a hair tighter, solved exactly. A WRONG edge
+    // is off by the whole stroke - hundreds of mm - so 30 mm loses nothing.
+    if(candidate===null||onEdge>0.03||Math.abs(candidate)<0.2) continue;
     if(best===null||onEdge<best.onEdge) best={onEdge, candidate, edge};
   }
   if(best!==null){
