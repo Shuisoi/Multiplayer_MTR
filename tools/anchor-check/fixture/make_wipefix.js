@@ -136,11 +136,18 @@ glass('mmtr_windshield_1_2', 0, 1.7, 1.8, 0.3, 0.3);
 
 // ---- cab 1, pane 3: a PARALLEL-LINKAGE (pantograph) wiper -----------------------------------------
 // Glass centred on (0, 1.6, 3.6), 1.2 x 1.2 m. Domain: right/up -0.6..0.6.
-const LINK = [0.5, 0.12];                 // THE link vector, used for BOTH links - that is the
-const Q1 = [0.0, 0.0];                    // parallelogram condition, written once so it cannot drift
+//
+// A REAL train linkage is an IMPERFECT parallelogram: the two link vectors differ slightly, so the
+// blade does not stay exactly parallel - it turns a few degrees as it sweeps, and the region it clears
+// is a SLIGHT FAN rather than a pure translated band. That is what the +0.015 below is: it is the whole
+// difference between "the blade translates" and "the blade fans slightly", and it is a real property of
+// the mechanism, not a modelling error.
+const LINK = [0.5, 0.12];                 // the ARM's link vector
+const LINK_ROD = [0.5, 0.12 + 0.015];     // the ROD's, deliberately a little different (see above)
+const Q1 = [0.0, 0.0];                    // the main spindle
 const Q2 = [0.0, 0.3];                    // the second spindle, offset from the first
-const QA = [Q1[0] + LINK[0], Q1[1] + LINK[1]];   // blade end attached to the arm
-const QB = [Q2[0] + LINK[0], Q2[1] + LINK[1]];   // blade end attached to the rod
+const QA = [Q1[0] + LINK[0], Q1[1] + LINK[1]];         // blade end attached to the arm
+const QB = [Q2[0] + LINK_ROD[0], Q2[1] + LINK_ROD[1]]; // blade end attached to the rod
 const Q_PARK = 0, Q_SWEEP = 50, Q_RADIUS = 0.55;
 
 glass('mmtr_windshield_1_3', 0, 1.6, 3.6, 0.6, 0.6);
@@ -156,5 +163,7 @@ fs.writeFileSync(path.join(__dirname, 'wipefix.obj'), vertexLines.concat(lines).
 console.log('wrote wipefix.obj: ' + vertices.length + ' vertices, ' + lines.filter(l => l.startsWith('o ')).length + ' objects');
 console.log('single-axis  pane 1: P1=(' + P1 + ') park=' + PARK_DEG + ' sweep=' + SWEEP_DEG + ' arm=' + ARM_M);
 console.log('             blade A0=(' + BLADE_A.map(x => x.toFixed(6)) + ') B0=(' + BLADE_B.map(x => x.toFixed(6)) + ')');
-console.log('parallelogram pane 3: P1=(' + Q1 + ') P2=(' + Q2 + ') link=(' + LINK + ')');
-console.log('             blade A0=(' + QA + ') B0=(' + QB + ')   B-A=(' + (QB[0] - QA[0]) + ',' + (QB[1] - QA[1]) + ') = P2-P1 (constant)');
+console.log('parallelogram pane 3: P1=(' + Q1 + ') P2=(' + Q2 + ')');
+console.log('             arm link=(' + LINK + ') rod link=(' + LINK_ROD + ')  <- deliberately NOT equal:');
+console.log('             blade A0=(' + QA + ') B0=(' + QB + ')  B-A=(' + (QB[0] - QA[0]).toFixed(3) + ',' + (QB[1] - QA[1]).toFixed(3) +
+  '), i.e. a SLIGHT FAN, not a pure band');

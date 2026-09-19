@@ -406,9 +406,23 @@ function main() {
           fail(scope, 'equal link vectors (residual ' + residual.toFixed(5) + ' m) but the blade still turns ' +
             maxDirectionDrift.toFixed(3) + ' deg - the parallelogram case is not behaving like one');
         }
-        notes.push(scope + ': parallelogram, blade direction constant to ' + maxDirectionDrift.toFixed(3) + ' deg over the stroke');
+        notes.push(scope + ': ideal parallelogram (link residual ' + residual.toFixed(5) + ' m), blade direction constant to ' +
+          maxDirectionDrift.toFixed(3) + ' deg');
       } else {
-        notes.push(scope + ': mixed linkage (link residual ' + residual.toFixed(4) + ' m), blade turns ' + maxDirectionDrift.toFixed(2) + ' deg while it moves');
+        // A REAL train linkage is an imperfect parallelogram: it is a SLIGHT FAN. The blade must turn a
+        // little (that is the fan) and must still turn far less than the arm, otherwise "parallel
+        // linkage" is the wrong description of the mechanism and it wants re-modelling or a single-axis
+        // sector instead.
+        if (maxDirectionDrift < 0.2) {
+          fail(scope, 'link vectors differ by ' + residual.toFixed(4) + ' m but the blade does not turn at all - ' +
+            'the linkage is not doing anything, check the rod attachment');
+        }
+        if (maxDirectionDrift > sweepDeg * 0.5) {
+          fail(scope, 'the blade turns ' + maxDirectionDrift.toFixed(2) + ' deg over a ' + sweepDeg.toFixed(2) +
+            ' deg stroke, i.e. it is not a linkage at all - model it as a single-axis wiper (drop the rod)');
+        }
+        notes.push(scope + ': slight fan - the blade turns ' + maxDirectionDrift.toFixed(2) + ' deg while the arm sweeps ' +
+          sweepDeg.toFixed(2) + ' deg (link residual ' + residual.toFixed(4) + ' m), so the cleared region opens like a narrow sector');
       }
     }
 

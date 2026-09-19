@@ -613,6 +613,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
   const rod=partFaces.find(p=>p.name.toLowerCase()==='wiperrod_'+glass.cab+'_'+pane&&p.faces.length);
   let p2=p1;
   let family='single-axis';
+  let bladeTurnDeg=null;
   if(rod){
     const rodEnds=barEnds(rod.faces, domain);
     // The rod end bolted to the blade carrier is the one nearest the blade; the other is its pivot.
@@ -620,22 +621,37 @@ function fitWiperMechanism(sweepFit, glass, domain){
     const near1=distanceToSegment(rodEnds[1], a0, b0);
     p2=near0<=near1 ? rodEnds[1] : rodEnds[0];
     family='parallel linkage';
-    const attachment=near0<=near1 ? rodEnds[0] : rodEnds[1];
     const attachmentGap=Math.min(near0, near1);
     if(attachmentGap>0.03){
       console.warn('WARNING: '+rod.name+' does not reach the blade ('+attachmentGap.toFixed(3)+' m away); check that the rod is modelled from its pivot to the blade carrier.');
     }
-    // The parallelogram condition, measured: equal link vectors mean the blade neither turns nor changes
-    // length as it sweeps. Report the residual either way - a linkage that is NEARLY a parallelogram is
-    // a real arrangement (the blade turns a little), and the numbers are how the modeller sees which one
-    // they built.
     const linkA=[a0[0]-p1[0], a0[1]-p1[1]];
     const linkB=[b0[0]-p2[0], b0[1]-p2[1]];
     const residual=Math.hypot(linkA[0]-linkB[0], linkA[1]-linkB[1]);
-    family=residual<0.005 ? 'parallelogram (blade translates)' : 'mixed linkage (blade turns while it moves)';
+    // How far the BLADE ITSELF turns over the whole stroke - which is the number that matters, because
+    // a real "parallel linkage" is an IMPERFECT parallelogram. The blade turns a few degrees, so the
+    // region it clears is a SLIGHT FAN, not a pure translated band. The link residual is only the raw
+    // cause; this angle is the effect, and it is the one thing about the mechanism a modeller cannot
+    // see by looking at a static model.
+    const directionAt=thetaDeg=>{
+      const radians=thetaDeg*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
+      const rotate=(pivot,point)=>{
+        const dx=point[0]-pivot[0], dy=point[1]-pivot[1];
+        return [pivot[0]+dx*cos-dy*sin, pivot[1]+dx*sin+dy*cos];
+      };
+      const a=rotate(p1,a0), b=rotate(p2,b0);
+      return Math.atan2(b[1]-a[1], b[0]-a[0])*180/Math.PI;
+    };
+    let turn=directionAt(sweepFit.parkAngleDeg+sweepFit.sweepDeg)-directionAt(sweepFit.parkAngleDeg);
+    while(turn>90) turn-=180;
+    while(turn<=-90) turn+=180;
+    bladeTurnDeg=Math.abs(turn);
+    const shape=bladeTurnDeg<0.5 ? 'ideal parallelogram - the blade only translates (a pure band)'
+      : bladeTurnDeg<20 ? 'slight fan - the blade turns '+bladeTurnDeg.toFixed(1)+' deg as it sweeps'
+      : 'strong rotation - check whether this should be a single-axis sector instead';
     console.log('wiper mechanism: '+glass.name+' two pivots '+Math.hypot(p1[0]-p2[0],p1[1]-p2[1]).toFixed(3)+
-      ' m apart, link residual '+residual.toFixed(4)+' m -> '+family);
-    if(attachment[0]!==undefined){ /* the attachment point is only used for the reach check above */ }
+      ' m apart, link residual '+residual.toFixed(4)+' m, blade turns '+bladeTurnDeg.toFixed(2)+' deg over the '+
+      sweepFit.sweepDeg.toFixed(0)+' deg stroke -> '+shape);
   } else {
     console.log('wiper mechanism: '+glass.name+' single pivot -> '+family+' (the blade rides the arm)');
   }
