@@ -210,14 +210,18 @@ public class RenderVehicles implements IGui {
 						final double oscillationAmount = vehicle.persistentVehicleData.getOscillation(carNumber).getAmount() * Config.getClient().getVehicleOscillationMultiplier();
 
 						if (canRide) {
-							// ⚠️ TRAIN BOARDING IS DELETED (notes/185). This block used to build
-							// `openFloorsAndDoorways` and call VehicleRidingMovement.startRiding(), which
-							// was the ONLY way to get on a train. It is gone on purpose: the riding logic is
-							// being rebuilt (notes/184/185) and until then the player cannot board.
+							// MMTR: this is the ONLY way onto a train. `floorsAndDoorways` below is for
+							// MOVEMENT; boarding happens through the open DOORWAYS collected separately, so
+							// walking around inside a car does not "suck" the crew in and a deliberate
+							// dismount is not undone by an instant re-mount.
 							//
-							// What remains below is the FLOOR/DOORWAY DEBUG RENDER and the gangway geometry
-							// collection, which are MTR rendering concerns and are kept so the rest of the
-							// render path (culling, gangway positions, door rendering) is untouched.
+							// Restored after the clean-slate delete (notes/185). The riding machinery in
+							// VehicleRidingMovement was deliberately kept generic for exactly this, so what
+							// came back is the CALL SITE, not the logic. Without it nobody can be inside a
+							// train at all, and every in-cab feature - the wiper included - is untestable in
+							// game no matter how correct its offline model is.
+							final ObjectArrayList<Box> openFloorsAndDoorways = new ObjectArrayList<>();
+
 							if (vehicleResourceCache != null) {
 								vehicleResourceCache.floors.forEach(floor -> {
 									floorsAndDoorways.add(new ObjectBooleanImmutablePair<>(floor, true));
@@ -231,8 +235,16 @@ public class RenderVehicles implements IGui {
 							openDoorways.forEach(openDoorway -> {
 								final Box doorway = openDoorway.left();
 								floorsAndDoorways.add(new ObjectBooleanImmutablePair<>(doorway, false));
+								// Boarding is open to everyone. The permission seam that used to gate this
+								// (MmtrCabPermissions.canBoard) was deleted with the rest of the cab
+								// interaction layer, and "who may drive" is a question for the rebuilt cab
+								// session - not for whether a player can get on the train.
+								openFloorsAndDoorways.add(doorway);
 								RenderVehicleHelper.renderFloorOrDoorway(doorway, 0xFFFF0000, playerPosition, vehicleCarRenderingPositionAndRotation, offsetVector == null);
 							});
+
+							// Check and mount player
+							VehicleRidingMovement.startRiding(openFloorsAndDoorways, vehicle.vehicleExtraData.getDepotId(), vehicle.vehicleExtraData.getSidingId(), vehicle.getId(), carNumber, playerPosition.getXMapped(), playerPosition.getYMapped(), playerPosition.getZMapped(), absoluteVehicleCarPositionAndRotation.yaw);
 						}
 
 						// Play vehicle sounds
@@ -367,11 +379,21 @@ public class RenderVehicles implements IGui {
 							}
 						});
 
-						// ⚠️ TRAIN MOVEMENT IS DELETED (notes/185). VehicleRidingMovement.movePlayer() used
-						// to be called here every frame for every car, and it was the ONLY thing that kept a
-						// rider glued to a train. With boarding gone there is nothing to move, so the call is
-						// gone too: this is the second half of "you cannot be inside a train" at this
-						// checkpoint. The lift path still calls its own movePlayer.
+						if (canRide) {
+							// Main logic for player movement inside the car. This is the ONLY thing that
+							// keeps a rider glued to a train: it re-derives the player's position inside the
+							// car every frame and renews the ride session (VehicleRidingMovement.tick ends
+							// the ride when nothing has moved the player). Restored with boarding above.
+							VehicleRidingMovement.movePlayer(
+									millisElapsed, vehicle.getId(), carNumber,
+									floorsAndDoorways,
+									vehicleResource.hasGangway1() ? previousGangwayMovementPositions.gangwayMovementPositions : null,
+									vehicleResource.hasGangway1() ? gangwayMovementPositions1 : null,
+									vehicleResource.hasGangway2() ? gangwayMovementPositions2 : null,
+									absoluteVehicleCarPositionAndRotation
+							);
+						}
+
 						previousGangwayMovementPositions.gangwayMovementPositions = gangwayMovementPositions2;
 					});
 				}

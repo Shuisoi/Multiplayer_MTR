@@ -7,8 +7,10 @@ import org.apache.commons.io.IOUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.mtr.core.tool.Vector;
+import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntObjectImmutablePair;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
 import org.mtr.mapping.holder.Direction;
 import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.holder.MinecraftClient;
@@ -22,10 +24,13 @@ import java.util.regex.Pattern;
 import org.mtr.mod.Init;
 import org.mtr.mod.KeyBindings;
 import org.mtr.mod.client.IDrawing;
+import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
 import org.mtr.mod.data.IGui;
+import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.StoredMatrixTransformations;
@@ -291,7 +296,7 @@ public final class MmtrWindshield {
 
 		// The wiper is drawn ONLY on the train this client actually drives. Every other train in the
 		// world keeps its blades parked, which is also what stops a passenger's key from wiping anything.
-		final WiperMode mode = driverOnBoard(vehicleId) ? wiperMode : WiperMode.OFF;
+		final WiperMode mode = driverOnBoard(vehicleId, carNumber) ? wiperMode : WiperMode.OFF;
 
 		for (final Anchor anchor : MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(vehicleId), carNumber)) {
 			if (anchor.widthM <= 0 || anchor.heightM <= 0) {
@@ -444,22 +449,69 @@ public final class MmtrWindshield {
 	 * resource id the model was loaded from. A consist can mix models, so this asks the client's own
 	 * vehicle list for the driven vehicle and compares its car models.</p>
 	 *
-	 * <p>⚠️ TEMPORARILY ALWAYS FALSE while the riding logic is being rebuilt (notes/185). The cab
-	 * interaction that used to answer this was deleted with the rest of the boarding layer, so the wiper
-	 * stalk has nothing to gate on yet. The wiper still DRAWS (parked); pressing the stalk key reports
-	 * "需要先坐上驾驶位" because there is no way to take a cab at this checkpoint. Restore this when the new
-	 * ride session can answer "which cab am I in" (rebuild step B2).</p>
+	 * <p>This was hard-coded false from notes/185 (the clean-slate delete) until now, and that single
+	 * false is why the wiper could never leave its parked position in game: the drawn blade is gated on a
+	 * question nothing answered. It is answered here from the ride session - the client's own record of
+	 * which car of which vehicle the player is inside.</p>
+	 *
+	 * <p>The cab is identified by the CAR: in every MMTR model a cab is a car of its own (one at each end
+	 * of a set), so "which car am I in" IS "which cab am I in". A car carrying two cabs would wipe both;
+	 * nothing is modelled that way.</p>
 	 */
-	private static boolean driverOnBoard(String resourceId) {
-		return false;
+	private static boolean driverOnBoard(String resourceId, int carNumber) {
+		final VehicleExtension ridingVehicle = ridingVehicle();
+		if (ridingVehicle == null || resourceId == null) {
+			return false;
+		}
+		final IntObjectImmutablePair<ObjectObjectImmutablePair<Vector3d, Double>> ridingCar = VehicleRidingMovement.getRidingVehicleCarNumberAndOffset(ridingVehicle.getId());
+		if (ridingCar == null) {
+			return false;
+		}
+		final int ridingCarNumber = ridingCar.leftInt();
+		// The resource id is per CAR (ModelPropertiesPart does the same lookup), so a consist whose cars
+		// carry different models still matches only the car the player is actually inside.
+		return ridingCarNumber == carNumber && resourceId.equals(resourceIdFor(ridingVehicle, ridingCarNumber));
 	}
 
 	/**
-	 * Whether this client holds ANY cab, for the wiper stalk. Stubbed to false with {@link #driverOnBoard}
-	 * while the ride logic is rebuilt (notes/185).
+	 * Whether this client holds ANY cab, for the wiper stalk. False while riding something whose cars
+	 * carry no windshield (a lift, or a wagon set with no cab), so pressing the key there still says
+	 * "take a cab first" instead of switching a wiper that does not exist.
 	 */
 	private static boolean driverOnBoardAnyCab() {
-		return false;
+		final VehicleExtension ridingVehicle = ridingVehicle();
+		if (ridingVehicle == null) {
+			return false;
+		}
+		final IntObjectImmutablePair<ObjectObjectImmutablePair<Vector3d, Double>> ridingCar = VehicleRidingMovement.getRidingVehicleCarNumberAndOffset(ridingVehicle.getId());
+		if (ridingCar == null) {
+			return false;
+		}
+		final int ridingCarNumber = ridingCar.leftInt();
+		final String resourceId = resourceIdFor(ridingVehicle, ridingCarNumber);
+		return resourceId != null && !MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(resourceId), ridingCarNumber).isEmpty();
+	}
+
+	/** The model's resource id for one car of a consist - the same lookup ModelPropertiesPart uses. */
+	@Nullable
+	private static String resourceIdFor(VehicleExtension vehicle, int carNumber) {
+		final ObjectArrayList<ObjectObjectImmutablePair<org.mtr.core.data.VehicleCar, ObjectArrayList<org.mtr.core.data.Vehicle.BogiePosition>>> cars = vehicle.getVehicleCarsAndPositions();
+		return carNumber < 0 || carNumber >= cars.size() ? null : cars.get(carNumber).left().getVehicleId();
+	}
+
+	/** The vehicle the local player is riding, or null when they are riding nothing (or a lift). */
+	@Nullable
+	private static VehicleExtension ridingVehicle() {
+		final long ridingVehicleId = VehicleRidingMovement.getRidingVehicleId();
+		if (ridingVehicleId == 0) {
+			return null;
+		}
+		for (final VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
+			if (vehicle.getId() == ridingVehicleId) {
+				return vehicle;
+			}
+		}
+		return null;
 	}
 
 	/**

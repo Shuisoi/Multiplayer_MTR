@@ -23,29 +23,33 @@ import javax.annotation.Nullable;
  *
  * <h2>⚠️ This file is mid-refactor. Read this before touching it.</h2>
  *
- * <p>The MMTR train boarding/alighting logic that used to live here has been DELETED (notes/185): the
- * three entry paths, the cab lock, the seat pin, the floor probe, the per-frame train movement, the
- * driver-key wiring. What is left is the minimum the <b>lift</b> path needs, because the user's decision
- * was "只对火车进行重构" - lifts keep working while trains are rebuilt.</p>
+ * <p>The MMTR train CAB layer that used to live here is still DELETED (notes/185): the cab lock, the seat
+ * pin, the driver key, the permissions seam and the G-key cab interaction have no replacement yet. What
+ * is NOT deleted any more is train RIDING - {@code RenderVehicles} calls {@link #startRiding} and
+ * {@link #movePlayer} again (restored 2026-09-18), so a player can board a train car through an open
+ * doorway and be carried inside it. That restore was necessary rather than optional: while nobody could be
+ * inside a train, every in-cab feature - the wiper above all - was untestable in game no matter how
+ * correct its offline model was.</p>
  *
- * <p>So the split is now explicit:</p>
+ * <p>So the split is now:</p>
  *
  * <ul>
- *   <li><b>Lifts (working):</b> {@code RenderLifts} calls {@link #startRiding} when the player stands in
- *       an open lift doorway and {@link #movePlayer} every frame, and reads
- *       {@link #getRidingVehicleCarNumberAndOffset} to render the world relative to the player.
- *       That whole path is intact and unmodified.</li>
- *   <li><b>Trains (removed):</b> {@code RenderVehicles} no longer calls {@link #startRiding} or
- *       {@link #movePlayer} at all. There is therefore no way to board a train at this checkpoint, and
- *       the train is rendered in absolute world coordinates. That is deliberate.</li>
+ *   <li><b>Lifts (worked all along):</b> {@code RenderLifts} calls {@link #startRiding} when the player
+ *       stands in an open lift doorway and {@link #movePlayer} every frame, and reads
+ *       {@link #getRidingVehicleCarNumberAndOffset} to render the world relative to the player.</li>
+ *   <li><b>Trains (riding restored; the cab layer is still absent):</b> {@code RenderVehicles} calls both
+ *       again, so the player rides inside the car they boarded. What is still missing is the CAB itself -
+ *       no driver key, no seat pin, no cab lock. {@code MmtrWindshield.driverOnBoard} answers "which cab
+ *       am I in" from the RIDE state (which car of which vehicle), which is what the wiper needs and is
+ *       deliberately not a claim that the cab layer exists.</li>
  * </ul>
  *
- * <h2>Why the shared state is kept rather than deleted</h2>
+ * <h2>Why the shared state is kept rather than split yet</h2>
  *
- * <p>Lifts and trains used to share this state, which is exactly how a train-side change kept breaking
- * the lift side and vice versa. Rather than gut the state and break lifts, the train's WRITE SITES are
- * gone, so the state can only ever be set by the lift path. The rebuild (notes/185 §6) replaces the
- * train half with its own session object instead of reaching back in here.</p>
+ * <p>Lifts and trains share this state, which is how a train-side change kept breaking the lift side and
+ * vice versa. The rebuild (notes/185 §6) still intends to give the train half its own session object
+ * instead of reaching back in here. Until then, every train change made here has to be re-checked against
+ * the lift path.</p>
  *
  * <h2>Ownership rule to preserve</h2>
  *
@@ -135,8 +139,10 @@ public class VehicleRidingMovement {
 	/**
 	 * Boards whatever {@code openFloorsAndDoorways} the player is standing in.
 	 *
-	 * <p><b>Lifts only.</b> {@code RenderVehicles} used to call this for trains and no longer does, which
-	 * is what "boarding a train is disabled" means concretely.</p>
+	 * <p>Called by {@code RenderLifts} for lifts and by {@code RenderVehicles} for trains - one generic
+	 * mechanism for both. Each caller passes only the boxes it considers boardable: for trains that is the
+	 * OPEN DOORWAYS and not the floors, so walking around inside a car does not re-mount a player who
+	 * deliberately dismounted.</p>
 	 */
 	public static void startRiding(ObjectArrayList<Box> openFloorsAndDoorways, long depotId, long sidingId, long vehicleId, int carNumber, double x, double y, double z, double yaw) {
 		if (ridingVehicleId != 0 && !isRiding(vehicleId)) {
@@ -164,9 +170,10 @@ public class VehicleRidingMovement {
 	/**
 	 * Walks the player around inside the vehicle they are riding, and pins them to it.
 	 *
-	 * <p><b>Lifts only</b> at this checkpoint: {@code RenderVehicles} no longer calls it, so nothing moves
-	 * a player inside a train. The gangway branches are kept because they are part of the generic ride
-	 * path, but no lift uses them.</p>
+	 * <p>Called every frame for the car being ridden, by {@code RenderLifts} and - restored 2026-09-18 -
+	 * by {@code RenderVehicles}. This is the ONLY thing that keeps a rider glued to a train, and it also
+	 * renews the ride session: {@link #tick} ends the ride as soon as nothing has moved the player. The
+	 * gangway branches are the train path (a lift has no gangways).</p>
 	 */
 	public static void movePlayer(
 			long millisElapsed, long vehicleId, int carNumber,
