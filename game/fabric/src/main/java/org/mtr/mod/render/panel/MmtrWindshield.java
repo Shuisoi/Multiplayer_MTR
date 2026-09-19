@@ -1132,9 +1132,14 @@ public final class MmtrWindshield {
 			}
 			logPlaneOnce(anchor.name + "@" + anchor.car, plane, anchor.widthM, anchor.heightM);
 			drawRain(carTransform, plane);
-			if (config.wiper) {
-				// ONE wiper per anchor. A pair of wipers is two mmtr_windshield_<n> quads, each with its
-				// own pivot and its own park direction - no mirroring rule to get wrong.
+			// ONE wiper per anchor. A pair of wipers is two mmtr_windshield_<cab>_<pane> quads, each with
+			// its own pivot and its own park direction - no mirroring rule to get wrong.
+			//
+			// config.wiper is the ANIMATION (does this glass get wiped at all); config.drawBlade is the
+			// mod's OWN blade geometry. A model that carries a solid wiper_<cab>_<pane> part sets
+			// drawBlade=false so the two blades do not sit on top of each other, while the glass still
+			// gets wiped and the (modelled) arm is what the animation is meant to move.
+			if (config.wiper && config.drawBlade) {
 				drawWiper(carTransform, plane);
 			}
 		}
@@ -1525,6 +1530,13 @@ public final class MmtrWindshield {
 		private final double maxStreakM;
 		/** Whether this anchor carries a wiper at all (false = rain only, e.g. a rear screen). */
 		private final boolean wiper;
+		/**
+		 * Whether the CLIENT draws its own blade. False when the model carries a solid wiper part
+		 * ({@code wiper_<cab>_<pane>}): the glass must still be wiped (that is {@link #wiper}), but the
+		 * drawn blade would sit on top of the modelled one. The packager sets this from the model, so a
+		 * model without a solid wiper keeps the drawn blade exactly as before.
+		 */
+		private final boolean drawBlade;
 		/** 0 = derive the arm from the modelled quad (half its shorter side). */
 		private final double armMConfigured;
 		private final double parkAngleDeg;
@@ -1585,6 +1597,7 @@ public final class MmtrWindshield {
 			fallMps = Math.max(0.01, getDouble(json, "fallMps", 0.55));
 			maxStreakM = Math.max(0, getDouble(json, "maxStreakM", 0.10));
 			wiper = getBoolean(json, "wiper", true);
+			drawBlade = getBoolean(json, "drawBlade", true);
 			armMConfigured = getDouble(json, "armM", 0);
 			// The park direction is modelled, so 0 is the correct default: the blade lies along the
 			// face's own "right" edge. These two only nudge it off that line.

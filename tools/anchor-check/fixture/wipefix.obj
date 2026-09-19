@@ -1,0 +1,96 @@
+# MMTR anchor-check fixture: a wiper ACTION SECTOR (triangle fan) on a windscreen.
+#
+# Exists so the sweep fit can be verified offline, and so the naming rules around it are pinned down by
+# a test instead of by memory. Four things are in here on purpose:
+#
+#   1. mmtr_windshield_1_1   cab 1, pane 1 - the main screen, 3.0 x 1.2 m, vertical, plane x = 0
+#   2. mmtr_wipersweep_1_1   its action sector, a TRIANGLE FAN whose apex is the wiper pivot
+#   3. mmtr_windshield_1_2   cab 1, pane 2 - a side window with NO sweep (must stay wiper-free data)
+#   4. wiper_1_1             the solid wiper part (must become its own visible part, and must make the
+#                            glass set drawBlade=false without switching the wiper off)
+#
+# Glass frame, from the winding of face 1 (verified against the packager's own rule):
+#   normal = -X,  up = +Y,  right = +Z     centre = (0, 1.6, 0)
+# so the 2D domain is  right = z,  up = y - 1.6,  spanning  right -1.5..1.5, up -0.6..0.6.
+#
+# The fan's apex is the pivot at (0, 1.1, -1.2)  ->  (right, up) = (-1.2, -0.5).
+# Three rim vertices at radius 1.0 m and 20 / 50 / 80 degrees:
+#
+#        80 deg  .            <- park from 20 deg, sweep 60 deg
+#                | \
+#        50 deg  |  .
+#                | /
+#        20 deg  .            pivot is at the apex, below-left of all three
+#
+# Expected fit (pivotU/pivotV are fractions from the glass's LEFT / BOTTOM edge):
+#   pivotU = 0.5 + (-1.2)/3.0 = 0.1
+#   pivotV = 0.5 + (-0.5)/1.2 = 0.0833
+#   armM = 1.0    parkAngleDeg = 20    sweepDeg = 60    sweepSign = 1
+# and the glass's windshield config block must then read:
+#   wiper=true, drawBlade=false (a solid wiper_1_1 exists), plus the five fitted fields.
+#
+# Face indices are GLOBAL, as in a real Blender export.
+mtllib wipefix.mtl
+
+o body
+v -0.3  0.0 -1.5
+v -0.3  0.0  1.5
+v -0.3  2.4  1.5
+v -0.3  2.4 -1.5
+v  0.3  0.0 -1.5
+v  0.3  0.0  1.5
+v  0.3  2.4  1.5
+v  0.3  2.4 -1.5
+f 1 2 3 4
+f 5 8 7 6
+f 1 5 6 2
+f 2 6 7 3
+f 3 7 8 4
+f 4 8 5 1
+
+o mmtr_windshield_1_1
+v 0.0 1.0 -1.5
+v 0.0 1.0  1.5
+v 0.0 2.2  1.5
+v 0.0 2.2 -1.5
+f 9 10 11 12
+
+o mmtr_wipersweep_1_1
+v 0.0 1.1 -1.2
+v 0.0 1.442020 -0.260307
+v 0.0 1.866044 -0.557212
+v 0.0 2.084808 -1.026352
+f 13 14 15
+f 13 15 16
+
+o mmtr_windshield_1_2
+v 0.0 1.4 1.5
+v 0.0 1.4 2.1
+v 0.0 2.0 2.1
+v 0.0 2.0 1.5
+f 17 18 19 20
+
+o wiper_1_1
+v 0.02 1.08 -1.25
+v 0.02 1.12 -1.25
+v 0.02 1.12 -0.30
+v 0.02 1.08 -0.30
+v 0.06 1.08 -1.25
+v 0.06 1.12 -1.25
+v 0.06 1.12 -0.30
+v 0.06 1.08 -0.30
+f 21 22 23 24
+f 25 28 27 26
+f 21 25 26 22
+f 22 26 27 23
+f 23 27 28 24
+f 24 28 25 21
+
+# Cab 2's screen, written with a SINGLE index. This is the backward-compatibility guard: one index is
+# the CAB (pane defaults to 1), so this must come out as cab 2 / pane 1 - not "cab 1, pane 2".
+o mmtr_windshield_2
+v 0.0 1.0 -2.6
+v 0.0 1.0 -1.6
+v 0.0 2.2 -1.6
+v 0.0 2.2 -2.6
+f 29 30 31 32

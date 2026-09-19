@@ -85,7 +85,7 @@ const groupMap=params.groupMap||{};
   // anchor prefix "mmtr_" (5), so it silently stops being an anchor: no error, two missing anchors,
   // and no wipers in game. Patterns like "BlockEntities" cannot do this, because no anchor is named
   // "mmtr_BlockEntities" - so they are not reported.
-  const ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','door'];
+  const ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','wipersweep','door'];
   const patterns=[];
   for(const role of Object.keys(groupMap)) for(const pat of (groupMap[role]||[])) patterns.push({role:role,pat:String(pat)});
   for(const other of patterns){
@@ -113,6 +113,23 @@ function renameGroup(name){ return groupRename[name]||name; }
 function roleOf(name){ let best=null,bestLen=-1; for(const role of Object.keys(groupMap)) for(const pat of groupMap[role]) if(name.indexOf(pat)>=0 && pat.length>bestLen){ best=role; bestLen=pat.length; } return best; }
 const used={};
 function canonical(name){ const r=roleOf(name); if(r){used[r]=1; return r;} return null; }
+// Anchor kinds that must ALWAYS be anchors, even when some groupMap role happens to spell the same
+// word. Concretely: a role for the solid wiper part ("wiper": ["wiper"]) would otherwise win over the
+// 5-char "mmtr_" prefix inside "mmtr_wipersweep_1_1" (a 5-char pattern ties, and the tie is broken by
+// object key order) - the sweep anchor would silently turn into a VISIBLE part and vanish as data.
+//
+// "door" is DELIBERATELY absent from this list: models in this repo name passenger doors
+// mmtr_door_l_1 (HST_B, p1) and rely on the longer "door_l" pattern beating the anchor prefix.
+const RESERVED_ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','wipersweep'];
+const anchorPrefixes=(groupMap.anchor||[]).map(String);
+function isReservedAnchorName(name){
+  for(const prefix of anchorPrefixes){
+    if(prefix.length===0||name.indexOf(prefix)!==0) continue;
+    const rest=name.slice(prefix.length);
+    if(RESERVED_ANCHOR_KINDS.some(kind=>rest===kind||rest.indexOf(kind+'_')===0)) return true;
+  }
+  return false;
+}
 // Door groups keep their own names so every door is a separate MTR part (its own slide + DOORWAY):
 //   door_l_1 / door_l_2 ... = 左侧第1/2扇客车门;  door_r_1 / door_r_2 ... = 右侧
 //   mmtr_cabdoor_<cab>_<n> = 驾驶室 <cab>(1=A端,2=B端) 的第 <n> 扇司机门 (anchor role, not rendered)
@@ -121,6 +138,9 @@ const anchorFaces=[]; let currentRole=null; let currentAnchor=null;
 // mmtr_cabdoor_* is special: it is BOTH a visible part (the driver's door you can see and aim at)
 // and an anchor. Other mmtr_* faces (hud/seat/ack) are pure data and get stripped from the geometry.
 const cabDoorParts=[];
+// wiper_<cab>_<pane>: the solid wiper's own visible parts. Named by convention (no groupMap entry
+// needed) and kept one part per wiper, so each can later be rotated about its own pivot.
+const wiperGroups=[];
 let vi=0;
 // Data-only anchor geometry is dropped entirely: faces stripped AND vertices removed, because an OBJ
 // has no per-group vertex scoping - leaving them in would attach them to whichever group was written
@@ -139,7 +159,15 @@ for(const line of raw.split('\n')){
   else if(t.startsWith('vn ')){ const p=t.split(/\s+/).slice(1,4).map(Number); out.push('vn '+(cs*p[0]+sn*p[2]).toFixed(6)+' '+p[1].toFixed(6)+' '+(-sn*p[0]+cs*p[2]).toFixed(6)); }
   else if(t.startsWith('o ')||t.startsWith('g ')){
     // Blender duplicates object names with a ".001" suffix - strip it so roles/anchors match cleanly.
-    const raw2=renameGroup(t.slice(2).trim().replace(/\.\d+$/,'')); const cn=canonical(raw2);
+    const raw2=renameGroup(t.slice(2).trim().replace(/\.\d+$/,'')); let cn=canonical(raw2);
+    if(cn!=='anchor'&&isReservedAnchorName(raw2)){
+      // Say so: the groupMap overlap check above cannot catch this one (a 5-char "wiper" pattern does
+      // not out-length the 5-char "mmtr_" prefix, so it passes silently) - and without this override
+      // the anchor would have been rendered as a part and lost as data.
+      console.warn('WARNING: groupMap role "'+cn+'" also matches the anchor name "'+raw2+'"; the anchor wins. '+
+        'Rename the role pattern so it does not appear inside an anchor name.');
+      cn='anchor'; used.anchor=1;
+    }
     if(cn==='anchor'){
       const cabDoorMatch=/^mmtr_cabdoor_/i.test(raw2);
       currentAnchor={name:raw2,faces:[]};
@@ -155,6 +183,10 @@ for(const line of raw.split('\n')){
       }
     }
     else if(cn==='door_l'||cn==='door_r'){ if(!doorGroups.includes(raw2)) doorGroups.push(raw2); currentRole=raw2; currentAnchor=null; out.push('g '+raw2); }
+    // The solid wiper is its OWN part per (cab, pane), like a door leaf - recognised by name, so it
+    // needs no groupMap entry and cannot be swallowed by one. Merging every wiper into a single part
+    // (which is what a generic "wiper" role does) would make them impossible to rotate separately.
+    else if(/^wiper_\d+_\d+$/i.test(raw2)){ if(!wiperGroups.includes(raw2)) wiperGroups.push(raw2); currentRole=raw2; currentAnchor=null; out.push('g '+raw2); }
     else if(cn){ currentRole=cn; currentAnchor=null; out.push('g '+cn); }
     else { currentRole=null; currentAnchor=null; }
   }
@@ -365,13 +397,132 @@ function buildFacets(g,ctx){
     };
   });
 
-  console.log('hud facets: '+ctx.rawName+' faces='+faces.length+' fold='+maxFold.toFixed(1)+'deg about '+(foldAboutRight?'right':'up')
-    +' canvas='+(foldAboutRight?sharedSpan:foldSpan).toFixed(3)+' x '+(foldAboutRight?foldSpan:sharedSpan).toFixed(3)+'m');
-  return {
-    canvasWidthM:+((foldAboutRight ? sharedSpan : foldSpan)).toFixed(4),
-    canvasHeightM:+((foldAboutRight ? foldSpan : sharedSpan)).toFixed(4),
-    faces:faces
+  const canvasWidthM=+(foldAboutRight ? sharedSpan : foldSpan).toFixed(4);
+  const canvasHeightM=+(foldAboutRight ? foldSpan : sharedSpan).toFixed(4);
+  // The 2D DOMAIN mapper: any 3D point on the surface -> (right, up) in metres from the reference
+  // facet's centre, measured in the UNROLLED frame. This is the space a wiper's pivot and angles live
+  // in, so a sweep fan drawn on a curved glass fits in the same coordinates the drops are simulated in.
+  // A point is assigned to the facet it is closest to (by distance from that facet's plane).
+  const domain={
+    canvasWidthM: canvasWidthM,
+    canvasHeightM: canvasHeightM,
+    toRightUp: p => {
+      let best=facets[0], bestDistance=Infinity;
+      for(const f of facets){
+        const distance=Math.abs(vDot(vSub(p,f.position),f.normal));
+        if(distance<bestDistance){ bestDistance=distance; best=f; }
+      }
+      const s=foldCoord(best,p);
+      return foldAboutRight ? [sharedCoord(p), s] : [s, sharedCoord(p)];
+    }
   };
+  console.log('hud facets: '+ctx.rawName+' faces='+faces.length+' fold='+maxFold.toFixed(1)+'deg about '+(foldAboutRight?'right':'up')
+    +' canvas='+canvasWidthM.toFixed(3)+' x '+canvasHeightM.toFixed(3)+'m');
+  return {
+    // Only these keys reach the anchor JSON. `domain` is runtime-only (a function cannot be serialised)
+    // and is deliberately returned OUTSIDE `fields` so the caller cannot leak it into the pack.
+    fields:{canvasWidthM:canvasWidthM, canvasHeightM:canvasHeightM, faces:faces},
+    domain:domain
+  };
+}
+
+/**
+ * The 2D DOMAIN of every anchor: the space a wiper's pivot and angles are measured in, in metres from
+ * the anchor's own centre along its right/up axes (or, for a folded anchor, along the UNROLLED axes).
+ * Filled while the anchors are built, consumed by the wipersweep fit.
+ */
+const DOMAINS=new Map();
+/** Glass anchor name -> the fields fitted from its mmtr_wipersweep fan. */
+const SWEEP_FITS=new Map();
+
+/**
+ * Fits the action sector of a wiper from its modelled TRIANGLE FAN.
+ *
+ * <p>A fan has exactly one vertex shared by every one of its triangles, and that vertex IS the pivot -
+ * so "where does the wiper work" is answered by the geometry the modeller drew, not by numbers in a
+ * config file. Everything is measured in the glass's 2D domain (see {@link DOMAINS}), which is the
+ * same space the client simulates drops in, so a fan drawn on a curved glass fits too.</p>
+ *
+ * <p>The result uses the SAME fields the client already reads for a hand-configured wiper, so a flat
+ * glass needs no client change at all: {@code pivotU}/{@code pivotV} (fractions from the left/bottom
+ * edge), {@code armM}, {@code parkAngleDeg}/{@code sweepDeg} (degrees from the face's right edge,
+ * positive towards up) and {@code sweepSign}.</p>
+ *
+ * <p>Every refusal names its reason on the console. A silently ignored sweep is a wiper that never
+ * clears anything, which is close to undiagnosable from inside the game.</p>
+ */
+function fitWipersweep(group, domain){
+  const label=group.name||'mmtr_wipersweep';
+  if(!domain){ console.warn('WARNING: '+label+' cannot be fitted - its glass has no 2D domain.'); return null; }
+  // Pivot = the vertex present in EVERY face: a fan's apex appears once per triangle, so it is the only
+  // vertex whose count equals the face count.
+  //
+  // ...EXCEPT for a two-triangle fan, which IS a quad: both faces share an edge, so BOTH of that edge's
+  // endpoints are "in every face" and the geometry alone cannot say which one is the pivot - the fact is
+  // simply not in the mesh. For that case the authoring convention decides: write the apex as the FIRST
+  // vertex of every face (which is also how a fan is normally wound by hand).
+  const counts=new Map();
+  for(const f of group.faces) for(const i of new Set(f)) counts.set(i,(counts.get(i)||0)+1);
+  let apexes=[...counts.entries()].filter(entry=>entry[1]===group.faces.length).map(entry=>entry[0]);
+  if(apexes.length>1){
+    const firstVertices=new Set(group.faces.map(f=>f[0]));
+    const conventional=firstVertices.size===1 ? [...firstVertices][0] : null;
+    if(conventional!==null&&apexes.includes(conventional)){
+      console.warn('NOTE: '+label+' is a '+group.faces.length+'-triangle fan, where the pivot is ambiguous '+
+        '(the geometry is just a quad); using vertex '+conventional+' because every face starts with it.');
+      apexes=[conventional];
+    }
+  }
+  if(apexes.length!==1){
+    console.warn('WARNING: '+label+' must be a TRIANGLE FAN (one vertex shared by every face), but '+
+      apexes.length+' vertices are shared by all of them and they do not agree on a first vertex - '+
+      'the wiper action sector is ignored. Draw the sector with at least three triangles, or start '+
+      'every triangle with the pivot.');
+    return null;
+  }
+  const apex=apexes[0];
+  const pivot=domain.toRightUp(rc(apex));
+  const rim=[...new Set(group.faces.flat())].filter(i=>i!==apex);
+  if(rim.length<2){ console.warn('WARNING: '+label+' has fewer than two rim vertices - ignored.'); return null; }
+
+  let armM=0;
+  const angles=[];
+  for(const i of rim){
+    const p=domain.toRightUp(rc(i));
+    const dr=p[0]-pivot[0], dh=p[1]-pivot[1];
+    armM=Math.max(armM,Math.hypot(dr,dh));
+    angles.push(Math.atan2(dh,dr)*180/Math.PI);
+  }
+  // The sector is ONE contiguous arc, so it is the complement of the largest gap between the rim
+  // angles: sort them, find the widest gap, and the sector runs from the angle after that gap round to
+  // the angle before it. Doing it this way needs no "which end is the park position" convention and
+  // survives angles that wrap through 180/-180.
+  const sorted=[...angles].sort((a,b)=>a-b);
+  let gapSize=-Infinity, gapIndex=0;
+  for(let i=0;i<sorted.length;i++){
+    const previous=i===0 ? sorted[sorted.length-1]-360 : sorted[i-1];
+    const gap=sorted[i]-previous;
+    if(gap>gapSize){ gapSize=gap; gapIndex=i; }
+  }
+  const parkAngleDeg=sorted[gapIndex];
+  let sweepDeg=sorted[(gapIndex-1+sorted.length)%sorted.length]-parkAngleDeg;
+  while(sweepDeg<0) sweepDeg+=360;
+  if(sweepDeg<5){
+    console.warn('WARNING: '+label+' spans only '+sweepDeg.toFixed(1)+' degrees - that is a line, not a wiper sector; ignored.');
+    return null;
+  }
+
+  const pivotU=0.5+pivot[0]/domain.canvasWidthM;
+  const pivotV=0.5+pivot[1]/domain.canvasHeightM;
+  if(pivotU<-0.5||pivotU>1.5||pivotV<-0.5||pivotV>1.5){
+    console.warn('WARNING: '+label+' puts its pivot at (u='+pivotU.toFixed(3)+', v='+pivotV.toFixed(3)+'), well outside its glass - '+
+      'check that the fan is modelled on the glass it names.');
+  }
+  const fit={wiper:true, pivotU:+pivotU.toFixed(4), pivotV:+pivotV.toFixed(4), armM:+armM.toFixed(4),
+    parkAngleDeg:+parkAngleDeg.toFixed(3), sweepDeg:+sweepDeg.toFixed(3), sweepSign:1};
+  console.log('wiper sweep: '+label+' -> pivot u='+fit.pivotU+' v='+fit.pivotV+' arm='+fit.armM+
+    'm park='+fit.parkAngleDeg+' sweep='+fit.sweepDeg+'deg (fitted from a '+group.faces.length+'-triangle fan)');
+  return fit;
 }
 
 function buildAnchors(){
@@ -415,23 +566,63 @@ function buildAnchors(){
     //   cabdoor_1_2  = 驾驶室1 的第2扇门   hud_2 = 驾驶室2 的仪表   seat_1 = 驾驶室1 座位
     //   cab 1 = A 端 (CAB_A), cab 2 = B 端 (CAB_B); no cab = single-cab model (defaults to 1)
     const m=/^(hud|seat|cabdoor|ack)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
-    // mmtr_windshield[_<cab>]: the rain/wiper plane. <cab> means a CAB NUMBER, exactly as it does for
-    // hud/seat/cabdoor - a double-ended locomotive must be able to say which cab a screen belongs to.
-    // The wiper's pivot and park direction come from the quad's own geometry (centre and "right" edge),
-    // so there is no second index to spend here.
-    const wsm=/^windshield(?:_(\d+))?$/.exec(rawName);
-    const kind=wsm?'windshield':(m?m[1]:rawName);
-    const cab=wsm?(wsm[1]?+wsm[1]:1):(m&&m[2]?+m[2]:null);
-    const door=wsm?null:(m&&m[3]?+m[3]:null);
+    // mmtr_windshield[_<cab>][_<pane>] - the rain/wiper glass, and mmtr_wipersweep_<cab>_<pane> - the
+    // sector that glass's wiper sweeps (see docs §1.4).
+    //
+    // INDEX RULE - one index is the CAB, two are cab + pane:
+    //   mmtr_windshield_1     = cab 1, pane 1     (every existing model means this)
+    //   mmtr_windshield_2     = CAB 2, pane 1     <- NOT "cab 1 pane 2"
+    //   mmtr_windshield_1_2   = cab 1, pane 2
+    // Reading a lone index as a pane instead would silently turn SAF101v2's two screens (one per cab)
+    // into "two panes of cab 1" - no error, wrong glass. The pane defaults to 1 either way.
+    const wsm=/^windshield(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
+    const swm=/^wipersweep(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
+    const kind=wsm?'windshield':(swm?'wipersweep':(m?m[1]:rawName));
+    const cab=wsm?(wsm[1]?+wsm[1]:1):(swm?(swm[1]?+swm[1]:1):(m&&m[2]?+m[2]:null));
+    const pane=(wsm||swm)?((wsm?wsm[2]:swm[2])?+(wsm?wsm[2]:swm[2]):1):null;
+    const door=(wsm||swm)?null:(m&&m[3]?+m[3]:null);
     const anchor={name:rawName,kind:kind,cab:cab,door:door,car:params.carIndex||0,
       x:+c[0].toFixed(5), y:+c[1].toFixed(5), z:+c[2].toFixed(5),
       normal:n.map(x=>+x.toFixed(6)), up:up.map(x=>+x.toFixed(6)), right:right.map(x=>+x.toFixed(6)),
       widthM:+(wMax-wMin).toFixed(4), heightM:+(hMax-hMin).toFixed(4)};
-    // A folded dashboard adds canvasWidthM/canvasHeightM + one entry per face. The fields above keep
-    // their old meaning, so a client that does not know about facets still draws the old quad.
-    const facetFields=buildFacets(g,{kind:kind,refFace:f0,refNormal:n,refUp:up,refRight:right,groupCentroid:c,flip:flipThis,rawName:rawName});
-    if(facetFields) for(const key of Object.keys(facetFields)) anchor[key]=facetFields[key];
+    // The pane number is written ONLY when it is not 1, so a single-pane glass (which is what every
+    // model built before multi-pane existed has) keeps a byte-identical anchor entry. Absent = pane 1.
+    if(pane!==null && pane!==1) anchor.pane=pane;
+    // A folded dashboard/glass adds canvasWidthM/canvasHeightM + one entry per face. The fields above
+    // keep their old meaning, so a client that does not know about facets still draws the old quad.
+    const facetResult=buildFacets(g,{kind:kind,refFace:f0,refNormal:n,refUp:up,refRight:right,groupCentroid:c,flip:flipThis,rawName:rawName});
+    if(facetResult) for(const key of Object.keys(facetResult.fields)) anchor[key]=facetResult.fields[key];
+    // The 2D domain every wiper pivot/angle is measured in. A flat anchor measures straight off its
+    // own frame; a folded one uses the unrolled frame from buildFacets.
+    DOMAINS.set(rawName, facetResult ? facetResult.domain : {
+      canvasWidthM:anchor.widthM, canvasHeightM:anchor.heightM,
+      toRightUp: p => { const d=sub(p,c); return [dot(d,right), dot(d,up)]; }
+    });
     anchors.push(anchor);
+  }
+
+  // ---- second pass: the wiper ACTION SECTOR of each glass -----------------------------------------
+  // A mmtr_wipersweep group is a TRIANGLE FAN, and a fan has exactly one vertex shared by ALL of its
+  // triangles - that shared vertex IS the wiper's pivot. Fitting it here means the modeller DRAWS
+  // where the wiper works instead of typing pivot/angles into a config file, and because the fit lands
+  // in the very fields the client already reads (pivotU/pivotV/armM/parkAngleDeg/sweepDeg/sweepSign),
+  // a flat glass needs no client code at all for it.
+  const byName=new Map(anchors.map(a=>[a.name,a]));
+  for(const g of anchorFaces){
+    const name=(g.name||'').replace(/^mmtr_/,'');
+    const sweep=byName.get(name);
+    if(!sweep||sweep.kind!=='wipersweep') continue;
+    // `pane` is only written to the JSON when it is not 1, so read it defensively here: the pair key is
+    // always spelled out in full (windshield_<cab>_<pane>).
+    const pane=sweep.pane||1;
+    const glass=byName.get('windshield_'+sweep.cab+'_'+pane);
+    if(!glass){
+      console.warn('WARNING: '+g.name+' has no matching mmtr_windshield_'+sweep.cab+'_'+pane+
+        ' - there is nothing for it to sweep, so it is ignored (check the cab/pane numbers).');
+      continue;
+    }
+    const fit=fitWipersweep(g, DOMAINS.get(glass.name));
+    if(fit) SWEEP_FITS.set(glass.name, fit);
   }
   return anchors;
 }
@@ -450,7 +641,7 @@ const anchors=buildAnchors();
 // KEEP THIS IN STEP WITH MmtrWindshield.WindshieldConfig. A field the client reads but this list omits is
 // DROPPED AT PACK TIME and the config looks like it was ignored in game - that was the real cause of the
 // "sweepSign has no effect" bug (notes/179 §9.4 #3), and the "droplet physics has no effect" repeat of it.
-const WINDSHIELD_FIELDS=['raindrops','fallMps','maxStreakM','wiper','dualWiper','armM','parkAngleDeg',
+const WINDSHIELD_FIELDS=['raindrops','fallMps','maxStreakM','wiper','drawBlade','dualWiper','armM','parkAngleDeg',
                          'sweepDeg','sweepSign','periodS','pivotU','pivotV','bladeWidthM','colour','armColour','snow','twoSided',
                          'creepMps','jitterMps','minBeadRadiusM','maxBeadRadiusM','growthMps','spawnPerSecond'];
 function buildWindshieldConfig(){
@@ -474,17 +665,19 @@ function buildWindshieldConfig(){
       for(const entry of ws){
         let key=null;
         if(entry&&entry.anchor){
-          const mn=/^mmtr_(windshield(?:_\d+)?)$/.exec(String(entry.anchor));
+          const mn=/^mmtr_(windshield(?:_\d+)?(?:_\d+)?)$/.exec(String(entry.anchor));
           if(mn) key=mn[1];
         }
+        // Legacy "index" meant the cab; "cab"/"pane" is the explicit form (pane defaults to 1).
+        if(!key&&entry&&(entry.cab!==undefined||entry.pane!==undefined)) key='windshield_'+(entry.cab||1)+'_'+(entry.pane||1);
         if(!key&&entry&&entry.index!==undefined) key='windshield_'+entry.index;
-        if(!key){ console.warn('windshield array entry has no usable anchor/index, ignored'); continue; }
+        if(!key){ console.warn('windshield array entry has no usable anchor/cab+pane/index, ignored'); continue; }
         put(key,entry);
       }
     } else {
       // Keyed by anchor name, with or without the "mmtr_" prefix.
       for(const rawKey of Object.keys(ws)){
-        const mn=/^(?:mmtr_)?(windshield(?:_\d+)?)$/.exec(String(rawKey));
+        const mn=/^(?:mmtr_)?(windshield(?:_\d+)?(?:_\d+)?)$/.exec(String(rawKey));
         if(!mn){ console.warn('windshield key "'+rawKey+'" is not a windshield anchor name, ignored'); continue; }
         put(mn[1],ws[rawKey]);
       }
@@ -492,7 +685,25 @@ function buildWindshieldConfig(){
   }
   // Models that have windshields but no authored block still get an entry, so the file shows where to tune.
   for(const anchor of anchors){
-    if(anchor.kind==='windshield'&&!byAnchor[anchor.name]) byAnchor[anchor.name]={};
+    if(anchor.kind!=='windshield'||byAnchor[anchor.name]) continue;
+    byAnchor[anchor.name]={};
+  }
+  // Merge the fitted wiper sectors, and decide whether the client should draw its own blade.
+  for(const anchor of anchors){
+    if(anchor.kind!=='windshield') continue;
+    const values=byAnchor[anchor.name]||(byAnchor[anchor.name]={});
+    const fit=SWEEP_FITS.get(anchor.name);
+    if(fit){
+      // The modelled sector fills in whatever the config did not state outright, so an explicit
+      // parkAngleDeg in the pack config still wins (that is the escape hatch for tuning).
+      for(const field of Object.keys(fit)) if(values[field]===undefined) values[field]=fit[field];
+    }
+    // A modelled SOLID wiper replaces the drawn blade. It must NOT switch the wiper off: the glass
+    // still has to be wiped, and the modelled arm is what the animation is meant to move (that part is
+    // still to come - see docs §1.4④). Only the mod's own blade geometry is suppressed.
+    // This is the ONLY case in which a client default is overridden, which is what keeps every model
+    // packed before solid wipers existed drawing exactly what it drew before.
+    if(wiperGroups.includes('wiper_'+anchor.cab+'_'+(anchor.pane||1))&&values.drawBlade===undefined) values.drawBlade=false;
   }
   return byAnchor;
 }
@@ -672,6 +883,12 @@ if(hasFloor) parts.push({names:['floor'],positionDefinitions:['p0'],type:'FLOOR'
 for(const g of cabDoorParts){
   const ov=params.doorSlideByGroup&&params.doorSlideByGroup[g]!==undefined?params.doorSlideByGroup[g]:undefined;
   parts.push({names:[g],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:ov!==undefined?ov:0,doorAnimationType:params.doorAnimationType||'STANDARD'});
+}
+// The solid wiper(s): one EXTERIOR part each, at their modelled (parked) position. They do not move
+// yet - rotating a part about its pivot is not something MTR's part renderer can do today (see
+// docs §1.4④); until then the client's own drawn blade is the one that sweeps.
+for(const g of wiperGroups){
+  parts.push({names:[g],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:params.doorAnimationType||'STANDARD'});
 }
 // extras (matched groups beyond known) as EXTERIOR - "anchor" is data, never rendered
 for(const r of Object.keys(used)) if(!['body','interior','door_l','door_r','anchor'].includes(r)) parts.push({names:[r],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});

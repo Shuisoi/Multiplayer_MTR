@@ -1,0 +1,34 @@
+{
+  "id": "wipefix",
+  "name": "Wiper sweep fixture",
+  "color": "7FA8CC",
+  "transportMode": "TRAIN",
+  "carLengthBlocks": 4,
+  "carWidthBlocks": 3,
+  "carIndex": 0,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -1.5,
+  "bogie2OffsetBlocks": 1.5,
+  "couplingPadding1": 0,
+  "couplingPadding2": 0,
+  "sourceObj": "${MC_ROOT}/mmtr/tools/anchor-check/fixture/wipefix.obj",
+  "textureDir": "${MC_ROOT}/mmtr/tools/anchor-check/fixture",
+  "rotationDegY": 0,
+  "recenter": false,
+  "flipTextureV": true,
+  "groupMap": {
+    "body": [
+      "body"
+    ],
+    "interior": [],
+    "anchor": [
+      "mmtr_"
+    ]
+  },
+  "doorAnimationType": "STANDARD",
+  "doorSlidePx": 14,
+  "outputPackName": "wipefix_v1",
+  "outputDir": "${MC_ROOT}/mmtr/tools/anchor-check/fixture/out",
+  "stagingDir": "${MC_ROOT}/mmtr/tools/anchor-check/fixture/stage-wipefix",
+  "packFormat": 18
+}
