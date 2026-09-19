@@ -698,6 +698,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
   const b0=distanceToPivot0<=distanceToPivot1 ? ends[1] : ends[0];
 
   let p2=p1;
+  let rodPin=b0;
   let family='single-axis';
   let bladeTurnDeg=null;
   if(rod){
@@ -706,6 +707,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
     const near0=distanceToSegment(rodEnds[0], a0, b0);
     const near1=distanceToSegment(rodEnds[1], a0, b0);
     p2=near0<=near1 ? rodEnds[1] : rodEnds[0];
+    rodPin=near0<=near1 ? rodEnds[0] : rodEnds[1];
     family='parallel linkage';
     const attachmentGap=Math.min(near0, near1);
     if(attachmentGap>0.03){
@@ -727,12 +729,26 @@ function fitWiperMechanism(sweepFit, glass, domain){
     const dy=p2[1]-p1[1]+((b0[0]-p2[0])-(a0[0]-p1[0]))*sin+((b0[1]-p2[1])-(a0[1]-p1[1]))*cos;
     return Math.atan2(dy,dx)*180/Math.PI;
   };
+  // THE PIN-BASED BLADE MOTION. The two points a linkage drives are the PINS, not the blade's ends: a real
+  // arm is bolted to the blade's MIDDLE, so using an end scales the translation by |end-P1|/|pin-P1|.
+  // (verify_windshield.js checkPinKinematics quantifies it: 11 mm over a 50 deg stroke on a 0.5 m arm.)
+  // Both pins rotate by the same angle in a parallelogram; the blade is the rigid body through them, and
+  // its ends follow from the rigid motion that takes the park pin pair onto the current one.
+  const pinAPoint=armTip||a0;
+  const pinBPoint=rodPin||b0;
+
   const bladeAt=phi=>{
     const radians=phi*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
     const rotate=(pivot,point)=>{
       const dx=point[0]-pivot[0], dy=point[1]-pivot[1];
       return [pivot[0]+dx*cos-dy*sin, pivot[1]+dx*sin+dy*cos];
     };
+    // NOT the pin-pair rigid motion. That was tried and MEASURED WRONG here (4.5 mm on this fixture): the
+    // two pins move on two different circles, so "both rotate by the same phi" does not preserve the
+    // distance between them - which the blade's rigidity requires - unless the link vectors are equal
+    // (i.e. unless it is exactly a parallelogram). The pins are therefore only usable once the FOLLOWER'S
+    // ANGLE IS SOLVED from the four-bar loop closure instead of assumed equal to the crank's. Until then
+    // the blade's ends are rotated directly, which is at least self-consistent.
     return [rotate(p1,a0), rotate(p2,b0)];
   };
 
@@ -760,6 +776,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
       const on=Math.max(distanceToSegment(aAt,edge.a,edge.b), distanceToSegment(bAt,edge.a,edge.b));
       if(on<onEdge){ onEdge=on; candidate=phi; }
     }
+
     // |phi| near zero means this edge IS the parked blade, not the far one.
     if(candidate===null||onEdge>0.005||Math.abs(candidate)<0.2) continue;
     strokeDeg=Math.abs(candidate);
@@ -838,10 +855,6 @@ function fitWiperMechanism(sweepFit, glass, domain){
     fields.pinAV=+toV(armTip).toFixed(4);
   }
   if(rod){
-    const rodEnds2=barEnds(rod.faces, domain);
-    const q0=distanceToSegment(rodEnds2[0], a0, b0);
-    const q1=distanceToSegment(rodEnds2[1], a0, b0);
-    const rodPin=q0<=q1 ? rodEnds2[0] : rodEnds2[1];
     fields.pinBU=+toU(rodPin).toFixed(4);
     fields.pinBV=+toV(rodPin).toFixed(4);
     console.log('wiper pins: '+glass.name+' arm pin '+Math.hypot(armTip?armTip[0]-p1[0]:0,armTip?armTip[1]-p1[1]:0).toFixed(3)+
