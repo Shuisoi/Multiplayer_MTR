@@ -300,7 +300,9 @@ public final class MmtrWindshield {
 		// SAME car: the real saf101 model does exactly that (windshield_1 at z = +7.79 m, windshield_2 at
 		// z = -7.78 m), so "which car am I in" cannot tell the two ends of one car apart and both blades
 		// would sweep together.
-		for (final Anchor anchor : MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(vehicleId), carNumber)) {
+		final ObjectArrayList<Anchor> panes = MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(vehicleId), carNumber);
+		logGate(vehicleId, carNumber, panes);
+		for (final Anchor anchor : panes) {
 			if (anchor.widthM <= 0 || anchor.heightM <= 0) {
 				continue;
 			}
@@ -492,6 +494,48 @@ public final class MmtrWindshield {
 			}
 		}
 		return nearestCab == anchor.cab;
+	}
+
+	/** [MMTR-DBG] Last logged gating situation per car, so the log gets one line per CHANGE, not per frame. */
+	private static final java.util.Map<String, Integer> GATE_LOG = new java.util.HashMap<>();
+
+	/**
+	 * [MMTR-DBG] One line per CHANGE of the wiper's gating situation: which vehicle and car this client
+	 * believes it is riding, how many panes that car even has, and which of them it resolves to the
+	 * cockpit.
+	 *
+	 * <p>This exists because the gate cannot be exercised offline at all (notes/189). Without it, "the
+	 * wiper does not move" in game cannot be told apart from "driverOnBoard answered no", from "it picked
+	 * the other cab", or from "this car has no pane at all" - three failures that need completely different
+	 * fixes and look identical on screen.</p>
+	 */
+	private static void logGate(String vehicleId, int carNumber, ObjectArrayList<Anchor> panes) {
+		final long ridingVehicleId = VehicleRidingMovement.getRidingVehicleId();
+		if (ridingVehicleId == 0) {
+			return;
+		}
+		final IntObjectImmutablePair<ObjectObjectImmutablePair<Vector3d, Double>> ridingCar = VehicleRidingMovement.getRidingVehicleCarNumberAndOffset(ridingVehicleId);
+		if (ridingCar == null) {
+			return;
+		}
+		// Cheap signature of everything that can change the answer, so the strings below are only built
+		// when the situation actually differs from the last logged one.
+		final int signature = panes.size() * 1000003 + carNumber * 101 + wiperMode.ordinal() * 17
+				+ (int) Math.round(ridingCar.right().left().getZMapped() * 10) * 7 + (int) (ridingVehicleId % 97);
+		final String key = vehicleId + ":" + carNumber;
+		final Integer previous = GATE_LOG.put(key, signature);
+		if (previous != null && previous.intValue() == signature) {
+			return;
+		}
+		final StringBuilder builder = new StringBuilder();
+		builder.append("riding=").append(ridingVehicleId).append(" ridingCar=").append(ridingCar.leftInt())
+				.append(" panes=").append(panes.size()).append(" stalk=").append(wiperMode);
+		for (final Anchor pane : panes) {
+			builder.append(" | ").append(pane.name).append(" cab=").append(pane.cab)
+					.append(" paneZ=").append(Math.round(pane.position.z() * 100) / 100.0)
+					.append(" driven=").append(driverOnBoard(vehicleId, carNumber, pane));
+		}
+		LOGGER.info("[MMTR-DBG] wiper gate {} -> {}", key, builder);
 	}
 
 	/**
