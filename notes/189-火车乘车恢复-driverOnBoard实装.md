@@ -162,3 +162,21 @@ windshield_2  cab=2  car=0   pos = (0, 3.7476,  -7.78299)   normal z = +0.959
 | `selftest` | **21/21** 注入故障全被抓 |
 | 三个真车 zip 整体 SHA256（旧打包器 fa9ab8e vs 现打包器） | HST_H_v12 / SAF101_snd_probe / BR101_v1 **逐字节不变** |
 | 进游戏看雨刷只动所在驾驶室 | **待用户验收**（我无法观察画面） |
+
+## 10. 为什么"玩家位置 vs 玻璃位置"可以直接比较（帧约定核对）
+
+§7 的比较依赖一个坐标帧假设。刚因为假设没核对吃过一次亏（§7 本身），所以这次去代码里核对了：
+
+- 骑行 offset 来自 `VehicleRidingMovement` 的 `ridingPositionCache`，而它由 `startRiding` 的
+  `x,y,z` 写入，调用方传的是 `RenderVehicles` 第 141 行的
+  `final Vector3d playerPosition = absoluteVehicleCarPositionAndRotation.transformBackwards(clientPlayerEntity.getPos(), …)`
+  —— **世界坐标反变换进车体坐标系**，所以是**车体局部**的。
+- 它被消费的地方是 `getRenderPositionAndRotation`（第 428 行）：把 offset 取负后按被骑车的朝向旋转、
+  再加上两车位置之差 —— 这是标准的"车体局部偏移"用法（取负是 MTR 的 180° 翻转约定）。
+- 锚点侧：`Anchor.position = toRidingSpace(filePosition)`，而 `toRidingSpace` 就是
+  `(x, y, z) -> (-x, y, -z)`（同样的 180° 翻转，文档写明"players, floors and doorways 所在的空间"）。
+
+⇒ **两者同帧、同为车体局部米**，可以直接比较 z。§7 的修法成立。
+
+顺带核对：saf101 的两块玻璃 normal 分别是 `z = -0.959` 与 `+0.959`（各自朝向车体中心），
+位置 `z = +7.79 / -7.78`，与"1 = A 端、2 = B 端"一致。
