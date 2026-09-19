@@ -822,6 +822,27 @@ function fitWiperMechanism(sweepFit, glass, domain){
     fields.pivot2U=+toU(p2).toFixed(4);
     fields.pivot2V=+toV(p2).toFixed(4);
   }
+  // THE PINS - where each link is bolted to the BLADE. These, not the blade's own ends, are the two
+  // points a linkage actually drives: a real arm is pinned to the blade's MIDDLE, so a model that uses
+  // the blade's end instead translates the blade by the wrong amount (|end-P1| instead of |pin-P1|).
+  // Emitted additively: the client ignores them until its kinematics is switched over to them, and the
+  // blade's own park geometry (bladeAU/../bladeBV) stays in the file because the client needs BOTH -
+  // the pins define the motion, the blade's ends define what to draw and wipe.
+  if(armTip){
+    fields.pinAU=+toU(armTip).toFixed(4);
+    fields.pinAV=+toV(armTip).toFixed(4);
+  }
+  if(rod){
+    const rodEnds2=barEnds(rod.faces, domain);
+    const q0=distanceToSegment(rodEnds2[0], a0, b0);
+    const q1=distanceToSegment(rodEnds2[1], a0, b0);
+    const rodPin=q0<=q1 ? rodEnds2[0] : rodEnds2[1];
+    fields.pinBU=+toU(rodPin).toFixed(4);
+    fields.pinBV=+toV(rodPin).toFixed(4);
+    console.log('wiper pins: '+glass.name+' arm pin '+Math.hypot(armTip?armTip[0]-p1[0]:0,armTip?armTip[1]-p1[1]:0).toFixed(3)+
+      ' m from the spindle'+(armTip&&distanceToSegment(armTip,a0,b0)>0.01?' (NOT at a blade end - the pin-based kinematics is the correct one)':'')+
+      ', rod pin '+Math.hypot(rodPin[0]-p2[0],rodPin[1]-p2[1]).toFixed(3)+' m from the second pivot');
+  }
   return fields;
 }
 
@@ -954,7 +975,7 @@ const anchors=buildAnchors();
 // "sweepSign has no effect" bug (notes/179 §9.4 #3), and the "droplet physics has no effect" repeat of it.
 const WINDSHIELD_FIELDS=['raindrops','fallMps','maxStreakM','wiper','drawBlade','dualWiper','armM','parkAngleDeg',
                          'sweepDeg','sweepSign','periodS','pivotU','pivotV','bladeWidthM','colour','armColour','snow','twoSided',
-                         'pivot2U','pivot2V','bladeAU','bladeAV','bladeBU','bladeBV',
+                         'pivot2U','pivot2V','bladeAU','bladeAV','bladeBU','bladeBV','pinAU','pinAV','pinBU','pinBV',
                          'creepMps','jitterMps','minBeadRadiusM','maxBeadRadiusM','growthMps','spawnPerSecond'];
 function buildWindshieldConfig(){
   const byAnchor={};
