@@ -546,6 +546,19 @@ function fitWipersweep(group, domain){
   const edgeUse=new Map();
   const edgeKey=(a,b)=>a<b?a+'_'+b:b+'_'+a;
   for(const f of group.faces) for(let i=0;i<f.length;i++){ const k=edgeKey(f[i],f[(i+1)%f.length]); edgeUse.set(k,(edgeUse.get(k)||0)+1); }
+  // Two boundary edges are the SAME boundary only if they lie on the same LINE - being merely PARALLEL is
+  // not enough. Deduplicating by ANGLE alone collapses a BAND, whose two extreme blade positions are
+  // parallel and distinct, down to a single edge; with only one edge left the fit gives up on the outline
+  // and falls back to reading the region as an angular sector, which reports a 185-degree stroke for a
+  // 35-degree band. Compare against the line, not against the direction.
+  const onSameLine=(edge,pa,pb)=>{
+    const dx=pb[0]-pa[0], dy=pb[1]-pa[1];
+    const length=Math.hypot(dx,dy);
+    if(length<=1.0E-9) return true;
+    const nx=-dy/length, ny=dx/length;
+    return Math.abs(nx*(edge.a[0]-pa[0])+ny*(edge.a[1]-pa[1]))<=0.002 &&
+      Math.abs(nx*(edge.b[0]-pa[0])+ny*(edge.b[1]-pa[1]))<=0.002;
+  };
   const boundaryEdges=[];
   for(const f of group.faces){
     for(let i=0;i<f.length;i++){
@@ -554,7 +567,7 @@ function fitWipersweep(group, domain){
       const pa=domain.toRightUp(rc(a)), pb=domain.toRightUp(rc(b));
       if(Math.hypot(pb[0]-pa[0], pb[1]-pa[1])<=0.02) continue;
       const angle=Math.atan2(pb[1]-pa[1], pb[0]-pa[0])*180/Math.PI;
-      if(!boundaryEdges.some(edge=>Math.abs(normaliseLineAngle(angle-edge.angle))<0.5)) {
+      if(!boundaryEdges.some(edge=>onSameLine(edge,pa,pb))) {
         boundaryEdges.push({a:pa, b:pb, angle:angle});
       }
     }

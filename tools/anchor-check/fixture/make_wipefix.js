@@ -323,6 +323,30 @@ segmentBox('wiperarm_1_4', 0, 1.6, 5.4, R1, RA_MID, 0.018, 0.018);
 segmentBox('wiperrod_1_4', 0, 1.6, 5.4, R2, RB, 0.014, 0.014);
 segmentBox('wiper_1_4', 0, 1.6, 5.4, R_A0, R_B0, 0.022, 0.018);
 
+// ---- cab 1, pane 5: a PERFECT parallelogram - the cleared region is a BAND, not a fan ---------------
+// Glass centred on (0, 1.6, 7.2), 1.2 x 1.2 m. Domain: right/up -0.6..0.6.
+//
+// EQUAL link vectors, so the blade does NOT turn - it translates, and the region it clears has no apex at
+// all. This is the case a triangle fan cannot express, and it is what the "two pivots => swept band" path
+// exists for. The geometry is deliberately on the TANGENCY boundary (|crank - pivotDistance| equals
+// |pinSpan - follower|): the two solution circles touch exactly once per revolution, and at that angle the
+// assembly mode is a TOGGLE - which is where a "nearest candidate" branch test flips and a handedness test
+// does not. It is also why the stroke is solved within the reachable range rather than over a full turn.
+const S1 = [0.0, 0.0];                    // the arm's spindle
+const S2 = [0.0, 0.31];                   // the rod's spindle
+const S_LINK = [0.4, -0.05];              // ONE link vector for both, i.e. a perfect parallelogram
+const SA_MID = [S1[0] + S_LINK[0], S1[1] + S_LINK[1]];   // the arm's pin: the blade's MIDDLE
+const SB = [S2[0] + S_LINK[0], S2[1] + S_LINK[1]];       // the rod's pin
+const S_B0 = SB;
+const S_A0 = [2 * SA_MID[0] - S_B0[0], 2 * SA_MID[1] - S_B0[1]];   // so the pin is exactly halfway
+const S_SWEEP = 35;
+
+glass('mmtr_windshield_1_5', 0, 1.6, 7.2, 0.6, 0.6);
+sweptRegionBand('mmtr_wipersweep_1_5', 0, 1.6, 7.2, S1, S2, S_A0, S_B0, S_SWEEP, SA_MID, SB);
+segmentBox('wiperarm_1_5', 0, 1.6, 7.2, S1, SA_MID, 0.018, 0.018);
+segmentBox('wiperrod_1_5', 0, 1.6, 7.2, S2, SB, 0.014, 0.014);
+segmentBox('wiper_1_5', 0, 1.6, 7.2, S_A0, S_B0, 0.022, 0.018);
+
 // ---- cab 2: a screen named with a SINGLE index ----------------------------------------------------
 glass('mmtr_windshield_2', 0, 1.6, -2.1, 0.5, 0.6);
 

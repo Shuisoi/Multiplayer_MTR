@@ -279,15 +279,12 @@ function bandFactor(px, py, from, to) {
  * @returns {strokeDeg, pivotU, pivotV, armM, parkAngleDeg, onEdge} or {error}
  */
 function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, vpos) {
-  const counts = new Map();
-  for (const f of sweepGroup.faces) for (const i of new Set(f)) counts.set(i, (counts.get(i) || 0) + 1);
-  let apexes = [...counts.entries()].filter(e => e[1] === sweepGroup.faces.length).map(e => e[0]);
-  if (apexes.length > 1) {
-    const firsts = new Set(sweepGroup.faces.map(f => f[0]));
-    if (firsts.size === 1 && apexes.includes([...firsts][0])) apexes = [[...firsts][0]];
-  }
-  if (apexes.length !== 1) return { error: 'not a triangle fan' };
-  const apex = apexes[0];
+  // This used to require "exactly one vertex shared by every face" - a triangle fan - and returned
+  // 'not a triangle fan' otherwise. That requirement is gone: the candidate edges below are the region's
+  // OUTLINE, which does not depend on a shared vertex at all. A BAND is a legitimate shape (an ideal
+  // parallelogram translates its blade, so its two extreme positions are PARALLEL, the apex is at infinity
+  // and no triangle fan can express the region), and rejecting it here is exactly what left the stroke
+  // unsolvable and let a bogus 185-degree angular-sector reading stand unchallenged.
 
   const bladeEnds = barEnds(bladeGroup, domain, vpos);
   // The spindle comes from the ARM (the end that does not touch the blade) - the fan's apex is the swept
@@ -318,12 +315,24 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
     br0 = d0 <= d1 ? rodEnds[0] : rodEnds[1];   // the end NEAR the blade is the rod's pin
   }
 
-  // Every rim edge that is not incident to the apex is a boundary candidate.
+  // The candidates are the region's OUTLINE: an edge belonging to exactly ONE face. That is the packager's
+  // rule, and it works for both shapes - a fan's spokes belong to two faces and drop out on their own (so
+  // no apex is needed), and a BAND's interior crossbars do the same, leaving its two extreme blade
+  // positions. Taking "every edge except those touching the apex" instead would, on a band, offer the
+  // interior crossbars as candidates too - and the blade lies square on every one of them.
+  const edgeUse = new Map();
+  const edgeKey = (a, b) => (a < b ? a + '_' + b : b + '_' + a);
+  for (const f of sweepGroup.faces) {
+    for (let i = 0; i < f.length; i++) {
+      const key = edgeKey(f[i], f[(i + 1) % f.length]);
+      edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
+    }
+  }
   const edges = [];
   for (const f of sweepGroup.faces) {
     for (let i = 0; i < f.length; i++) {
       const a = f[i], b = f[(i + 1) % f.length];
-      if (a === apex || b === apex) continue;
+      if (edgeUse.get(edgeKey(a, b)) !== 1) continue;
       const pa = domain.toRightUp(vpos[a]), pb = domain.toRightUp(vpos[b]);
       if (Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) <= 0.02) continue;
       edges.push({ a: pa, b: pb });
