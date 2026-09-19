@@ -152,8 +152,9 @@ function insideConvexQuad(px, py, xs, ys) {
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
     const cross = (xs[j] - xs[i]) * (py - ys[i]) - (ys[j] - ys[i]) * (px - xs[i]);
-    if (cross > 1.0E-9) positive = true;
-    if (cross < -1.0E-9) negative = true;
+    const margin = Math.hypot(xs[j] - xs[i], ys[j] - ys[i]) * BAND_INFLATE_M;
+    if (cross > margin) positive = true;
+    if (cross < -margin) negative = true;
   }
   return !(positive && negative);
 }
@@ -164,6 +165,7 @@ function insideConvexQuad(px, py, xs, ys) {
  * parallel linkage, whose blade never passes through a pivot.
  */
 const WIPE_FADE_M = 0.03;
+const BAND_INFLATE_M = 0.003;
 
 function bandFactor(px, py, from, to) {
   const xs = [from[0][0], from[1][0], to[1][0], to[0][0]];
@@ -171,6 +173,89 @@ function bandFactor(px, py, from, to) {
   if (insideConvexQuad(px, py, xs, ys)) return 1;
   const d = distanceToSegment([px, py], to[0], to[1]);
   return d >= WIPE_FADE_M ? 0 : 1 - d / WIPE_FADE_M;
+}
+
+/**
+ * THE STROKE, re-derived from the source geometry the way the packager does it - independently.
+ *
+ * The fan is the region the BLADE sweeps, so its boundary edges are the blade's own extreme positions.
+ * One of them is the parked blade; the other says which rotation puts the blade there, which is how the
+ * ARM's stroke is recovered (a real linkage opens only a couple of degrees, so the fan's own opening is
+ * NOT the stroke). Matching is by POSITION: a line angle repeats every 180 degrees, and a linkage's blade
+ * direction barely moves, so direction alone cannot tell the real stroke from its aliases.
+ *
+ * @returns {strokeDeg, pivotU, pivotV, armM, parkAngleDeg, onEdge} or {error}
+ */
+function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, vpos) {
+  const counts = new Map();
+  for (const f of sweepGroup.faces) for (const i of new Set(f)) counts.set(i, (counts.get(i) || 0) + 1);
+  let apexes = [...counts.entries()].filter(e => e[1] === sweepGroup.faces.length).map(e => e[0]);
+  if (apexes.length > 1) {
+    const firsts = new Set(sweepGroup.faces.map(f => f[0]));
+    if (firsts.size === 1 && apexes.includes([...firsts][0])) apexes = [[...firsts][0]];
+  }
+  if (apexes.length !== 1) return { error: 'not a triangle fan' };
+  const apex = apexes[0];
+
+  const bladeEnds = barEnds(bladeGroup, domain, vpos);
+  // The spindle comes from the ARM (the end that does not touch the blade) - the fan's apex is the swept
+  // region's virtual centre and is NOT the spindle, not even for a single-axis wiper.
+  if (!armGroup) return { error: 'no wiperarm_ group, so the spindle cannot be located' };
+  const armEnds = barEnds(armGroup, domain, vpos);
+  const armNear0 = distanceToSegment(armEnds[0], bladeEnds[0], bladeEnds[1]);
+  const armNear1 = distanceToSegment(armEnds[1], bladeEnds[0], bladeEnds[1]);
+  const p1 = armNear0 <= armNear1 ? armEnds[1] : armEnds[0];
+
+  const near0 = Math.hypot(bladeEnds[0][0] - p1[0], bladeEnds[0][1] - p1[1]);
+  const near1 = Math.hypot(bladeEnds[1][0] - p1[0], bladeEnds[1][1] - p1[1]);
+  const a0 = near0 <= near1 ? bladeEnds[0] : bladeEnds[1];
+  const b0 = near0 <= near1 ? bladeEnds[1] : bladeEnds[0];
+
+  let p2 = p1.slice();
+  if (rodGroup) {
+    const rodEnds = barEnds(rodGroup, domain, vpos);
+    const d0 = distanceToSegment(rodEnds[0], a0, b0);
+    const d1 = distanceToSegment(rodEnds[1], a0, b0);
+    p2 = d0 <= d1 ? rodEnds[1] : rodEnds[0];
+  }
+
+  // Every rim edge that is not incident to the apex is a boundary candidate.
+  const edges = [];
+  for (const f of sweepGroup.faces) {
+    for (let i = 0; i < f.length; i++) {
+      const a = f[i], b = f[(i + 1) % f.length];
+      if (a === apex || b === apex) continue;
+      const pa = domain.toRightUp(vpos[a]), pb = domain.toRightUp(vpos[b]);
+      if (Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) <= 0.02) continue;
+      edges.push({ a: pa, b: pb });
+    }
+  }
+
+  const bladeAt = phi => {
+    const radians = phi * Math.PI / 180, cos = Math.cos(radians), sin = Math.sin(radians);
+    const rotate = (pivot, point) => {
+      const dx = point[0] - pivot[0], dy = point[1] - pivot[1];
+      return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos];
+    };
+    return [rotate(p1, a0), rotate(p2, b0)];
+  };
+
+  let best = null;
+  for (const edge of edges) {
+    for (let phi = -180; phi <= 180; phi += 0.05) {
+      const [aAt, bAt] = bladeAt(phi);
+      const on = Math.max(distanceToSegment(aAt, edge.a, edge.b), distanceToSegment(bAt, edge.a, edge.b));
+      if (on <= 0.005 && Math.abs(phi) > 0.2 && (best === null || on < best.on)) best = { phi, on };
+    }
+  }
+  if (best === null) return { error: 'no fan boundary edge is a blade position (the fan must be the region the blade sweeps)' };
+  return {
+    strokeDeg: Math.abs(best.phi),
+    sweepSign: best.phi < 0 ? -1 : 1,
+    onEdge: best.on,
+    parkAngleDeg: Math.atan2(b0[1] - a0[1], b0[0] - a0[0]) * 180 / Math.PI,
+    pivot1: p1, pivot2: p2, a0, b0
+  };
 }
 
 /** A clean, dependency-free re-derivation of the fitted sector, from the fan's own vertices. */
@@ -301,22 +386,36 @@ function main() {
     }
 
     const domain = glassDomain(glassGroup, vpos);
-    const fit = fitSector(sweepGroup, domain, vpos);
-    if (fit.error) { fail(scope, fit.error); continue; }
-
     const values = windshieldConfig[glassName] || {};
     if (values.wiper !== true) fail(scope, 'its glass does not have wiper=true (got ' + JSON.stringify(values.wiper) + ')');
     const near = (a, b, tol) => a !== undefined && Math.abs(a - b) <= tol;
-    if (!near(values.pivotU, fit.pivotU, FRACTION_TOL)) fail(scope, 'pivotU ' + values.pivotU + ' != re-derived ' + fit.pivotU.toFixed(4));
-    if (!near(values.pivotV, fit.pivotV, FRACTION_TOL)) fail(scope, 'pivotV ' + values.pivotV + ' != re-derived ' + fit.pivotV.toFixed(4));
-    if (!near(values.armM, fit.armM, ARM_TOL_M)) fail(scope, 'armM ' + values.armM + ' != re-derived ' + fit.armM.toFixed(4));
-    if (!near(values.parkAngleDeg, fit.parkAngleDeg, ANGLE_TOL_DEG)) fail(scope, 'parkAngleDeg ' + values.parkAngleDeg + ' != re-derived ' + fit.parkAngleDeg.toFixed(3));
-    if (!near(values.sweepDeg, fit.sweepDeg, ANGLE_TOL_DEG)) fail(scope, 'sweepDeg ' + values.sweepDeg + ' != re-derived ' + fit.sweepDeg.toFixed(3));
-    if (fit.maxOffPlane > OFF_PLANE_TOL_M) fail(scope, 'a fan vertex sits ' + fit.maxOffPlane.toFixed(4) + ' m off the glass plane (tol ' + OFF_PLANE_TOL_M + ')');
-    if (!fit.rimInside) fail(scope, 'a fan vertex falls outside the glass it sweeps');
+
+    // The fan is the region the BLADE sweeps, so what it can be checked against is the modelled blade and
+    // the modelled arm - not against a sector about its own apex, which is a VIRTUAL centre (metres away
+    // from the glass when the fan is the slight sliver a real train linkage draws).
+    const bladeForFit = allGroupsByName.get('wiper_' + sweep.cab + '_' + pane);
+    const solved = bladeForFit
+      ? solveStrokeFromFan(sweepGroup, bladeForFit, allGroupsByName.get('wiperarm_' + sweep.cab + '_' + pane),
+        allGroupsByName.get('wiperrod_' + sweep.cab + '_' + pane), domain, vpos)
+      : { error: 'no modelled blade, so the fan cannot be interpreted as a swept region - the legacy sector fit is not checked here' };
+    if (solved.error) {
+      fail(scope, solved.error);
+    } else {
+      const pivotU = 0.5 + solved.pivot1[0] / domain.widthM;
+      const pivotV = 0.5 + solved.pivot1[1] / domain.heightM;
+      const reach = Math.max(Math.hypot(solved.a0[0] - solved.pivot1[0], solved.a0[1] - solved.pivot1[1]),
+        Math.hypot(solved.b0[0] - solved.pivot1[0], solved.b0[1] - solved.pivot1[1]));
+      if (!near(values.pivotU, pivotU, FRACTION_TOL)) fail(scope, 'pivotU ' + values.pivotU + ' != the spindle re-derived from the arm (' + pivotU.toFixed(4) + ')');
+      if (!near(values.pivotV, pivotV, FRACTION_TOL)) fail(scope, 'pivotV ' + values.pivotV + ' != the spindle re-derived from the arm (' + pivotV.toFixed(4) + ')');
+      if (!near(values.armM, reach, ARM_TOL_M)) fail(scope, 'armM ' + values.armM + ' != the blade reach ' + reach.toFixed(4));
+      if (!near(values.parkAngleDeg, solved.parkAngleDeg, ANGLE_TOL_DEG)) fail(scope, 'parkAngleDeg ' + values.parkAngleDeg + ' != the modelled park direction ' + solved.parkAngleDeg.toFixed(3));
+      if (!near(values.sweepDeg, solved.strokeDeg, ANGLE_TOL_DEG)) fail(scope, 'sweepDeg ' + values.sweepDeg + ' != the stroke solved from the fan (' + solved.strokeDeg.toFixed(3) + ')');
+      if ((values.sweepSign || 1) !== solved.sweepSign) fail(scope, 'sweepSign ' + values.sweepSign + ' != solved ' + solved.sweepSign);
+      notes.push(scope + ' -> ' + glassName + ': spindle (' + pivotU.toFixed(4) + ', ' + pivotV.toFixed(4) + ') arm ' + reach.toFixed(3) +
+        ' m, park ' + solved.parkAngleDeg.toFixed(2) + ' deg, stroke solved ' + solved.strokeDeg.toFixed(2) +
+        ' deg (blade on the fan edge to ' + (solved.onEdge * 1000).toFixed(1) + ' mm)');
+    }
     fittedGlasses.add(glassName);
-    notes.push(scope + ' -> ' + glassName + ': pivot (' + fit.pivotU.toFixed(4) + ', ' + fit.pivotV.toFixed(4) + ') arm ' +
-      fit.armM.toFixed(3) + ' m, park ' + fit.parkAngleDeg.toFixed(2) + ' deg, sweep ' + fit.sweepDeg.toFixed(2) + ' deg');
 
     // ---- M1/M2: the mechanism ------------------------------------------------------------------
     const bladeGroup = allGroupsByName.get('wiper_' + sweep.cab + '_' + pane);

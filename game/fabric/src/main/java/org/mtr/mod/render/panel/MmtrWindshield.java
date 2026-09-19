@@ -158,6 +158,8 @@ public final class MmtrWindshield {
 	/** How far in FRONT of the blade the film starts thinning, in metres (the band path's equivalent of
 	 * {@link #WIPE_FADE_DEG}, which is an angle and only means anything for a blade through the pivot). */
 	private static final double WIPE_FADE_M = 0.03;
+	/** How far outside the swept quad still counts as swept, in metres (see insideConvexQuad). */
+	private static final double BAND_INFLATE_M = 0.003;
 	/** Ceiling on the acceleration used to throw beads sideways, so a physics glitch cannot smear them. */
 	private static final double MAX_LATERAL_ACCELERATION = 1.2;
 	/** Ceiling on the lateral bead speed (m/s), for the same reason. */
@@ -1046,8 +1048,13 @@ public final class MmtrWindshield {
 			for (int i = 0; i < 4; i++) {
 				final int j = (i + 1) % 4;
 				final double cross = (xs[j] - xs[i]) * (py - ys[i]) - (ys[j] - ys[i]) * (px - xs[i]);
-				if (cross > 1.0E-9) positive = true;
-				if (cross < -1.0E-9) negative = true;
+				// The quad is a CHORD approximation of a band whose real edges are arcs (the blade's ends
+				// travel along them), so a bead can sit a fraction of a millimetre outside the polygon and
+				// still be under the blade. Compare the cross product against the edge length times the
+				// inflation - i.e. "at most BAND_INFLATE_M outside this edge" - instead of against zero.
+				final double margin = Math.hypot(xs[j] - xs[i], ys[j] - ys[i]) * BAND_INFLATE_M;
+				if (cross > margin) positive = true;
+				if (cross < -margin) negative = true;
 			}
 			return !(positive && negative);
 		}
@@ -1784,13 +1791,17 @@ public final class MmtrWindshield {
 		 * @return {@code {{ax, ay}, {bx, by}}}, or null when the model carries no blade geometry
 		 */
 		@Nullable
-		private double[][] bladeSegmentM(double thetaDeg, Anchor anchor) {
+		private double[][] bladeSegmentM(double absoluteAngleDeg, Anchor anchor) {
 			if (!hasBlade) {
 				return null;
 			}
+			// parkAngleDeg is the direction the blade is MODELLED at, so it is the ORIGIN of the rotation:
+			// the linkage is driven by "how far from park", not by an absolute bearing. Without this the
+			// blade would be rotated by the phase angle plus the park bearing - i.e. 110 degrees out.
+			final double theta = (absoluteAngleDeg - parkAngleDeg) * sweepSign;
 			final double widthM = anchor.widthM;
 			final double heightM = anchor.heightM;
-			final double radians = Math.toRadians(thetaDeg);
+			final double radians = Math.toRadians(theta);
 			final double cos = Math.cos(radians);
 			final double sin = Math.sin(radians);
 			return new double[][]{

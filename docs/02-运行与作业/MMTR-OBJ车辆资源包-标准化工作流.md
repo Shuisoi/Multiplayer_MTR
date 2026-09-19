@@ -290,9 +290,26 @@ wiper mechanism: windshield_1_3 two pivots 0.300 m apart, link residual 0.0150 m
                  blade turns 2.13 deg over the 50 deg stroke -> slight fan - the blade turns 2.1 deg as it sweeps
 ```
 
-**扇形描述的是臂的行程**（扇心 = 主轴 P1，角度 = 臂扫过的角），刀片自己那几度的微转是**机构算出来的**、
-不单独作者输入。所以对平行连杆来说："作用面（扇）」和"刀片真正刮过的区域（微微的扇）」是**两个不同的扇形**，
-别混：前者给动画，后者由机构决定。
+**扇形描述的是"刀片真正扫过的区域"**，不是臂的摆动范围：
+
+- 扇的**两条边界边必须是刀片在行程两端的位置**（所以扇的 rim 要包含刀片在停放位与最大位的两个位置）。
+- 扇的**扇心是虚拟中心**（两条刀片极限位置延长线的交点）—— **不是主轴**，单轴雨刷也一样（刀片是**偏离**
+  主轴的，穿过主轴的是**臂**）。所以**主轴只能来自 `wiperarm_`**。
+- 扇的**开口角 = 刀片自转角**（真实机车只有几度），**臂的行程角由打包器从扇的另一条边界边反解出来**
+  （按**位置**匹配：刀片落在哪条边界边上；按角度匹配会被"直线角每 180° 重复"和"连杆刀片方向几乎不变"
+  两个陷阱骗到）。
+- 所以平行连杆模型**必须**建 `wiperarm_`（主轴来源）与 `wiperrod_`（第二支点来源）。
+
+打包器日志（真实样例）：
+
+```
+wiper sweep:     mmtr_wipersweep_1_3 -> pivot u=0.9167 v=-5.1916 arm=7.605m park=90 sweep=2.125deg (swept region, ...)
+wiper mechanism: windshield_1_3 stroke solved as 50.00 deg from the fan edge at 92.13 deg (blade on it to within 0.0 mm)
+wiper mechanism: windshield_1_3 parallel linkage, blade turns 2.13 deg over the 50.00 deg stroke -> slight fan (real train linkage)
+```
+
+（第一行里那个 `pivot u=0.9167 v=-5.19` 是**虚拟中心**，离玻璃 7.6 m —— 正常现象；写进锚点 JSON 的
+`pivotU/pivotV` 是**主轴**，不是它。）
 
 **客户端按几何分流**（不是按"有没有建模刀片"）：
 - **一个支点** ⇒ 用原来的**扇形**角度判定（刀片穿过支点，扇形是精确的）

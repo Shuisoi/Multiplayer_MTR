@@ -519,22 +519,81 @@ function fitWipersweep(group, domain){
   const parkAngleDeg=sorted[gapIndex];
   let sweepDeg=sorted[(gapIndex-1+sorted.length)%sorted.length]-parkAngleDeg;
   while(sweepDeg<0) sweepDeg+=360;
-  if(sweepDeg<5){
-    console.warn('WARNING: '+label+' spans only '+sweepDeg.toFixed(1)+' degrees - that is a line, not a wiper sector; ignored.');
+  // The guard is deliberately tiny. Under "the fan is the region the blade SWEEPS" a real train linkage
+  // opens only a COUPLE OF DEGREES (the blade barely turns while the arm sweeps 50), so a small span is
+  // the normal case, not a modelling mistake - only a truly collinear fan is degenerate.
+  if(sweepDeg<0.2){
+    console.warn('WARNING: '+label+' spans only '+sweepDeg.toFixed(2)+' degrees - its rim vertices are collinear, so it declares no area; ignored.');
     return null;
   }
 
   const pivotU=0.5+pivot[0]/domain.canvasWidthM;
   const pivotV=0.5+pivot[1]/domain.canvasHeightM;
-  if(pivotU<-0.5||pivotU>1.5||pivotV<-0.5||pivotV>1.5){
+
+  // The fan's BOUNDARY EDGES - the rim edges that are NOT incident to the apex, i.e. the lines that
+  // bound the region it declares.
+  //
+  // A fan drawn as THE REGION THE BLADE SWEEPS (the meaning chosen for this project) has the blade's two
+  // extreme positions among these edges, and those are what the mechanism solve needs: they are the
+  // directions the blade has at the two ends of the stroke. A 4-rim fan gives THREE edges though - the
+  // two blade positions AND the outer edge that joins them - so this returns all candidates and lets
+  // fitWiperMechanism pick by testing which one the blade actually LIES ON. A plain angular sector (rim
+  // points all at the same radius from the apex) has no such edges, and then the outline's own span is
+  // the only boundary - the older meaning, kept so models that only draw a sweep sector keep working.
+  const boundaryEdges=[];
+  for(const f of group.faces){
+    for(let i=0;i<f.length;i++){
+      const a=f[i], b=f[(i+1)%f.length];
+      if(a===apex||b===apex) continue;
+      const pa=domain.toRightUp(rc(a)), pb=domain.toRightUp(rc(b));
+      const length=Math.hypot(pb[0]-pa[0], pb[1]-pa[1]);
+      if(length<=0.02) continue;
+      const angle=Math.atan2(pb[1]-pa[1], pb[0]-pa[0])*180/Math.PI;
+      if(!boundaryEdges.some(edge=>Math.abs(normaliseLineAngle(angle-edge.angle))<0.5)) {
+        boundaryEdges.push({a:pa, b:pb, angle:angle});
+      }
+    }
+  }
+  const shape=boundaryEdges.length>=2 ? 'swept region' : 'angular sector';
+  // A pivot far outside the glass is only a mistake for the OLD meaning (a sector about the pivot). For a
+  // SWEPT-REGION fan the apex is a virtual centre and is EXPECTED to sit far away - that is what makes a
+  // slight fan slight - so warning there would cry wolf on every correct model.
+  if(shape==='angular sector'&&(pivotU<-0.5||pivotU>1.5||pivotV<-0.5||pivotV>1.5)){
     console.warn('WARNING: '+label+' puts its pivot at (u='+pivotU.toFixed(3)+', v='+pivotV.toFixed(3)+'), well outside its glass - '+
       'check that the fan is modelled on the glass it names.');
   }
+  if(shape==='angular sector'){
+    boundaryEdges.length=0;
+    const from=polarDeg(pivot,armM,parkAngleDeg), to=polarDeg(pivot,armM,parkAngleDeg+sweepDeg);
+    boundaryEdges.push({a:pivot, b:from, angle:parkAngleDeg}, {a:pivot, b:to, angle:parkAngleDeg+sweepDeg});
+  }
+
   const fit={wiper:true, pivotU:+pivotU.toFixed(4), pivotV:+pivotV.toFixed(4), armM:+armM.toFixed(4),
-    parkAngleDeg:+parkAngleDeg.toFixed(3), sweepDeg:+sweepDeg.toFixed(3), sweepSign:1};
+    parkAngleDeg:+parkAngleDeg.toFixed(3), sweepDeg:+sweepDeg.toFixed(3), sweepSign:1,
+    boundaryEdges:boundaryEdges};
   console.log('wiper sweep: '+label+' -> pivot u='+fit.pivotU+' v='+fit.pivotV+' arm='+fit.armM+
-    'm park='+fit.parkAngleDeg+' sweep='+fit.sweepDeg+'deg (fitted from a '+group.faces.length+'-triangle fan)');
+    'm park='+fit.parkAngleDeg+' sweep='+fit.sweepDeg+'deg ('+shape+', '+boundaryEdges.length+' boundary edge(s) at '+
+    boundaryEdges.map(edge=>normaliseLineAngle(edge.angle).toFixed(2)).join(' / ')+')');
   return fit;
+}
+
+/** A point at {@code degrees} and {@code radius} from {@code from}, in the domain's (right, up). */
+function polarDeg(from,radius,degrees){
+  const radians=degrees*Math.PI/180;
+  return [from[0]+radius*Math.cos(radians), from[1]+radius*Math.sin(radians)];
+}
+
+/** An angle folded into [0, 180): a LINE has no direction, so +/-180 is the same boundary. */
+function normaliseLineAngle(degrees){
+  let value=degrees%180;
+  if(value<0) value+=180;
+  return value;
+}
+
+function normaliseDegrees360(degrees){
+  let value=degrees%360;
+  if(value<0) value+=360;
+  return value;
 }
 
 /**
@@ -602,15 +661,37 @@ function fitWiperMechanism(sweepFit, glass, domain){
   if(!domain){ console.warn('WARNING: '+blade.name+' cannot be fitted - its glass has no 2D domain.'); return null; }
 
   const ends=barEnds(blade.faces, domain);
-  const p1=[(sweepFit.pivotU-0.5)*domain.canvasWidthM, (sweepFit.pivotV-0.5)*domain.canvasHeightM];
-  // A = the end nearer the spindle, B = the other. (Which is which only matters as a naming convention,
-  // but it has to be decided by GEOMETRY or the two ends swap with the winding.)
+  const rod=partFaces.find(p=>p.name.toLowerCase()==='wiperrod_'+glass.cab+'_'+pane&&p.faces.length);
+  const arm=partFaces.find(p=>p.name.toLowerCase()==='wiperarm_'+glass.cab+'_'+pane&&p.faces.length);
+
+  // ---- the SPINDLE -------------------------------------------------------------------------------
+  // The fan is the region the BLADE sweeps, so its apex is the region's VIRTUAL centre - the point where
+  // the blade's two extreme LINES meet. That is NOT the spindle, and not only for a linkage: even a
+  // single-axis blade is OFFSET from its pivot (the ARM passes through the spindle, the blade does not),
+  // so its two extreme lines meet somewhere else entirely. The spindle therefore has to be stated, and
+  // the only thing that can state it is the modelled ARM: its end that does NOT touch the blade.
+  // (Distance-to-segment does not care which blade end is A and which is B, so this does not depend on
+  // the assignment below.)
+  let p1=[(sweepFit.pivotU-0.5)*domain.canvasWidthM, (sweepFit.pivotV-0.5)*domain.canvasHeightM];
+  let armTip=null;
+  if(arm){
+    const armEnds=barEnds(arm.faces, domain);
+    const near0=distanceToSegment(armEnds[0], ends[0], ends[1]);
+    const near1=distanceToSegment(armEnds[1], ends[0], ends[1]);
+    armTip=near0<=near1 ? armEnds[0] : armEnds[1];
+    p1=near0<=near1 ? armEnds[1] : armEnds[0];
+  } else if(rod){
+    console.warn('WARNING: '+glass.name+' has a parallel linkage but no wiperarm_'+glass.cab+'_'+pane+
+      ' - the spindle can only come from the arm (the fan apex is the SWEPT REGION\'s virtual centre, not the spindle). Falling back, so the stroke is probably wrong.');
+  }
+
+  // A = the blade end nearer the spindle, B = the other. Decided by GEOMETRY, or the two ends swap with
+  // the winding and the mechanism turns inside out.
   const distanceToPivot0=Math.hypot(ends[0][0]-p1[0], ends[0][1]-p1[1]);
   const distanceToPivot1=Math.hypot(ends[1][0]-p1[0], ends[1][1]-p1[1]);
   const a0=distanceToPivot0<=distanceToPivot1 ? ends[0] : ends[1];
   const b0=distanceToPivot0<=distanceToPivot1 ? ends[1] : ends[0];
 
-  const rod=partFaces.find(p=>p.name.toLowerCase()==='wiperrod_'+glass.cab+'_'+pane&&p.faces.length);
   let p2=p1;
   let family='single-axis';
   let bladeTurnDeg=null;
@@ -625,59 +706,116 @@ function fitWiperMechanism(sweepFit, glass, domain){
     if(attachmentGap>0.03){
       console.warn('WARNING: '+rod.name+' does not reach the blade ('+attachmentGap.toFixed(3)+' m away); check that the rod is modelled from its pivot to the blade carrier.');
     }
-    const linkA=[a0[0]-p1[0], a0[1]-p1[1]];
-    const linkB=[b0[0]-p2[0], b0[1]-p2[1]];
-    const residual=Math.hypot(linkA[0]-linkB[0], linkA[1]-linkB[1]);
-    // How far the BLADE ITSELF turns over the whole stroke - which is the number that matters, because
-    // a real "parallel linkage" is an IMPERFECT parallelogram. The blade turns a few degrees, so the
-    // region it clears is a SLIGHT FAN, not a pure translated band. The link residual is only the raw
-    // cause; this angle is the effect, and it is the one thing about the mechanism a modeller cannot
-    // see by looking at a static model.
-    const directionAt=thetaDeg=>{
-      const radians=thetaDeg*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
-      const rotate=(pivot,point)=>{
-        const dx=point[0]-pivot[0], dy=point[1]-pivot[1];
-        return [pivot[0]+dx*cos-dy*sin, pivot[1]+dx*sin+dy*cos];
-      };
-      const a=rotate(p1,a0), b=rotate(p2,b0);
-      return Math.atan2(b[1]-a[1], b[0]-a[0])*180/Math.PI;
-    };
-    let turn=directionAt(sweepFit.parkAngleDeg+sweepFit.sweepDeg)-directionAt(sweepFit.parkAngleDeg);
-    while(turn>90) turn-=180;
-    while(turn<=-90) turn+=180;
-    bladeTurnDeg=Math.abs(turn);
-    const shape=bladeTurnDeg<0.5 ? 'ideal parallelogram - the blade only translates (a pure band)'
-      : bladeTurnDeg<20 ? 'slight fan - the blade turns '+bladeTurnDeg.toFixed(1)+' deg as it sweeps'
-      : 'strong rotation - check whether this should be a single-axis sector instead';
-    console.log('wiper mechanism: '+glass.name+' two pivots '+Math.hypot(p1[0]-p2[0],p1[1]-p2[1]).toFixed(3)+
-      ' m apart, link residual '+residual.toFixed(4)+' m, blade turns '+bladeTurnDeg.toFixed(2)+' deg over the '+
-      sweepFit.sweepDeg.toFixed(0)+' deg stroke -> '+shape);
-  } else {
-    console.log('wiper mechanism: '+glass.name+' single pivot -> '+family+' (the blade rides the arm)');
   }
 
-  // The arm, when modelled, is a third cross-check: its far end should land ON the blade segment. NOT
-  // on A0 - a real arm is bolted to the blade's middle, so a blade that extends past the arm on one side
-  // (which is how they are built) is correct, and demanding it end at A0 flags every real wiper.
-  const arm=partFaces.find(p=>p.name.toLowerCase()==='wiperarm_'+glass.cab+'_'+pane&&p.faces.length);
-  if(arm){
-    const armEnds=barEnds(arm.faces, domain);
-    const near=armEnds[0] && Math.hypot(armEnds[0][0]-p1[0], armEnds[0][1]-p1[1])<=Math.hypot(armEnds[1][0]-p1[0], armEnds[1][1]-p1[1]) ? armEnds[0] : armEnds[1];
-    const far=armEnds[0]===near ? armEnds[1] : armEnds[0];
-    const pivotGap=Math.hypot(near[0]-p1[0], near[1]-p1[1]);
-    const bladeGap=distanceToSegment(far, a0, b0);
-    if(pivotGap>0.03||bladeGap>0.03){
-      console.warn('WARNING: '+arm.name+' runs from '+pivotGap.toFixed(3)+' m off the spindle to '+bladeGap.toFixed(3)+
-        ' m off the blade; check the arm against the sector fitted from '+mmtr_sweepLabel(glass)+'.');
+  // ---- the STROKE, solved from the fan's far boundary ---------------------------------------------
+  // The fan declares where the blade clears, i.e. its two extreme positions. One of those is the park
+  // position the blade is modelled at; the other says which rotation of the LINKAGE puts the blade
+  // there. So the arm's stroke is recovered by solving direction(phi) = the far boundary - which is why
+  // the fan does NOT need to be the arm's own swing any more (a real train linkage turns its blade only
+  // a couple of degrees over a 50 degree stroke, so the fan is a slight sliver, not a 50 degree sector).
+  const parkDir=Math.atan2(b0[1]-a0[1], b0[0]-a0[0])*180/Math.PI;
+  const edges=sweepFit.boundaryEdges||[];
+  const directionAt=phi=>{
+    const radians=phi*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
+    const dx=p2[0]-p1[0]+((b0[0]-p2[0])-(a0[0]-p1[0]))*cos-((b0[1]-p2[1])-(a0[1]-p1[1]))*sin;
+    const dy=p2[1]-p1[1]+((b0[0]-p2[0])-(a0[0]-p1[0]))*sin+((b0[1]-p2[1])-(a0[1]-p1[1]))*cos;
+    return Math.atan2(dy,dx)*180/Math.PI;
+  };
+  const bladeAt=phi=>{
+    const radians=phi*Math.PI/180, cos=Math.cos(radians), sin=Math.sin(radians);
+    const rotate=(pivot,point)=>{
+      const dx=point[0]-pivot[0], dy=point[1]-pivot[1];
+      return [pivot[0]+dx*cos-dy*sin, pivot[1]+dx*sin+dy*cos];
+    };
+    return [rotate(p1,a0), rotate(p2,b0)];
+  };
+
+  let strokeDeg=sweepFit.sweepDeg;
+  let strokeSign=sweepFit.sweepSign||1;
+  let parkAngleDeg=sweepFit.parkAngleDeg;
+  let solved=false;
+
+  for(const edge of edges){
+    // Do NOT exclude an edge just because its DIRECTION is close to park: in a real linkage the far blade
+    // is only a couple of degrees away from the parked one - that is exactly what "slight fan" means - so
+    // a direction filter would throw the real answer away. The park edge excludes itself below instead,
+    // because solving for it returns phi = 0.
+    // Solve for the stroke by POSITION, not by direction. Two traps make the direction alone useless:
+    //   - a line angle repeats every 180 degrees, so a single-axis blade matches at phi, phi-180, ...;
+    //   - a linkage's blade direction barely moves over the stroke, so a whole RANGE of phi matches the
+    //     far edge within tolerance.
+    // Where the blade actually LIES has neither problem: the blade's motion is a one-parameter family and
+    // the edge is one specific member of it, so the residual has a unique zero at the real stroke. It is
+    // also what tells a real blade position from the third edge of a 4-rim fan (the outer edge joining the
+    // blade's two far ends), which no direction test can separate on a slight fan.
+    let candidate=null, onEdge=Infinity;
+    for(let phi=-180;phi<=180;phi+=0.05){
+      const [aAt,bAt]=bladeAt(phi);
+      const on=Math.max(distanceToSegment(aAt,edge.a,edge.b), distanceToSegment(bAt,edge.a,edge.b));
+      if(on<onEdge){ onEdge=on; candidate=phi; }
+    }
+    // |phi| near zero means this edge IS the parked blade, not the far one.
+    if(candidate===null||onEdge>0.005||Math.abs(candidate)<0.2) continue;
+    strokeDeg=Math.abs(candidate);
+    strokeSign=candidate<0?-1:1;
+    parkAngleDeg=parkDir;
+    solved=true;
+    console.log('wiper mechanism: '+glass.name+' stroke solved as '+strokeDeg.toFixed(2)+' deg from the fan edge at '+
+      normaliseLineAngle(edge.angle).toFixed(2)+' deg (blade on it to within '+(onEdge*1000).toFixed(1)+' mm); '+
+      'the blade is within '+(onEdge*1000).toFixed(1)+' mm of that edge');
+    break;
+  }
+  if(!solved){
+    console.warn('WARNING: '+glass.name+' could not recover a stroke from '+mmtr_sweepLabel(glass)+
+      '. The fan must be the region the BLADE SWEEPS: its rim has to include the blade at BOTH ends of the stroke (so its boundary edges are the two blade positions, not the arm\'s own swing).');
+  }
+  // The blade's OWN rotation over the stroke, now that the stroke is known: this is the fan's opening, and
+  // the number that says whether this really is a parallel linkage (a couple of degrees) or a plain
+  // single-axis wiper (it turns by the whole stroke).
+  bladeTurnDeg=Math.abs(normaliseLineAngle(directionAt(strokeSign*strokeDeg)-directionAt(0)));
+
+  // The arm, when modelled, is a cross-check: the end that is NOT the spindle should land ON the blade
+  // segment. NOT on A0 - a real arm is bolted to the blade's MIDDLE, so a blade that extends past the
+  // arm on one side (which is how they are built) is correct, and demanding it end at A0 flags every
+  // real wiper.
+  if(arm&&armTip){
+    const bladeGap=distanceToSegment(armTip, a0, b0);
+    if(bladeGap>0.03){
+      console.warn('WARNING: '+arm.name+' reaches to '+bladeGap.toFixed(3)+' m off the blade; check the arm against '+
+        mmtr_sweepLabel(glass)+'.');
     }
   }
 
   const toU=p=>0.5+p[0]/domain.canvasWidthM;
   const toV=p=>0.5+p[1]/domain.canvasHeightM;
+  // pivotU/pivotV/armM are OVERWRITTEN with the SPINDLE and the blade's reach, because the fan's own
+  // apex is the swept region's VIRTUAL centre (it can be metres outside the glass, and for pane 3 of the
+  // fixture it is 7.6 m away). Everything that treats pivotU/pivotV as "the point a blade rotates about"
+  // - the client's blade kinematics, and the legacy sector wipe's reach - means the SPINDLE.
+  const reach=Math.max(Math.hypot(a0[0]-p1[0], a0[1]-p1[1]), Math.hypot(b0[0]-p1[0], b0[1]-p1[1]));
   const fields={
+    pivotU:+toU(p1).toFixed(4), pivotV:+toV(p1).toFixed(4), armM:+reach.toFixed(4),
     bladeAU:+toU(a0).toFixed(4), bladeAV:+toV(a0).toFixed(4),
-    bladeBU:+toU(b0).toFixed(4), bladeBV:+toV(b0).toFixed(4)
+    bladeBU:+toU(b0).toFixed(4), bladeBV:+toV(b0).toFixed(4),
+    // These OVERRIDE the fan's own readings, and that is the whole point of the solve above:
+    // parkAngleDeg is the direction the modelled blade is parked at (the origin of the rotation), and
+    // sweepDeg is the ARM's stroke recovered from the fan's far boundary - not the fan's own opening,
+    // which is only the couple of degrees the blade turns.
+    parkAngleDeg:+parkAngleDeg.toFixed(3), sweepDeg:+strokeDeg.toFixed(3), sweepSign:strokeSign
   };
+  if(bladeTurnDeg!==null){
+    // For a single-axis wiper "the blade turns by the whole stroke" IS the definition, so the hint about
+    // remodelling only applies when there is a linkage to get wrong.
+    const shape=family==='single-axis' ? 'single axis (the blade turns by the whole stroke)'
+      : bladeTurnDeg<0.5 ? 'ideal parallelogram (blade only translates)'
+      : bladeTurnDeg<20 ? 'slight fan (real train linkage)'
+      : 'strong rotation for a linkage - consider a single-axis model instead';
+    console.log('wiper mechanism: '+glass.name+' '+family+', blade turns '+bladeTurnDeg.toFixed(2)+
+      ' deg over the '+strokeDeg.toFixed(2)+' deg stroke -> '+shape);
+  } else {
+    console.log('wiper mechanism: '+glass.name+' '+family+' (the blade rides the arm)');
+  }
   // pivot2 is only written when there IS a second pivot, so a single-axis wiper's block stays small and
   // the client's default (P2 = P1) applies.
   if(rod){
@@ -870,7 +1008,9 @@ function buildWindshieldConfig(){
     if(fit){
       // The modelled sector fills in whatever the config did not state outright, so an explicit
       // parkAngleDeg in the pack config still wins (that is the escape hatch for tuning).
-      for(const field of Object.keys(fit)) if(values[field]===undefined) values[field]=fit[field];
+      // Only real config fields are copied: the fit also carries internal values (the fan's boundary
+      // lines) that have no business in the pack.
+      for(const field of Object.keys(fit)) if(WINDSHIELD_FIELDS.includes(field)&&values[field]===undefined) values[field]=fit[field];
     }
     // A modelled SOLID wiper replaces the drawn blade. It must NOT switch the wiper off: the glass
     // still has to be wiped, and the modelled arm is what the animation is meant to move (that part is
