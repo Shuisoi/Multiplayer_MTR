@@ -118,6 +118,31 @@ const SUITES = [
         name: 'a lone index read as a PANE instead of the cab',
         expect: 'lone index is the CAB',
         apply: data => { data.anchors.find(a => a.name === 'windshield_2').cab = 1; }
+      },
+      {
+        name: 'the second pivot of a parallel linkage moved',
+        expect: 'pivot2',
+        apply: data => { data.windshield.windshield_1_3.pivot2U += 0.06; }
+      },
+      {
+        name: 'a blade end moved (the linkage would sit on the wrong glass)',
+        expect: 'blade ends were written',
+        apply: data => { data.windshield.windshield_1_3.bladeBU -= 0.05; }
+      },
+      {
+        name: 'parallel linkage present but the second pivot dropped',
+        expect: 'no pivot2 was written',
+        apply: data => { delete data.windshield.windshield_1_3.pivot2U; delete data.windshield.windshield_1_3.pivot2V; }
+      },
+      {
+        name: 'a second pivot invented for a single-axis wiper',
+        expect: 'no wiperrod_',
+        apply: data => { data.windshield.windshield_1_1.pivot2U = 0.5; data.windshield.windshield_1_1.pivot2V = 0.5; }
+      },
+      {
+        name: 'sector radius too short to reach the blade',
+        expect: 'does not reach the blade',
+        apply: data => { data.windshield.windshield_1_1.armM *= 0.6; }
       }
     ]
   }

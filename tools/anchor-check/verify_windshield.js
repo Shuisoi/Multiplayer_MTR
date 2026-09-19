@@ -90,6 +90,62 @@ function glassDomain(group, vpos) {
   };
 }
 
+/**
+ * The two ends of a bar-shaped part, as (right, up) in the glass domain. Principal-axis fit, NOT "the
+ * two furthest-apart vertices" - for a box that pair is a diagonal.
+ */
+function barEnds(group, domain, vpos) {
+  const ids = [...new Set(group.faces.flat())];
+  const points = ids.map(i => domain.toRightUp(vpos[i]));
+  const centre = L.average(points.map(p => [p[0], p[1], 0]));
+  const cx = centre[0], cy = centre[1];
+  let srr = 0, sru = 0, suu = 0;
+  for (const p of points) {
+    const dx = p[0] - cx, dy = p[1] - cy;
+    srr += dx * dx; sru += dx * dy; suu += dy * dy;
+  }
+  const theta = 0.5 * Math.atan2(2 * sru, srr - suu);
+  const axis = [Math.cos(theta), Math.sin(theta)];
+  let min = Infinity, max = -Infinity;
+  for (const p of points) {
+    const t = (p[0] - cx) * axis[0] + (p[1] - cy) * axis[1];
+    if (t < min) min = t;
+    if (t > max) max = t;
+  }
+  return [
+    [cx + axis[0] * min, cy + axis[1] * min],
+    [cx + axis[0] * max, cy + axis[1] * max]
+  ];
+}
+
+function distanceToSegment(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lengthSquared));
+  return Math.hypot(p[0] - (a[0] + dx * t), p[1] - (a[1] + dy * t));
+}
+
+/**
+ * THE CLIENT'S KINEMATICS, re-implemented. Both wiper families are this pair of expressions; the
+ * difference between them falls out of the geometry rather than out of a branch:
+ *
+ *   A(theta) = P1 + R(theta) * (A0 - P1)
+ *   B(theta) = P2 + R(theta) * (B0 - P2)
+ *
+ * With P1 = P2 the blade rotates rigidly about the spindle (a car wiper). With equal link vectors the
+ * difference B - A is constant, so the blade only translates (a train's parallel linkage).
+ * KEEP THIS IN STEP WITH the client when the client grows the same helper.
+ */
+function bladeSegment(p1, p2, a0, b0, thetaDeg) {
+  const radians = thetaDeg * Math.PI / 180;
+  const cos = Math.cos(radians), sin = Math.sin(radians);
+  const rotate = (pivot, point) => {
+    const dx = point[0] - pivot[0], dy = point[1] - pivot[1];
+    return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos];
+  };
+  return [rotate(p1, a0), rotate(p2, b0)];
+}
+
 /** A clean, dependency-free re-derivation of the fitted sector, from the fan's own vertices. */
 function fitSector(group, domain, vpos) {
   const counts = new Map();
@@ -164,6 +220,9 @@ function main() {
   const windshieldConfig = data.windshield || {};
   const groups = L.anchorsOf(obj);
   const groupByName = new Map(groups.map(g => [g.name.replace(/^mmtr_/i, ''), g]));
+  // The solid wiper parts deliberately have NO anchor prefix (they are visible parts), so they must be
+  // looked up in every group, not just the mmtr_* ones.
+  const allGroupsByName = new Map(obj.groups.map(g => [g.name, g]));
   const byName = new Map(anchors.map(a => [a.name, a]));
 
   const groupsOf = new Map();
@@ -231,6 +290,100 @@ function main() {
     fittedGlasses.add(glassName);
     notes.push(scope + ' -> ' + glassName + ': pivot (' + fit.pivotU.toFixed(4) + ', ' + fit.pivotV.toFixed(4) + ') arm ' +
       fit.armM.toFixed(3) + ' m, park ' + fit.parkAngleDeg.toFixed(2) + ' deg, sweep ' + fit.sweepDeg.toFixed(2) + ' deg');
+
+    // ---- M1/M2: the mechanism ------------------------------------------------------------------
+    const bladeGroup = allGroupsByName.get('wiper_' + sweep.cab + '_' + pane);
+    if (!bladeGroup) {
+      notes.push(scope + ': no modelled blade, so the client draws its own (nothing to verify)');
+      continue;
+    }
+    const bladeEnds = barEnds(bladeGroup, domain, vpos);
+    const pivot1 = [(values.pivotU - 0.5) * domain.widthM, (values.pivotV - 0.5) * domain.heightM];
+    const dA = Math.hypot(bladeEnds[0][0] - pivot1[0], bladeEnds[0][1] - pivot1[1]);
+    const dB = Math.hypot(bladeEnds[1][0] - pivot1[0], bladeEnds[1][1] - pivot1[1]);
+    const a0 = dA <= dB ? bladeEnds[0] : bladeEnds[1];
+    const b0 = dA <= dB ? bladeEnds[1] : bladeEnds[0];
+
+    const fittedA = [(values.bladeAU - 0.5) * domain.widthM, (values.bladeAV - 0.5) * domain.heightM];
+    const fittedB = [(values.bladeBU - 0.5) * domain.widthM, (values.bladeBV - 0.5) * domain.heightM];
+    const pairGap = Math.min(
+      Math.hypot(fittedA[0] - a0[0], fittedA[1] - a0[1]) + Math.hypot(fittedB[0] - b0[0], fittedB[1] - b0[1]),
+      Math.hypot(fittedA[0] - b0[0], fittedA[1] - b0[1]) + Math.hypot(fittedB[0] - a0[0], fittedB[1] - a0[1]));
+    if (!(pairGap <= 2 * FRACTION_TOL * Math.max(domain.widthM, domain.heightM) + ARM_TOL_M)) {
+      fail(scope, 'blade ends were written as (' + fittedA.map(x => x.toFixed(3)) + ')/(' + fittedB.map(x => x.toFixed(3)) +
+        ') but the modelled blade is (' + a0.map(x => x.toFixed(3)) + ')/(' + b0.map(x => x.toFixed(3)) + ')');
+      continue;
+    }
+
+    const rodGroup = allGroupsByName.get('wiperrod_' + sweep.cab + '_' + pane);
+    let pivot2 = pivot1.slice();
+    if (rodGroup) {
+      const rodEnds = barEnds(rodGroup, domain, vpos);
+      const near0 = distanceToSegment(rodEnds[0], a0, b0);
+      const near1 = distanceToSegment(rodEnds[1], a0, b0);
+      pivot2 = near0 <= near1 ? rodEnds[1] : rodEnds[0];
+      if (values.pivot2U === undefined || values.pivot2V === undefined) {
+        fail(scope, 'the model has a ' + rodGroup.name + ' but no pivot2 was written, so the blade would be rotated as if single-axis');
+      } else {
+        const fitted2 = [(values.pivot2U - 0.5) * domain.widthM, (values.pivot2V - 0.5) * domain.heightM];
+        if (Math.hypot(fitted2[0] - pivot2[0], fitted2[1] - pivot2[1]) > ARM_TOL_M) {
+          fail(scope, 'pivot2 ' + fitted2.map(x => x.toFixed(3)) + ' != re-derived ' + pivot2.map(x => x.toFixed(3)));
+        }
+      }
+    } else if (values.pivot2U !== undefined) {
+      fail(scope, 'wrote a pivot2 but the model has no wiperrod_, so the second pivot is unexplained');
+    }
+
+    // M2: the two degenerate cases, evaluated with the CLIENT'S OWN formula over the whole stroke.
+    // The reference is the direction AT PARK: the stroke starts there, so measuring from theta = 0 would
+    // fold the park angle into the drift and "prove" a perfectly correct wiper wrong.
+    const park = values.parkAngleDeg;
+    const sweepDeg = values.sweepDeg;
+    const referenceLength = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+    let referenceDirection = null;
+    let maxDirectionDrift = 0, maxLengthDrift = 0;
+    for (let step = 0; step <= 20; step++) {
+      const theta = park + sweepDeg * step / 20;
+      const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta);
+      const direction = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+      if (referenceDirection === null) referenceDirection = direction;
+      // A blade is a LINE: 180 degrees apart is the same direction, so unwrap into (-90, 90].
+      let drift = direction - referenceDirection;
+      while (drift > 90) drift -= 180;
+      while (drift <= -90) drift += 180;
+      maxDirectionDrift = Math.max(maxDirectionDrift, Math.abs(drift));
+      maxLengthDrift = Math.max(maxLengthDrift, Math.abs(Math.hypot(b[0] - a[0], b[1] - a[1]) - referenceLength));
+    }
+    const coaxial = Math.hypot(pivot2[0] - pivot1[0], pivot2[1] - pivot1[1]) < 1.0E-6;
+    if (coaxial) {
+      // P1 == P2 must reproduce a rigid rotation: the blade's direction turns by exactly theta, and its
+      // length never changes. If this drifts, the formula is not the degenerate case it claims to be.
+      if (Math.abs(maxDirectionDrift - sweepDeg) > 0.05) {
+        fail(scope, 'single-axis (one pivot) but the blade direction drifts ' + maxDirectionDrift.toFixed(3) +
+          ' deg over a ' + sweepDeg.toFixed(3) + ' deg stroke - it must turn by exactly the stroke');
+      }
+      if (maxLengthDrift > 1.0E-6) fail(scope, 'single-axis but the blade length changes by ' + maxLengthDrift.toFixed(6) + ' m');
+      const reach = Math.max(Math.hypot(a0[0] - pivot1[0], a0[1] - pivot1[1]), Math.hypot(b0[0] - pivot1[0], b0[1] - pivot1[1]));
+      if (Math.abs(reach - values.armM) > 0.03) {
+        fail(scope, 'sector radius armM ' + values.armM + ' does not reach the blade (' + reach.toFixed(3) +
+          ' m), so the wiped sector would stop short of what the blade actually touches');
+      }
+      notes.push(scope + ': single-axis, blade turns by exactly the stroke (' + maxDirectionDrift.toFixed(2) + ' deg), reach ' + reach.toFixed(3) + ' m');
+    } else {
+      const linkA = [a0[0] - pivot1[0], a0[1] - pivot1[1]];
+      const linkB = [b0[0] - pivot2[0], b0[1] - pivot2[1]];
+      const residual = Math.hypot(linkA[0] - linkB[0], linkA[1] - linkB[1]);
+      if (residual < 0.005) {
+        // Equal link vectors MUST give a blade that never turns: B - A is constant.
+        if (maxDirectionDrift > 0.05) {
+          fail(scope, 'equal link vectors (residual ' + residual.toFixed(5) + ' m) but the blade still turns ' +
+            maxDirectionDrift.toFixed(3) + ' deg - the parallelogram case is not behaving like one');
+        }
+        notes.push(scope + ': parallelogram, blade direction constant to ' + maxDirectionDrift.toFixed(3) + ' deg over the stroke');
+      } else {
+        notes.push(scope + ': mixed linkage (link residual ' + residual.toFixed(4) + ' m), blade turns ' + maxDirectionDrift.toFixed(2) + ' deg while it moves');
+      }
+    }
   }
 
   // ---- N2 the other way: a glass with a fan must HAVE a fit ---------------------------------------

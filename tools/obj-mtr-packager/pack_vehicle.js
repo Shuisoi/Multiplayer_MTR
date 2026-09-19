@@ -138,9 +138,12 @@ const anchorFaces=[]; let currentRole=null; let currentAnchor=null;
 // mmtr_cabdoor_* is special: it is BOTH a visible part (the driver's door you can see and aim at)
 // and an anchor. Other mmtr_* faces (hud/seat/ack) are pure data and get stripped from the geometry.
 const cabDoorParts=[];
-// wiper_<cab>_<pane>: the solid wiper's own visible parts. Named by convention (no groupMap entry
-// needed) and kept one part per wiper, so each can later be rotated about its own pivot.
+// wiper_<cab>_<pane>: the solid wiper's own visible parts, each named and modelled INDEPENDENTLY -
+// wiper_ (the blade), wiperarm_ (the arm), wiperrod_ (the control rod of a parallel linkage). Kept one
+// part per object so each can be rotated about its own pivot, and collected here so their geometry can
+// be fitted into the mechanism (see fitWiperMechanism).
 const wiperGroups=[];
+const partFaces=[]; let currentPart=null;
 let vi=0;
 // Data-only anchor geometry is dropped entirely: faces stripped AND vertices removed, because an OBJ
 // has no per-group vertex scoping - leaving them in would attach them to whichever group was written
@@ -172,6 +175,7 @@ for(const line of raw.split('\n')){
       const cabDoorMatch=/^mmtr_cabdoor_/i.test(raw2);
       currentAnchor={name:raw2,faces:[]};
       anchorFaces.push(currentAnchor);
+      currentPart=null;
       if(cabDoorMatch){
         // Keep the geometry: the cab door must be visible (and aimable) in game.
         const partName=raw2.replace(/^mmtr_/i,'');
@@ -182,18 +186,26 @@ for(const line of raw.split('\n')){
         currentRole='anchor';
       }
     }
-    else if(cn==='door_l'||cn==='door_r'){ if(!doorGroups.includes(raw2)) doorGroups.push(raw2); currentRole=raw2; currentAnchor=null; out.push('g '+raw2); }
-    // The solid wiper is its OWN part per (cab, pane), like a door leaf - recognised by name, so it
-    // needs no groupMap entry and cannot be swallowed by one. Merging every wiper into a single part
-    // (which is what a generic "wiper" role does) would make them impossible to rotate separately.
-    else if(/^wiper_\d+_\d+$/i.test(raw2)){ if(!wiperGroups.includes(raw2)) wiperGroups.push(raw2); currentRole=raw2; currentAnchor=null; out.push('g '+raw2); }
-    else if(cn){ currentRole=cn; currentAnchor=null; out.push('g '+cn); }
-    else { currentRole=null; currentAnchor=null; }
+    else if(cn==='door_l'||cn==='door_r'){ if(!doorGroups.includes(raw2)) doorGroups.push(raw2); currentRole=raw2; currentAnchor=null; currentPart=null; out.push('g '+raw2); }
+    // Solid wiper parts, each modelled and named INDEPENDENTLY and each kept as its OWN part (so each
+    // can be rotated about its own pivot later): wiper_ = the blade, wiperarm_ = the arm, wiperrod_ =
+    // the control rod of a parallel linkage. Recognised by name, so no groupMap entry is needed - and
+    // a generic role would both merge them into one part and steal names from mmtr_wipersweep_*.
+    else if(/^wiper(arm|rod)?_\d+_\d+$/i.test(raw2)){
+      if(!wiperGroups.includes(raw2)) wiperGroups.push(raw2);
+      currentPart={name:raw2,faces:[]};
+      partFaces.push(currentPart);
+      currentRole=raw2; currentAnchor=null; out.push('g '+raw2);
+    }
+    else if(cn){ currentRole=cn; currentAnchor=null; currentPart=null; out.push('g '+cn); }
+    else { currentRole=null; currentAnchor=null; currentPart=null; }
   }
   else if(t.startsWith('f ')){
     // Anchor faces are always collected (even when the group is also rendered, like the cab door);
     // data-only anchor geometry is not written out at all.
-    if(currentAnchor){ currentAnchor.faces.push(t.split(/\s+/).slice(1).map(x=>+x.split('/')[0])); }
+    const indices=t.split(/\s+/).slice(1).map(x=>+x.split('/')[0]);
+    if(currentAnchor){ currentAnchor.faces.push(indices); }
+    if(currentPart){ currentPart.faces.push(indices); }
     if(currentRole!=='anchor') out.push(remapFace(t));
   }
   else if(t.startsWith('vt ')||t.startsWith('s ')||t.startsWith('usemtl ')) out.push(line);
@@ -525,6 +537,144 @@ function fitWipersweep(group, domain){
   return fit;
 }
 
+/**
+ * The two ends of a bar-shaped part, as (right, up) in the glass's 2D domain.
+ *
+ * <p>Principal-axis fit rather than "the two furthest-apart vertices": for a box the furthest pair is a
+ * DIAGONAL, which would put the blade's ends at opposite corners and make the blade longer than it is.
+ * The principal axis of a long thin box is its long axis, and projecting onto it then taking the
+ * extremes gives the two end faces.</p>
+ */
+function barEnds(faces, domain){
+  const ids=[...new Set(faces.flat())];
+  const points=ids.map(i=>domain.toRightUp(rc(i)));
+  const centre=vAverage(points);
+  let srr=0,sru=0,suu=0;
+  for(const p of points){
+    const dr=p[0]-centre[0], du=p[1]-centre[1];
+    srr+=dr*dr; sru+=dr*du; suu+=du*du;
+  }
+  const theta=0.5*Math.atan2(2*sru, srr-suu);
+  const axis=[Math.cos(theta),Math.sin(theta)];
+  let min=Infinity,max=-Infinity;
+  for(const p of points){
+    const t=(p[0]-centre[0])*axis[0]+(p[1]-centre[1])*axis[1];
+    if(t<min)min=t; if(t>max)max=t;
+  }
+  return [
+    [centre[0]+axis[0]*min, centre[1]+axis[1]*min],
+    [centre[0]+axis[0]*max, centre[1]+axis[1]*max]
+  ];
+}
+
+/** Distance from a point to a segment, used to tell which end of the rod is bolted to the blade. */
+function distanceToSegment(p, a, b){
+  const dx=b[0]-a[0], dy=b[1]-a[1];
+  const lengthSquared=dx*dx+dy*dy;
+  const t=lengthSquared<1e-12 ? 0 : Math.max(0, Math.min(1, ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/lengthSquared));
+  return Math.hypot(p[0]-(a[0]+dx*t), p[1]-(a[1]+dy*t));
+}
+
+/**
+ * Fits the WIPER MECHANISM from the parts the modeller named independently, and answers the question
+ * "does the blade turn, or does it translate?" - the difference between a car wiper and a train's
+ * parallel linkage.
+ *
+ * <p>Both families are the same rigid segment whose two ends each rotate by the same angle about their
+ * OWN pivot:</p>
+ * <pre>
+ *   A(theta) = P1 + R(theta)*(A0 - P1)
+ *   B(theta) = P2 + R(theta)*(B0 - P2)
+ * </pre>
+ * <p>With {@code P1 = P2} (one spindle) that is a rigid rotation - the blade turns with the arm, which
+ * is what a single-axis wiper does. With EQUAL link vectors ({@code A0 - P1 = B0 - P2}, i.e. a
+ * parallelogram) the difference {@code B(theta) - A(theta)} is constant, so the blade keeps its
+ * direction and only TRANSLATES. No branch is needed on the client: it evaluates the same two
+ * expressions either way. See docs §1.4⑤.</p>
+ *
+ * @returns extra fields for the glass's windshield block, or null when the model has no blade part
+ *   (in which case the client keeps drawing its own synthetic blade, exactly as before)
+ */
+function fitWiperMechanism(sweepFit, glass, domain){
+  const pane=glass.pane||1;
+  const blade=partFaces.find(p=>p.name.toLowerCase()==='wiper_'+glass.cab+'_'+pane&&p.faces.length);
+  if(!blade) return null;
+  if(!domain){ console.warn('WARNING: '+blade.name+' cannot be fitted - its glass has no 2D domain.'); return null; }
+
+  const ends=barEnds(blade.faces, domain);
+  const p1=[(sweepFit.pivotU-0.5)*domain.canvasWidthM, (sweepFit.pivotV-0.5)*domain.canvasHeightM];
+  // A = the end nearer the spindle, B = the other. (Which is which only matters as a naming convention,
+  // but it has to be decided by GEOMETRY or the two ends swap with the winding.)
+  const distanceToPivot0=Math.hypot(ends[0][0]-p1[0], ends[0][1]-p1[1]);
+  const distanceToPivot1=Math.hypot(ends[1][0]-p1[0], ends[1][1]-p1[1]);
+  const a0=distanceToPivot0<=distanceToPivot1 ? ends[0] : ends[1];
+  const b0=distanceToPivot0<=distanceToPivot1 ? ends[1] : ends[0];
+
+  const rod=partFaces.find(p=>p.name.toLowerCase()==='wiperrod_'+glass.cab+'_'+pane&&p.faces.length);
+  let p2=p1;
+  let family='single-axis';
+  if(rod){
+    const rodEnds=barEnds(rod.faces, domain);
+    // The rod end bolted to the blade carrier is the one nearest the blade; the other is its pivot.
+    const near0=distanceToSegment(rodEnds[0], a0, b0);
+    const near1=distanceToSegment(rodEnds[1], a0, b0);
+    p2=near0<=near1 ? rodEnds[1] : rodEnds[0];
+    family='parallel linkage';
+    const attachment=near0<=near1 ? rodEnds[0] : rodEnds[1];
+    const attachmentGap=Math.min(near0, near1);
+    if(attachmentGap>0.03){
+      console.warn('WARNING: '+rod.name+' does not reach the blade ('+attachmentGap.toFixed(3)+' m away); check that the rod is modelled from its pivot to the blade carrier.');
+    }
+    // The parallelogram condition, measured: equal link vectors mean the blade neither turns nor changes
+    // length as it sweeps. Report the residual either way - a linkage that is NEARLY a parallelogram is
+    // a real arrangement (the blade turns a little), and the numbers are how the modeller sees which one
+    // they built.
+    const linkA=[a0[0]-p1[0], a0[1]-p1[1]];
+    const linkB=[b0[0]-p2[0], b0[1]-p2[1]];
+    const residual=Math.hypot(linkA[0]-linkB[0], linkA[1]-linkB[1]);
+    family=residual<0.005 ? 'parallelogram (blade translates)' : 'mixed linkage (blade turns while it moves)';
+    console.log('wiper mechanism: '+glass.name+' two pivots '+Math.hypot(p1[0]-p2[0],p1[1]-p2[1]).toFixed(3)+
+      ' m apart, link residual '+residual.toFixed(4)+' m -> '+family);
+    if(attachment[0]!==undefined){ /* the attachment point is only used for the reach check above */ }
+  } else {
+    console.log('wiper mechanism: '+glass.name+' single pivot -> '+family+' (the blade rides the arm)');
+  }
+
+  // The arm, when modelled, is a third cross-check: its far end should land ON the blade segment. NOT
+  // on A0 - a real arm is bolted to the blade's middle, so a blade that extends past the arm on one side
+  // (which is how they are built) is correct, and demanding it end at A0 flags every real wiper.
+  const arm=partFaces.find(p=>p.name.toLowerCase()==='wiperarm_'+glass.cab+'_'+pane&&p.faces.length);
+  if(arm){
+    const armEnds=barEnds(arm.faces, domain);
+    const near=armEnds[0] && Math.hypot(armEnds[0][0]-p1[0], armEnds[0][1]-p1[1])<=Math.hypot(armEnds[1][0]-p1[0], armEnds[1][1]-p1[1]) ? armEnds[0] : armEnds[1];
+    const far=armEnds[0]===near ? armEnds[1] : armEnds[0];
+    const pivotGap=Math.hypot(near[0]-p1[0], near[1]-p1[1]);
+    const bladeGap=distanceToSegment(far, a0, b0);
+    if(pivotGap>0.03||bladeGap>0.03){
+      console.warn('WARNING: '+arm.name+' runs from '+pivotGap.toFixed(3)+' m off the spindle to '+bladeGap.toFixed(3)+
+        ' m off the blade; check the arm against the sector fitted from '+mmtr_sweepLabel(glass)+'.');
+    }
+  }
+
+  const toU=p=>0.5+p[0]/domain.canvasWidthM;
+  const toV=p=>0.5+p[1]/domain.canvasHeightM;
+  const fields={
+    bladeAU:+toU(a0).toFixed(4), bladeAV:+toV(a0).toFixed(4),
+    bladeBU:+toU(b0).toFixed(4), bladeBV:+toV(b0).toFixed(4)
+  };
+  // pivot2 is only written when there IS a second pivot, so a single-axis wiper's block stays small and
+  // the client's default (P2 = P1) applies.
+  if(rod){
+    fields.pivot2U=+toU(p2).toFixed(4);
+    fields.pivot2V=+toV(p2).toFixed(4);
+  }
+  return fields;
+}
+
+function mmtr_sweepLabel(glass){
+  return 'mmtr_wipersweep_'+glass.cab+'_'+(glass.pane||1);
+}
+
 function buildAnchors(){
   const anchors=[];
   const sub=vSub, cr=vCross, nz=vNorm, dot=vDot;
@@ -622,7 +772,14 @@ function buildAnchors(){
       continue;
     }
     const fit=fitWipersweep(g, DOMAINS.get(glass.name));
-    if(fit) SWEEP_FITS.set(glass.name, fit);
+    if(fit){
+      // The modelled parts say whether the blade RIDES the arm (one pivot) or is carried by a
+      // parallelogram linkage (two pivots). This is what makes a train's pantograph wiper work with the
+      // same client code as a car's - see fitWiperMechanism.
+      const mechanism=fitWiperMechanism(fit, glass, DOMAINS.get(glass.name));
+      if(mechanism) for(const key of Object.keys(mechanism)) fit[key]=mechanism[key];
+      SWEEP_FITS.set(glass.name, fit);
+    }
   }
   return anchors;
 }
@@ -643,6 +800,7 @@ const anchors=buildAnchors();
 // "sweepSign has no effect" bug (notes/179 §9.4 #3), and the "droplet physics has no effect" repeat of it.
 const WINDSHIELD_FIELDS=['raindrops','fallMps','maxStreakM','wiper','drawBlade','dualWiper','armM','parkAngleDeg',
                          'sweepDeg','sweepSign','periodS','pivotU','pivotV','bladeWidthM','colour','armColour','snow','twoSided',
+                         'pivot2U','pivot2V','bladeAU','bladeAV','bladeBU','bladeBV',
                          'creepMps','jitterMps','minBeadRadiusM','maxBeadRadiusM','growthMps','spawnPerSecond'];
 function buildWindshieldConfig(){
   const byAnchor={};
