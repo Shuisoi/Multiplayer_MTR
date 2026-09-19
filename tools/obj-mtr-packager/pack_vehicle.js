@@ -212,7 +212,52 @@ for(const line of raw.split('\n')){
   else if(t.startsWith('mtllib ')){ out.push('mtllib '+srcBase.replace(/\.obj$/i,'')+'.mtl'); }
   else if(!t.startsWith('#')) out.push(line);
 }
-const objMain=out.join('\n');
+// MERGE SAME-NAMED GROUPS - without this a vehicle can be present and effectively INVISIBLE.
+//
+// MTR keys its parts by GROUP NAME (nameToObjModels.put(name, model)), so two groups with the same name
+// overwrite each other and only the LAST one is drawn. groupMap deliberately maps SEVERAL source groups
+// onto one role - the BR101's body covers car_body + buffer_beam + buffers + bogies + wiper_motors - so
+// renaming alone left FIVE "g body" blocks in the pack and the train rendered as just the last of them
+// (the wiper motors): the whole shell was there in the file and nothing showed in game. The same trap
+// catches any model whose config maps more than one object to a role.
+//
+// Vertex lines are hoisted into one prelude so the absolute face indices stay valid; then each name is
+// emitted exactly once, with its faces in their original order and each face's `usemtl` replayed.
+function mergeSameNamedGroups(lines){
+  const prelude=[], order=[], faces=new Map(), faceMaterial=new Map();
+  let group=null, material=null;
+  for(const line of lines){
+    const t=line.trim();
+    if(t.startsWith('g ')||t.startsWith('o ')){
+      const name=t.slice(2).trim();
+      if(!faces.has(name)){ faces.set(name,[]); faceMaterial.set(name,[]); order.push(name); }
+      group=name;
+    } else if(t.startsWith('f ')&&group!==null){
+      faces.get(group).push(line);
+      faceMaterial.get(group).push(material);
+    } else if(t.startsWith('usemtl ')){
+      material=t.slice(7).trim();          // replayed per face below, so it stays with its geometry
+    } else {
+      prelude.push(line);
+    }
+  }
+  const merged=prelude.slice();
+  for(const name of order){
+    const list=faces.get(name);
+    if(!list.length) continue;
+    merged.push('g '+name);
+    const materials=faceMaterial.get(name);
+    let last=null;
+    for(let i=0;i<list.length;i++){
+      if(materials[i]!==last){ if(materials[i]) merged.push('usemtl '+materials[i]); last=materials[i]; }
+      merged.push(list[i]);
+    }
+  }
+  const sourceGroups=lines.filter(l=>/^(g|o) /.test(l.trim())).length;
+  if(sourceGroups>order.length) console.log('merged groups: '+sourceGroups+' source group(s) -> '+order.length+' part name(s)');
+  return merged;
+}
+const objMain=mergeSameNamedGroups(out).join('\n');
 
 // ---- MMTR cab HUD anchors: centre + orthonormal frame + size of each mmtr_hud* quad ----------
 //
