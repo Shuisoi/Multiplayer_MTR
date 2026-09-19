@@ -226,3 +226,19 @@ W4 的目视验收要"走进开着的门"上车，而**门怎么开**在清空�
 
 **未做**：补回开门键属于"驾驶室层"（本目标范围之外），而且同样无法离线验证。
 若验收时发现门打不开，再决定是否补一个最小的手动门键（左/右）。
+
+## 14. §13 的补充更正：手动门车**有**开门办法（指挥命令）
+
+§13 说"没有任何键能开手动门车的门"——**键**确实没有，但**命令**有，所以上车验收是可行的：
+`MmtrCommandExecutor`（游戏端）与网页指令栏提供乘务指令，用法见该文件第 282 行的自述：
+
+```
+doors <vehicleId> [open|close|toggle] [left|right|both]      # 缺省 toggle / both
+（网页指令栏的写法：train doors <id> open / train couple <a> <b> / …）
+```
+
+实现在第 424-431 行：调 `vehicle.vehicleExtraData.mmtrSetDoors(action, side)`，**不要求驾驶室、
+不要求编组体车**，并且会回报 `L=… R=… 手动=…`（顺便就能看出这辆车是不是手动门车）。
+同一行还列出了其它乘务指令：`changeends <id>`、`cab <id> <A|B|out>`、`shunt …`、`couple/uncouple`、`trace`。
+
+⇒ 手动门车打不开门不再阻塞验收：车停稳后用 `doors <id> open` 开门，再走进去上车。
