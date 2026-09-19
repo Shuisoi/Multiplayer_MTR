@@ -1801,12 +1801,73 @@ public final class MmtrWindshield {
 			final double theta = (absoluteAngleDeg - parkAngleDeg) * sweepSign;
 			final double widthM = anchor.widthM;
 			final double heightM = anchor.heightM;
+			final double[] p1 = {pivotU * widthM, pivotV * heightM};
+			final double[] p2 = {pivot2U * widthM, pivot2V * heightM};
+			final double[] a0 = {bladeAU * widthM, bladeAV * heightM};
+			final double[] b0 = {bladeBU * widthM, bladeBV * heightM};
 			final double radians = Math.toRadians(theta);
 			final double cos = Math.cos(radians);
 			final double sin = Math.sin(radians);
-			return new double[][]{
-					rotateAbout(pivotU * widthM, pivotV * heightM, bladeAU * widthM, bladeAV * heightM, cos, sin),
-					rotateAbout(pivot2U * widthM, pivot2V * heightM, bladeBU * widthM, bladeBV * heightM, cos, sin)
+			// BOTH ENDS ROTATE BY THE SAME ANGLE - i.e. this is the PARALLELOGRAM (the parallel double
+			// link), which is what the offline verifier checks against the modelled mechanism.
+			//
+			// The general FOUR-BAR is designed and deliberately NOT enabled yet: it replaces this with the
+			// loop closure (B = circle(P2, |B0-P2|) intersect circle(A(theta), |A0-B0|), on the parked
+			// assembly mode), which would also cover a linkage that is NOT a parallelogram - one whose
+			// follower lags or leads the crank. A first implementation did not reproduce the degenerate
+			// case (the verifier reported the blade turning 53 deg where the parallelogram turns 2), so it
+			// is backed out until it has its own offline harness. See notes/187.
+			final double[] a = rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin);
+			return new double[][]{a, rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
+		}
+
+		/**
+		 * UNUSED until the four-bar loop closure is enabled (see bladeSegmentM). Kept because the four-bar
+		 * is designed, its inputs are already fitted, and this is the piece that was wrong.
+		 *
+		 * Which of the follower's two solution circles is the real one - the mechanism's ASSEMBLY MODE.
+		 *
+		 * <p>It never changes while the linkage moves, so it is read off the PARKED configuration rather
+		 * than decided per frame: deciding per frame (nearest to the last position, say) lets the blade
+		 * flip to its mirror position part way through a stroke.</p>
+		 */
+		private static int followMode(double[] p1, double[] p2, double[] a0, double[] b0, double cos, double sin) {
+			final double[] a = rotateAbout(p1[0], p1[1], a0[0], a0[1], 1, 0);
+			final double followerM = Math.hypot(b0[0] - p2[0], b0[1] - p2[1]);
+			final double bladeM = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+			final double[] plus = followerEnd(a, p2, followerM, bladeM, 1);
+			final double[] minus = followerEnd(a, p2, followerM, bladeM, -1);
+			if (plus == null || minus == null) {
+				return 1;
+			}
+			return Math.hypot(plus[0] - b0[0], plus[1] - b0[1]) <= Math.hypot(minus[0] - b0[0], minus[1] - b0[1]) ? 1 : -1;
+		}
+
+		/**
+		 * The follower's end: where a circle of radius {@code followerM} about {@code pivot} meets a circle
+		 * of radius {@code bladeM} about the crank's end {@code a}, on the side {@code mode} says.
+		 *
+		 * <p>This IS the loop closure of the four-bar. A parallelogram satisfies those two circle
+		 * conditions with {@code pivot + R(theta)*(B0-pivot)}, so it comes out of the same expression -
+		 * the parallel double link is the degenerate case, not a special case.</p>
+		 *
+		 * @return null when the circles do not meet (the linkage cannot reach that angle)
+		 */
+		@Nullable
+		private static double[] followerEnd(double[] a, double[] pivot, double followerM, double bladeM, int mode) {
+			final double dx = pivot[0] - a[0];
+			final double dy = pivot[1] - a[1];
+			final double distance = Math.hypot(dx, dy);
+			if (distance < 1.0E-9 || distance > followerM + bladeM || distance < Math.abs(followerM - bladeM)) {
+				return null;
+			}
+			final double along = (distance * distance + followerM * followerM - bladeM * bladeM) / (2 * distance);
+			final double height = Math.sqrt(Math.max(0, followerM * followerM - along * along));
+			final double ux = dx / distance;
+			final double uy = dy / distance;
+			return new double[]{
+					a[0] + ux * along - mode * uy * height,
+					a[1] + uy * along + mode * ux * height
 			};
 		}
 

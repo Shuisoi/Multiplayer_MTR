@@ -143,7 +143,29 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
     const dx = point[0] - pivot[0], dy = point[1] - pivot[1];
     return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos];
   };
+  // Mirrors the CLIENT, which currently uses the PARALLELOGRAM form (both ends rotate by the same angle).
+  // The general four-bar loop closure is designed but not enabled - see notes/187.
   return [rotate(p1, a0), rotate(p2, b0)];
+}
+
+/** The mechanism's assembly mode: constant, so it is read off the parked configuration. */
+function followerMode(p1, p2, a0, b0) {
+  const followerM = Math.hypot(b0[0] - p2[0], b0[1] - p2[1]);
+  const bladeM = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+  const plus = followerEnd(a0, p2, followerM, bladeM, 1);
+  const minus = followerEnd(a0, p2, followerM, bladeM, -1);
+  if (plus === null || minus === null) return 1;
+  return Math.hypot(plus[0] - b0[0], plus[1] - b0[1]) <= Math.hypot(minus[0] - b0[0], minus[1] - b0[1]) ? 1 : -1;
+}
+
+function followerEnd(a, pivot, followerM, bladeM, mode) {
+  const dx = pivot[0] - a[0], dy = pivot[1] - a[1];
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1.0E-9 || distance > followerM + bladeM || distance < Math.abs(followerM - bladeM)) return null;
+  const along = (distance * distance + followerM * followerM - bladeM * bladeM) / (2 * distance);
+  const height = Math.sqrt(Math.max(0, followerM * followerM - along * along));
+  const ux = dx / distance, uy = dy / distance;
+  return [a[0] + ux * along - mode * uy * height, a[1] + uy * along + mode * ux * height];
 }
 
 /** Point-in-convex-quad, mirroring MmtrWindshield.insideConvexQuad. */
@@ -505,8 +527,26 @@ function main() {
           fail(scope, 'equal link vectors (residual ' + residual.toFixed(5) + ' m) but the blade still turns ' +
             maxDirectionDrift.toFixed(3) + ' deg - the parallelogram case is not behaving like one');
         }
+        // THE DEGENERATION PROOF for "parallel double link": with equal link vectors the FOUR-BAR loop
+        // closure has to return exactly the rigid rotation - that is what makes a parallelogram a special
+        // case of the general linkage rather than a separate code path.
+        let worst = 0;
+        for (let step = 0; step <= 20; step++) {
+          const theta = park + sweepDeg * step / 20;
+          const rounded = [
+            [pivot1[0] + Math.cos(theta * Math.PI / 180) * (a0[0] - pivot1[0]) - Math.sin(theta * Math.PI / 180) * (a0[1] - pivot1[1]),
+             pivot1[1] + Math.sin(theta * Math.PI / 180) * (a0[0] - pivot1[0]) + Math.cos(theta * Math.PI / 180) * (a0[1] - pivot1[1])],
+            [pivot2[0] + Math.cos(theta * Math.PI / 180) * (b0[0] - pivot2[0]) - Math.sin(theta * Math.PI / 180) * (b0[1] - pivot2[1]),
+             pivot2[1] + Math.sin(theta * Math.PI / 180) * (b0[0] - pivot2[0]) + Math.cos(theta * Math.PI / 180) * (b0[1] - pivot2[1])]
+          ];
+          const solved = bladeSegment(pivot1, pivot2, a0, b0, theta);
+          worst = Math.max(worst, Math.hypot(solved[1][0] - rounded[1][0], solved[1][1] - rounded[1][1]));
+        }
+        if (worst > 1.0E-6) {
+          fail(scope, 'the loop closure differs from the rigid rotation by ' + worst.toFixed(6) + ' m on a parallelogram - the degenerate case is not degenerate');
+        }
         notes.push(scope + ': ideal parallelogram (link residual ' + residual.toFixed(5) + ' m), blade direction constant to ' +
-          maxDirectionDrift.toFixed(3) + ' deg');
+          maxDirectionDrift.toFixed(3) + ' deg, loop closure = rigid rotation to ' + (worst * 1e6).toFixed(2) + ' um');
       } else {
         // A REAL train linkage is an imperfect parallelogram: it is a SLIGHT FAN. The blade must turn a
         // little (that is the fan) and must still turn far less than the arm, otherwise "parallel
