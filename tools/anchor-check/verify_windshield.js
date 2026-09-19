@@ -146,6 +146,33 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
   return [rotate(p1, a0), rotate(p2, b0)];
 }
 
+/** Point-in-convex-quad, mirroring MmtrWindshield.insideConvexQuad. */
+function insideConvexQuad(px, py, xs, ys) {
+  let positive = false, negative = false;
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    const cross = (xs[j] - xs[i]) * (py - ys[i]) - (ys[j] - ys[i]) * (px - xs[i]);
+    if (cross > 1.0E-9) positive = true;
+    if (cross < -1.0E-9) negative = true;
+  }
+  return !(positive && negative);
+}
+
+/**
+ * THE BAND WIPE, mirroring MmtrWindshield.wipeFactorBand: the region a MODELLED blade cleared is the
+ * quadrilateral between where it was and where it is. This is the only formulation that works for a
+ * parallel linkage, whose blade never passes through a pivot.
+ */
+const WIPE_FADE_M = 0.03;
+
+function bandFactor(px, py, from, to) {
+  const xs = [from[0][0], from[1][0], to[1][0], to[0][0]];
+  const ys = [from[0][1], from[1][1], to[1][1], to[0][1]];
+  if (insideConvexQuad(px, py, xs, ys)) return 1;
+  const d = distanceToSegment([px, py], to[0], to[1]);
+  return d >= WIPE_FADE_M ? 0 : 1 - d / WIPE_FADE_M;
+}
+
 /** A clean, dependency-free re-derivation of the fitted sector, from the fan's own vertices. */
 function fitSector(group, domain, vpos) {
   const counts = new Map();
@@ -383,6 +410,44 @@ function main() {
       } else {
         notes.push(scope + ': mixed linkage (link residual ' + residual.toFixed(4) + ' m), blade turns ' + maxDirectionDrift.toFixed(2) + ' deg while it moves');
       }
+    }
+
+    // M3: the WIPED BAND, only where the client actually uses it. Two properties, either of which a
+    // rotated or mirrored quad test would break:
+    //   (a) every position the blade passes through during the step is inside the band;
+    //   (b) a point well off to the side of the blade's travel is not.
+    //
+    // Only the TWO-PIVOT case is checked here, and that is not laziness: a single-pivot blade turns, so
+    // the straight edges of the quad cut the corner off the arc it really sweeps (by R*(1-cos) over the
+    // step). The client therefore uses the exact angular sector for one pivot and this band for two, and
+    // asserting the band on a rotating blade would demand something the client deliberately does not do.
+    if (!coaxial) {
+      const fromTheta = park + sweepDeg * 0.30;
+      const toTheta = park + sweepDeg * 0.40;
+      const from = bladeSegment(pivot1, pivot2, a0, b0, fromTheta);
+      const to = bladeSegment(pivot1, pivot2, a0, b0, toTheta);
+      let pathMisses = 0;
+      for (let step = 0; step <= 4; step++) {
+        const theta = fromTheta + (toTheta - fromTheta) * step / 4;
+        const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta);
+        for (const point of [a, b, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]]) {
+          if (bandFactor(point[0], point[1], from, to) <= 0) pathMisses++;
+        }
+      }
+      if (pathMisses > 0) {
+        fail(scope, pathMisses + ' point(s) the blade actually passed through are NOT inside the wiped band - the band test is rotated or mirrored against the blade');
+      }
+      // A point half a metre to the side of the blade, measured perpendicular to it, must stay unwiped.
+      const midTo = [(to[0][0] + to[1][0]) / 2, (to[0][1] + to[1][1]) / 2];
+      const along = [to[1][0] - to[0][0], to[1][1] - to[0][1]];
+      const alongLength = Math.hypot(along[0], along[1]) || 1;
+      const beside = [midTo[0] - along[1] / alongLength * 0.5, midTo[1] + along[0] / alongLength * 0.5];
+      if (bandFactor(beside[0], beside[1], from, to) > 0) {
+        fail(scope, 'a point 0.5 m to the side of the blade is counted as wiped - the band is far too wide');
+      }
+      notes.push(scope + ': band covers the blade\'s whole path over the step, and 0.5 m to the side stays unwiped');
+    } else {
+      notes.push(scope + ': one pivot, so the client uses the exact angular sector (the band test would cut the arc corner)');
     }
   }
 

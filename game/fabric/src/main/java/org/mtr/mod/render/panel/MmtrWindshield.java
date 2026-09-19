@@ -155,6 +155,9 @@ public final class MmtrWindshield {
 	 * train at speed look different.
 	 */
 	private static final double AIRFLOW_COEFFICIENT = 0.02;
+	/** How far in FRONT of the blade the film starts thinning, in metres (the band path's equivalent of
+	 * {@link #WIPE_FADE_DEG}, which is an angle and only means anything for a blade through the pivot). */
+	private static final double WIPE_FADE_M = 0.03;
 	/** Ceiling on the acceleration used to throw beads sideways, so a physics glitch cannot smear them. */
 	private static final double MAX_LATERAL_ACCELERATION = 1.2;
 	/** Ceiling on the lateral bead speed (m/s), for the same reason. */
@@ -884,8 +887,19 @@ public final class MmtrWindshield {
 			final double pivotX = config.pivotU * widthM;
 			final double pivotY = (1 - config.pivotV) * heightM;
 			final boolean canWipe = config.wiper && bladeMoving;
+			// A PARALLEL LINKAGE clears a BAND between two blade positions (its blade never passes
+			// through a pivot, so no sector describes it). A single-pivot wiper keeps the angular sector
+			// test it has always used, which is exact for that motion - so every existing model, and every
+			// new single-axis one, behaves exactly as before.
+			final boolean bandWipe = canWipe && config.usesBandWipe();
+			final double[][] bladeFrom = bandWipe ? config.bladeSegmentM(wipedFromDeg, anchor) : null;
+			final double[][] bladeTo = bandWipe ? config.bladeSegmentM(wiperAngleDeg, anchor) : null;
 			if (canWipe) {
-				drawWiperFilm(pivotX, pivotY);
+				if (bandWipe) {
+					drawWiperFilmBand(bladeFrom, bladeTo);
+				} else {
+					drawWiperFilm(pivotX, pivotY);
+				}
 			}
 			final double[] down = panelDown();
 
@@ -896,7 +910,9 @@ public final class MmtrWindshield {
 				final double dropX = drop.x * widthM;
 				final double dropY = drop.y * heightM;
 				if (canWipe) {
-					final double wipe = wipeFactor(dropX, dropY, pivotX, pivotY);
+					final double wipe = bandWipe
+							? wipeFactorBand(dropX, dropY, bladeFrom, bladeTo)
+							: wipeFactor(dropX, dropY, pivotX, pivotY);
 					if (wipe < 0) {
 						continue;
 					}
@@ -995,6 +1011,68 @@ public final class MmtrWindshield {
 		/** Whether a point is being cleared at all; kept for readability at the call site. */
 		private boolean wasWiped(double pointX, double pointY, double pivotX, double pivotY) {
 			return wipeFactor(pointX, pointY, pivotX, pivotY) > 0;
+		}
+
+		/**
+		 * The same question as {@link #wipeFactor}, asked of a MODELLED blade instead of an angular
+		 * sector: is this point inside the band the blade swept since the last repaint?
+		 *
+		 * <p>This is what makes a parallel linkage work. A sector test is only valid when the blade
+		 * passes through the pivot (a single-axis wiper); a pantograph blade does not, it translates
+		 * across the glass, and the region it clears is the quadrilateral between where it was and where
+		 * it is now.</p>
+		 *
+		 * <p>Returns 1 well inside the band, 1..0 across the leading edge, and 0 elsewhere. It never
+		 * returns -1: that value means "skip this bead entirely" to the caller, and a bead the blade has
+		 * not touched must still be DRAWN.</p>
+		 *
+		 * @param from the blade at the previous repaint's angle, {@code {{ax, ay}, {bx, by}}}
+		 * @param to   the blade now
+		 */
+		private static double wipeFactorBand(double pointX, double pointY, double[][] from, double[][] to) {
+			final double[] ax = {from[0][0], from[0][1], to[0][0], to[0][1]};
+			final double[] ay = {from[1][0], from[1][1], to[1][0], to[1][1]};
+			if (insideConvexQuad(pointX, pointY, ax, ay)) {
+				return 1;
+			}
+			// The leading edge: the blade is on its way here, so thin the film and knock the bead back
+			// gradually instead of snapping at a hard line.
+			final double distance = distanceToSegmentM(pointX, pointY, to[0], to[1]);
+			return distance >= WIPE_FADE_M ? 0 : 1 - distance / WIPE_FADE_M;
+		}
+
+		private static boolean insideConvexQuad(double px, double py, double[] xs, double[] ys) {
+			boolean positive = false, negative = false;
+			for (int i = 0; i < 4; i++) {
+				final int j = (i + 1) % 4;
+				final double cross = (xs[j] - xs[i]) * (py - ys[i]) - (ys[j] - ys[i]) * (px - xs[i]);
+				if (cross > 1.0E-9) positive = true;
+				if (cross < -1.0E-9) negative = true;
+			}
+			return !(positive && negative);
+		}
+
+		private static double distanceToSegmentM(double px, double py, double[] a, double[] b) {
+			final double dx = b[0] - a[0];
+			final double dy = b[1] - a[1];
+			final double lengthSquared = dx * dx + dy * dy;
+			final double t = lengthSquared < 1.0E-12 ? 0 : Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / lengthSquared));
+			return Math.hypot(px - (a[0] + dx * t), py - (a[1] + dy * t));
+		}
+
+		/**
+		 * The film the blade is dragging, for a MODELLED blade: the quadrilateral between where the
+		 * blade was at the last repaint and where it is now. For a single-axis wiper that quadrilateral
+		 * is a triangle through the pivot - the sector the old sector-fill drew, minus the arc bulge -
+		 * and for a parallel linkage it is the band that slid across the glass.
+		 */
+		private void drawWiperFilmBand(double[][] from, double[][] to) {
+			canvas.fillPolygon(
+					new double[]{from[0][0], from[1][0], to[1][0], to[0][0]},
+					new double[]{from[0][1], from[1][1], to[1][1], to[0][1]},
+					argb(0x2E, 0xE8F4FF)
+			);
+			canvas.line(to[0][0], to[0][1], to[1][0], to[1][1], 0.02, argb(0x38, 0xFFFFFF));
 		}
 
 		/**
@@ -1559,6 +1637,20 @@ public final class MmtrWindshield {
 		 */
 		private final double pivotU;
 		private final double pivotV;
+		/**
+		 * The SECOND pivot of a parallel-linkage wiper, and the blade's two ends in its parked position.
+		 * All in the same fractions-from-the-left/bottom convention as {@link #pivotU}/{@link #pivotV}.
+		 *
+		 * <p>Absent for a wiper the models does not carry geometry for, in which case the client keeps
+		 * drawing and sweeping its own synthetic blade along the arm - exactly as it always did.</p>
+		 */
+		private final boolean hasBlade;
+		private final double pivot2U;
+		private final double pivot2V;
+		private final double bladeAU;
+		private final double bladeAV;
+		private final double bladeBU;
+		private final double bladeBV;
 
 		// --- droplet physics (all optional; the defaults are tuned for a raked main windscreen) -------
 		/** Ceiling on the upward creep the airflow produces at line speed (m/s). */
@@ -1613,6 +1705,16 @@ public final class MmtrWindshield {
 			dualWiper = getBoolean(json, "dualWiper", false);
 			pivotU = getDouble(json, "pivotU", 0.5);
 			pivotV = getDouble(json, "pivotV", 0.0);
+			final boolean bladeGiven = json.has("bladeAU") && json.has("bladeBU");
+			hasBlade = bladeGiven;
+			bladeAU = getDouble(json, "bladeAU", 0);
+			bladeAV = getDouble(json, "bladeAV", 0);
+			bladeBU = getDouble(json, "bladeBU", 0);
+			bladeBV = getDouble(json, "bladeBV", 0);
+			// No second pivot means the two ends rotate about the SAME point, which is exactly a
+			// single-axis wiper - so a missing pivot2 is not a special case anywhere in the maths.
+			pivot2U = getDouble(json, "pivot2U", pivotU);
+			pivot2V = getDouble(json, "pivot2V", pivotV);
 			creepMps = Math.max(0, getDouble(json, "creepMps", 0.09));
 			jitterMps = Math.max(0, getDouble(json, "jitterMps", 0.008));
 			minBeadRadiusM = Math.max(0.0005, getDouble(json, "minBeadRadiusM", 0.0035));
@@ -1644,6 +1746,63 @@ public final class MmtrWindshield {
 		 */
 		private double armM(Anchor anchor) {
 			return armMConfigured > 0 ? armMConfigured : Math.max(0.05, Math.min(anchor.widthM, anchor.heightM) / 2);
+		}
+
+		/**
+		 * Whether this wiper's blade sweeps a BAND rather than a sector - i.e. whether it has a second
+		 * pivot, which is what a parallel linkage (a train's pantograph wiper) adds.
+		 *
+		 * <p>The split is by GEOMETRY, not by whether the model carries blade art, because the two tests
+		 * are exact for different motions:</p>
+		 * <ul>
+		 *   <li>ONE pivot: the blade passes through the pivot, so the region it clears is exactly the
+		 *       angular sector between park and the blade - the original test, kept unchanged.</li>
+		 *   <li>TWO pivots: the blade never passes through a pivot, so no sector describes it. The quad
+		 *       between two blade positions covers a pure translation exactly (a parallelogram), and for
+		 *       a partially-rotating linkage it is exact to within the arc bulge over one repaint.</li>
+		 * </ul>
+		 */
+		private boolean usesBandWipe() {
+			return hasBlade && (Math.abs(pivot2U - pivotU) > 1.0E-9 || Math.abs(pivot2V - pivotV) > 1.0E-9);
+		}
+
+		/**
+		 * The blade's two ends at a given stroke angle, in canvas METRES with y UP and the origin at the
+		 * bottom-left - the same space the beads are simulated in, so the wiped region can never end up
+		 * mirrored against the beads it is supposed to be clearing.
+		 *
+		 * <p>Both wiper families are these two expressions, and NOTHING else differs between them:</p>
+		 * <pre>
+		 *   A(theta) = P1 + R(theta) * (A0 - P1)
+		 *   B(theta) = P2 + R(theta) * (B0 - P2)
+		 * </pre>
+		 * <p>With one pivot ({@code P1 = P2}) the blade rotates rigidly - a single-axis car wiper. With
+		 * equal link vectors (the parallelogram a train uses) the difference {@code B - A} is constant, so
+		 * the blade keeps its direction and only translates. Both fall out of the geometry; there is no
+		 * branch on "which kind of wiper is this".</p>
+		 *
+		 * @return {@code {{ax, ay}, {bx, by}}}, or null when the model carries no blade geometry
+		 */
+		@Nullable
+		private double[][] bladeSegmentM(double thetaDeg, Anchor anchor) {
+			if (!hasBlade) {
+				return null;
+			}
+			final double widthM = anchor.widthM;
+			final double heightM = anchor.heightM;
+			final double radians = Math.toRadians(thetaDeg);
+			final double cos = Math.cos(radians);
+			final double sin = Math.sin(radians);
+			return new double[][]{
+					rotateAbout(pivotU * widthM, pivotV * heightM, bladeAU * widthM, bladeAV * heightM, cos, sin),
+					rotateAbout(pivot2U * widthM, pivot2V * heightM, bladeBU * widthM, bladeBV * heightM, cos, sin)
+			};
+		}
+
+		private static double[] rotateAbout(double pivotX, double pivotY, double pointX, double pointY, double cos, double sin) {
+			final double dx = pointX - pivotX;
+			final double dy = pointY - pivotY;
+			return new double[]{pivotX + dx * cos - dy * sin, pivotY + dx * sin + dy * cos};
 		}
 
 		private static WindshieldConfig get(String vehicleId, String anchorName) {
