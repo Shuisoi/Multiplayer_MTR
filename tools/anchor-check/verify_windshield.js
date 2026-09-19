@@ -129,14 +129,23 @@ function distanceToSegment(p, a, b) {
  * THE CLIENT'S KINEMATICS, re-implemented. Both wiper families are this pair of expressions; the
  * difference between them falls out of the geometry rather than out of a branch:
  *
- *   A(theta) = P1 + R(theta) * (A0 - P1)
- *   B(theta) = P2 + R(theta) * (B0 - P2)
+ *   M(theta)  = P1 + R(theta) * (M0 - P1)                             the ARM's pin (the driven crank)
+ *   Br(theta) = circle(P2, |Br0-P2|) n circle(M(theta), |Br0-M0|)      the ROD's pin (SOLVED, rigid blade)
+ *   blade     = the rigid motion carrying (M0, Br0) onto (M(theta), Br(theta)), applied to (A0, B0)
  *
- * With P1 = P2 the blade rotates rigidly about the spindle (a car wiper). With equal link vectors the
- * difference B - A is constant, so the blade only translates (a train's parallel linkage).
+ * With P1 = P2 the blade rotates rigidly about the spindle (a car wiper). With equal link vectors the pin
+ * pair keeps its direction, so the blade only translates (a train's parallel linkage).
+ *
+ * THE PINS ARE NOT THE BLADE'S ENDS, and assuming they are is a real defect rather than a simplification:
+ * a wiper pins its arm to the blade's MIDDLE (so the blade is pressed evenly) and its rod near an end, so
+ * the pin span is a fraction of the blade, not its length. This file used to take |B0 - A0| as the pin
+ * span unconditionally, which is only right when the pins happen to BE the ends - i.e. exactly the case
+ * every fixture built so far happened to model. On the first fixture with the arm at the blade's middle it
+ * took a span of 0.60 m where the packager (which recovers the real pins from the mesh by PCA) had 0.30 m,
+ * and the two disagreed about the blade position by 0.45 m while using identical arithmetic.
  * KEEP THIS IN STEP WITH the client when the client grows the same helper.
  */
-function bladeSegment(p1, p2, a0, b0, thetaDeg) {
+function bladeSegment(p1, p2, a0, b0, thetaDeg, m0 = a0, br0 = b0) {
   const radians = thetaDeg * Math.PI / 180;
   const cos = Math.cos(radians), sin = Math.sin(radians);
   const rotate = (pivot, point) => {
@@ -155,8 +164,8 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
   const solutions = crankPin => {
     const dx = p2[0] - crankPin[0], dy = p2[1] - crankPin[1];
     const distance = Math.hypot(dx, dy);
-    const spanM = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
-    const followerM = Math.hypot(b0[0] - p2[0], b0[1] - p2[1]);
+    const spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
+    const followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
     if (distance < 1.0E-9 || distance > spanM + followerM || distance < Math.abs(spanM - followerM)) return null;
     const along = (distance * distance + spanM * spanM - followerM * followerM) / (2 * distance);
     const height = Math.sqrt(Math.max(0, spanM * spanM - along * along));
@@ -166,17 +175,19 @@ function bladeSegment(p1, p2, a0, b0, thetaDeg) {
   };
   // The assembly mode is decided ONCE, from the parked configuration: choosing per angle lets the linkage
   // flip to its mirror branch at a toggle position, which is a real failure mode of this mechanism.
-  const park = solutions(a0);
+  const park = solutions(m0);
   if (park === null) return [rotate(p1, a0), rotate(p2, b0)];
-  const mode = branchIndex(p2, a0, b0, park);
-  const now = solutions(rotate(p1, a0));
+  const mode = branchIndex(p2, m0, br0, park);
+  const now = solutions(rotate(p1, m0));
   if (now === null) return [rotate(p1, a0), rotate(p2, b0)];
-  const m = rotate(p1, a0);
+  const m = rotate(p1, m0);
   const br = now[mode];
-  const turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(b0[1] - a0[1], b0[0] - a0[0]);
+  // The angle the pin PAIR turned through. For a parallelogram the pair keeps its direction, so this is
+  // zero - which is exactly what "the blade does not turn, it translates" means.
+  const turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
   const c = Math.cos(turn), s = Math.sin(turn);
   const apply = point => {
-    const dx = point[0] - a0[0], dy = point[1] - a0[1];
+    const dx = point[0] - m0[0], dy = point[1] - m0[1];
     return [m[0] + dx * c - dy * s, m[1] + dx * s + dy * c];
   };
   return [apply(a0), apply(b0)];
@@ -286,6 +297,11 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
   const armNear0 = distanceToSegment(armEnds[0], bladeEnds[0], bladeEnds[1]);
   const armNear1 = distanceToSegment(armEnds[1], bladeEnds[0], bladeEnds[1]);
   const p1 = armNear0 <= armNear1 ? armEnds[1] : armEnds[0];
+  // ...and the arm's PIN is the arm's OTHER end: the one that sits on the blade. For a car wiper that is
+  // the arm's tip; for a train linkage it is where the arm meets the blade, which a real design puts at
+  // the blade's MIDDLE. Reading it off the arm (instead of taking the blade's end) is what makes a
+  // middle-pin wiper describable at all.
+  const m0 = armNear0 <= armNear1 ? armEnds[0] : armEnds[1];
 
   const near0 = Math.hypot(bladeEnds[0][0] - p1[0], bladeEnds[0][1] - p1[1]);
   const near1 = Math.hypot(bladeEnds[1][0] - p1[0], bladeEnds[1][1] - p1[1]);
@@ -293,11 +309,13 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
   const b0 = near0 <= near1 ? bladeEnds[1] : bladeEnds[0];
 
   let p2 = p1.slice();
+  let br0 = b0;
   if (rodGroup) {
     const rodEnds = barEnds(rodGroup, domain, vpos);
     const d0 = distanceToSegment(rodEnds[0], a0, b0);
     const d1 = distanceToSegment(rodEnds[1], a0, b0);
     p2 = d0 <= d1 ? rodEnds[1] : rodEnds[0];
+    br0 = d0 <= d1 ? rodEnds[0] : rodEnds[1];   // the end NEAR the blade is the rod's pin
   }
 
   // Every rim edge that is not incident to the apex is a boundary candidate.
@@ -312,11 +330,10 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
     }
   }
 
-  // Mirrors the packager and the client. The PINS are taken to be the blade's ends, which is exactly what
-  // the fixture models (arm pinned at one end, rod at the other); a model with the arm pinned to the
-  // blade's MIDDLE needs the pins passed in, and until such a fixture exists the synthetic unit check
-  // checkPinKinematics is what covers that case.
-  const bladeAt = phi => bladeSegment(p1, p2, a0, b0, phi);
+  // Mirrors the packager and the client, with the PINS as the linkage's input: they are read off the arm
+  // and the rod (the ends nearest the blade), never off the blade's ends, so a model whose arm is pinned
+  // to the blade's MIDDLE is described by its real mechanism instead of by an assumption.
+  const bladeAt = phi => bladeSegment(p1, p2, a0, b0, phi, m0, br0);
 
   let best = null;
   for (const edge of edges) {
@@ -332,7 +349,7 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
     sweepSign: best.phi < 0 ? -1 : 1,
     onEdge: best.on,
     parkAngleDeg: Math.atan2(b0[1] - a0[1], b0[0] - a0[0]) * 180 / Math.PI,
-    pivot1: p1, pivot2: p2, a0, b0
+    pivot1: p1, pivot2: p2, a0, b0, m0, br0
   };
 }
 
@@ -614,6 +631,21 @@ function main() {
     const a0 = dA <= dB ? bladeEnds[0] : bladeEnds[1];
     const b0 = dA <= dB ? bladeEnds[1] : bladeEnds[0];
 
+    // The PINS, re-derived from the parts exactly as the packager does: the arm's end NEAR the blade is
+    // the arm's pin (the other end is the spindle) and the rod's end near the blade is the rod's pin.
+    // These are the linkage's real inputs, and they are NOT the blade's ends whenever the arm is pinned to
+    // the blade's middle - the case the old "pins are the ends" assumption mis-described by a factor of two
+    // in the pin span, and so could not check at all.
+    const armGroup = allGroupsByName.get('wiperarm_' + sweep.cab + '_' + pane);
+    let m0 = a0;
+    if (armGroup) {
+      const armEnds = barEnds(armGroup, domain, vpos);
+      const e0 = distanceToSegment(armEnds[0], a0, b0);
+      const e1 = distanceToSegment(armEnds[1], a0, b0);
+      m0 = e0 <= e1 ? armEnds[0] : armEnds[1];
+    }
+    let br0 = b0;
+
     const fittedA = [(values.bladeAU - 0.5) * domain.widthM, (values.bladeAV - 0.5) * domain.heightM];
     const fittedB = [(values.bladeBU - 0.5) * domain.widthM, (values.bladeBV - 0.5) * domain.heightM];
     const pairGap = Math.min(
@@ -632,6 +664,7 @@ function main() {
       const near0 = distanceToSegment(rodEnds[0], a0, b0);
       const near1 = distanceToSegment(rodEnds[1], a0, b0);
       pivot2 = near0 <= near1 ? rodEnds[1] : rodEnds[0];
+      br0 = near0 <= near1 ? rodEnds[0] : rodEnds[1];   // the end NEAR the blade is the rod's pin
       if (values.pivot2U === undefined || values.pivot2V === undefined) {
         fail(scope, 'the model has a ' + rodGroup.name + ' but no pivot2 was written, so the blade would be rotated as if single-axis');
       } else {
@@ -644,6 +677,44 @@ function main() {
       fail(scope, 'wrote a pivot2 but the model has no wiperrod_, so the second pivot is unexplained');
     }
 
+    // THE PINS THE PACKAGER WROTE must be the pins the parts actually have. This is the assertion with
+    // teeth for the middle-pin case: a fallback to "the pins are the blade's ends" (which is what this
+    // verifier itself used to do, and what the packager does when it cannot find an arm or a rod) puts the
+    // arm pin at the wrong end of the blade and gets the span wrong by a factor, and it fires here.
+    if (values.pinAU !== undefined && values.pinAV !== undefined) {
+      const fittedM = [(values.pinAU - 0.5) * domain.widthM, (values.pinAV - 0.5) * domain.heightM];
+      if (Math.hypot(fittedM[0] - m0[0], fittedM[1] - m0[1]) > ARM_TOL_M) {
+        fail(scope, 'the arm pin was written as (' + fittedM.map(x => x.toFixed(3)) + ') but the modelled arm meets the blade at (' +
+          m0.map(x => x.toFixed(3)) + ')');
+      }
+    } else {
+      notes.push(scope + ': no arm pin written (pinAU/pinAV), so the fitted pins are not cross-checked against the parts');
+    }
+    if (values.pinBU !== undefined && values.pinBV !== undefined) {
+      const fittedR = [(values.pinBU - 0.5) * domain.widthM, (values.pinBV - 0.5) * domain.heightM];
+      if (Math.hypot(fittedR[0] - br0[0], fittedR[1] - br0[1]) > ARM_TOL_M) {
+        fail(scope, 'the rod pin was written as (' + fittedR.map(x => x.toFixed(3)) + ') but the modelled rod meets the blade at (' +
+          br0.map(x => x.toFixed(3)) + ')');
+      }
+    } else if (rodGroup) {
+      notes.push(scope + ': the model has a rod but no rod pin was written (pinBU/pinBV), so the fitted pins are not cross-checked');
+    }
+
+    // The two PINS must sit ON the blade: that is what "the arm is bolted to the blade" means, and it is
+    // the property that makes the pin span a fraction of the blade instead of the whole of it. Not
+    // tautological - the pins come from the arm and rod meshes, the blade from its own - and it is the
+    // assertion a fallback to "the pins are the ends" cannot satisfy on a middle-pin wiper.
+    const armPinGap = distanceToSegment(m0, a0, b0);
+    if (armPinGap > ARM_TOL_M) {
+      fail(scope, 'the arm meets the blade ' + (armPinGap * 1000).toFixed(1) + ' mm off it - the arm pin must be ON the blade');
+    }
+    if (rodGroup) {
+      const rodPinGap = distanceToSegment(br0, a0, b0);
+      if (rodPinGap > ARM_TOL_M) {
+        fail(scope, 'the rod meets the blade ' + (rodPinGap * 1000).toFixed(1) + ' mm off it - the rod pin must be ON the blade');
+      }
+    }
+
     // M2: the two degenerate cases, evaluated with the CLIENT'S OWN formula over the whole stroke.
     // The reference is the direction AT PARK: the stroke starts there, so measuring from theta = 0 would
     // fold the park angle into the drift and "prove" a perfectly correct wiper wrong.
@@ -654,7 +725,7 @@ function main() {
     let maxDirectionDrift = 0, maxLengthDrift = 0;
     for (let step = 0; step <= 20; step++) {
       const theta = sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
-      const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta);
+      const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta, m0, br0);
       const direction = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
       if (referenceDirection === null) referenceDirection = direction;
       // A blade is a LINE: 180 degrees apart is the same direction, so unwrap into (-90, 90].
@@ -680,8 +751,8 @@ function main() {
       }
       notes.push(scope + ': single-axis, blade turns by exactly the stroke (' + maxDirectionDrift.toFixed(2) + ' deg), reach ' + reach.toFixed(3) + ' m');
     } else {
-      const linkA = [a0[0] - pivot1[0], a0[1] - pivot1[1]];
-      const linkB = [b0[0] - pivot2[0], b0[1] - pivot2[1]];
+      const linkA = [m0[0] - pivot1[0], m0[1] - pivot1[1]];
+      const linkB = [br0[0] - pivot2[0], br0[1] - pivot2[1]];
       const residual = Math.hypot(linkA[0] - linkB[0], linkA[1] - linkB[1]);
       if (residual < 0.005) {
         // Equal link vectors MUST give a blade that never turns: B - A is constant.
@@ -695,13 +766,11 @@ function main() {
         let worst = 0;
         for (let step = 0; step <= 20; step++) {
           const theta = sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
-          const rounded = [
-            [pivot1[0] + Math.cos(theta * Math.PI / 180) * (a0[0] - pivot1[0]) - Math.sin(theta * Math.PI / 180) * (a0[1] - pivot1[1]),
-             pivot1[1] + Math.sin(theta * Math.PI / 180) * (a0[0] - pivot1[0]) + Math.cos(theta * Math.PI / 180) * (a0[1] - pivot1[1])],
-            [pivot2[0] + Math.cos(theta * Math.PI / 180) * (b0[0] - pivot2[0]) - Math.sin(theta * Math.PI / 180) * (b0[1] - pivot2[1]),
-             pivot2[1] + Math.sin(theta * Math.PI / 180) * (b0[0] - pivot2[0]) + Math.cos(theta * Math.PI / 180) * (b0[1] - pivot2[1])]
-          ];
-          const solved = bladeSegment(pivot1, pivot2, a0, b0, theta);
+          // The ideal-parallelogram prediction, pin-based: rotate BOTH pins about their own pivots. That is
+          // only valid for a parallelogram, which is exactly the case being proved here - for any other
+          // linkage the follower's pin has to be SOLVED, and that is what the loop closure does.
+          const rounded = pinMotion(pivot1, pivot2, m0, br0, a0, b0, theta);
+          const solved = bladeSegment(pivot1, pivot2, a0, b0, theta, m0, br0);
           worst = Math.max(worst, Math.hypot(solved[1][0] - rounded[1][0], solved[1][1] - rounded[1][1]));
         }
         if (worst > 1.0E-6) {
@@ -739,12 +808,12 @@ function main() {
     if (!coaxial) {
       const fromTheta = sweepDeg * 0.30;
       const toTheta = sweepDeg * 0.40;
-      const from = bladeSegment(pivot1, pivot2, a0, b0, fromTheta);
-      const to = bladeSegment(pivot1, pivot2, a0, b0, toTheta);
+      const from = bladeSegment(pivot1, pivot2, a0, b0, fromTheta, m0, br0);
+      const to = bladeSegment(pivot1, pivot2, a0, b0, toTheta, m0, br0);
       let pathMisses = 0;
       for (let step = 0; step <= 4; step++) {
         const theta = fromTheta + (toTheta - fromTheta) * step / 4;
-        const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta);
+        const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta, m0, br0);
         for (const point of [a, b, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]]) {
           if (bandFactor(point[0], point[1], from, to) <= 0) pathMisses++;
         }

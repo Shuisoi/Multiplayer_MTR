@@ -169,14 +169,38 @@ function followerPin(p1, p2, m0, br0, thetaDeg) {
   return now[mode];
 }
 
-function sweptRegionFan(name, planeX, centreY, centreZ, p1, p2, a0, b0, strokeDeg) {
-  const a1 = rotateAbout(p1, a0, strokeDeg);
-  // ONE pivot means the blade rides the arm (single axis), so both ends turn about the spindle. TWO pivots
-  // means a linkage, and there the follower end must be SOLVED - rotating it independently is the very
-  // assumption this fixture exists to catch.
-  const b1 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) < 1.0e-9
-    ? rotateAbout(p2, b0, strokeDeg)
-    : followerPin(p1, p2, a0, b0, strokeDeg);
+/**
+ * The blade's two ends after the arm has turned theta, driven by the PIN PAIR.
+ *
+ * The blade is a RIGID body, so it moves by the rigid motion that carries its parked pins onto their
+ * current positions - it is not "one end rotates about a spindle". Those two descriptions agree only when
+ * the pins happen to BE the ends, which is what every fixture here used to model: with the arm pinned to
+ * the blade's MIDDLE the pin span is 0.30 m while |B0 - A0| is 0.60 m, and building the region from the
+ * ends then produces a boundary that the packager (which recovers the real pins from the mesh) cannot
+ * reproduce. That mismatch was measured at 0.45 m.
+ *
+ * ONE pivot means the blade rides the arm, so it rotates rigidly about the spindle - which is exactly what
+ * the loop closure degenerates to when the two pins turn about a common centre, and it is written out
+ * separately because a pure translation is the WRONG rigid motion in that case.
+ */
+function carriedBlade(p1, p2, m0, br0, a0, b0, thetaDeg) {
+  if (Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) < 1.0e-9) {
+    return [rotateAbout(p1, a0, thetaDeg), rotateAbout(p1, b0, thetaDeg)];
+  }
+  const m = rotateAbout(p1, m0, thetaDeg);
+  // The follower's pin is SOLVED, never rotated independently - see followerPin.
+  const br = followerPin(p1, p2, m0, br0, thetaDeg);
+  const turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
+  const c = Math.cos(turn), s = Math.sin(turn);
+  const apply = point => {
+    const dx = point[0] - m0[0], dy = point[1] - m0[1];
+    return [m[0] + dx * c - dy * s, m[1] + dx * s + dy * c];
+  };
+  return [apply(a0), apply(b0)];
+}
+
+function sweptRegionFan(name, planeX, centreY, centreZ, p1, p2, a0, b0, strokeDeg, m0 = a0, br0 = b0) {
+  const [a1, b1] = carriedBlade(p1, p2, m0, br0, a0, b0, strokeDeg);
   const apex = lineIntersection(a0, [b0[0] - a0[0], b0[1] - a0[1]], a1, [b1[0] - a1[0], b1[1] - a1[1]]) || a0;
   fan(name, planeX, centreY, centreZ, apex, [a0, b0, b1, a1]);
   return apex;
@@ -249,6 +273,31 @@ sweptRegionFan('mmtr_wipersweep_1_3', 0, 1.6, 3.6, Q1, Q2, QA, QB, Q_SWEEP);
 segmentBox('wiperarm_1_3', 0, 1.6, 3.6, Q1, QA, 0.018, 0.018);
 segmentBox('wiperrod_1_3', 0, 1.6, 3.6, Q2, QB, 0.014, 0.014);
 segmentBox('wiper_1_3', 0, 1.6, 3.6, QA, QB, 0.022, 0.018);
+
+// ---- cab 1, pane 4: a linkage whose ARM IS PINNED TO THE BLADE'S MIDDLE ---------------------------
+// Glass centred on (0, 1.6, 5.4), 1.2 x 1.2 m. Domain: right/up -0.6..0.6.
+//
+// THIS is the case worth testing, and the one the first attempt got wrong twice over:
+//   (a) the arm's pin is at the blade's MIDDLE, so the pins are NOT the blade's ends: the pin span is
+//       0.30 m while the blade is 0.60 m long. A harness that reads the span off the blade is wrong by a
+//       factor of two and cannot describe this wiper at all;
+//   (b) the two link vectors must DIFFER, or the mechanism is a perfect parallelogram, whose cleared
+//       region is a pure BAND - it has no apex at all, so a triangle fan cannot express it (the two
+//       blade positions come out parallel, the apex line-intersection degenerates, and the rim collapses
+//       to two lines). A real train linkage is an IMPERFECT parallelogram; the 0.01 m below is that.
+const R1 = [0.0, 0.0];                    // the arm's spindle
+const R2 = [0.0, 0.31];                   // the rod's spindle (0.01 m out of parallel on purpose)
+const RA_MID = [0.4, -0.05];              // the arm's pin: the MIDDLE of the blade
+const RB = [0.4, 0.25];                   // the rod's pin: the blade's upper end
+const R_A0 = [0.4, -0.35];                // the blade's ends: RA_MID is exactly halfway between them
+const R_B0 = [0.4, 0.25];
+const R_SWEEP = 35;
+
+glass('mmtr_windshield_1_4', 0, 1.6, 5.4, 0.6, 0.6);
+sweptRegionFan('mmtr_wipersweep_1_4', 0, 1.6, 5.4, R1, R2, R_A0, R_B0, R_SWEEP, RA_MID, RB);
+segmentBox('wiperarm_1_4', 0, 1.6, 5.4, R1, RA_MID, 0.018, 0.018);
+segmentBox('wiperrod_1_4', 0, 1.6, 5.4, R2, RB, 0.014, 0.014);
+segmentBox('wiper_1_4', 0, 1.6, 5.4, R_A0, R_B0, 0.022, 0.018);
 
 // ---- cab 2: a screen named with a SINGLE index ----------------------------------------------------
 glass('mmtr_windshield_2', 0, 1.6, -2.1, 0.5, 0.6);

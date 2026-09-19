@@ -595,9 +595,24 @@ function normaliseLineAngle(degrees){
   return value;
 }
 
+/**
+ * The rotation taking one LINE direction to another, folded into (-90, 90].
+ *
+ * NOT normaliseLineAngle, and the distinction is a real defect rather than pedantry: folding a
+ * DIFFERENCE into [0, 180) turns a small turn in the negative sense into ~180. Measured on the
+ * middle-pin fixture, the blade turns -1.27 deg and was reported as "turns 178.73 deg", which then
+ * tripped the "strong rotation for a linkage - consider a single-axis model instead" warning on a
+ * perfectly correct linkage. A direction folds into [0,180); a rotation amount folds into (-90, 90].
+ */
+function lineDeltaDeg(fromDeg,toDeg){
+  let value=(toDeg-fromDeg)%180;
+  if(value>90) value-=180;
+  while(value<=-90) value+=180;
+  return value;
+}
+
 function normaliseDegrees360(degrees){
-  let value=degrees%360;
-  if(value<0) value+=360;
+  let value=degrees%360;  if(value<0) value+=360;
   return value;
 }
 
@@ -877,24 +892,37 @@ function fitWiperMechanism(sweepFit, glass, domain){
   // against 2.13 deg on the swept-region fixture - and the real one is what the linkage actually does.
   {
     const directionOf=pair=>Math.atan2(pair[1][1]-pair[0][1],pair[1][0]-pair[0][0])*180/Math.PI;
-    bladeTurnDeg=Math.abs(normaliseLineAngle(directionOf(bladeAt(strokeSign*strokeDeg))-directionOf(bladeAt(0))));
+    bladeTurnDeg=Math.abs(lineDeltaDeg(directionOf(bladeAt(0)), directionOf(bladeAt(strokeSign*strokeDeg))));
   }
 
   // THE SUCCESS CRITERION for the loop closure: the pin span must not change, at ANY angle. The blade is
   // rigid, so a linkage that fails this is not describing the mechanism the modeller built - and if it
   // fails, everything downstream (the stroke, the wiped band, the part rotation) is built on sand.
   if(rod){
-    let worstSpan=0, unreachable=false;
-    for(let phi=-180;phi<=180;phi+=2.5){
+    let worstSpan=0, unreachable=false, failedAt=0;
+    // THE STROKE, not a full revolution. A limited-stroke wiper linkage physically cannot be cranked all
+    // the way round - past its stroke the crank points at the second spindle and the two circles stop
+    // meeting - so demanding every angle fails a correct mechanism (it did: the first middle-pin fixture
+    // is assemblable over its 35 deg stroke and over nothing else). The criterion is conservation over
+    // the whole STROKE, which is what is measured here.
+    for(let step=0;step<=40;step++){
+      const phi=strokeSign*strokeDeg*step/40;
       const pair=pinPairAt(phi);
-      if(pair===null){ unreachable=true; break; }
+      if(pair===null){ unreachable=true; failedAt=phi; break; }
       worstSpan=Math.max(worstSpan,Math.abs(Math.hypot(pair[1][0]-pair[0][0],pair[1][1]-pair[0][1])-pinSpan));
     }
     if(unreachable){
-      console.warn('WARNING: '+glass.name+' the linkage cannot be assembled at every angle - check the arm and rod lengths against the pivot spacing.');
+      console.warn('WARNING: '+glass.name+' the linkage cannot be assembled at '+failedAt.toFixed(2)+
+        ' deg, i.e. INSIDE its '+strokeDeg.toFixed(2)+' deg stroke - check the arm and rod lengths against the pivot spacing.');
     } else {
       console.log('wiper linkage: '+glass.name+' pin span '+pinSpan.toFixed(4)+' m conserved to '+(worstSpan*1e6).toFixed(3)+
-        ' um over a full revolution'+(worstSpan<1.0E-9?'':' *** THE BLADE IS RIGID, SO THIS MUST BE ZERO ***'));
+        ' um over the whole '+strokeDeg.toFixed(2)+' deg stroke'+(worstSpan<1.0E-9?'':' *** THE BLADE IS RIGID, SO THIS MUST BE ZERO ***'));
+    }
+    // Extra information, explicitly NOT a defect: how far the linkage can be cranked before it comes apart.
+    let fullRevolution=true;
+    for(let phi=-180;phi<=180;phi+=2.5){ if(pinPairAt(phi)===null){ fullRevolution=false; break; } }
+    if(!fullRevolution){
+      console.log('wiper linkage: '+glass.name+' (assembled over its stroke only, not over a full revolution - normal for a limited-stroke wiper)');
     }
   }
 
