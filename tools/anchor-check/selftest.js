@@ -143,6 +143,30 @@ const SUITES = [
         name: 'sector radius too short to reach the blade',
         expect: 'does not reach the blade',
         apply: data => { data.windshield.windshield_1_1.armM *= 0.6; }
+      },
+      {
+        // The pins are the linkage's INPUTS and they are NOT the blade's ends: on windshield_1_4 the arm is
+        // pinned to the blade's MIDDLE, so writing the arm pin at a blade end is exactly what the "pins are
+        // the ends" fallback produces (and what this verifier itself used to do unconditionally). This is
+        // the injection that proves the new cross-check against the arm mesh has teeth rather than merely
+        // restating the fitted fields.
+        name: 'the arm pin written at a blade END instead of the blade\'s MIDDLE',
+        expect: 'the arm pin was written as',
+        apply: data => {
+          const w = data.windshield.windshield_1_4;
+          w.pinAU = w.bladeAU;
+          w.pinAV = w.bladeAV;
+        }
+      },
+      {
+        name: 'the two pins swapped (the rod pin put where the arm pin belongs)',
+        expect: 'the rod pin was written as',
+        apply: data => {
+          const w = data.windshield.windshield_1_4;
+          const u = w.pinBU, v = w.pinBV;
+          w.pinBU = w.pinAU; w.pinBV = w.pinAV;
+          w.pinAU = u; w.pinAV = v;
+        }
       }
     ]
   }
