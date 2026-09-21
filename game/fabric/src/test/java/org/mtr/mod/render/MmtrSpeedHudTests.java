@@ -66,4 +66,25 @@ public final class MmtrSpeedHudTests {
 		assertEquals(0, MmtrSpeedHud.digitOffset(0, cellWidth, cellWidth), "与格子一样宽的数字（取最大格宽）从 0 开始");
 		assertTrue(MmtrSpeedHud.digitOffset(2, WIDTHS[8], cellWidth) < 27, "第三位仍在整块内");
 	}
+
+	/** 版位：**右对齐**（用户 2026-09-21 由左下角改为右下角）。 */
+	@Test
+	public void theBlockIsFlushWithTheRightEdge() {
+		final int[] windowWidths = {320, 427, 640, 854, 1920};
+		final float[] scales = {2F, 4F, 4.5F};
+		for (final int windowWidth : windowWidths) {
+			for (final float scale : scales) {
+				for (final int cellWidth : new int[]{8, 9, 11, 13}) {
+					final int edgePadding = 8;
+					final int left = MmtrSpeedHud.blockLeft(windowWidth, cellWidth, scale, edgePadding);
+					final int right = left + Math.round(3 * cellWidth * scale);
+					// ① 右边缘钉在"屏宽 - 留白" ⇒ 读数不会随数字宽度左右移动
+					assertEquals(windowWidth - edgePadding, right,
+						"屏宽 " + windowWidth + " 格宽 " + cellWidth + " 缩放 " + scale);
+					// ② 整块必须还在屏幕里（窗口别太窄）
+					assertTrue(left >= 0, "屏宽 " + windowWidth + " 下整块跑到屏幕外了：" + left);
+				}
+			}
+		}
+	}
 }

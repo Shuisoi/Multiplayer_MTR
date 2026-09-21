@@ -13,7 +13,7 @@ import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 
 /**
- * 屏幕**左下角的大号速度读数**：三位数字、DIN 1451、**右斜体**（notes/223）。
+ * 屏幕**右下角的大号速度读数**：三位数字、DIN 1451、**右斜体**（notes/223）。
  *
  * <h2>为什么逐位排版，而不是整串画一次</h2>
  *
@@ -22,6 +22,9 @@ import org.mtr.mod.data.VehicleExtension;
  * 整块往左缩一截），这在读数是唯一信息时非常刺眼。做法是给每位一个**固定格宽**（取 0–9 里最宽的
  * 那一位量出来），各位在自己的格子里**居中**：格子中心与"这一位是谁"无关，于是 1 和 8 占同样的版位、
  * 整块宽度恒定、数字在原地变化。</p>
+ *
+ * <p>版位靠**右**对齐（用户 2026-09-21 由左下角改为右下角）：整块的右边缘钉在
+ * {@code 屏宽 - EDGE_PADDING}，所以三位数的宽度变化不会让读数左右移动。</p>
  *
  * <h2>斜体</h2>
  *
@@ -75,7 +78,7 @@ public final class MmtrSpeedHud {
 
 		final Window window = minecraftClient.getWindow();
 		final int cellWidth = cellWidth();
-		final int left = EDGE_PADDING;
+		final int left = blockLeft(window.getScaledWidth(), cellWidth, SCALE, EDGE_PADDING);
 		final int top = window.getScaledHeight() - EDGE_PADDING - Math.round(IGui.TEXT_HEIGHT * SCALE);
 
 		graphicsHolder.push();
@@ -101,6 +104,16 @@ public final class MmtrSpeedHud {
 	 */
 	static int digitOffset(int index, int digitWidth, int cellWidth) {
 		return index * cellWidth + (cellWidth - digitWidth) / 2;
+	}
+
+	/**
+	 * 整块的左边缘（缩放前像素）——**右对齐**：右边缘钉在 {@code 屏宽 - edgePadding}。
+	 *
+	 * <p>同样抽成纯函数以便单测：{@code blockLeft + 整块宽度 == 屏宽 - 留白}，于是"三位数字宽度变化
+	 * 不会让读数左右移动"这条在缩放后依然成立（缩放前对齐、缩放后仍对齐）。</p>
+	 */
+	static int blockLeft(int scaledWindowWidth, int cellWidth, float scale, int edgePadding) {
+		return scaledWindowWidth - edgePadding - Math.round(DIGITS * cellWidth * scale);
 	}
 
 	/** 固定格宽：0–9 里最宽的那位 + 呼吸。 */
