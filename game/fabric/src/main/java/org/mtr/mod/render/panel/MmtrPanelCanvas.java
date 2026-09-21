@@ -40,6 +40,11 @@ public final class MmtrPanelCanvas {
 	/** Panels are small; anything bigger than this is a modelling mistake, so clamp instead of exploding. */
 	private static final int MAX_PIXELS = 512;
 	private static final int MIN_PIXELS = 8;
+	/**
+	 * 屏幕 HUD 用的上限（notes/227）：HUD 要按**窗口缩放率**栅格化（高 GUI 缩放下远超 512），
+	 * 所以走 {@link #createExactPixels} 这条入口 —— 面板那条 512 的防呆上限保持不动。
+	 */
+	private static final int MAX_HUD_PIXELS = 4096;
 
 	private MmtrPanelCanvas(double widthM, double heightM, int pxPerMetre) {
 		this.widthM = Math.max(widthM, 1.0E-3);
@@ -94,6 +99,24 @@ public final class MmtrPanelCanvas {
 		this.scaleY = 1;
 		image = null;
 		graphics = null;
+	}
+
+	/**
+	 * 画布按**给定像素数**建成（长边不再被 512 夹住，只留 {@link #MAX_HUD_PIXELS} 的防爆上限）。
+	 *
+	 * <p>给屏幕 HUD 用（notes/227）：HUD 要按窗口缩放率栅格化才够锐 —— 例如 208×104 GUI 单位、
+	 * 缩放率 3 时要 624×312 像素，而面板那条 {@link #createPixels} 会把它夹到 512 长边。</p>
+	 */
+	public static MmtrPanelCanvas createExactPixels(double widthM, double heightM, int widthPx, int heightPx) {
+		final double safeWidthM = Math.max(widthM, 1.0E-3);
+		final double safeHeightM = Math.max(heightM, 1.0E-3);
+		final int clampedWidthPx = Math.max(1, Math.min(MAX_HUD_PIXELS, widthPx));
+		final int clampedHeightPx = Math.max(1, Math.min(MAX_HUD_PIXELS, heightPx));
+		final MmtrPanelCanvas canvas = new MmtrPanelCanvas(safeWidthM, safeHeightM);
+		canvas.scaleX = clampedWidthPx / safeWidthM;
+		canvas.scaleY = clampedHeightPx / safeHeightM;
+		canvas.replaceImage(clampedWidthPx, clampedHeightPx);
+		return canvas;
 	}
 
 	private void replaceImage(int widthPx, int heightPx) {
@@ -238,7 +261,12 @@ public final class MmtrPanelCanvas {
 		);
 	}
 
-	/** A filled convex polygon; the two arrays are x/y pairs in metres and must have the same length. */
+	/**
+	 * A filled polygon; the two arrays are x/y pairs in metres and must have the same length.
+	 *
+	 * <p>Implemented with {@code Path2D} + a non-zero winding fill, so a simple NON-convex outline
+	 * (such as the speed HUD's wedge-plus-plate) fills correctly too - it does not have to be convex.</p>
+	 */
 	public MmtrPanelCanvas fillPolygon(double[] xs, double[] ys, int color) {
 		final int count = Math.min(xs.length, ys.length);
 		if (count < 3) {
@@ -292,20 +320,133 @@ public final class MmtrPanelCanvas {
 		return this;
 	}
 
+	/**
+	 * {@link #text} 的**斜体**版：把字形按 {@code shear} 水平错切（Java2D 仿射变换），
+	 * 正数 = **向右倾**（屏幕坐标 y 向下，所以内部取 {@code -shear}）。
+	 *
+	 * <p>错切中心取**墨迹框的水平中点**：这样居中对齐的读数（如速度的每一位）倾斜后视觉中心不动 ——
+	 * 与"逐位中点固定"那条要求同一目的（notes/223/227）。</p>
+	 *
+	 * <p>为什么不用 MC 的 {@code Style.withItalic}：那是给 MC 字体系统的位图字形加偏移，而 HUD 现在整幅
+	 * 由 Java2D 栅格化（要抗锯齿与大字号下的锐度），字形来源不同，斜体也就得在这一层做。</p>
+	 */
+	public MmtrPanelCanvas textItalic(String text, double x, double y, double heightM, double shear, int color, IGui.HorizontalAlignment horizontalAlignment, IGui.VerticalAlignment verticalAlignment) {
+		if (text == null || text.isEmpty() || heightM <= 0) {
+			return this;
+		}
+
+		final double targetHeightPx = heightM * scaleY;
+		final Font baseFont = MmtrPanelFont.get(text);
+		final FontRenderContext fontRenderContext = graphics.getFontRenderContext();
+		final GlyphVector probeGlyphs = baseFont.deriveFont(Font.PLAIN, 100F).createGlyphVector(fontRenderContext, text);
+		final Rectangle2D probeInk = probeGlyphs.getVisualBounds();
+		if (probeInk.getHeight() <= 0) {
+			return this;
+		}
+
+		final Font font = baseFont.deriveFont(Font.PLAIN, (float) (100 * targetHeightPx / probeInk.getHeight()));
+		final GlyphVector glyphs = font.createGlyphVector(fontRenderContext, text);
+		final Rectangle2D ink = glyphs.getVisualBounds();
+		final double boxLeft = px(x) + horizontalAlignment.getOffset(0, (float) ink.getWidth());
+		final double boxTop = py(y) + verticalAlignment.getOffset(0, (float) ink.getHeight());
+		final double anchorX = boxLeft - ink.getX();
+		final double anchorY = boxTop - ink.getY();
+
+		graphics.setColor(colorOf(color));
+		if (shear == 0) {
+			graphics.drawGlyphVector(glyphs, (float) anchorX, (float) anchorY);
+			return this;
+		}
+		final java.awt.geom.AffineTransform saved = graphics.getTransform();
+		final java.awt.geom.AffineTransform sheared = new java.awt.geom.AffineTransform(saved);
+		final double centreX = anchorX + ink.getWidth() / 2;
+		sheared.translate(centreX, anchorY);
+		sheared.shear(-shear, 0);
+		sheared.translate(-centreX, -anchorY);
+		graphics.setTransform(sheared);
+		graphics.drawGlyphVector(glyphs, (float) anchorX, (float) anchorY);
+		graphics.setTransform(saved);
+		return this;
+	}
+
+	/**
+	 * 量一段文字在给定**墨迹高度**下的墨迹宽度（米）—— 与 {@link #text} 用同一套字号推导，
+	 * 所以"先量宽度、再排版"不会与画出来的不一致（notes/227：逐位格宽就是靠它量的）。
+	 */
+	public double textWidth(String text, double heightM) {
+		if (text == null || text.isEmpty() || heightM <= 0) {
+			return 0;
+		}
+		final double targetHeightPx = heightM * scaleY;
+		final Font baseFont = MmtrPanelFont.get(text);
+		final FontRenderContext fontRenderContext = graphics.getFontRenderContext();
+		final GlyphVector probeGlyphs = baseFont.deriveFont(Font.PLAIN, 100F).createGlyphVector(fontRenderContext, text);
+		final Rectangle2D probeInk = probeGlyphs.getVisualBounds();
+		if (probeInk.getHeight() <= 0) {
+			return 0;
+		}
+		final Font font = baseFont.deriveFont(Font.PLAIN, (float) (100 * targetHeightPx / probeInk.getHeight()));
+		return font.createGlyphVector(fontRenderContext, text).getVisualBounds().getWidth() / scaleX;
+	}
+
 	// ---- output ----------------------------------------------------------------------------------
 
-	/** The finished surface as an ABGR image ready for a {@code NativeImageBackedTexture}. */
-	public NativeImage toNativeImage() {
+	/** Pixel width of the surface, for callers that keep a texture of matching size. */
+	public int widthPx() {
+		return image.getWidth();
+	}
+
+	/** Pixel height of the surface, for callers that keep a texture of matching size. */
+	public int heightPx() {
+		return image.getHeight();
+	}
+
+	/**
+	 * Writes the finished surface INTO an existing (already GPU-allocated) {@link NativeImage}, applying
+	 * the AWT-ARGB to memory-ABGR swap described on {@link #toNativeImage()}.
+	 *
+	 * <p>This is the repaint path: the texture keeps ONE {@code NativeImage} for its whole life, so its GL
+	 * id never changes and no cached render layer ever has to be rebuilt. Reading pixels back out of a
+	 * {@code NativeImage} is not possible through this mapping (there is no {@code getPixelColor}), so the
+	 * canvas has to be pushed rather than pulled.</p>
+	 *
+	 * @return false when the target cannot hold this canvas, in which case the caller must rebuild
+	 */
+	public boolean writeInto(NativeImage target) {
+		if (target == null || target.getWidth() != image.getWidth() || target.getHeight() != image.getHeight()) {
+			return false;
+		}
 		final int widthPx = image.getWidth();
 		final int heightPx = image.getHeight();
 		final int[] pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-		final NativeImage nativeImage = new NativeImage(NativeImageFormat.getAbgrMapped(), widthPx, heightPx, false);
 		for (int y = 0; y < heightPx; y++) {
 			final int row = y * widthPx;
 			for (int x = 0; x < widthPx; x++) {
-				nativeImage.setPixelColor(x, y, pixels[row + x]);
+				final int argb = pixels[row + x];
+				// 0xAARRGGBB -> 0xAABBGGRR
+				target.setPixelColor(x, y, (argb & 0xFF00FF00)
+						| ((argb & 0x00FF0000) >>> 16)
+						| ((argb & 0x000000FF) << 16));
 			}
 		}
+		return true;
+	}
+
+	/**
+	 * The finished surface as an ABGR image ready for a {@code NativeImageBackedTexture}.
+	 *
+	 * <p><b>ABGR means the bytes are A,B,G,R - so the AWT int (which is 0xAARRGGBB) has to have its red
+	 * and blue fields swapped.</b> This used to hand the AWT value straight to
+	 * {@code setPixelColor(x, y, argb)}, and the only visible symptom was colour: a test pattern painted
+	 * {@code #FF3B30} (red) arrived on the glass as BLUE. That is worth spelling out because a swapped
+	 * channel is nearly invisible on this feature - the rain, the sheen and the water film are all
+	 * desaturated blue-grey, so only a saturated authored colour exposes it, and the wiper's own colours
+	 * are dark greys.</p>
+	 */
+	public NativeImage toNativeImage() {
+		final NativeImage nativeImage = new NativeImage(NativeImageFormat.getAbgrMapped(),
+				image.getWidth(), image.getHeight(), false);
+		writeInto(nativeImage);
 		return nativeImage;
 	}
 
