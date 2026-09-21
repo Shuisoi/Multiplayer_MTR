@@ -93,14 +93,16 @@ public final class MmtrManifestMotionSpawnTests {
 		assertTrue(syncedCopy.immutablePath.size() > 0, "synced VED path carries the motion leg shadow (" + syncedCopy.immutablePath.size() + " legs)");
 
 		// Drive with the existing cab control: throttle + forward reverser, like the game client keys.
-		// 钥匙归属 (2026-09-10): the staged consist holds the engine's system key, which drives nobody -
-		// the crew member has to take the cab first, exactly as the in-game interact key does.
+		// 钥匙归属 (2026-09-10) + 放宽 (2026-09-19): the staged consist holds the engine's system key,
+		// which drives nobody and does not replace a driver - but driving no longer REQUIRES the key:
+		// riding as the driver is the whole gate (用户口径「操作手柄不需要手里握着钥匙」).
 		final UUID driver = UUID.randomUUID();
 		assertEquals(org.mtr.core.mmtr.consist.MmtrCabState.KeyHolder.SYSTEM, vehicle.getMmtrCabKeyHolder(), "the yard staged the stock under the system key");
-		assertFalse(vehicle.canTakeMmtrControl(driver), "the system key cannot drive; the crew has to take the cab");
+		assertFalse(vehicle.canTakeMmtrControl(driver), "还没坐在司机位上 ⇒ 不能操纵（与钥匙无关）");
 		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
 		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
 		vehicle.updateRidingEntities(entities);
+		assertTrue(vehicle.canTakeMmtrControl(driver), "骑在司机位上就能开，不必先接管 system 钥匙");
 		assertTrue(vehicle.enterMmtrCab(org.mtr.core.mmtr.consist.MmtrCabState.Cab.CAB_A, driver), "the crew takes the staged cab from the system key");
 		assertEquals(org.mtr.core.mmtr.consist.MmtrCabState.KeyHolder.CREW, vehicle.getMmtrCabKeyHolder());
 		assertTrue(vehicle.canTakeMmtrControl(driver));

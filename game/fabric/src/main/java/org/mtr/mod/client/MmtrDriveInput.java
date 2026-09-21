@@ -26,9 +26,11 @@ import javax.annotation.Nullable;
  * <h2>上报策略（用户口径 + 省钱）</h2>
  *
  * <ul>
+ *   <li><b>坐在司机位上就能操作</b>：判据是 {@link MmtrDriverSeat}（沿车长的位置离哪个驾驶室的玻璃最近），
+ *       <b>不需要手里握着钥匙、也不需要按 G 申领</b>（用户口径 2026-09-19）；</li>
  *   <li><b>只在变化时发</b>：手柄是保持型状态，不按不耗流量；</li>
- *   <li><b>握钥匙期间每秒补发一次</b>：引擎侧 override 被自动释放（司机摘下钥匙/断线）之后能自愈；</li>
- *   <li><b>离开司机位时把三手柄归到 关闭 / 运行 / 定速 0 并发最后一次</b>：否则"人还在车上但不在司机位"
+ *   <li><b>握着司机位期间每秒补发一次</b>：引擎侧 override 被自动释放（人走了/断线）之后能自愈；</li>
+ *   <li><b>离开司机位时把三手柄归到 关闭 / 运行 / 定速 0 并发最后一次</b>：否则"人还在车上但走开了"
  *       会让车带着旧手柄继续跑。换向器**不动**（真车手柄停在哪就是哪，且方向由引擎在停稳时才认）。</li>
  * </ul>
  *
@@ -87,11 +89,12 @@ public final class MmtrDriveInput {
 	/** 每客户端 tick 调用一次（挨着其它交互键，见 {@code MainRenderer}）。 */
 	public static void tick() {
 		final long nowMillis = System.currentTimeMillis();
-		final long cabVehicleId = VehicleRidingMovement.mmtrCabVehicleId();
-		// 引擎的确认位才算数：本地请求被拒（钥匙在别人手里/车没停稳）时不许发手柄状态。
-		final boolean holdingCab = cabVehicleId != 0 && VehicleRidingMovement.mmtrIsCabConfirmed();
+		// 判据：坐在司机位上（位置判定），**不看钥匙**。按 G 申领驾驶室仍然是可用的另一条路
+		// （它把人钉到座椅上并锁定走动），但它不再是想开车的前提。
+		final MmtrDriverSeat.Seat seat = MmtrDriverSeat.current();
+		final long vehicleId = seat == null ? 0 : seat.vehicleId();
 
-		if (!holdingCab) {
+		if (vehicleId == 0) {
 			if (controlledVehicleId != 0) {
 				neutraliseHandles();
 				send(controlledVehicleId);
@@ -101,41 +104,53 @@ public final class MmtrDriveInput {
 			return;
 		}
 
-		final VehicleExtension vehicle = vehicleById(cabVehicleId);
-		if (controlledVehicleId != cabVehicleId) {
-			// 刚拿到钥匙：从镜像取回换向器的位置（别把别人停成尾向前的车又掰回正向），
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		if (controlledVehicleId != vehicleId) {
+			// 刚坐上司机位：从镜像取回换向器的位置（别把别人停成尾向前的车又掰回正向），
 			// 三根手柄归零，并强制首帧上报。
-			controlledVehicleId = cabVehicleId;
+			controlledVehicleId = vehicleId;
 			activeSpec = specOf(vehicle);
 			reverser = vehicle != null && vehicle.getMmtrReverserFromSync() < 0 ? -1 : 1;
 			neutraliseHandles();
 			sentDriveHandle = Integer.MIN_VALUE;
 			warnIfNotThreeHandle(vehicle);
-			MmtrTrace.log("[MMTR-DRV] client handles acquired (vehicle " + cabVehicleId + " spec=" + activeSpec.encode() + ")");
+			MmtrTrace.log("[MMTR-DRV] client seated at " + seat.cabSpec() + " (vehicle " + vehicleId + " spec=" + activeSpec.encode() + ")");
 		}
 
 		applyKeyDeltas(nowMillis);
+		if (handleChangedThisTick) {
+			// 动了手柄 ⇒ 顺手把这个驾驶室接管过来（引擎要的"哪一端在前"由它决定，见 MmtrCabInteraction）。
+			MmtrCabInteraction.claimSeatWhenDriving(seat);
+		}
 		if (changedSinceLastSend() || nowMillis - lastSendMillis >= REFRESH_INTERVAL_MILLIS) {
-			send(cabVehicleId);
+			send(vehicleId);
 		}
 	}
 
+	/** 本拍有没有哪个手柄动了（驱动"动操纵即接管司机位"）。 */
+	private static boolean handleChangedThisTick;
+
 	private static void applyKeyDeltas(long nowMillis) {
+		handleChangedThisTick = false;
 		final int driveDelta = DRIVE_KEYS.read(nowMillis);
 		if (driveDelta != 0) {
 			driveHandle = activeSpec.clampDriveHandle(driveHandle + driveDelta);
+			handleChangedThisTick = true;
 		}
 		final int brakeDelta = BRAKE_KEYS.read(nowMillis);
 		if (brakeDelta != 0) {
 			brakePosition = activeSpec.clampBrakePosition(brakePosition + brakeDelta);
+			handleChangedThisTick = true;
 		}
 		final int afbDelta = AFB_KEYS.read(nowMillis);
 		if (afbDelta != 0) {
 			cruiseKmh = activeSpec.clampCruiseKmh(cruiseKmh + afbDelta);
+			handleChangedThisTick = true;
 		}
 		final int reverserDelta = REVERSER_KEYS.read(nowMillis);
 		if (reverserDelta != 0) {
 			reverser = Math.max(-1, Math.min(1, reverser + reverserDelta));
+			handleChangedThisTick = true;
 		}
 	}
 
@@ -207,12 +222,26 @@ public final class MmtrDriveInput {
 
 	public static int getReverser() { return reverser; }
 
-	/** 当前三手柄的一句话状态（日志与 HUD 共用一套说法，避免两处各写一套）。 */
+	/** 正在控制的车；0 = 手里没有司机位。 */
+	public static long getControlledVehicleId() { return controlledVehicleId; }
+
+	/** 油门手柄的短语：牵引 45% / 电阻制动 最小 / 关闭（HUD 与日志共用 {@link ThreeHandleSpec} 的说法）。 */
+	public static String driveHandleText() { return activeSpec.describeDriveHandle(driveHandle); }
+
+	/** 制动手柄的档名：运行 / 1A / 1B / 2…8 / EB。 */
+	public static String brakeText() { return activeSpec.brakePositionLabel(brakePosition); }
+
+	/** 制动手柄是否在紧急位（HUD 用它上红色）。 */
+	public static boolean isEmergencyBrake() { return activeSpec.isEmergencyPosition(brakePosition); }
+
+	/** 定速巡航的短语：关闭 / 100 km/h。 */
+	public static String cruiseText() { return cruiseKmh <= 0 ? "关闭" : cruiseKmh + " km/h"; }
+
+	public static String reverserText() { return reverser > 0 ? "前进" : reverser < 0 ? "后退" : "中立"; }
+
+	/** 当前三手柄的一句话状态（日志用；HUD 分行显示同样这几个词，避免两处各写一套）。 */
 	public static String describeHandles() {
-		return "油门=" + activeSpec.describeDriveHandle(driveHandle)
-			+ " 制动=" + activeSpec.brakePositionLabel(brakePosition)
-			+ " 定速=" + (cruiseKmh <= 0 ? "关闭" : cruiseKmh + "km/h")
-			+ " 换向=" + (reverser > 0 ? "前进" : reverser < 0 ? "后退" : "中立");
+		return "油门=" + driveHandleText() + " 制动=" + brakeText() + " 定速=" + cruiseText() + " 换向=" + reverserText();
 	}
 
 	/** 一对"加/减"键：单击正好一步，长按超过 {@code holdDelayMillis} 后每 {@code sweepIntervalMillis} 扫一步。 */

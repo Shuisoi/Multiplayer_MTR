@@ -81,9 +81,37 @@ public class VehicleRidingMovement {
 
 	/** When the next position report is due. */
 	private static long sendPositionUpdateTime;
-	/** Whether this client told the server it holds a driver key. */
-	private static boolean isHoldingDriverKey;
+	/** Whether this client last told the server it is THE driver (ride packet's {@code isDriver}). */
+	private static boolean isDriverReported;
 	private static int doorOverrideTicks;
+
+	// ---- the cab (B2, restored 2026-09-19) ---------------------------------------------------------
+	//
+	// Taking a cab via MmtrCabInteraction does exactly two things to this class: it MOVES the player to
+	// the cab's seat (car-local, the space this class already maintains) and it LOCKS walking. Both are
+	// owned here; the interaction only states the intent, because this class stays the only writer of the
+	// riding coordinate (see the ownership rule in the class doc, and notes/185 §7 rule 1).
+	//
+	// There is deliberately NO separate "seat foot Y" pin any more. The old layer carried one and it had
+	// four different clearing points, which is how the camera kept dropping back to the floor
+	// (notes/184 §6 #4). It is not needed: MmtrVehicleAnchors.cabView already returns the FLOOR TOP
+	// (sill + FLOOR_TOP_OFFSET_M), which is exactly what movePlayer computes from the floor box.
+
+	/** The vehicle whose cab this client holds, or 0 when the player is only a passenger. */
+	private static long mmtrCabVehicleId;
+	private static int mmtrCabCarNumber = -1;
+	private static int mmtrCabNumber = -1;
+
+	/**
+	 * True once the ENGINE has confirmed this client holds the cab (mirror: one of our cab's ends is
+	 * active and the key holder is a CREW key).
+	 *
+	 * <p>This is deliberately separate from {@link #mmtrCabVehicleId}, which is set the instant the key is
+	 * pressed. Boarding and DRIVING are different things: a refused claim must leave the player aboard as a
+	 * passenger who can still walk, not lock them in place. The first version locked on the local flag, so
+	 * a refused claim froze the player where they stood with no way to move until the ride timed out.</p>
+	 */
+	private static boolean mmtrCabConfirmed;
 
 	private static final int RIDING_COOLDOWN = 5;
 	private static final float VEHICLE_WALKING_SPEED_MULTIPLIER = 0.005F;
@@ -106,8 +134,9 @@ public class VehicleRidingMovement {
 		if (ridingVehicleCooldown < RIDING_COOLDOWN && shiftHoldingTicks < SHIFT_ACTIVATE_TICKS) {
 			ridingVehicleCooldown++;
 		} else {
-			// Nothing is moving the player: end the ride.
-			leaveRide();
+			// Nothing is moving the player: end the ride. This is the timer that catches "the ride was
+			// established but movePlayer never ran for it" - the likeliest way a cab entry dies silently.
+			leaveRide("计时器：movePlayer 没再推动玩家（没上车 / 车节号不匹配 / 车没了）");
 		}
 
 		if (ridingPositionCache != null) {
@@ -193,7 +222,15 @@ public class VehicleRidingMovement {
 
 		ridingVehicleCooldown = 0;
 		final double entityYawOld = EntityHelper.getYaw(new org.mtr.mapping.holder.Entity(clientPlayerEntity.data));
-		final float speedMultiplier = millisElapsed * VEHICLE_WALKING_SPEED_MULTIPLIER * (clientPlayerEntity.isSprinting() ? 2 : 1);
+		// In a cab the driver does not walk: the same key that took the cab gives it back. This is the
+		// cab lock, and it is a MULTIPLIER rather than an early return on purpose - the rest of this
+		// method is what keeps the player glued to the train and renews the ride session, so skipping it
+		// would drop the driver out of their own cab.
+		//
+		// The lock follows the ENGINE's verdict (mmtrIsDriverLocked), not the local request: while a claim
+		// is still unconfirmed the player is a passenger who may walk, so a refused claim cannot freeze
+		// them in place.
+		final float speedMultiplier = mmtrIsDriverLocked() ? 0 : millisElapsed * VEHICLE_WALKING_SPEED_MULTIPLIER * (clientPlayerEntity.isSprinting() ? 2 : 1);
 		final Vector3d movement = positionAndRotation.transformBackwards(new Vector3d(
 				Math.abs(clientPlayerEntity.getSidewaysSpeedMapped()) > 0.5 ? Math.copySign(speedMultiplier, clientPlayerEntity.getSidewaysSpeedMapped()) : 0,
 				0,
@@ -227,8 +264,14 @@ public class VehicleRidingMovement {
 			clampPosition(floorsAndDoorways, ridingVehicleX + movementX - RenderVehicleHelper.HALF_PLAYER_WIDTH, ridingVehicleZ + movementZ + RenderVehicleHelper.HALF_PLAYER_WIDTH, offsets);
 
 			if (offsets.isEmpty()) {
-				// Not standing on any floor any more: out of the vehicle.
-				leaveRide();
+				// Not standing on any floor any more: out of the vehicle. If this fires on the FIRST frame
+				// after a cab entry, the seat point is not over a floor box and the entry is being undone
+				// here - so report the clamp's own inputs, which is the only way to tell "no boxes at all"
+				// apart from "boxes exist but the point/Y misses them".
+				leaveRide("四个角都没有地板（点 x=" + Math.round(ridingVehicleX * 100) / 100.0
+						+ " z=" + Math.round(ridingVehicleZ * 100) / 100.0
+						+ " y=" + Math.round(ridingVehicleY * 1000) / 1000.0
+						+ "；" + describeBoxes(floorsAndDoorways) + "）");
 				return;
 			}
 
@@ -260,13 +303,147 @@ public class VehicleRidingMovement {
 		if (sendPositionUpdateTime > 0 && sendPositionUpdateTime <= System.currentTimeMillis()) {
 			sendUpdate(false);
 		}
+		// 位置变了 ⇒ "我在不在司机位"可能变了（走进/走出驾驶室都不需要按键）。变化时才发包。
+		refreshDriverFlag();
+	}
+
+	// ---- the cab entry (B2) ------------------------------------------------------------------------
+
+	/**
+	 * Puts the player in a cab: the camera goes onto that cab's seat and walking is disabled until
+	 * {@link #mmtrLeaveCab()}.
+	 *
+	 * <p>Coordinates are <b>car-local</b>, which is the space {@link #movePlayer} maintains. The old cab
+	 * entry wrote a WORLD position into the same fields and relied on the next frame to overwrite it
+	 * (notes/184 §6 #1) - that is the inconsistency this avoids: the value written here is already the
+	 * value the next {@code movePlayer} would compute.</p>
+	 *
+	 * @param cab            1 = the A end, 2 = the B end (the anchor's {@code cab})
+	 * @param carLocalX/Y/Z  the seat point from {@code MmtrVehicleAnchors.cabView}
+	 * @param vehicleYaw     the car's own yaw right now (so the view does not snap on the first frame)
+	 * @param playerYawDeg   the entity yaw to face (the direction the cab faces), in MC degrees
+	 */
+	public static void mmtrEnterCab(long sidingId, long vehicleId, int carNumber, int cab, double carLocalX, double carLocalY, double carLocalZ, double vehicleYaw, float playerYawDeg) {
+		ridingSidingId = sidingId;
+		ridingVehicleId = vehicleId;
+		ridingVehicleCarNumber = carNumber;
+		ridingVehicleX = carLocalX;
+		ridingVehicleY = carLocalY;
+		ridingVehicleZ = carLocalZ;
+		isOnGangway = false;
+		ridingPositionCacheOld = null;
+		ridingPositionCache = null;
+		ridingYawDifference = null;
+		previousVehicleYaw = vehicleYaw;
+		ridingVehicleCooldown = 0;
+		shiftHoldingTicks = 0;
+		mmtrCabVehicleId = vehicleId;
+		mmtrCabCarNumber = carNumber;
+		mmtrCabNumber = cab;
+		// 坐进座椅就是司机（引擎侧"谁能操纵"的判据只认这个），是否被引擎接受由它自己的闸门决定
+		// （停稳、一个驾驶室只有一把钥匙）—— 不再等钥匙确认才敢上报（用户口径 2026-09-19）。
+		mmtrCabConfirmed = false;
+		refreshDriverFlag();
+		final ClientPlayerEntity clientPlayerEntity = MinecraftClient.getInstance().getPlayerMapped();
+		if (clientPlayerEntity != null) {
+			EntityHelper.setYaw(new org.mtr.mapping.holder.Entity(clientPlayerEntity.data), playerYawDeg);
+		}
+		sendUpdate(false);
+	}
+
+	/**
+	 * Gives the cab back. The player stays on the train (they are still riding) but may walk again; the
+	 * server is told the driver key is gone.
+	 */
+	public static void mmtrLeaveCab() {
+		if (mmtrCabVehicleId == 0) {
+			return;
+		}
+		mmtrCabVehicleId = 0;
+		mmtrCabCarNumber = -1;
+		mmtrCabNumber = -1;
+		refreshDriverFlag();
+		if (ridingVehicleId != 0) {
+			sendUpdate(false);
+		}
+	}
+
+	/** @return whether the local player currently holds a cab (and is still on that train) */
+	public static boolean mmtrIsInCab() {
+		return mmtrCabVehicleId != 0 && ridingVehicleId == mmtrCabVehicleId;
+	}
+
+	/**
+	 * @return whether the driver LOCK applies: we hold a cab locally AND the engine has confirmed the key.
+	 *         Only this should ever stop the player walking.
+	 */
+	public static boolean mmtrIsDriverLocked() {
+		return mmtrIsInCab() && mmtrCabConfirmed;
+	}
+
+	/**
+	 * Called by the interaction layer once per tick with the engine's mirrored verdict.
+	 *
+	 * <p>The verdict still matters: it is what {@link #mmtrIsDriverLocked()} uses to stop the player
+	 * walking. But it is no longer what makes this client a DRIVER - that follows the seat (see
+	 * {@link #refreshDriverFlag()}).</p>
+	 */
+	public static void mmtrSetCabConfirmed(boolean confirmed) {
+		if (confirmed == mmtrCabConfirmed) {
+			return;
+		}
+		mmtrCabConfirmed = confirmed;
+		refreshDriverFlag();
+		if (ridingVehicleId != 0) {
+			sendUpdate(false);
+		}
+	}
+
+	/**
+	 * 重算并（仅当变化时）上报 ride 包里的 {@code isDriver}：**坐在司机位上就够了，不再要求钥匙**
+	 * （用户口径 2026-09-19：操作手柄不需要手里握着钥匙）。
+	 *
+	 * <p>为什么这一位必须如实跟着位置走：引擎侧的"谁能操纵"判据就是它（{@code Vehicle.canTakeMmtrControl}
+	 * 只认"骑在司机位上"）。按 G 申领驾驶室依然会让它为真（那条路还会把人钉在座椅上），但它不再是前提。</p>
+	 *
+	 * <p>只在**变化**时发包：位置每帧都在动，而这一位回答的是"我是不是司机"，不是坐标。</p>
+	 */
+	private static void refreshDriverFlag() {
+		final boolean isDriver = mmtrCabConfirmed || MmtrDriverSeat.isAtControls();
+		if (isDriver == isDriverReported) {
+			return;
+		}
+		isDriverReported = isDriver;
+		if (ridingVehicleId != 0) {
+			sendUpdate(false);
+		}
+	}
+
+	/** @return whether the engine has confirmed the cab claim (for messages and diagnostics) */
+	public static boolean mmtrIsCabConfirmed() {
+		return mmtrCabConfirmed;
+	}
+
+	/** @return the vehicle whose cab is held, or 0 */
+	public static long mmtrCabVehicleId() {
+		return mmtrIsInCab() ? mmtrCabVehicleId : 0;
+	}
+
+	/** @return the CONSIST car index whose cab is held, or -1 */
+	public static int mmtrCabCarNumber() {
+		return mmtrIsInCab() ? mmtrCabCarNumber : -1;
+	}
+
+	/** @return the cab number held (1 = A end, 2 = B end), or -1 */
+	public static int mmtrCabNumber() {
+		return mmtrIsInCab() ? mmtrCabNumber : -1;
 	}
 
 	/** The gangway branch of {@link #movePlayer}: X is a percentage across, Z is a percentage along. */
 	private static void moveOnGangway(@Nullable GangwayMovementPositions previousCarGangwayMovementPositions, @Nullable GangwayMovementPositions thisCarGangwayMovementPositions1, @Nullable GangwayMovementPositions thisCarGangwayMovementPositions2, double movementX, double movementZ) {
 		if (thisCarGangwayMovementPositions1 == null || previousCarGangwayMovementPositions == null) {
 			// The gangway data is gone: nothing left to stand on.
-			leaveRide();
+			leaveRide("贯通道数据没了（isOnGangway 但两侧贯通道为空）");
 			return;
 		}
 		if (ridingVehicleZ + movementZ > 1) {
@@ -286,8 +463,21 @@ public class VehicleRidingMovement {
 		}
 	}
 
-	/** Ends the ride: tells the server, and forgets everything about being on board. */
-	private static void leaveRide() {
+	/**
+	 * Ends the ride: tells the server, and forgets everything about being on board.
+	 *
+	 * <p>The reason is logged, but ONLY when there was actually something to leave: {@code tick} calls this
+	 * on every frame the player is not riding, so an unconditional log line would flood the file. Knowing
+	 * WHY a ride ended is the difference between "the player stepped off" and "the floor clamp found
+	 * nothing under the cab and dropped them", and from the outside those look identical.</p>
+	 */
+	private static void leaveRide(String reason) {
+		final boolean wasRiding = ridingVehicleId != 0;
+		final boolean hadCab = mmtrCabVehicleId != 0;
+		if (wasRiding || hadCab) {
+			org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 结束骑乘（{}）车={} 车节={} 驾驶室={} 已确认={}",
+					reason, ridingVehicleId, ridingVehicleCarNumber, mmtrCabNumber, mmtrCabConfirmed);
+		}
 		sendUpdate(true);
 		ridingSidingId = 0;
 		ridingVehicleId = 0;
@@ -298,11 +488,18 @@ public class VehicleRidingMovement {
 		ridingYawDifference = null;
 		ridingVehicleCooldown = 0;
 		shiftHoldingTicks = 0;
+		// The cab goes with the ride: this is the ONE place that clears it, so getting off the train can
+		// never leave a stale "I hold a cab" behind (the old layer had four clearing points - notes/184 §6 #4).
+		mmtrCabVehicleId = 0;
+		mmtrCabCarNumber = -1;
+		mmtrCabNumber = -1;
+		mmtrCabConfirmed = false;
+		isDriverReported = false;
 	}
 
 	private static void sendUpdate(boolean dismount) {
 		if (ridingVehicleId != 0) {
-			InitClient.REGISTRY_CLIENT.sendPacketToServer(PacketUpdateVehicleRidingEntities.create(ridingSidingId, ridingVehicleId, dismount ? -1 : ridingVehicleCarNumber, ridingVehicleX, ridingVehicleY, ridingVehicleZ, isOnGangway, isHoldingDriverKey, false, false, false, false, doorOverrideTicks > 1));
+			InitClient.REGISTRY_CLIENT.sendPacketToServer(PacketUpdateVehicleRidingEntities.create(ridingSidingId, ridingVehicleId, dismount ? -1 : ridingVehicleCarNumber, ridingVehicleX, ridingVehicleY, ridingVehicleZ, isOnGangway, isDriverReported, false, false, false, false, doorOverrideTicks > 1));
 			sendPositionUpdateTime = 0;
 		}
 		if (dismount) {
@@ -345,6 +542,33 @@ public class VehicleRidingMovement {
 					final double maxZ = box.getMaxZMapped();
 					return (org.mtr.core.tool.Utilities.isBetween(x, minX, maxX) ? 0 : Math.min(Math.abs(minX - x), Math.abs(maxX - x))) + (org.mtr.core.tool.Utilities.isBetween(z, minZ, maxZ) ? 0 : Math.min(Math.abs(minZ - z), Math.abs(maxZ - z)));
 				})).orElse(null));
+	}
+
+	/**
+	 * One line describing the boxes the floor clamp was given: how many, how many of them are floors, and
+	 * the union of their Y extents.
+	 *
+	 * <p>The clamp needs a box that contains the rider's Y, and the model's floor slab is only centimetres
+	 * thick, so "the seat point is not over a floor" has two completely different causes - no boxes at all
+	 * (the model publishes no FLOOR part / the wrong car) versus boxes that exist but whose Y the rider
+	 * misses by a hair. Reporting the inputs is what tells them apart without another round trip.</p>
+	 */
+	private static String describeBoxes(ObjectArrayList<ObjectBooleanImmutablePair<Box>> floorsAndDoorways) {
+		int floors = 0;
+		double minY = Double.MAX_VALUE;
+		double maxY = -Double.MAX_VALUE;
+		for (final ObjectBooleanImmutablePair<Box> box : floorsAndDoorways) {
+			if (box.rightBoolean()) {
+				floors++;
+			}
+			minY = Math.min(minY, box.left().getMinYMapped());
+			maxY = Math.max(maxY, box.left().getMaxYMapped());
+		}
+		if (floorsAndDoorways.isEmpty()) {
+			return "这次一个盒都没有（车型没有 FLOOR 部件？或车节对不上）";
+		}
+		return "这次有 " + floorsAndDoorways.size() + " 个盒（其中地板 " + floors + " 个），所有盒的 y 范围 ["
+				+ Math.round(minY * 1000) / 1000.0 + ", " + Math.round(maxY * 1000) / 1000.0 + "]";
 	}
 
 	private static void clampPosition(ObjectArrayList<ObjectBooleanImmutablePair<Box>> floorsAndDoorways, double x, double z, ObjectArrayList<Vector3d> offsets) {

@@ -52,6 +52,17 @@ public final class MmtrVehicleAnchors {
 
 	private static final Object2ObjectOpenHashMap<String, ObjectArrayList<Anchor>> CACHE = new Object2ObjectOpenHashMap<>();
 
+	/**
+	 * Per model: the car-local height a rider's feet end up at (the anchor file's {@code rider.feetY}).
+	 *
+	 * <p>MTR builds no floor boxes for OBJ models and substitutes a synthetic slab at
+	 * {@code y = 1 + legacyRiderOffset}; that slab is what {@code VehicleRidingMovement} clamps the rider
+	 * onto. The cab entry uses this value so it lands ON that slab. Without it the entry height has to
+	 * come from the door sill and must stay within the clamp's 1 m tolerance of the slab, which is what
+	 * capped how high the driver's modelled eye point could be raised.</p>
+	 */
+	private static final Object2ObjectOpenHashMap<String, Double> RIDER_FEET_Y = new Object2ObjectOpenHashMap<>();
+
 	public enum Kind {
 		HUD,
 		CABDOOR,
@@ -84,8 +95,22 @@ public final class MmtrVehicleAnchors {
 		public final double v0;
 		public final double u1;
 		public final double v1;
+		/**
+		 * The facet's own four corners as {@code (right, up)} offsets from {@link #position}, or
+		 * {@code null} for a pack that predates them.
+		 *
+		 * <p>A facet is not always a rectangle: a dashboard wing that follows the desk's flowing line is a
+		 * parallelogram, and the {@code widthM x heightM} rectangle then covers it with its BOUNDING box
+		 * and overhangs the desk by the shear. The corners let the client draw the facet exactly.</p>
+		 */
+		@Nullable
+		public final double[][] corners;
 
 		private Facet(Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, double u0, double v0, double u1, double v1) {
+			this(position, normal, up, right, widthM, heightM, u0, v0, u1, v1, null);
+		}
+
+		private Facet(Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, double u0, double v0, double u1, double v1, @Nullable double[][] corners) {
 			this.position = position;
 			this.normal = normal;
 			this.up = up;
@@ -96,6 +121,7 @@ public final class MmtrVehicleAnchors {
 			this.v0 = v0;
 			this.u1 = u1;
 			this.v1 = v1;
+			this.corners = corners;
 		}
 	}
 
@@ -143,8 +169,33 @@ public final class MmtrVehicleAnchors {
 		/** Unfolded canvas size of a folded dashboard, in blocks; {@code 0} when there are no facets. */
 		public final double canvasWidthM;
 		public final double canvasHeightM;
+		/**
+		 * THE SAG GRID of a CURVED face: 9 x 9 samples of how far the modelled surface sits from this
+		 * anchor's own plane, in metres along {@code normal}, row-major from {@link #sagVMinM} upwards and
+		 * {@link #sagUMinM} rightwards. EMPTY for a flat face, which keeps the original plane-only path -
+		 * so a model that was fine before this existed behaves exactly as it did.
+		 *
+		 * <p>An anchor's frame comes from ONE face (the largest), which is exact only while the group is
+		 * flat. A curved mmtr_windshield is therefore treated as the plane of whichever patch happened to
+		 * be biggest: measured on BR101 V25, the real glass sits up to 112 mm from that plane while the
+		 * water layer's own offset is 50 mm and the glass is 23 mm thick - the rain floats a hand's width
+		 * off the screen, and nothing said so.</p>
+		 *
+		 * <p>A grid rather than a profile along one axis: a windscreen is usually a cylinder, which a
+		 * profile would capture exactly, but only against a frame whose normal is perpendicular to the
+		 * cylinder's axis, and nothing guarantees that. Measured on this very surface, a 17-sample profile
+		 * still left 18.3 mm because part of the departure is linear across the WIDTH.</p>
+		 */
+		public final double[] sagGridM;
+		public final double sagUMinM;
+		public final double sagUMaxM;
+		public final double sagVMinM;
+		public final double sagVMaxM;
+		/** The grid's resolution, so the client never has to be told it twice. */
+		public static final int SAG_NX = 17;
+		public static final int SAG_NY = 17;
 
-		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM, int pane) {
+		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM, double[] sagGridM, double sagUMinM, double sagUMaxM, double sagVMinM, double sagVMaxM, int pane) {
 			this.name = name;
 			this.kind = kind;
 			this.cab = cab;
@@ -166,6 +217,11 @@ public final class MmtrVehicleAnchors {
 			this.facets = facets;
 			this.canvasWidthM = canvasWidthM;
 			this.canvasHeightM = canvasHeightM;
+			this.sagGridM = sagGridM;
+			this.sagUMinM = sagUMinM;
+			this.sagUMaxM = sagUMaxM;
+			this.sagVMinM = sagVMinM;
+			this.sagVMaxM = sagVMaxM;
 		}
 	}
 
@@ -215,6 +271,18 @@ public final class MmtrVehicleAnchors {
 	/** Drops the cache so a reloaded resource pack is picked up. */
 	public static void clearCache() {
 		CACHE.clear();
+		RIDER_FEET_Y.clear();
+	}
+
+	/**
+	 * @param vehicleId the vehicle model ID
+	 * @return the car-local height a rider's feet belong at ({@code rider.feetY} from the anchor file),
+	 *         or {@link Double#NaN} when the model does not declare one
+	 */
+	public static double riderFeetY(String vehicleId) {
+		get(vehicleId);
+		final Double value = RIDER_FEET_Y.get(vehicleId);
+		return value == null ? Double.NaN : value;
 	}
 
 	/**
@@ -293,6 +361,31 @@ public final class MmtrVehicleAnchors {
 			}
 		}
 		return result;
+	}
+
+	/**
+	 * MMTR: **哪一个驾驶室**的骑乘者正坐在 {@code playerZ} 处（骑乘空间，沿车长）——取最近的风挡锚点。
+	 *
+	 * <p>这条规则只有一个地方写着，因为已经有三个消费者：雨刷（哪把刀该动）、驾驶输入（能不能操作三根手柄）、
+	 * 以及"我是不是司机"的上报。各写一份的下场在本仓有先例：判据一分为二，就会出现"仪表台上写着驾驶室 1、
+	 * 动的却是驾驶室 2"（notes/189 §7 就是这么修的）。</p>
+	 *
+	 * <p>按**沿车长的位置**判，不按车厢号：真模型会在一节车上带两个驾驶室（saf101/BR101 的
+	 * {@code windshield_1} 与 {@code windshield_2} 同在 car 0），按车厢号会把两端一起选中。</p>
+	 *
+	 * @return 1 = A 端驾驶室，2 = B 端驾驶室；这节车没有风挡时返回 0（= 判不出，调用方按"没在驾驶室"处理）
+	 */
+	public static int nearestCab(ObjectArrayList<Anchor> anchors, int modelCar, double playerZ) {
+		double nearestDistanceM = Double.MAX_VALUE;
+		int nearestCab = 0;
+		for (final Anchor other : findWindshields(anchors, modelCar)) {
+			final double distanceM = Math.abs(playerZ - other.position.z());
+			if (distanceM < nearestDistanceM) {
+				nearestDistanceM = distanceM;
+				nearestCab = other.cab <= 0 ? 1 : other.cab;
+			}
+		}
+		return nearestCab;
 	}
 
 	/**
@@ -459,6 +552,11 @@ public final class MmtrVehicleAnchors {
 			if (!root.isJsonObject()) {
 				return anchors;
 			}
+			// The rider block rides next to `hud`; remember the feet height for the cab entry.
+			final JsonElement rider = root.getAsJsonObject().get("rider");
+			if (rider != null && rider.isJsonObject() && rider.getAsJsonObject().has("feetY")) {
+				RIDER_FEET_Y.put(vehicleId, rider.getAsJsonObject().get("feetY").getAsDouble());
+			}
 			final JsonArray array = root.getAsJsonObject().getAsJsonArray("anchors");
 			if (array == null) {
 				return anchors;
@@ -485,6 +583,11 @@ public final class MmtrVehicleAnchors {
 						getFacets(object),
 						getDouble(object, "canvasWidthM", 0),
 						getDouble(object, "canvasHeightM", 0),
+						getSagGrid(object),
+						getDouble(object, "sagUMinM", -getDouble(object, "widthM", 0) / 2),
+						getDouble(object, "sagUMaxM", getDouble(object, "widthM", 0) / 2),
+						getDouble(object, "sagVMinM", -getDouble(object, "heightM", 0) / 2),
+						getDouble(object, "sagVMaxM", getDouble(object, "heightM", 0) / 2),
 						getInt(object, "pane", 1)
 				));
 			}
@@ -532,8 +635,32 @@ public final class MmtrVehicleAnchors {
 	 * <p>An empty list is what keeps the original single-quad path alive, so a resource pack built
 	 * before facets existed needs no repacking.</p>
 	 */
-	private static ObjectArrayList<Facet> getFacets(JsonObject object) {
-		final ObjectArrayList<Facet> facets = new ObjectArrayList<>();
+	/**
+	 * The sag profile of a curved face, in metres along the anchor normal, sampled evenly along up.
+	 *
+	 * <p>An empty array is what keeps a flat model on the original plane-only path, so a pack built before
+	 * curved faces existed needs no repacking. A profile shorter than two samples is meaningless and is
+	 * treated as flat rather than believed.</p>
+	 */
+	private static double[] getSagGrid(JsonObject object) {
+		final JsonElement element = object.get("sagGridM");
+		if (element == null || !element.isJsonArray()) {
+			return EMPTY_SAG;
+		}
+		final JsonArray array = element.getAsJsonArray();
+		if (array.size() != Anchor.SAG_NX * Anchor.SAG_NY) {
+			// A grid of the wrong size cannot be indexed; treating it as flat is the only safe reading.
+			return EMPTY_SAG;
+		}
+		final double[] grid = new double[array.size()];
+		for (int index = 0; index < grid.length; index++) {
+			grid[index] = array.get(index).getAsDouble();
+		}
+		return grid;
+	}
+
+	private static final double[] EMPTY_SAG = new double[0];
+	private static ObjectArrayList<Facet> getFacets(JsonObject object) {		final ObjectArrayList<Facet> facets = new ObjectArrayList<>();
 		final JsonElement element = object.get("faces");
 		if (element == null || !element.isJsonArray()) {
 			return facets;
@@ -553,10 +680,33 @@ public final class MmtrVehicleAnchors {
 					getDouble(faceObject, "u0", 0),
 					getDouble(faceObject, "v0", 0),
 					getDouble(faceObject, "u1", 1),
-					getDouble(faceObject, "v1", 1)
+					getDouble(faceObject, "v1", 1),
+					getCorners(faceObject)
 			));
 		}
 		return facets;
+	}
+
+	/**
+	 * @return the facet's own four corners as {@code (right, up)} offsets, or {@code null} when the pack
+	 *         does not declare any (a rectangle, or a pack from before the corners existed)
+	 */
+	@Nullable
+	private static double[][] getCorners(JsonObject faceObject) {
+		final JsonElement element = faceObject.get("corners");
+		if (element == null || !element.isJsonArray() || element.getAsJsonArray().size() != 4) {
+			return null;
+		}
+		final double[][] corners = new double[4][];
+		int index = 0;
+		for (final JsonElement cornerElement : element.getAsJsonArray()) {
+			if (!cornerElement.isJsonArray() || cornerElement.getAsJsonArray().size() != 2) {
+				return null;
+			}
+			final JsonArray pair = cornerElement.getAsJsonArray();
+			corners[index++] = new double[]{pair.get(0).getAsDouble(), pair.get(1).getAsDouble()};
+		}
+		return corners;
 	}
 
 	private static String getString(JsonObject object, String key, String fallback) {

@@ -390,12 +390,12 @@ public final class MmtrConsistVehicleMotionTests {
 	}
 
 	/**
-	 * 钥匙归属 (2026-09-10): a consist staged from the yard manifest is manned by the engine's
-	 * <em>system key</em> so the model knows which end leads. That placeholder used to be
-	 * indistinguishable from a crew key, so every player who spawned a train was locked out of its
-	 * cab ("无法进入（需停稳且该驾驶室空闲）"). These tests pin the replacement contract: the crew
-	 * displaces the system key, the engine never displaces a crew, and only the crew member whose key
-	 * is in the cab may drive.
+	 * 钥匙归属 (2026-09-10) + **操纵判据放宽 (2026-09-19)**：车底在编组时被引擎的 <em>system 钥匙</em>占着，
+	 * 那既是"哪一端在前"的判据、也是自动运行的占位。system 钥匙**不代替司机**，但操纵也不再要求手里有钥匙
+	 * —— 判据只有"骑在司机位上"（用户口径：「操作手柄不需要手里握着钥匙」）。
+	 *
+	 * <p>仍然保留的规矩：编组体上同时只有一个人在开（占用锁：先动手的人拿到，持有者还在司机位上时别人抢不走）、
+	 * system 钥匙可以被乘务员顶掉、引擎永远不顶掉乘务员、**司机位空了才交还操纵权**。</p>
 	 */
 	@Test
 	public void theCrewTakesTheStagedCabFromTheSystemKeyAndThenOwnsTheThrottle() {
@@ -406,19 +406,23 @@ public final class MmtrConsistVehicleMotionTests {
 
 		assertEquals(MmtrCabState.KeyHolder.SYSTEM, v.getMmtrCabKeyHolder(), "the staging seam holds the system key");
 		assertEquals(MmtrCabState.Cab.CAB_B, v.getMmtrActiveCab());
-		assertFalse(v.canTakeMmtrControl(crew), "the system key drives nobody");
+		assertFalse(v.canTakeMmtrControl(crew), "system 钥匙不代替司机：没人骑在司机位上就不能操纵");
 
 		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_A, crew), "the crew takes the cab the system key held");
 		assertEquals(MmtrCabState.KeyHolder.CREW, v.getMmtrCabKeyHolder());
 		assertEquals("CAB_A", v.getMmtrActiveCabFromSync(), "the cab state is mirrored for clients");
 		assertEquals(crew.toString(), v.getMmtrCabCrewFromSync());
-		// Both players ride as cab drivers; only the one whose key is in the cab may actually drive.
+		// 两位玩家都骑在司机位上：钥匙不再是前提 ⇒ 两人都拿得到；先动手的那位拿到之后，
+		// 占用锁把另一位挡住 —— 这就是"一列车上只有一个司机"。
 		final ObjectArrayList<VehicleRidingEntity> riders = new ObjectArrayList<>();
 		riders.add(new VehicleRidingEntity(crew, 0, 0, 0, 0, false, true, true, false, false, false, false));
 		riders.add(new VehicleRidingEntity(other, 0, 0, 0, 0, false, true, true, false, false, false, false));
 		v.updateRidingEntities(riders);
 		assertTrue(v.canTakeMmtrControl(crew));
-		assertFalse(v.canTakeMmtrControl(other), "another crew member cannot drive someone else's consist");
+		assertTrue(v.canTakeMmtrControl(other), "钥匙不再是前提：骑在司机位上就能开（2026-09-19）");
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1), crew);
+		assertTrue(v.isMmtrManualOverride());
+		assertFalse(v.canTakeMmtrControl(other), "占用锁：持有者还在司机位上时别人抢不走");
 
 		// The engine's own insert is refused while the crew holds the key, and the crew key cannot be
 		// pulled by anyone else.
@@ -426,16 +430,22 @@ public final class MmtrConsistVehicleMotionTests {
 		assertFalse(v.leaveMmtrCab(other));
 		assertEquals(MmtrCabState.Cab.CAB_A, v.getMmtrActiveCab());
 
-		// The crew can drive; pulling the key drops the override on the next tick (no key, no traction).
-		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1), crew);
-		assertTrue(v.isMmtrManualOverride());
 		driveTicks(v, 2, positions());
 		assertTrue(v.getSpeed() > 0);
+		// 拔钥匙**不再**断牵引：override 跟着司机位走、不跟着钥匙走（否则站在司机位上的人会突然失去制动）。
 		assertTrue(v.leaveMmtrCab(crew));
 		driveTicks(v, 1, positions());
-		assertFalse(v.isMmtrManualOverride(), "pulling the key releases the driving authority");
+		assertTrue(v.isMmtrManualOverride(), "人还在司机位上 ⇒ 操纵权还在（钥匙不再是前提）");
 		assertEquals(MmtrCabState.Cab.NONE, v.getMmtrActiveCab());
 		assertEquals(MmtrCabState.KeyHolder.NONE, v.getMmtrCabKeyHolder());
+		// 走开（不再"骑着的司机"）才交还操纵权 —— 放宽之后这是唯一的交还判据。
+		// 注意 updateRidingEntities 收的是**逐人的更新**：要让某人下车得发一条 ridingCar = -1 的记录，
+		// 传空表什么也不会移除。
+		final ObjectArrayList<VehicleRidingEntity> dismount = new ObjectArrayList<>();
+		dismount.add(new VehicleRidingEntity(crew, -1, 0, 0, 0, false, false, false, false, false, false, false));
+		v.updateRidingEntities(dismount);
+		driveTicks(v, 1, positions());
+		assertFalse(v.isMmtrManualOverride(), "司机位空了 ⇒ 交还操纵权");
 	}
 
 	/** Taking a cab also disarms an auto run that was armed under the system key. */

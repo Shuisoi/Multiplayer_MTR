@@ -471,6 +471,10 @@ public final class InitClient {
 		// box with white text is a HUD element even when it tracks a world position.
 		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(MmtrInteractPrompt::render);
 
+		// MMTR: 三手柄机车的右上角简略 HUD（速度 + 油门/制动/定速/换向）。只在坐在司机位上时画，
+		// 判据与"能不能操作手柄"同源（MmtrDriverSeat），所以能看到 HUD 就一定能操作。
+		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(org.mtr.mod.render.MmtrDriverHud::render);
+
 		Config.init(MinecraftClient.getInstance().getRunDirectoryMapped());
 
 		BlockTactileMap.BlockEntity.updateSoundSource = TACTILE_MAP_SOUND_INSTANCE::setPos;

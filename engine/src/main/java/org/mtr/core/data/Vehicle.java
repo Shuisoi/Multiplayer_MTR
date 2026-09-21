@@ -1527,8 +1527,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public void simulate(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, @Nullable Long2ObjectOpenHashMap<LongObjectImmutablePair<Vehicle>> vehicleTimesAlongRoute) {
 		// MMTR: release the explicit override as soon as its driver no longer rides as a cab
 		// driver (occupation lock), so a stale ControlState never keeps a consist moving and a
-		// new driver can take over.
-		if (!isClientside && MmtrDriveAccess.shouldAutoRelease(mmtrManualOverride, mmtrDriverUuid, mmtrDriverUuid != null && hasMmtrDriverRiding(mmtrDriverUuid) && holdsMmtrCabKey(mmtrDriverUuid))) {
+		// new driver can take over. 钥匙不参与这个判据（2026-09-19）：司机位空了才交还，
+		// 而不是"钥匙被拔掉就断牵引"—— 后者会让站着没动的人突然失去制动。
+		if (!isClientside && MmtrDriveAccess.shouldAutoRelease(mmtrManualOverride, mmtrDriverUuid, mmtrDriverUuid != null && hasMmtrDriverRiding(mmtrDriverUuid))) {
 			releaseMmtrManualOverride();
 		}
 
@@ -2666,9 +2667,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * Whether {@code uuid} may drive this consist from the cab: a consist-body train is only
-	 * controllable by the crew member whose key is actually in the cab (the engine's placeholder key
-	 * drives nobody). Legacy path vehicles without a cab model keep the old riding-driver rule.
+	 * Whether {@code uuid} holds the key of this consist's manned cab ("NONE" / "SYSTEM" / "CREW").
+	 *
+	 * <p><b>不再参与操纵判据</b>（2026-09-19：操作手柄不需要钥匙，见 {@link #canTakeMmtrControl}）。
+	 * 留着是因为它回答的是另一个问题——"钥匙在谁手里"，驾驶室界面与运维查询用它，
+	 * 而 {@code SYSTEM} 钥匙（自动运行的占位钥匙）与乘务员钥匙的区别也只有这里能问。</p>
 	 */
 	public boolean holdsMmtrCabKey(@Nullable UUID uuid) {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
@@ -2857,6 +2860,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * Server-authoritative driver check: may {@code uuid} take/keep MMTR control right now?
 	 * A {@code null} uuid keeps the legacy semantic of "some cab driver is present" so older
 	 * no-identity callers (tests/tools) keep working.
+	 *
+	 * <p><b>钥匙不再是操纵的前提</b>（用户口径 2026-09-19：「操作手柄不需要手里握着钥匙」）。
+	 * 判据只认"骑在这辆车上、并且是司机位"（{@code isDriver} 由客户端按**沿车长的位置**判，
+	 * 见 {@code MmtrDriverSeat}）—— 以前还要求 {@code holdsMmtrCabKey}，于是"人坐在司机位上、
+	 * 引擎里放着一把 system 钥匙"的组合按了没反应，正是用户报的那件事。</p>
+	 *
+	 * <p>仍然拦着的：无任务不得操纵（T4 策略闸门）、以及"一列车上只有一个司机"的占用锁
+	 * （{@link MmtrDriveAccess#canControl}：当前持有者还在司机位上时别人抢不走）。</p>
 	 */
 	public boolean canTakeMmtrControl(@Nullable UUID uuid) {
 		// T4 准入闸门：无任务不得操纵（策略开关；默认关，见 MmtrDriveAccess.taskAdmitsDriving）。
@@ -2873,7 +2884,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			});
 			return anyDriverRiding[0];
 		}
-		final boolean senderIsRidingDriver = hasMmtrDriverRiding(uuid) && holdsMmtrCabKey(uuid);
+		final boolean senderIsRidingDriver = hasMmtrDriverRiding(uuid);
 		final boolean holderStillRiding = mmtrDriverUuid == null || hasMmtrDriverRiding(mmtrDriverUuid);
 		return MmtrDriveAccess.canControl(senderIsRidingDriver, mmtrManualOverride, mmtrDriverUuid, uuid, holderStillRiding);
 	}
