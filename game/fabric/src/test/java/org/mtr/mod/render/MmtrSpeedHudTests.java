@@ -67,23 +67,43 @@ public final class MmtrSpeedHudTests {
 		assertTrue(MmtrSpeedHud.digitOffset(2, WIDTHS[8], cellWidth) < 27, "第三位仍在整块内");
 	}
 
-	/** 版位：**右对齐**（用户 2026-09-21 由左下角改为右下角）。 */
+	/** 版位：**右对齐**，且数字右边缘要给单位（km/h）让出位置（用户 2026-09-21 加单位）。 */
 	@Test
-	public void theBlockIsFlushWithTheRightEdge() {
+	public void theBlockIsFlushWithTheRightEdgeLeavingRoomForTheUnit() {
 		final int[] windowWidths = {320, 427, 640, 854, 1920};
 		final float[] scales = {2F, 4F, 4.5F};
-		for (final int windowWidth : windowWidths) {
-			for (final float scale : scales) {
-				for (final int cellWidth : new int[]{8, 9, 11, 13}) {
-					final int edgePadding = 8;
-					final int left = MmtrSpeedHud.blockLeft(windowWidth, cellWidth, scale, edgePadding);
-					final int right = left + Math.round(3 * cellWidth * scale);
-					// ① 右边缘钉在"屏宽 - 留白" ⇒ 读数不会随数字宽度左右移动
-					assertEquals(windowWidth - edgePadding, right,
-						"屏宽 " + windowWidth + " 格宽 " + cellWidth + " 缩放 " + scale);
-					// ② 整块必须还在屏幕里（窗口别太窄）
-					assertTrue(left >= 0, "屏宽 " + windowWidth + " 下整块跑到屏幕外了：" + left);
+		// 尾部宽度：0 = 没有单位；14 / 22 = km/h 在不同字号下占的宽度
+		for (final int trailingWidth : new int[]{0, 14, 22}) {
+			for (final int windowWidth : windowWidths) {
+				for (final float scale : scales) {
+					for (final int cellWidth : new int[]{8, 9, 11, 13}) {
+						final int edgePadding = 8;
+						final int left = MmtrSpeedHud.digitsLeft(windowWidth, cellWidth, scale, edgePadding, trailingWidth);
+						final int digitsRight = left + Math.round(3 * cellWidth * scale);
+						// ① 数字右边缘 = 屏宽 - 留白 - 单位宽度 ⇒ 单位紧贴右边、数字不压上去
+						assertEquals(windowWidth - edgePadding - trailingWidth, digitsRight,
+							"屏宽 " + windowWidth + " 格宽 " + cellWidth + " 缩放 " + scale + " 尾宽 " + trailingWidth);
+						// ② 整块必须还在屏幕里（窗口别太窄）
+						assertTrue(left >= 0, "屏宽 " + windowWidth + " 尾宽 " + trailingWidth + " 下整块跑到屏幕外了：" + left);
+					}
 				}
+			}
+		}
+	}
+
+	/** 图标是拿矩形拼出来的圆：中心半宽 = 半径、边缘为 0、左右对称、逼近真值。 */
+	@Test
+	public void theIconsAreDrawnAsCircles() {
+		for (final int radius : new int[]{6, 8, 10, 13}) {
+			assertEquals(radius, MmtrSpeedHud.circleHalfWidth(radius, 0), "圆心那一行最宽，等于半径");
+			assertEquals(0, MmtrSpeedHud.circleHalfWidth(radius, radius), "圆的最下一行");
+			assertEquals(0, MmtrSpeedHud.circleHalfWidth(radius, -radius), "圆的最上一行");
+			assertEquals(0, MmtrSpeedHud.circleHalfWidth(radius, radius + 3), "圆外不画");
+			for (int dy = -radius; dy <= radius; dy++) {
+				final int halfWidth = MmtrSpeedHud.circleHalfWidth(radius, dy);
+				final double exact = Math.sqrt((double) radius * radius - (double) dy * dy);
+				assertTrue(Math.abs(halfWidth - exact) <= 1, "r=" + radius + " dy=" + dy + "：" + halfWidth + " 应贴近 " + exact);
+				assertEquals(halfWidth, MmtrSpeedHud.circleHalfWidth(radius, -dy), "上下对称");
 			}
 		}
 	}
