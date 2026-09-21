@@ -139,8 +139,22 @@ public final class MmtrSpeedHud {
 
 		final GuiDrawing guiDrawing = new GuiDrawing(graphicsHolder);
 		guiDrawing.beginDrawingTexture(texture.identifier());
-		guiDrawing.drawTexture(window.getScaledWidth() - HUD_WIDTH, window.getScaledHeight() - HUD_HEIGHT, HUD_WIDTH, HUD_HEIGHT, 0, 0, 1, 1);
+		final double[] quad = screenQuad(window.getScaledWidth(), window.getScaledHeight());
+		guiDrawing.drawTexture(quad[0], quad[1], quad[2], quad[3], 0, 0, 1, 1);
 		guiDrawing.finishDrawingTexture();
+	}
+
+	/**
+	 * HUD 在屏幕上的绘制矩形 {@code {x1, y1, x2, y2}}（GUI 单位，y 自屏幕顶往下），右下角顶住屏幕角。
+	 *
+	 * <p><b>★ 为什么单独抽出来</b>：{@code GuiDrawing.drawTexture} 的 8 参数重载收的是
+	 * **两个角**（x1,y1,x2,y2），不是 {@code (x,y,w,h)} —— 参数全是 {@code double}，写错了照样编译。
+	 * 栅格化那一版第一次真的去贴图，我就把宽高填进了后两个角的槽位，于是四边形从右下角一路拉到
+	 * (208,104)，整块被斜着摊到屏幕中上部（用户报的"UI 不在右下角了"）。这条几何现在由
+	 * {@code MmtrSpeedHudTests} 钉住：尺寸 = 画布尺寸、右/下边缘齐屏、且 x1&lt;x2、y1&lt;y2。</p>
+	 */
+	static double[] screenQuad(int scaledWindowWidth, int scaledWindowHeight) {
+		return new double[]{scaledWindowWidth - HUD_WIDTH, scaledWindowHeight - HUD_HEIGHT, scaledWindowWidth, scaledWindowHeight};
 	}
 
 	/**

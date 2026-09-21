@@ -186,4 +186,32 @@ public final class MmtrSpeedHudTests {
 		}
 		return inside;
 	}
+
+	/**
+	 * ★ 贴图四边形必须**钉在屏幕右下角**（用户：「UI 不在右下角了」）。
+	 *
+	 * <p>{@code GuiDrawing.drawTexture} 的 8 参数重载收的是**两个角** {@code (x1,y1,x2,y2)}，
+	 * 不是 {@code (x,y,w,h)} —— 参数全是 {@code double}，把宽高填进后两个槽位照样编译通过，
+	 * 结果四边形从 (屏宽−208, 屏高−104) 一路拉到 (208,104)，整块被摊到屏幕中上部。
+	 * 这条判据就是钉这个：尺寸对、右/下边缘齐屏、且**不能是反向矩形**。</p>
+	 */
+	@Test
+	public void theHudQuadIsPinnedToTheBottomRightCorner() {
+		final int[][] windows = {{320, 180}, {427, 240}, {640, 360}, {854, 480}, {1920, 1080}};
+		for (final int[] windowSize : windows) {
+			final int width = windowSize[0];
+			final int height = windowSize[1];
+			final double[] quad = MmtrSpeedHud.screenQuad(width, height);
+			assertEquals(4, quad.length, "四边形是 x1,y1,x2,y2");
+			// ① 尺寸必须正好是画布尺寸（w/h 填错槽位时这里立刻炸）
+			assertEquals(MmtrSpeedHud.HUD_WIDTH, quad[2] - quad[0], 1e-9, "屏 " + width + "：宽度必须是 " + MmtrSpeedHud.HUD_WIDTH);
+			assertEquals(MmtrSpeedHud.HUD_HEIGHT, quad[3] - quad[1], 1e-9, "屏 " + width + "：高度必须是 " + MmtrSpeedHud.HUD_HEIGHT);
+			// ② 右边缘与下边缘齐屏 ⇒ 贴着右下角
+			assertEquals(width, quad[2], 1e-9, "屏 " + width + "：右边缘应齐屏");
+			assertEquals(height, quad[3], 1e-9, "屏 " + width + "：下边缘应齐屏");
+			// ③ x1<x2、y1<y2（反向矩形就是当初那个 bug）
+			assertTrue(quad[0] < quad[2] && quad[1] < quad[3], "屏 " + width + "：四边形反向了 " + quad[0] + "," + quad[1]);
+			assertTrue(quad[0] >= 0 && quad[1] >= 0, "屏 " + width + "：整块应还在屏幕里");
+		}
+	}
 }

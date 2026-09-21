@@ -725,6 +725,17 @@
   做成像素级断言（采样点缺底即 exit 1）。`sandbox/run-speed-hud-probe.ps1` 一条命令跑完
   368+26+20 项算术检查 / 23 项真实字体版面检查 / 14 点暗底采样 / 7 条 JUnit（自带 junit-platform
   手动入口，不用 Gradle、不用关游戏）。客户端 437 源/643 类编译通过。
+  **224b = 回归：第一次真的贴图就把 `drawTexture` 的参数写错了**（用户：「UI 不在右下角了」）：
+  `GuiDrawing.drawTexture` 的四个 `double` 是**两个角** `(x1,y1,x2,y2)`，不是 `(x,y,w,h)` ——
+  我按"位置+尺寸"填了后两个槽位，四边形从 (屏宽−208, 屏高−104) 拉到 (208,104)，整块被摊到屏幕中上部。
+  **编译期抓不到**（8 个参数全是 double），**这一轮的离线探针也抓不到**：探针验的是"画布里的内容"
+  （栅格化/字号/暗底），而"贴图落在屏幕哪里"只有进游戏才看得见 —— 上一版的 HUD 是拿 MC 图元直接画在
+  屏幕坐标上的、根本没有贴图，所以这个错是新引入的。定位靠 `javap -c` 反编译 mapping 层：
+  四个顶点是 `(x1,y1)(x1,y2)(x2,y2)(x2,y1)`、中间无减法 ⇒ 就是两个角（上游 `RailwaySignScreen`
+  的 `drawTexture(x, y, x+size, y+size, …)` 同证）。修法 = 贴图矩形抽成纯函数 `screenQuad(...)`，
+  用例钉住"尺寸 = 画布尺寸 / 右·下边缘齐屏 / x1<x2、y1<y2"，red-proof 塞回旧写法当场失败
+  （`屏 320：宽度必须是 208 ==> expected: <208.0> but was: <96.0>`）。**教训**：屏幕坐标这类
+  "只有进游戏才看得见"的算术，必须抽成纯函数进用例，靠出图是验不到的。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
