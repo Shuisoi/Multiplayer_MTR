@@ -2,11 +2,13 @@ package org.mtr.mod.render;
 
 import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mapping.holder.MinecraftClient;
+import org.mtr.mapping.holder.MutableText;
 import org.mtr.mapping.holder.Text;
 import org.mtr.mapping.holder.Window;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mapping.mapper.GuiDrawing;
 import org.mtr.mapping.mapper.TextHelper;
+import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MmtrDriveInput;
 import org.mtr.mod.client.MmtrDriverSeat;
 import org.mtr.mod.data.IGui;
@@ -74,11 +76,18 @@ public final class MmtrDriverHud {
 			return;
 		}
 
+		// 字体：MMTR 屏幕 UI 字体（DIN 1451 西文 + HarmonyOS Sans SC 中文，notes/221）。
+		// ★ 测量与绘制必须用**同一份带样式的文本**：换字体后字宽会变，用默认字体量、用 UI 字体画，
+		//   面板宽度与右对齐就会错位（这类"差几个像素"的问题在屏幕上很难归因）。
+		final MutableText[] labels = new MutableText[rows.length];
+		final MutableText[] values = new MutableText[rows.length];
 		int labelWidth = 0;
 		int valueWidth = 0;
-		for (final Row row : rows) {
-			labelWidth = Math.max(labelWidth, GraphicsHolder.getTextWidth(row.label()));
-			valueWidth = Math.max(valueWidth, GraphicsHolder.getTextWidth(row.value()));
+		for (int i = 0; i < rows.length; i++) {
+			labels[i] = IDrawing.withUIFont(TextHelper.literal(rows[i].label()));
+			values[i] = IDrawing.withUIFont(TextHelper.literal(rows[i].value()));
+			labelWidth = Math.max(labelWidth, GraphicsHolder.getTextWidth(labels[i]));
+			valueWidth = Math.max(valueWidth, GraphicsHolder.getTextWidth(values[i]));
 		}
 
 		final Window window = minecraftClient.getWindow();
@@ -94,10 +103,10 @@ public final class MmtrDriverHud {
 		guiDrawing.finishDrawingRectangle();
 
 		int y = panelTop + PADDING;
-		for (final Row row : rows) {
-			graphicsHolder.drawText(row.label(), panelLeft + PADDING, y, LABEL_COLOR, true, GraphicsHolder.getDefaultLight());
+		for (int i = 0; i < rows.length; i++) {
+			graphicsHolder.drawText(labels[i], panelLeft + PADDING, y, LABEL_COLOR, true, GraphicsHolder.getDefaultLight());
 			// 值右对齐：三根手柄的数字长短不一（"牵引 100%" vs "2"），右对齐才看得出变化。
-			graphicsHolder.drawText(row.value(), panelRight - PADDING - GraphicsHolder.getTextWidth(row.value()), y, row.valueColor(), true, GraphicsHolder.getDefaultLight());
+			graphicsHolder.drawText(values[i], panelRight - PADDING - GraphicsHolder.getTextWidth(values[i]), y, rows[i].valueColor(), true, GraphicsHolder.getDefaultLight());
 			y += IGui.TEXT_HEIGHT + LINE_SPACING;
 		}
 	}

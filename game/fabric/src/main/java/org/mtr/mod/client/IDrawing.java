@@ -208,6 +208,25 @@ public interface IDrawing {
 		return Config.getClient().getUseMTRFont() ? TextHelper.setStyle(text, Style.getEmptyMapped().withFont(new Identifier(Init.MOD_ID, "mtr"))) : text;
 	}
 
+	/**
+	 * MMTR **屏幕 / 仪表 UI 字体**（notes/221）：西文数字走 Alte DIN 1451 Mittelschrift，中文走 HarmonyOS Sans SC。
+	 *
+	 * <p>与 {@link #withMTRFont} 是**两套东西**，刻意分开：{@code mtr:mtr} 是上游 MTR 自己的 Noto 那套
+	 * （站牌、PIDS、电梯面板都在用，且受 {@code useMTRFont} 开关控制），而这一套只给 MMTR 的屏幕 HUD
+	 * 与仪表 UI 用。字体定义见 {@code assets/mtr/font/ui.json} —— **没有碰** {@code minecraft:default}，
+	 * 游戏本身的字体（聊天、原版 GUI）一个字都不变。</p>
+	 *
+	 * <p>字形缺失时 MC 会退到定义里挂着的原版兜底（space/default/unifont），所以即便字体资源没装上也不会画成空白。</p>
+	 */
+	static MutableText withUIFont(MutableText text) {
+		return TextHelper.setStyle(text, Style.getEmptyMapped().withFont(new Identifier(Init.MOD_ID, "ui")));
+	}
+
+	/** {@link #withUIFont} 的粗体变体（标题、告警、要强调的读数；中文走 HarmonyOS Sans SC Bold）。 */
+	static MutableText withUIFontBold(MutableText text) {
+		return TextHelper.setStyle(text, Style.getEmptyMapped().withFont(new Identifier(Init.MOD_ID, "ui_bold")));
+	}
+
 	@FunctionalInterface
 	interface DrawingCallback {
 		void drawingCallback(float x1, float y1, float x2, float y2);

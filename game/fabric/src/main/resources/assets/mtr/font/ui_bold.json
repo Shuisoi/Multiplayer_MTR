@@ -1,0 +1,27 @@
+{
+	"_comment": "MMTR 屏幕/仪表 UI 字体的**粗体**变体（notes/221）：西文仍是 DIN 1451（该字体只有一种字重，粗体由 MC 的 TTF provider 按同一轮廓渲染），中文用 HarmonyOS Sans SC Bold。用于标题、告警、需要强调的读数。",
+	"providers": [
+		{
+			"type": "ttf",
+			"file": "mtr:font/din1451alt.ttf",
+			"size": 12.0,
+			"oversample": 8.0
+		},
+		{
+			"type": "ttf",
+			"file": "mtr:font/harmonyos-sans-sc-bold.ttf",
+			"shift": [ 0, 0.5 ],
+			"size": 12.0,
+			"oversample": 16.0
+		},
+		{
+			"type": "reference", "id": "minecraft:include/space"
+		},
+		{
+			"type": "reference", "id": "minecraft:include/default"
+		},
+		{
+			"type": "reference", "id": "minecraft:include/unifont"
+		}
+	]
+}

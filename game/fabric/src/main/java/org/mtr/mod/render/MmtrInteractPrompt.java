@@ -4,11 +4,13 @@ import org.mtr.core.tool.Vector;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mapping.holder.MinecraftClient;
+import org.mtr.mapping.holder.MutableText;
 import org.mtr.mapping.holder.Window;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mapping.mapper.GuiDrawing;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.KeyBindings;
+import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
@@ -100,10 +102,12 @@ public final class MmtrInteractPrompt {
 	}
 
 	/**
-	 * Entering a cab. <b>NOT LIVE YET</b>: deleting the riding layer (notes/185) removed the cab
-	 * interaction that this key drove, so the prompt is shown dimmed until rebuild step B2 restores it.
+	 * Entering a cab. <b>LIVE since 2026-09-19</b> (rebuild step B2): {@code MmtrCabInteraction} consumes
+	 * the key - it resolves which cab the player is aiming at (this class's own search, so the prompt and
+	 * the action can never disagree about the target), asks the engine to put the key in, and moves the
+	 * camera onto the seat.
 	 */
-	private static final Action ACTION_ENTER_CAB = new Action(keyLabel("MMTR_CAB_INTERACT", "G"), "进入驾驶室", false);
+	private static final Action ACTION_ENTER_CAB = new Action(keyLabel("MMTR_CAB_INTERACT", "G"), "进入驾驶室", true);
 
 	/** Doors. The per-side keys went with the riding layer for the same reason. */
 	private static final Action ACTION_DOORS = new Action(keyLabel("MMTR_DOOR_LEFT", "Y"), "开门", false);
@@ -196,7 +200,11 @@ public final class MmtrInteractPrompt {
 							world.x(), world.y() + LABEL_LIFT_M, world.z(),
 							distanceSquared,
 							labelFor(anchor, action),
-							action
+							action,
+							vehicle.getId(),
+							carNumber,
+							anchor.cab,
+							car.rotation
 					));
 				}
 			}
@@ -238,7 +246,10 @@ public final class MmtrInteractPrompt {
 		logProjection(window, candidate, point, projectionSource());
 
 		final String text = candidate.text;
-		final int textWidth = GraphicsHolder.getTextWidth(text);
+		// 字体：MMTR 屏幕 UI 字体（DIN 1451 西文 + HarmonyOS Sans SC 中文，notes/221）。
+		// 背景框的宽度必须用**同一份带样式的文本**量出来 —— 换字体后字宽会变，否则框会与字错位。
+		final MutableText styledText = IDrawing.withUIFont(TextHelper.literal(text));
+		final int textWidth = GraphicsHolder.getTextWidth(styledText);
 		final int halfWidth = textWidth / 2;
 		final int textTop = point.y - IGui.TEXT_HEIGHT / 2;
 
@@ -252,7 +263,7 @@ public final class MmtrInteractPrompt {
 		);
 		guiDrawing.finishDrawingRectangle();
 
-		graphicsHolder.drawText(text, point.x - halfWidth, textTop, candidate.action.live ? TEXT_COLOR : TEXT_COLOR_INACTIVE, true, GraphicsHolder.getDefaultLight());
+		graphicsHolder.drawText(styledText, point.x - halfWidth, textTop, candidate.action.live ? TEXT_COLOR : TEXT_COLOR_INACTIVE, true, GraphicsHolder.getDefaultLight());
 	}
 
 	/**
@@ -283,10 +294,16 @@ public final class MmtrInteractPrompt {
 	private static String lastLoggedProjectionSource;
 
 	private static void logProjection(Window window, Candidate candidate, ScreenPoint point, String projectionSource) {
-		if (projectionSource.equals(lastLoggedProjectionSource)) {
+		// Dedup on the SOURCE only, never on `projectionSource`, which is the human-readable line and
+		// carries the per-frame scale/FOV numbers. Keying on the whole string defeated this guard's own
+		// purpose: the numbers change every frame, so it fired on every frame a prompt was drawn (44 lines
+		// in one second in a real session, measured 2026-09-19) and buried the one state change it exists
+		// to announce. `lastProjectionSource` is the stable state - the matrix diagonal when the matrix was
+		// readable, otherwise the named reason it was not.
+		if (lastProjectionSource.equals(lastLoggedProjectionSource)) {
 			return;
 		}
-		lastLoggedProjectionSource = projectionSource;
+		lastLoggedProjectionSource = lastProjectionSource;
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
 		org.mtr.mod.Init.LOGGER.info("[MMTR-PROMPT] {} 屏幕=({},{}) 中心=({},{}) 窗口={}x{} 投影={} 相机=({},{},{}) yaw={} pitch={} 目标=({},{},{})",
@@ -614,7 +631,41 @@ public final class MmtrInteractPrompt {
 		return result;
 	}
 
-	private record Candidate(double x, double y, double z, double distanceSquared, String text, Action action) {
+	/**
+	 * One interactable, with everything an ACTION needs to carry it out.
+	 *
+	 * <p>{@code vehicleId}/{@code carNumber}/{@code cab} are only meaningful for a cab door, but they are
+	 * carried on every candidate: the interaction class must act on the SAME target the prompt drew, and
+	 * re-deriving "which cab is nearest" a second time is how the label and the key end up disagreeing
+	 * (the prompt lists every candidate, the action must pick exactly one).</p>
+	 */
+	private record Candidate(double x, double y, double z, double distanceSquared, String text, Action action,
+			long vehicleId, int carNumber, int cab, PositionAndRotation carTransform) {
+	}
+
+	/**
+	 * The cab door the player is aiming at: the nearest one inside {@link #REACH_M} and the view cone.
+	 *
+	 * <p>Exposed for {@code MmtrCabInteraction}, and computed by the same {@link #collect} pass that draws
+	 * the labels, so the {@code [G] 进入驾驶室1} a player sees is exactly the cab the key takes. Aims by
+	 * DISTANCE (not by the smallest angle): among the doors of one end the nearest is the one the player
+	 * is standing at, which is what "take this cab" means.</p>
+	 *
+	 * <p>{@code carTransform} is the aimed CAR's world transform - the interaction needs it to turn the
+	 * cab's car-local facing into the entity yaw the driver should start with.</p>
+	 */
+	@Nullable
+	public static CabTarget findCabTarget(ClientPlayerEntity player) {
+		for (final Candidate candidate : collect(player)) {
+			if (candidate.action == ACTION_ENTER_CAB) {
+				return new CabTarget(candidate.vehicleId, candidate.carNumber, candidate.cab, candidate.carTransform);
+			}
+		}
+		return null;
+	}
+
+	/** @see #findCabTarget(ClientPlayerEntity) */
+	public record CabTarget(long vehicleId, int carNumber, int cab, PositionAndRotation carTransform) {
 	}
 
 	/**

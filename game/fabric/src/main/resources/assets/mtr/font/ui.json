@@ -1,0 +1,27 @@
+{
+	"_comment": "MMTR 屏幕/仪表 UI 字体（notes/221）：西文与数字走 Alte DIN 1451 Mittelschrift（德式工程/铁路数字体，231 字形，正合 BR101 仪表），中文与缺字符回落 HarmonyOS Sans SC。**只给我们的 UI 用**——不碰 minecraft:default（游戏字体），也不动 mtr:mtr（上游 MTR 自己的 Noto 那套）。写法照上游 assets/mtr/font/mtr.json（同一 MC 版本的权威参照）：先列自己的 ttf，再挂原版的 space/default/unifont 兜底，最后那些引用保证缺字形时不会画成空白。",
+	"providers": [
+		{
+			"type": "ttf",
+			"file": "mtr:font/din1451alt.ttf",
+			"size": 12.0,
+			"oversample": 8.0
+		},
+		{
+			"type": "ttf",
+			"file": "mtr:font/harmonyos-sans-sc-regular.ttf",
+			"shift": [ 0, 0.5 ],
+			"size": 12.0,
+			"oversample": 16.0
+		},
+		{
+			"type": "reference", "id": "minecraft:include/space"
+		},
+		{
+			"type": "reference", "id": "minecraft:include/default"
+		},
+		{
+			"type": "reference", "id": "minecraft:include/unifont"
+		}
+	]
+}

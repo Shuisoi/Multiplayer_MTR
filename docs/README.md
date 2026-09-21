@@ -684,6 +684,16 @@
   先用 IDEA 那条命令原样起过一次证明游戏没问题（44 mod、`[MMTR-HLTH] vehicles=8`），
   再把 forge 改成**可选子工程**（`settings.gradle`，`-Pmmtr.forge=true` 才包含）：根项目 `compileJava`
   BUILD SUCCESSFUL、`projects` 只剩 `:fabric`。用户侧只需**重新导入 Gradle 项目**。
+  **221 = 屏幕/仪表 UI 字体导入**（用户口径：仅屏幕与仪表 UI，**不替换游戏字体**）：西文数字 =
+  **Alte DIN 1451 Mittelschrift**（231 字形，德式工程数字体）、中文 = **HarmonyOS Sans SC**（29221 字形），
+  按 `Font.canDisplayUpTo` 实测字形覆盖后定角色。两条渲染链各有入口、**同一批 TTF 同一套分工**：
+  屏幕 UI 走 MC 字体系统（新增字体 id `mtr:ui`/`mtr:ui_bold`，写法照上游 `mtr.json`，多 provider 天然
+  字符级回退，**不碰** `minecraft:default` 与上游 `mtr:mtr`），仪表 UI（BR101 `mmtr_hud_*` 面板）走
+  `MmtrPanelFont`（AWT 物理字体，没有 providers 兜底链，所以显式判"中文或 DIN 画不出→HarmonyOS"）。
+  核对过的机制：1.20.4 的 `ttf` provider 字段名取自类文件字面量、字形**按需烘焙**（不是加载时烘 2.9 万）、
+  `FontSet.textures` 是列表可自动加张；另修了一处对齐坑——**宽度测量必须用带样式的文本**
+  （`getTextWidth(MutableText)`），否则 HUD 面板宽度与提示背景框会与字错位。
+  离线验证：`PanelFontProbe` 15 个样本选择全对（含 `←` 回退）；客户端 436 源/641 类编译通过。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
