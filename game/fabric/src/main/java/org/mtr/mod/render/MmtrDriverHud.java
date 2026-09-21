@@ -1,9 +1,12 @@
 package org.mtr.mod.render;
 
+import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mapping.holder.MinecraftClient;
+import org.mtr.mapping.holder.Text;
 import org.mtr.mapping.holder.Window;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mapping.mapper.GuiDrawing;
+import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.client.MmtrDriveInput;
 import org.mtr.mod.client.MmtrDriverSeat;
 import org.mtr.mod.data.IGui;
@@ -47,6 +50,10 @@ public final class MmtrDriverHud {
 	private static final int BRAKE_COLOR = 0xFFFF9900;
 	private static final int EMERGENCY_COLOR = 0xFFFF5555;
 	private static final int CRUISE_COLOR = 0xFF55FFFF;
+	private static final int HOLD_COLOR = 0xFFFFAA33;
+
+	/** 上一拍显示过的"为什么不动"，用来只在**变化**时给玩家一句提示（动作栏），而不是每帧刷屏。 */
+	private static String lastHoldReason = "";
 
 	/** 一行：标签 + 值 + 值的颜色（标签一律用同一个弱色，值才承载信息）。 */
 	private record Row(String label, String value, int valueColor) {
@@ -57,10 +64,12 @@ public final class MmtrDriverHud {
 		if (minecraftClient.getCurrentScreenMapped() != null) {
 			return;
 		}
+		final VehicleExtension ridingVehicle = MmtrDriverSeat.ridingVehicle();
+		notifyHoldReason(ridingVehicle);
 		if (!MmtrDriverSeat.isAtControls()) {
 			return;
 		}
-		final Row[] rows = rows(MmtrDriverSeat.ridingVehicle());
+		final Row[] rows = rows(ridingVehicle);
 		if (rows.length == 0) {
 			return;
 		}
@@ -96,12 +105,50 @@ public final class MmtrDriverHud {
 	private static Row[] rows(@Nullable VehicleExtension vehicle) {
 		final int speedKmh = vehicle == null ? 0 : (int) Math.round(Math.abs(vehicle.getSpeed()) * 3600);
 		final int driveHandle = MmtrDriveInput.getDriveHandle();
+		final String holdReason = holdReasonOf(vehicle);
+		if (holdReason.isEmpty()) {
+			return new Row[]{
+				new Row("速度", speedKmh + " km/h", VALUE_COLOR),
+				new Row("油门", MmtrDriveInput.driveHandleText(), driveHandle > 0 ? TRACTION_COLOR : driveHandle < 0 ? BRAKE_COLOR : LABEL_COLOR),
+				new Row("制动", MmtrDriveInput.brakeText(), MmtrDriveInput.isEmergencyBrake() ? EMERGENCY_COLOR : MmtrDriveInput.getBrakePosition() > 0 ? BRAKE_COLOR : LABEL_COLOR),
+				new Row("定速", MmtrDriveInput.cruiseText(), MmtrDriveInput.getCruiseKmh() > 0 ? CRUISE_COLOR : LABEL_COLOR),
+				new Row("换向", MmtrDriveInput.reverserText(), VALUE_COLOR)
+			};
+		}
+		// 被信号/进路/任务按住时，把理由顶到最上面一行 —— 这正是"手柄有反应但车不动"的答案。
 		return new Row[]{
+			new Row("状态", holdReason, HOLD_COLOR),
 			new Row("速度", speedKmh + " km/h", VALUE_COLOR),
 			new Row("油门", MmtrDriveInput.driveHandleText(), driveHandle > 0 ? TRACTION_COLOR : driveHandle < 0 ? BRAKE_COLOR : LABEL_COLOR),
 			new Row("制动", MmtrDriveInput.brakeText(), MmtrDriveInput.isEmergencyBrake() ? EMERGENCY_COLOR : MmtrDriveInput.getBrakePosition() > 0 ? BRAKE_COLOR : LABEL_COLOR),
 			new Row("定速", MmtrDriveInput.cruiseText(), MmtrDriveInput.getCruiseKmh() > 0 ? CRUISE_COLOR : LABEL_COLOR),
 			new Row("换向", MmtrDriveInput.reverserText(), VALUE_COLOR)
 		};
+	}
+
+	@Nullable
+	private static String holdReasonOf(@Nullable VehicleExtension vehicle) {
+		return vehicle == null ? "" : vehicle.getMmtrHoldReasonFromSync();
+	}
+
+	/**
+	 * 理由**变化**时给玩家一句动作栏提示。
+	 *
+	 * <p>为什么不能只靠右上角那行小字：司机盯着前方与信号，不会一直看角落；而"按了油门车不动"
+	 * 恰恰是必须先知道原因的场景（notes/217）。只在变化时提示，理由持续存在期间不再刷屏。</p>
+	 */
+	private static void notifyHoldReason(@Nullable VehicleExtension vehicle) {
+		final String reason = holdReasonOf(vehicle);
+		if (reason.equals(lastHoldReason)) {
+			return;
+		}
+		lastHoldReason = reason;
+		if (reason.isEmpty() || !MmtrDriverSeat.isAtControls()) {
+			return;
+		}
+		final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
+		if (player != null) {
+			player.sendMessage(new Text(TextHelper.literal("车被扣住：" + reason).data), true);
+		}
 	}
 }

@@ -186,6 +186,42 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		return mmtrSectionAuthorityHold ? "block ahead ends at an unset turnout" : "block ahead occupied";
 	}
+
+	/**
+	 * **司机视角的"为什么不动"**：车被运动/信号层按住时给出**一句话**理由（镜像给客户端 HUD）。
+	 *
+	 * <p>为什么需要它（notes/217）：这些闸门（闭塞停车 / 行车许可 / 保护）都跑在司机控制**之前**
+	 * （{@code mmtrBlockedWaiting} 那一支直接 {@code speed = 0}），于是"手柄有反应、车一动不动"在游戏里
+	 * 完全没有解释 —— 用户实测就是这样报的（"刚才能动了，现在又动不了"）。理由原来只写在服务端日志里，
+	 * 而这正是开车的**人**最需要看到的东西。</p>
+	 *
+	 * <p>返回空串 = 没有被按住。文本刻意短（HUD 一行）；详细理由仍在 {@code [MMTR-SIG]} 日志行里。</p>
+	 */
+	private String mmtrMotionHoldReason() {
+		if (mmtrProtection) {
+			return "紧急保护（超速/闯灯）";
+		}
+		if (mmtrBlockedWaiting) {
+			final String detail = mmtrBlockStopReason() == null ? "" : mmtrBlockStopReason();
+			if (detail.contains("进路未设好") || detail.contains("红灯")) {
+				return "前方进路未设好（红灯）";
+			}
+			if (detail.contains("unset turnout")) {
+				return "前方道岔未设好";
+			}
+			return "前方区间被占（闭塞停车）";
+		}
+		if (speed <= 1e-9 && mmtrMotionStoppedAtTarget) {
+			return "已到停车点（站停/等待任务）";
+		}
+		if (speed <= 1e-9 && mmtrMotionWalker instanceof final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker && consistWalker.endOfLine()) {
+			return "前方无进路（死端）";
+		}
+		if (speed <= 1e-9 && mmtrMotionWalker != null && mmtrMotionWalker.atTarget()) {
+			return "已到任务目标轨（等待任务）";
+		}
+		return "";
+	}
 	/**
 	 * Signal S1: this vehicle is parked at its occupancy stop point (blocked by an occupied rail
 	 * ahead). Traction is suppressed while it stands; the flag clears automatically once the block
@@ -1537,6 +1573,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// 而不是"钥匙被拔掉就断牵引"—— 后者会让站着没动的人突然失去制动。
 		if (!isClientside && MmtrDriveAccess.shouldAutoRelease(mmtrManualOverride, mmtrDriverUuid, mmtrDriverUuid != null && hasMmtrDriverRiding(mmtrDriverUuid))) {
 			releaseMmtrManualOverride();
+		}
+
+		// 司机视角的"为什么不动"（notes/217）：这些闸门都跑在司机控制**之前**（闭塞停车那一支直接 speed = 0），
+		// 所以必须在每 tick 的入口处重算并通过镜像发给客户端 —— 否则"手柄有反应、车一动不动"在游戏里没有解释。
+		if (!isClientside) {
+			final String holdReasonNow = mmtrMotionHoldReason();
+			if (!holdReasonNow.equals(mmtrHoldReason)) {
+				mmtrHoldReason = holdReasonNow;
+				vehicleExtraData.mmtrMarkSyncDirty();
+			}
 		}
 
 		// MMTR (server): protection lock countdown after an overrun/SPAD emergency stop.
@@ -3292,6 +3338,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * 空串 = 本车不是三手柄车底。
 	 */
 	public String getMmtrHandleSpecFromSync() { return mmtrHandleSpec == null ? "" : mmtrHandleSpec; }
+	/**
+	 * 车为什么不动（司机可读的一句话；空串 = 没有被按住）。镜像字段，见 {@code mmtrMotionHoldReason()}。
+	 * 客户端 HUD 用它回答"手柄有反应但车不动"这个最常见的困惑。
+	 */
+	public String getMmtrHoldReasonFromSync() { return mmtrHoldReason == null ? "" : mmtrHoldReason; }
 	public int getMmtrReverserFromSync() { return (int) mmtrReverser; }
 	public boolean isMmtrProtectionFromSync() { return mmtrProtection; }
 	public boolean isMmtrEmergencyFromSync() { return mmtrEmergency; }

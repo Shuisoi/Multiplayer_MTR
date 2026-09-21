@@ -109,6 +109,10 @@
 			"type": "string",
 			"default": ""
 		},
+		"mmtrHoldReason": {
+			"type": "string",
+			"default": ""
+		},
 		"mmtrThrottleAxis": {
 			"type": "number",
 			"default": 0

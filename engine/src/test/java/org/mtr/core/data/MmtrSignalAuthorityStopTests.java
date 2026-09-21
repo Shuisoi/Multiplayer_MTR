@@ -160,6 +160,42 @@ public final class MmtrSignalAuthorityStopTests {
 			n.tick();
 		}
 		assertEquals(heldM, v.getMmtrMotionWalker().distanceM(), 1e-6, "被许可扣住之后不再前进");
+		// notes/217：被扣住必须有**司机可读**的理由（镜像给客户端 HUD）——
+		// 这些闸门跑在司机控制之前，没有这一条，"手柄有反应但车不动"在游戏里就没有解释。
+		assertEquals("前方进路未设好（红灯）", v.getMmtrHoldReasonFromSync(), "扣住时要把理由镜像给司机");
+	}
+
+	/** notes/217：理由只在被扣住时出现；放行之后必须清空（否则 HUD 会一直挂着一条过期理由）。 */
+	@Test
+	public void theHoldReasonClearsOnceTheTrainIsLetGo() {
+		final ForkNet n = new ForkNet("build/mmtr-t3-hold-reason-clears");
+		final Vehicle v = n.spawn();
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(n.stopTargetM, true);
+		final MmtrRoute route = n.publishPendingRoute(v);
+		for (int i = 0; i < 60; i++) {
+			n.tick();
+		}
+		assertFalse(v.getMmtrHoldReasonFromSync().isEmpty(), "先是红灯：应当有理由");
+
+		// 授权那条腿（与 settingTheRouteLetsTheHeldTrainGo 同一手法）
+		final MmtrTurnout turnout = n.sim.mmtrTurnout(n.fork.getX(), n.fork.getY(), n.fork.getZ());
+		final int legToBranch = turnout.branchLeg.getOrDefault(n.x.getHexId(), -1);
+		n.sim.mmtrPointAuthority.request(n.fork.getX(), n.fork.getY(), n.fork.getZ(), n.x.getHexId(),
+			"v" + v.getId(), legToBranch, n.sim.getCurrentMillis() + 600_000L);
+		n.sim.mmtrRoutes.refresh(v.getId(), n.sim.mmtrPointAuthority);
+		assertTrue(route.isEstablished(), "授权到手 ⇒ 进路 SET");
+		// 走起来必须"没有扣住理由"：逐拍看有没有那种时刻（放行之后前方还可能遇到**下一个**闸门，
+		// 所以不能在 200 拍之后直接断言空 —— 那是在断言"后面一路绿灯"，不是断言这条理由会清）。
+		boolean sawMovementWithoutHold = false;
+		for (int i = 0; i < 200; i++) {
+			n.tick();
+			if (v.getSpeed() > 1e-4 && v.getMmtrHoldReasonFromSync().isEmpty()) {
+				sawMovementWithoutHold = true;
+			}
+		}
+		assertTrue(v.getMmtrMotionWalker().distanceM() > 1.0, "放行后要能走");
+		assertTrue(sawMovementWithoutHold, "必须出现过'在走且没有扣住理由'的时刻（否则 HUD 会一直挂着过期理由）");
 	}
 
 	/** ③：进路一旦设好（授权到手）⇒ 许可放行，车自己续行。 */
