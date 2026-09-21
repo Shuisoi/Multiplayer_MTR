@@ -694,6 +694,15 @@
   `FontSet.textures` 是列表可自动加张；另修了一处对齐坑——**宽度测量必须用带样式的文本**
   （`getTextWidth(MutableText)`），否则 HUD 面板宽度与提示背景框会与字错位。
   离线验证：`PanelFontProbe` 15 个样本选择全对（含 `←` 回退）；客户端 436 源/641 类编译通过。
+  **222 = 屏幕 UI 全变方框：`ttf` provider 的 `file` 不能带 `font/` 前缀**：用户一句「**但车上的仪表
+  字体正常**」把范围一刀切开（仪表链 AWT 正常 ⇒ 文件没问题，问题在 MC 字体定义）——真因是我写成
+  `"file": "mtr:font/din1451alt.ttf"`，而 MC 的 `TrueTypeGlyphProviderDefinition` 会**自己加 `font/`**
+  （类文件里有该字面量；上游 `mtr.json` 写 `mtr:noto-sans-semibold.ttf` 而文件在 `assets/mtr/font/` 下，
+  两边互相印证）⇒ 解析到 `assets/mtr/font/font/…` ⇒ provider 加载失败 ⇒ 该字体没有字形 ⇒ 全方框。
+  修法：`file` 只写文件名；顺带删掉自找风险的顶层 `_comment`（与上游同形）。
+  新增守卫 `scripts/check-font-assets.ps1`（按 MC 规则解析每个 ttf 引用 + 校验文件头，带 `-AssetsRoot`
+  以便在夹具里做 red-proof：实测注入故障 exit=1、真资源 6/6 exit=0）。**过程教训**：red-proof
+  不许改真文件——第一次这么干、调用被中断，文件留在改坏状态且备份是坏后做的。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。

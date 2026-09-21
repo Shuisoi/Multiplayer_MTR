@@ -36,13 +36,19 @@ DIN 画不出的字符（箭头等）回退 HarmonyOS。Bold 变体留给标题/
 
 ```json
 { "providers": [
-  { "type": "ttf", "file": "mtr:font/din1451alt.ttf", "size": 12.0, "oversample": 8.0 },
-  { "type": "ttf", "file": "mtr:font/harmonyos-sans-sc-regular.ttf", "shift": [0, 0.5], "size": 12.0, "oversample": 16.0 },
+  { "type": "ttf", "file": "mtr:din1451alt.ttf", "size": 12.0, "oversample": 8.0 },
+  { "type": "ttf", "file": "mtr:harmonyos-sans-sc-regular.ttf", "shift": [0, 0.5], "size": 12.0, "oversample": 16.0 },
   { "type": "reference", "id": "minecraft:include/space" },
   { "type": "reference", "id": "minecraft:include/default" },
   { "type": "reference", "id": "minecraft:include/unifont" }
 ] }
 ```
+
+> ★ **`file` 只写文件名，不要写 `font/`**（notes/222 的教训）：MC 的 `TrueTypeGlyphProviderDefinition`
+> 会自己加 `font/` 前缀（类文件里有该字面量），写成 `mtr:font/x.ttf` 会被解析成
+> `assets/mtr/font/font/x.ttf` → provider 加载失败 → 该字体没有字形 → **屏幕上全是方框**。
+> 上游 `mtr.json` 写 `mtr:noto-sans-semibold.ttf` 而文件放在 `assets/mtr/font/` 下，两边正好互相印证。
+> 守卫：`scripts/check-font-assets.ps1`（提交前跑一次；带 `-AssetsRoot` 可用夹具做 red-proof）。
 
 - **多 provider = 天然的字符级回退**：首个支持该字符的 provider 胜出 ⇒ 西文数字拿 DIN、中文拿 HarmonyOS，
   最后的原版引用保证"就算一个 TTF 都没装上也不会画成空白"。
