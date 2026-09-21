@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 上车后收起**第一人称的手/物品**（用户口径，notes/226）。
+ * 上车后收起**第一人称的手/物品**（用户口径，notes/226/227）。
  *
  * <p><b>★ 描述符必须精确到这一个重载</b>：{@code HeldItemRenderer} 有两个 {@code renderItem}，
  * 另一个 {@code renderItem(LivingEntity, ItemStack, ModelTransformationMode, boolean, MatrixStack,
@@ -31,7 +31,7 @@ public abstract class HeldItemRendererMixin {
 		cancellable = true
 	)
 	private void mmtrHideFirstPersonItemOnBoard(float tickDelta, MatrixStack matrices, VertexConsumerProvider.Immediate vertexConsumers, ClientPlayerEntity player, int light, CallbackInfo callbackInfo) {
-		if (MmtrVanillaHud.hideHotbarAndHand()) {
+		if (MmtrVanillaHud.hideWhileRiding()) {
 			callbackInfo.cancel();
 		}
 	}

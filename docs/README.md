@@ -773,6 +773,16 @@
   另外三个不是本轮写的、未动（留给用户决定改 `.gitignore` 还是逐个 `-f`）。
   这条坑也做进了守卫：`run-mixin-probe.ps1` 核对完目标后会 `git ls-files`，把"在盘上但没被跟踪"的
   mixin 列出来并提示 `git add -f`。
+  **227 = 收窄成「只收物品栏那一簇」，聊天保留**：用户把口径收窄为「只把物品栏，物品栏上的信息，隐藏，
+  聊天一定要保留」（中途选过"整条 HUD 一起收"，随即用这句否掉了 —— 所以**没有**动 `GameOptions.hudHidden`）。
+  `InGameHudMixin` 从 1 个注入点扩到 4 个，正好是原版里挨着物品栏的那一簇：`renderHotbar`（九格+副手+选中框）、
+  `renderStatusBars`（血量/饥饿/护甲/氧气）、`renderExperienceBar`（经验条+等级）、`renderHeldItemTooltip`
+  （切换物品时弹在物品栏上方的物品名）；加上 `HeldItemRendererMixin` 的第一人称手，共 5 样。
+  **没碰**：聊天、准星、状态效果图标、计分板、F3、字幕；坐骑的 `renderMountHealth`/`renderMountJumpBar` 也没碰。
+  **把"聊天一定要保留"变成判据**：守卫在核对完目标后再扫一遍所有 `method = "…"`，任何注入点名字含 `chat`
+  ⇒ FAIL，否则打印"聊天未被触碰"并**列出全部 7 个注入点**（改口径时一眼看出有没有收多）。判据方法改名
+  `hideHotbarAndHand()` → `hideWhileRiding()`（名字要跟"实际收什么"对齐）。守卫 **7/7** 通过 ——
+  4 个新描述符要是手写错一个，离线就红，不必等进游戏炸 `InjectionError`。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
