@@ -475,6 +475,9 @@ public final class InitClient {
 		// 判据与"能不能操作手柄"同源（MmtrDriverSeat），所以能看到 HUD 就一定能操作。
 		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(org.mtr.mod.render.MmtrDriverHud::render);
 
+		// MMTR: 左下角大号速度读数（三位数字、DIN、右斜体、逐位固定格宽居中）。
+		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(org.mtr.mod.render.MmtrSpeedHud::render);
+
 		Config.init(MinecraftClient.getInstance().getRunDirectoryMapped());
 
 		BlockTactileMap.BlockEntity.updateSoundSource = TACTILE_MAP_SOUND_INSTANCE::setPos;

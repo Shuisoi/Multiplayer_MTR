@@ -703,6 +703,14 @@
   新增守卫 `scripts/check-font-assets.ps1`（按 MC 规则解析每个 ttf 引用 + 校验文件头，带 `-AssetsRoot`
   以便在夹具里做 red-proof：实测注入故障 exit=1、真资源 6/6 exit=0）。**过程教训**：red-proof
   不许改真文件——第一次这么干、调用被中断，文件留在改坏状态且备份是坏后做的。
+  **223 = UI 构建第一件：左下角大号速度读数**（三位数字 / DIN / 右斜体 / **逐位固定格宽居中**）：
+  新增 `MmtrSpeedHud`，`Style.withFont(mtr:ui).withItalic(true)`（MC 的斜体 = 向右剪切，DIN 无斜体字重）；
+  格宽 = 量出 0–9 里最宽的一位 + 呼吸，绘制 x = `i*格宽 + (格宽 - 该位宽度)/2` ⇒ **格子中心与数字无关**，
+  整块宽度恒定、数字原地变化（用户要的"中点固定、不因字宽伸缩"）。只在坐在司机位上时画（判据与
+  "能不能操作"同源）；格宽缓存接进 `CustomResourceLoader.reload`。
+  **一处读错要求**：第一版判据写成"窄/宽数字**左边缘**差 ≤1 px"，离线探针当场 FAIL（1→3 vs 8→1 差 2 px）
+  —— 那 2 px 正是居中的结果，要求是中点固定；探针与 JUnit 都改对后 **99 项检查 / 0 违规**。
+  客户端 437 源/642 类编译通过。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。

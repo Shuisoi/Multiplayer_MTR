@@ -95,6 +95,8 @@ public class CustomResourceLoader {
 		MmtrHudLayout.clearCache();
 		MmtrPanelFont.reset();
 		MmtrPanelTexture.clear();
+		// 屏幕 UI 侧同理：左下角速度读数的"固定格宽"是按字体量出来的，换字体后必须重新量（notes/223）
+		org.mtr.mod.render.MmtrSpeedHud.reset();
 		// MMTR: windshield precipitation/wiper state (per-anchor drops and the generated rain image)
 		MmtrWindshield.clear();
 		TEST_DURATION = 0;
