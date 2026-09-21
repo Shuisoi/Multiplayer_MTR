@@ -6,16 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 屏幕右下角速度读数的排版不变量（notes/223、notes/227）。
+ * 屏幕右下角速度读数的排版不变量（notes/224、notes/225）。
  *
- * <p>用户口径两条：①「三个数字单独排版，**位置中点固定**，防止字宽不同导致整体伸缩」；
- * ②「改成右下角，速度右加个 km/h，数字间距缩小，km/h 上面画限速图标，再加 AWS 图标指示」。</p>
+ * <p>用户口径：①「三个数字单独排版，**位置中点固定**，防止字宽不同导致整体伸缩」；
+ * ②「背景楔形：直角在屏幕右下角、底边 20% 屏宽、斜边与底边 30°」；
+ * ③「三角型斜边怎么有个方形的凸起」—— ③ 之后背景回到**纯三角形**，读数改成按斜边约束自动定字号。</p>
  *
- * <p>第一版整幅是拿 MC 矩形原语拼的（圆 = 逐行条、楔形 = 逐列条），于是这个用例里曾经钉着
- * {@code circleHalfWidth} / {@code wedgeColumnHeight} / {@code digitsLeft} 这些**像素级拼装**的细节。
- * 用户一句「绘图也太粗糙了吧」之后整幅改走 Java2D 栅格化（{@link MmtrSpeedHud#paint}），
- * 圆和楔形由 Java2D 画、不必再自证；**留下来值得钉的是与字体相关的排版算术**——
- * 格心、按宽度反推字号，以及楔形几何。像素级结果由离线探针出 PNG 看（sandbox/SpeedHudPaintProbe）。</p>
+ * <p>这里只放**纯算术**判据（不碰字体、不碰画布），所以离线、无头、游戏运行时都能跑。
+ * 依赖真实字体的部分（"字号反推得对不对""内容是不是真的落在斜边里"）在离线探针
+ * {@code sandbox/SpeedHudProbe} 与 {@code sandbox/SpeedHudPaintProbe} 里，那里有真画布和真字体。</p>
  */
 public final class MmtrSpeedHudTests {
 
@@ -42,7 +41,7 @@ public final class MmtrSpeedHudTests {
 		}
 	}
 
-	/** 格心之间的步长恒等于格宽 ⇒ 间距不随数字变化（用户要求"间距缩小点"后仍要均匀）。 */
+	/** 格心之间的步长恒等于格宽 ⇒ 间距不随数字变化；整块宽度 = 3 × 格宽。 */
 	@Test
 	public void theCellsAreEvenlySpaced() {
 		final double cellWidth = 11.5;
@@ -51,30 +50,27 @@ public final class MmtrSpeedHudTests {
 		assertEquals(cellWidth, step, 1e-9, "相邻格心步长 = 格宽");
 		assertEquals(step,
 			MmtrSpeedHud.digitCentreX(2, cellWidth, digitsRight) - MmtrSpeedHud.digitCentreX(1, cellWidth, digitsRight), 1e-9, "三位等距");
-		// 个位格右边缘 = 整块右边界（块宽 = 3 × 格宽，与数字无关）
-		assertEquals(digitsRight, MmtrSpeedHud.digitCentreX(2, cellWidth, digitsRight) + cellWidth / 2, 1e-9);
+		assertEquals(digitsRight, MmtrSpeedHud.digitCentreX(2, cellWidth, digitsRight) + cellWidth / 2, 1e-9, "个位格右边缘 = 整块右边界");
 		assertEquals(digitsRight - 3 * cellWidth, MmtrSpeedHud.digitCentreX(0, cellWidth, digitsRight) - cellWidth / 2, 1e-9, "整块左边界");
 	}
 
 	/** ② 限速牌里的数字：宽度放得下就用上限字号；放不下反复收缩；不管多挤都不小于保底值。 */
 	@Test
 	public void theLimitNumberShrinksToFitInsideTheSign() {
-		final double maxInk = 14;
-		final double boxWidth = 20;
-		// 线性模型：宽度 ∝ 字号 —— 一轮就该收敛
-		final java.util.function.DoubleUnaryOperator linear = widthPerInk(maxInk, 18);
-		assertEquals(maxInk, MmtrSpeedHud.fittedInkHeight(maxInk, boxWidth, linear), 1e-9, "刚好放得下不该缩");
-		assertEquals(maxInk, MmtrSpeedHud.fittedInkHeight(maxInk, boxWidth, widthPerInk(maxInk, boxWidth)), 1e-9, "正好等于可用宽度");
-		for (final double widthAtMaxInk : new double[]{21, 28, 33, 40}) {
+		final double maxInk = MmtrSpeedHud.LIMIT_TEXT_MAX_INK_HEIGHT;
+		final double boxWidth = MmtrSpeedHud.limitBoxWidth(); // = 2 × (半径 − 环宽) × 0.92
+		for (final double widthAtMaxInk : new double[]{6, 12, 16, 20, 26, 33}) {
 			final double fitted = MmtrSpeedHud.fittedInkHeight(maxInk, boxWidth, widthPerInk(maxInk, widthAtMaxInk));
-			assertTrue(fitted < maxInk, "宽 " + widthAtMaxInk + " 该缩");
-			assertEquals(boxWidth, widthAtMaxInk * fitted / maxInk, 1e-9, "缩完的宽度应贴住可用宽度");
+			if (widthAtMaxInk <= boxWidth) {
+				assertEquals(maxInk, fitted, 1e-9, "宽 " + widthAtMaxInk + " 放得下，不该缩");
+			} else if (maxInk * boxWidth / widthAtMaxInk >= MmtrSpeedHud.MIN_TEXT_INK_HEIGHT) {
+				assertTrue(fitted < maxInk, "宽 " + widthAtMaxInk + " 该缩");
+				assertEquals(boxWidth, widthAtMaxInk * fitted / maxInk, 1e-9, "缩完的宽度应贴住可用宽度");
+			} else {
+				assertEquals(MmtrSpeedHud.MIN_TEXT_INK_HEIGHT, fitted, 1e-9, "该落到保底字号");
+			}
+			assertTrue(fitted >= MmtrSpeedHud.MIN_TEXT_INK_HEIGHT && fitted <= maxInk, "字号在合法区间：" + fitted);
 		}
-		// ★ 这条是这一版的由来：三位数 "160" 用 14 号字量出来 33 宽，白面直径只有 2×(13−3)=20
-		//   ⇒ 不缩就会像离线 PNG 里那样，"1" 直接压在红圈上。
-		assertTrue(MmtrSpeedHud.fittedInkHeight(maxInk, 2 * (13 - 3) * 0.92, widthPerInk(maxInk, 33)) < 14, "三位限速必须缩");
-		// 保底：极端情况下也不返回 0/负数（否则 Java2D 会抛异常）
-		assertEquals(6, MmtrSpeedHud.fittedInkHeight(maxInk, boxWidth, widthPerInk(maxInk, 10_000)), 1e-9, "保底 6");
 	}
 
 	/**
@@ -86,12 +82,11 @@ public final class MmtrSpeedHudTests {
 	 */
 	@Test
 	public void theLimitNumberConvergesEvenWhenWidthIsNotLinearInInkHeight() {
-		final double maxInk = 14;
-		final double boxWidth = 18.4;
-		// 台阶模型：字体尺寸取整到 1 px 且宽度上取整到 1 px（就是探针里量出来的那种不连续）
+		final double maxInk = MmtrSpeedHud.LIMIT_TEXT_MAX_INK_HEIGHT;
+		final double boxWidth = MmtrSpeedHud.limitBoxWidth();
 		final java.util.function.DoubleUnaryOperator stepped = ink -> {
 			final double size = Math.max(1, Math.ceil(ink));
-			return Math.ceil(size * 33 / 14 + 1); // 14 号字量出 33，往上取整再加 1 px 的"台阶"
+			return Math.ceil(size * 33 / 14 + 1);
 		};
 		final double fitted = MmtrSpeedHud.fittedInkHeight(maxInk, boxWidth, stepped);
 		assertTrue(stepped.applyAsDouble(fitted) <= boxWidth,
@@ -104,7 +99,7 @@ public final class MmtrSpeedHudTests {
 		return ink -> widthAtMaxInk * ink / maxInk;
 	}
 
-	/** 背景楔形：直角在屏幕右下角、底边 = 屏宽 20%、左下顶点处"斜边与底边"夹角 = 30°。 */
+	/** 楔形：底边 = 屏宽 20%（窄窗口走下限）、竖边 = 底边 × tan30°、画布就是它的外接矩形。 */
 	@Test
 	public void theWedgeIsTwentyPercentWideAtThirtyDegrees() {
 		final int[][] windows = {{320, 180}, {427, 240}, {640, 360}, {854, 480}, {1920, 1080}};
@@ -114,77 +109,45 @@ public final class MmtrSpeedHudTests {
 			final double leg = MmtrSpeedHud.wedgeBottomLeg(width);
 			final double wedgeHeight = MmtrSpeedHud.wedgeHeight(width);
 
-			assertEquals(width * 0.20, leg, 1e-9, "屏宽 " + width + "：底边应是 20%");
-			final double angle = Math.toDegrees(Math.atan2(wedgeHeight, leg));
-			assertEquals(30.0, angle, 0.5, "屏宽 " + width + "：夹角应是 30°（实测 " + angle + "°）");
+			assertEquals(Math.max(width * 0.20, MmtrSpeedHud.MIN_WEDGE_LEG), leg, 1e-9, "屏宽 " + width + "：底边");
+			assertEquals(30.0, Math.toDegrees(Math.atan2(wedgeHeight, leg)), 0.5, "屏宽 " + width + "：斜边与底边夹角");
 			assertTrue(wedgeHeight > 0 && wedgeHeight < height, "竖边要装得下：" + wedgeHeight + " / 屏高 " + height);
+			// 画布 = 外接矩形 ⇒ 背景三角形正好铺满它的一半（±1 取整）
+			assertEquals(leg, MmtrSpeedHud.canvasWidth(width), 1.0, "画布宽 = 底边");
+			assertEquals(wedgeHeight, MmtrSpeedHud.canvasHeight(width), 1.0, "画布高 = 竖边");
 		}
-	}
-
-	/** 楔形随屏宽单调变长变高（画布宽固定，所以宽屏时楔形会铺满整个画布）。 */
-	@Test
-	public void theWedgeGrowsWithTheWindow() {
-		double previousLeg = -1;
-		double previousHeight = -1;
-		for (final int width : new int[]{320, 427, 640, 854, 1280, 1920}) {
-			final double leg = MmtrSpeedHud.wedgeBottomLeg(width);
-			final double wedgeHeight = MmtrSpeedHud.wedgeHeight(width);
-			assertTrue(leg > previousLeg && wedgeHeight > previousHeight, "屏宽 " + width + " 下楔形没有变大");
-			previousLeg = leg;
-			previousHeight = wedgeHeight;
-		}
-		// 854×480 这一档（用户实际窗口）竖边约 99 单位 —— 比画布矮，所以楔形只吃掉下半部分
-		assertEquals(854 * 0.20 * Math.tan(Math.toRadians(30)), MmtrSpeedHud.wedgeHeight(854), 1e-9);
 	}
 
 	/**
-	 * 背景 = 楔形 ∪ 读数底板（notes/227）。
+	 * ★ 背景是**纯三角形**（用户：「三角型斜边怎么有个方形的凸起」）。
 	 *
-	 * <p>★ 这条是"数字被斜边切掉"那个缺陷的回归判据：底板四角必须**全在背景里**，
-	 * 否则白字会压在透明白底上；同时背景不能退化成整块矩形 —— 楔形的斜边得留着。</p>
+	 * <p>{@code insideWedge} 是"内容有没有落在斜边里"的唯一判据：斜边从左下 (0,0) 到右上 (leg, H)，
+	 * 内侧就是 {@code y ≤ x·tan30°}。斜边上、斜边内为真；斜边外为假。</p>
 	 */
 	@Test
-	public void theBackgroundCoversTheReadoutPlateWithoutLosingTheSlope() {
-		for (final int screenWidth : new int[]{320, 427, 640, 854, 1280, 1920}) {
-			// 底板：左边缘 = 三位块左边 82.92 − 6，顶边 = 图标行顶 74 + 6（与 paint() 同源）
-			final double plateLeft = 82.92 - 6;
-			final double plateTop = 74 + 6;
-			final double[][] outline = MmtrSpeedHud.backgroundOutline(screenWidth, plateLeft, plateTop);
-
-			assertEquals(outline[0].length, outline[1].length, "x/y 顶点数必须一致");
-			assertTrue(outline[0].length >= 3, "至少是个三角形");
-
-			// ① 底板四角（内缩 0.5）都要在背景里 —— 这就是"读数一定有暗底"
-			final double[][] mustBeInside = {
-				{plateLeft + 0.5, 0.5}, {plateLeft + 0.5, plateTop - 0.5},
-				{MmtrSpeedHud.HUD_WIDTH - 0.5, plateTop - 0.5}, {MmtrSpeedHud.HUD_WIDTH - 0.5, 0.5},
-				{plateLeft + 0.5, plateTop / 2}, // 底板左边缘那一列（数字块的最左边）
-			};
-			for (final double[] point : mustBeInside) {
-				assertTrue(contains(outline, point[0], point[1]),
-					"屏宽 " + screenWidth + "：底板上的点 (" + point[0] + "," + point[1] + ") 竟然没有背景");
-			}
-
-			// ② 屏幕右下角（楔形的直角顶点）必须在背景里
-			assertTrue(contains(outline, MmtrSpeedHud.HUD_WIDTH - 0.5, 0.5), "屏宽 " + screenWidth + "：右下角没有背景");
-
-			// ③ 但背景不能是整块矩形：屏幕左上角（斜边之上、底板之左）必须**空着**
-			assertTrue(!contains(outline, 1, MmtrSpeedHud.HUD_HEIGHT - 1),
-				"屏宽 " + screenWidth + "：背景退化成整块矩形了（左上角也被涂上了）");
+	public void theWedgeIsAPlainTriangleWithNothingStuckOnItsSlope() {
+		final int screenWidth = 854;
+		final double tan = Math.tan(Math.toRadians(30));
+		// ① 右下角（直角顶点那一带）一定在里面；左下角之外（x 很小、y 很高）一定在外面
+		assertTrue(MmtrSpeedHud.insideWedge(screenWidth, MmtrSpeedHud.canvasWidth(screenWidth) - 1, 1, 0), "右下角在内");
+		assertTrue(!MmtrSpeedHud.insideWedge(screenWidth, 1, MmtrSpeedHud.canvasHeight(screenWidth) - 1, 0), "左上角在外");
+		// ② 斜边上的点算"在内"（留白为 0 时），再往上一点就算"在外"
+		for (final double x : new double[]{20, 40, 80, 120, 160}) {
+			final double onSlope = x * tan;
+			assertTrue(MmtrSpeedHud.insideWedge(screenWidth, x, onSlope, 0), "斜边上的点 (" + x + "," + onSlope + ") 应在内");
+			assertTrue(!MmtrSpeedHud.insideWedge(screenWidth, x, onSlope + 0.5, 0), "斜边上方 0.5 应在外的 (" + x + ")");
+			// ③ 留白是"往外推"：斜边下方只剩 1 个单位时，留白 2 就判为不在内
+			assertTrue(!MmtrSpeedHud.insideWedge(screenWidth, x, onSlope - 1, 2), "留白把 1 个单位的余量吃掉了 (" + x + ")");
 		}
 	}
 
-	/** 射线法：点是否在（简单）多边形里。测试专用。 */
-	private static boolean contains(double[][] outline, double x, double y) {
-		final double[] xs = outline[0];
-		final double[] ys = outline[1];
-		boolean inside = false;
-		for (int i = 0, j = xs.length - 1; i < xs.length; j = i++) {
-			if (ys[i] > y != ys[j] > y && x < (xs[j] - xs[i]) * (y - ys[i]) / (ys[j] - ys[i]) + xs[i]) {
-				inside = !inside;
-			}
-		}
-		return inside;
+	/** 窄窗口下限：屏宽 20% 装不下读数时用 {@link MmtrSpeedHud#MIN_WEDGE_LEG}，常见窗口仍走 20%。 */
+	@Test
+	public void theWedgeKeepsAUsableMinimumOnNarrowWindows() {
+		assertEquals(150.0, MmtrSpeedHud.wedgeBottomLeg(320), 1e-9, "320 宽：20% = 64 → 取下限");
+		assertEquals(150.0, MmtrSpeedHud.wedgeBottomLeg(640), 1e-9, "640 宽：20% = 128 → 取下限");
+		assertEquals(854 * 0.20, MmtrSpeedHud.wedgeBottomLeg(854), 1e-9, "854 宽：20% = 171 > 下限 → 按 20%");
+		assertEquals(1920 * 0.20, MmtrSpeedHud.wedgeBottomLeg(1920), 1e-9, "1920 宽：384");
 	}
 
 	/**
@@ -192,8 +155,7 @@ public final class MmtrSpeedHudTests {
 	 *
 	 * <p>{@code GuiDrawing.drawTexture} 的 8 参数重载收的是**两个角** {@code (x1,y1,x2,y2)}，
 	 * 不是 {@code (x,y,w,h)} —— 参数全是 {@code double}，把宽高填进后两个槽位照样编译通过，
-	 * 结果四边形从 (屏宽−208, 屏高−104) 一路拉到 (208,104)，整块被摊到屏幕中上部。
-	 * 这条判据就是钉这个：尺寸对、右/下边缘齐屏、且**不能是反向矩形**。</p>
+	 * 结果四边形从 (屏宽−208, 屏高−104) 一路拉到 (208,104)，整块被摊到屏幕中上部。</p>
 	 */
 	@Test
 	public void theHudQuadIsPinnedToTheBottomRightCorner() {
@@ -204,14 +166,25 @@ public final class MmtrSpeedHudTests {
 			final double[] quad = MmtrSpeedHud.screenQuad(width, height);
 			assertEquals(4, quad.length, "四边形是 x1,y1,x2,y2");
 			// ① 尺寸必须正好是画布尺寸（w/h 填错槽位时这里立刻炸）
-			assertEquals(MmtrSpeedHud.HUD_WIDTH, quad[2] - quad[0], 1e-9, "屏 " + width + "：宽度必须是 " + MmtrSpeedHud.HUD_WIDTH);
-			assertEquals(MmtrSpeedHud.HUD_HEIGHT, quad[3] - quad[1], 1e-9, "屏 " + width + "：高度必须是 " + MmtrSpeedHud.HUD_HEIGHT);
+			assertEquals(MmtrSpeedHud.canvasWidth(width), quad[2] - quad[0], 1e-9, "屏 " + width + "：宽度 = 画布宽");
+			assertEquals(MmtrSpeedHud.canvasHeight(width), quad[3] - quad[1], 1e-9, "屏 " + width + "：高度 = 画布高");
 			// ② 右边缘与下边缘齐屏 ⇒ 贴着右下角
 			assertEquals(width, quad[2], 1e-9, "屏 " + width + "：右边缘应齐屏");
 			assertEquals(height, quad[3], 1e-9, "屏 " + width + "：下边缘应齐屏");
 			// ③ x1<x2、y1<y2（反向矩形就是当初那个 bug）
-			assertTrue(quad[0] < quad[2] && quad[1] < quad[3], "屏 " + width + "：四边形反向了 " + quad[0] + "," + quad[1]);
+			assertTrue(quad[0] < quad[2] && quad[1] < quad[3], "屏 " + width + "：四边形反向了");
 			assertTrue(quad[0] >= 0 && quad[1] >= 0, "屏 " + width + "：整块应还在屏幕里");
 		}
+	}
+
+	/** 单位字号跟着数字缩，但有下限；图标行顶边跟着数字走。 */
+	@Test
+	public void theUnitAndIconRowFollowTheDigitSize() {
+		assertEquals(MmtrSpeedHud.MIN_UNIT_INK_HEIGHT, MmtrSpeedHud.unitInkHeight(0), 1e-9, "数字再小，单位不低于下限");
+		assertEquals(MmtrSpeedHud.MIN_UNIT_INK_HEIGHT, MmtrSpeedHud.unitInkHeight(MmtrSpeedHud.MIN_DIGIT_INK_HEIGHT), 1e-9, "最小数字时取下限");
+		assertEquals(36 * MmtrSpeedHud.UNIT_INK_RATIO, MmtrSpeedHud.unitInkHeight(36), 1e-9, "常规时按比例");
+		assertEquals(
+			MmtrSpeedHud.EDGE_PADDING + 30 + MmtrSpeedHud.ICON_GAP + 2 * MmtrSpeedHud.LIMIT_SIGN_RADIUS,
+			MmtrSpeedHud.iconRowTop(30), 1e-9, "图标行顶边 = 留白 + 数字高 + 间隙 + 牌直径");
 	}
 }
