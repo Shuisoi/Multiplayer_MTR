@@ -87,4 +87,40 @@ public final class MmtrSpeedHudTests {
 			}
 		}
 	}
+
+	/** 背景楔形：直角在屏幕右下角、底边 = 屏宽 20%、左下顶点处"斜边与底边"夹角 = 30°。 */
+	@Test
+	public void theWedgeIsTwentyPercentWideAtThirtyDegrees() {
+		final int[][] windows = {{320, 180}, {427, 240}, {640, 360}, {854, 480}, {1920, 1080}};
+		for (final int[] windowSize : windows) {
+			final int width = windowSize[0];
+			final int height = windowSize[1];
+			final int leg = MmtrSpeedHud.wedgeBottomLeg(width);
+			final int wedgeHeight = MmtrSpeedHud.wedgeHeight(width);
+
+			assertTrue(Math.abs(leg - width * 0.20) <= 1, "屏宽 " + width + "：底边应是 20%（" + leg + "）");
+			final double angle = Math.toDegrees(Math.atan2(wedgeHeight, leg));
+			assertTrue(Math.abs(angle - 30.0) <= 0.5, "屏宽 " + width + "：夹角应是 30°（实测 " + angle + "°）");
+			assertTrue(wedgeHeight > 0 && wedgeHeight < height, "竖边要装得下：" + wedgeHeight + " / 屏高 " + height);
+		}
+	}
+
+	@Test
+	public void theWedgeRisesMonotonicallyToItsFullHeight() {
+		final int width = 854;
+		final int leg = MmtrSpeedHud.wedgeBottomLeg(width);
+		final int wedgeHeight = MmtrSpeedHud.wedgeHeight(width);
+		int previous = -1;
+		for (int column = 1; column <= leg; column++) {
+			final int columnHeight = MmtrSpeedHud.wedgeColumnHeight(width, column);
+			assertTrue(columnHeight >= previous, "第 " + column + " 列高回落了（" + previous + " → " + columnHeight + "）");
+			assertTrue(columnHeight <= wedgeHeight, "第 " + column + " 列高超过竖边高");
+			previous = columnHeight;
+		}
+		assertEquals(wedgeHeight, previous, "最后一列恰好等于竖边高（楔形的右上顶点）");
+		// 越界的列被钳住：不该把三角形画到楔形之外
+		assertEquals(0, MmtrSpeedHud.wedgeColumnHeight(width, 0));
+		assertEquals(0, MmtrSpeedHud.wedgeColumnHeight(width, -3));
+		assertEquals(wedgeHeight, MmtrSpeedHud.wedgeColumnHeight(width, leg + 5));
+	}
 }

@@ -6,6 +6,7 @@ import org.mtr.mapping.holder.MutableText;
 import org.mtr.mapping.holder.Style;
 import org.mtr.mapping.holder.Window;
 import org.mtr.mapping.mapper.GraphicsHolder;
+import org.mtr.mapping.mapper.GuiDrawing;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.client.MmtrDriverSeat;
@@ -53,6 +54,16 @@ public final class MmtrSpeedHud {
 	private static final int DIGIT_COLOR = 0xFFFFFFFF;
 
 	/**
+	 * 背景楔形（用户口径 2026-09-21）：**直角顶点在屏幕右下角**，两条直角边分别沿屏幕底边与右边，
+	 * 底边长 = 屏宽的 {@value #WEDGE_BOTTOM_FRACTION_PERCENT}%，斜边与**底边**夹角
+	 * {@value #WEDGE_ANGLE_DEGREES}° ⇒ 竖边高 = 底边 × tan30°。读数压在这块楔形上。
+	 */
+	private static final double WEDGE_BOTTOM_FRACTION = 0.20;
+	private static final int WEDGE_BOTTOM_FRACTION_PERCENT = 20;
+	private static final double WEDGE_ANGLE_DEGREES = 30.0;
+	private static final int WEDGE_COLOR = 0xA8101418;
+
+	/**
 	 * 固定格宽（缩放前像素）—— 取 0–9 里**最宽**的那一位，加上呼吸。
 	 * 缓存：字体与样式不变时这是常量；资源重载（换字体）后由 {@link #reset()} 作废。
 	 */
@@ -81,6 +92,19 @@ public final class MmtrSpeedHud {
 		final int left = blockLeft(window.getScaledWidth(), cellWidth, SCALE, EDGE_PADDING);
 		final int top = window.getScaledHeight() - EDGE_PADDING - Math.round(IGui.TEXT_HEIGHT * SCALE);
 
+		// 背景楔形（屏幕坐标，未缩放）：直角在右下角，底边沿屏幕底边，斜边自左下顶点起 30° 上升。
+		// 画法：逐列 1 px 的竖条，高度按列位置线性涨到竖边高 —— 直角三角形的"简易绘制"。
+		// 逐列（而不是逐行）是因为 30° 是缓坡：列高变化平缓，上沿不会有阶梯洞。
+		final GuiDrawing guiDrawing = new GuiDrawing(graphicsHolder);
+		final int leg = wedgeBottomLeg(window.getScaledWidth());
+		guiDrawing.beginDrawingRectangle();
+		for (int column = 1; column <= leg; column++) {
+			final int columnHeight = wedgeColumnHeight(window.getScaledWidth(), column);
+			final int x = window.getScaledWidth() - leg + column - 1;
+			guiDrawing.drawRectangle(x, window.getScaledHeight() - columnHeight, x + 1, window.getScaledHeight(), WEDGE_COLOR);
+		}
+		guiDrawing.finishDrawingRectangle();
+
 		graphicsHolder.push();
 		graphicsHolder.translate(left, top, 0);
 		graphicsHolder.scale(SCALE, SCALE, 1);
@@ -94,6 +118,31 @@ public final class MmtrSpeedHud {
 		}
 
 		graphicsHolder.pop();
+	}
+
+	/** 楔形的底边长（沿屏幕底边，像素）：屏宽的 {@value #WEDGE_BOTTOM_FRACTION_PERCENT}%。 */
+	static int wedgeBottomLeg(int scaledWindowWidth) {
+		return (int) Math.round(scaledWindowWidth * WEDGE_BOTTOM_FRACTION);
+	}
+
+	/** 楔形的竖边高（沿屏幕右边，像素）= 底边 × tan(30°) —— 由"斜边与底边成 30°"推出。 */
+	static int wedgeHeight(int scaledWindowWidth) {
+		return (int) Math.round(wedgeBottomLeg(scaledWindowWidth) * Math.tan(Math.toRadians(WEDGE_ANGLE_DEGREES)));
+	}
+
+	/**
+	 * 自楔形左下顶点数起第 {@code column}（1 起）列的竖条高度。
+	 *
+	 * <p>纯函数，供单测钉住三条几何不变量：底边 = 屏宽 20%、左下顶点处的夹角 = 30°、
+	 * 每列都落在屏幕右边内（最后一列恰好等于竖边高）。</p>
+	 */
+	static int wedgeColumnHeight(int scaledWindowWidth, int column) {
+		final int leg = wedgeBottomLeg(scaledWindowWidth);
+		if (leg <= 0 || column <= 0) {
+			return 0;
+		}
+		final int clamped = Math.min(column, leg);
+		return (int) Math.round(wedgeHeight(scaledWindowWidth) * (double) clamped / leg);
 	}
 
 	/**
