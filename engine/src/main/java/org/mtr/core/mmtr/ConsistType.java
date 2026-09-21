@@ -2,6 +2,7 @@ package org.mtr.core.mmtr;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import org.jspecify.annotations.Nullable;
 
 /**
  * ConsistType ("车底/编组类"): server-side configuration that describes how a train set is
@@ -9,7 +10,7 @@ import com.google.gson.JsonObject;
  */
 public final class ConsistType {
 
-	public enum ControlMode { DEFAULT, NOTCHED, STEPLESS, AIR_BRAKE }
+	public enum ControlMode { DEFAULT, NOTCHED, STEPLESS, AIR_BRAKE, THREE_HANDLE }
 
 	private final String id;
 	private final String name;
@@ -36,8 +37,13 @@ public final class ConsistType {
 	 * legacy/plain behaviour is unchanged.
 	 */
 	private final double massRatio;
+	/**
+	 * 三手柄机车的操纵规格（定速巡航 + 双向油门 + 气制动的位置表），只在
+	 * {@link ControlMode#THREE_HANDLE} 下存在。其余模式为 {@code null}，行为一个字节不改。
+	 */
+	private final @Nullable ThreeHandleSpec handles;
 
-	/** Backwards-compatible constructor (mass ratio = 1.0). */
+	/** Backwards-compatible constructor (mass ratio = 1.0, no three-handle spec). */
 	public ConsistType(String id, String name, ControlMode controlMode, int powerNotches, int brakeNotches,
 		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
 		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
@@ -45,14 +51,26 @@ public final class ConsistType {
 		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh) {
 		this(id, name, controlMode, powerNotches, brakeNotches, maxSpeedKmh, tractionAccelerationMps2, serviceBrakeDecelerationMps2,
 			emergencyDecelerationMps2, tractionBreakpointKmh, resistanceA, resistanceB, resistanceC, airPipeChargeRatePerSecond,
-			airPipeDischargeRatePerSecond, airBrakeApplyRatePerSecond, airBrakeReleaseRatePerSecond, manualMaxSpeedKmh, 1.0);
+			airPipeDischargeRatePerSecond, airBrakeApplyRatePerSecond, airBrakeReleaseRatePerSecond, manualMaxSpeedKmh, 1.0, null);
+	}
+
+	/** Backwards-compatible constructor (no three-handle spec). */
+	public ConsistType(String id, String name, ControlMode controlMode, int powerNotches, int brakeNotches,
+		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
+		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
+		double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
+		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh, double massRatio) {
+		this(id, name, controlMode, powerNotches, brakeNotches, maxSpeedKmh, tractionAccelerationMps2, serviceBrakeDecelerationMps2,
+			emergencyDecelerationMps2, tractionBreakpointKmh, resistanceA, resistanceB, resistanceC, airPipeChargeRatePerSecond,
+			airPipeDischargeRatePerSecond, airBrakeApplyRatePerSecond, airBrakeReleaseRatePerSecond, manualMaxSpeedKmh, massRatio, null);
 	}
 
 	public ConsistType(String id, String name, ControlMode controlMode, int powerNotches, int brakeNotches,
 		double maxSpeedKmh, double tractionAccelerationMps2, double serviceBrakeDecelerationMps2,
 		double emergencyDecelerationMps2, double tractionBreakpointKmh, double resistanceA, double resistanceB, double resistanceC,
 		double airPipeChargeRatePerSecond, double airPipeDischargeRatePerSecond,
-		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh, double massRatio) {
+		double airBrakeApplyRatePerSecond, double airBrakeReleaseRatePerSecond, double manualMaxSpeedKmh, double massRatio,
+		@Nullable ThreeHandleSpec handles) {
 		this.id = id;
 		this.name = name;
 		this.controlMode = controlMode;
@@ -72,6 +90,7 @@ public final class ConsistType {
 		this.airBrakeApplyRatePerSecond = airBrakeApplyRatePerSecond;
 		this.airBrakeReleaseRatePerSecond = airBrakeReleaseRatePerSecond;
 		this.massRatio = massRatio > 0 ? massRatio : 1.0;
+		this.handles = handles;
 	}
 
 	public String getId() { return id; }
@@ -95,6 +114,9 @@ public final class ConsistType {
 	public double getAirBrakeApplyRatePerSecond() { return airBrakeApplyRatePerSecond; }
 	public double getAirBrakeReleaseRatePerSecond() { return airBrakeReleaseRatePerSecond; }
 
+	/** 三手柄操纵规格；非 {@link ControlMode#THREE_HANDLE} 模式为 {@code null}。 */
+	public @Nullable ThreeHandleSpec getHandles() { return handles; }
+
 	public static ConsistType fromJson(JsonObject json) {
 		final String modeText = getString(json, "controlMode", "DEFAULT").toUpperCase();
 		ControlMode mode;
@@ -103,15 +125,18 @@ public final class ConsistType {
 		} catch (IllegalArgumentException e) {
 			mode = ControlMode.DEFAULT;
 		}
+		final boolean threeHandle = mode == ControlMode.THREE_HANDLE;
+		final double serviceBrakeDecelerationMps2 = getDouble(json, "serviceBrakeDecelerationMps2", 0.8);
 		return new ConsistType(
 			getString(json, "id", "unnamed"),
 			getString(json, "name", ""),
 			mode,
-			getInt(json, "powerNotches", 7),
-			getInt(json, "brakeNotches", 8),
+			// 三手柄车底的档位数就是手柄量程本身（±96 档 + 关闭；制动 11 个位置），缺省值跟着模式走。
+			getInt(json, "powerNotches", threeHandle ? ThreeHandleSpec.DRIVE_HANDLE_MAX : 7),
+			getInt(json, "brakeNotches", threeHandle ? ThreeHandleSpec.DEFAULT_BRAKE_POSITIONS.length : 8),
 			getDouble(json, "maxSpeedKmh", 120),
 			getDouble(json, "tractionAccelerationMps2", 0.5),
-			getDouble(json, "serviceBrakeDecelerationMps2", 0.8),
+			serviceBrakeDecelerationMps2,
 			getDouble(json, "emergencyDecelerationMps2", 1.5),
 			getDouble(json, "tractionBreakpointKmh", maxSpeedDefaultKmh(json)),
 			getDouble(json, "resistanceA", 0),
@@ -122,7 +147,9 @@ public final class ConsistType {
 			getDouble(json, "airBrakeApplyRatePerSecond", 0.15),
 			getDouble(json, "airBrakeReleaseRatePerSecond", 0.1),
 			getDouble(json, "manualMaxSpeedKmh", 0),
-			getDouble(json, "massRatio", 1)
+			getDouble(json, "massRatio", 1),
+			// 电阻制动上限缺省跟随常用制动（不填也能跑）；只有三手柄模式才建规格。
+			threeHandle ? ThreeHandleSpec.fromJson(json, serviceBrakeDecelerationMps2) : null
 		);
 	}
 

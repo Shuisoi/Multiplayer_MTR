@@ -12,7 +12,7 @@ package org.mtr.core.mmtr;
  * </ul>
  * Braking force is proportional to cylinder pressure up to service maximum.
  */
-public final class AirBrakeController implements DriveController {
+public final class AirBrakeController implements DriveController, AirBrakeStateful {
 
 	private double pipePressure = 1.0;
 	private double brakeCylinderPressure = 0.0;

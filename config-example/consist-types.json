@@ -1,4 +1,9 @@
 {
+  "_comment": "车底（ConsistType）配置。carTypeIds = 车型（资源包 vehicle id）→ 车底的映射：让车自己决定用哪套操纵规格，不必把整个维度改成同一种车底（见 MmtrCarTypeResolver）。defaultConsistTypeId = 两条来源都解析不出来时的兜底。",
+  "defaultConsistTypeId": "emu_8_notched",
+  "carTypeIds": {
+    "br101": "br101_three_handle"
+  },
   "consistTypes": [
     {
       "id": "emu_8_notched",
@@ -37,6 +42,33 @@
       "airPipeDischargeRatePerSecond": 0.5,
       "airBrakeApplyRatePerSecond": 0.2,
       "airBrakeReleaseRatePerSecond": 0.08
+    },
+    {
+      "_comment": "三手柄机车（BR101）：定速巡航 AFB 步长 5 km/h 量程 0-160 + 双向油门手柄（中央关闭、±1 最小、±2..±97 = 5..100%，正牵引/负电阻制动）+ 气制动 运行/1A/1B/2..8/EB。规格见 docs/01-设计/驾驶输入与控制模型.md。",
+      "id": "br101_three_handle",
+      "name": "BR 101 (three-handle, 三手柄)",
+      "controlMode": "THREE_HANDLE",
+      "powerNotches": 97,
+      "brakeNotches": 11,
+      "maxSpeedKmh": 160,
+      "manualMaxSpeedKmh": 160,
+      "tractionAccelerationMps2": 0.55,
+      "tractionBreakpointKmh": 80,
+      "serviceBrakeDecelerationMps2": 1.0,
+      "emergencyDecelerationMps2": 1.8,
+      "rheostaticBrakeDecelerationMps2": 0.9,
+      "rheostaticFadeKmh": 10,
+      "driveMinRatio": 0.02,
+      "drivePercentSteps": 96,
+      "cruiseMaxKmh": 160,
+      "cruiseStepKmh": 5,
+      "afbGainPerMps": 0.15,
+      "afbUsesHandleAsCap": true,
+      "brakeRatios": "0,0.05,0.12,0.20,0.32,0.44,0.56,0.68,0.80,1.00,1.00",
+      "airPipeChargeRatePerSecond": 0.15,
+      "airPipeDischargeRatePerSecond": 0.5,
+      "airBrakeApplyRatePerSecond": 0.35,
+      "airBrakeReleaseRatePerSecond": 0.25
     }
   ]
 }

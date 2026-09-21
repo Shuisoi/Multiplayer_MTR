@@ -111,6 +111,10 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			VehicleRidingMovement.tick();
 			// C7: the "aim at a train and press K to couple/uncouple" interaction.
 			org.mtr.mod.client.MmtrCoupleInteraction.tick();
+			// B2: the "aim at a driver's door and press G to take/give back that cab" interaction.
+			org.mtr.mod.client.MmtrCabInteraction.tick();
+			// 三手柄机车的驾驶输入（油门/制动/定速/换向）：只在握着驾驶室钥匙时才产生控制意图。
+			org.mtr.mod.client.MmtrDriveInput.tick();
 			// Windshield wiper stalk (关 / 慢 / 快): a driver input, so it is ticked with the other keys.
 			MmtrWindshield.tick();
 			ArrivalsCacheClient.INSTANCE.tick();

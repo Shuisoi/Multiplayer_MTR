@@ -140,8 +140,9 @@ public final class MmtrComposition {
 	/**
 	 * Builds the per-car composition from MTR's runtime car list (C2). Each car contributes one
 	 * unit carrying its own {@code mmtrPowered} flag and its own ConsistType — resolved from
-	 * {@code registry} by the car's {@code mmtrConsistTypeId}, falling back to {@code fallbackType}
-	 * (the consist default). A hauled wagon therefore adds mass and brake-pipe volume without
+	 * {@code registry} by the car's {@code mmtrConsistTypeId}, then by the registry's
+	 * {@code carTypeIds} model mapping, falling back to {@code fallbackType} (the consist default).
+	 * A hauled wagon therefore adds mass and brake-pipe volume without
 	 * adding traction, which is what makes "locomotive + wagons" physically correct.
 	 *
 	 * @return the composition, or {@code null} when the list is empty or no type can be resolved
@@ -156,6 +157,11 @@ public final class MmtrComposition {
 			final VehicleCar car = cars.get(i);
 			final String consistTypeId = car.getMmtrConsistTypeId();
 			ConsistType type = consistTypeId == null || consistTypeId.isEmpty() || registry == null ? null : registry.get(consistTypeId);
+			if (type == null && registry != null) {
+				// 车厢没声明车底 ⇒ 退回"车型 → 车底"的映射（与 MmtrCarTypeResolver 同一优先级）。
+				final String mapped = registry.typeIdForCar(car.getVehicleId());
+				type = mapped == null ? null : registry.get(mapped);
+			}
 			if (type == null) {
 				type = fallbackType;
 			}

@@ -78,6 +78,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private @Nullable ConsistType mmtrConsistType;
 	private @Nullable DriveController mmtrDriveController;
 	/**
+	 * MMTR: 上一次解析出来的"操纵车底由哪节车说话"（{@link org.mtr.core.mmtr.MmtrCarTypeResolver}）。
+	 * null 表示还没解析过 —— 用 null 而不是空串作初值，才能让"谁都没解析出来（用维度缺省）"这一次也真的解析。
+	 */
+	private @Nullable String mmtrResolvedCarTypeKey;
+	/** 上一次解析时的车节数：廉价判据，见 {@link #mmtrRefreshConsistTypeFromCars()}。 */
+	private int mmtrResolvedCarCount = -1;
+	/**
 	 * MMTR: explicit control override. Only engaged by the future input layer that sends a real
 	 * ControlState (keyboard/HID). Until then manual driving follows the legacy single handle so
 	 * the game stays fully playable (equivalent to having no consist-type policy).
@@ -2247,6 +2254,34 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return siMps2 * 1e-6;
 	}
 
+	/**
+	 * 把司机控制状态折算成 **legacy 单手柄读数**（`powerLevel`）：MTR 自带的仪表与部分 HUD 仍读它，
+	 * 三手柄机车必须给出等价的"正=牵引 / 负=制动"，否则仪表永远显示 N。
+	 *
+	 * <p>优先权与控制器的合成顺序一致：紧急 &gt; 气制动位置 &gt; 油门手柄（牵引 / 电阻制动）。
+	 * 非三手柄车底沿用原来的档位折算，一个字节不改。</p>
+	 */
+	private int mmtrLegacyPowerLevelFromControl(ControlState control) {
+		final org.mtr.core.mmtr.ThreeHandleSpec handles = mmtrConsistType == null ? null : mmtrConsistType.getHandles();
+		if (handles == null) {
+			return control.getThrottleNotch() > 0 ? control.getThrottleNotch() : control.getBrakeNotch() > 0 ? -control.getBrakeNotch() : 0;
+		}
+		final int brakePosition = handles.clampBrakePosition(control.getBrakeNotch());
+		if (control.isEmergency() || handles.isEmergencyPosition(brakePosition)) {
+			return -MAX_POWER_LEVEL - 1;
+		}
+		if (brakePosition > org.mtr.core.mmtr.ThreeHandleSpec.runningPosition()) {
+			return -Math.max(1, Math.min(MAX_POWER_LEVEL, brakePosition));
+		}
+		final int driveHandle = handles.clampDriveHandle(control.getDriveHandle());
+		final double tractionRatio = handles.tractionRatio(driveHandle);
+		if (tractionRatio > 0) {
+			return Math.max(1, (int) Math.round(tractionRatio * MAX_POWER_LEVEL));
+		}
+		final double rheostaticRatio = handles.rheostaticRatio(driveHandle);
+		return rheostaticRatio > 0 ? -Math.max(1, (int) Math.round(rheostaticRatio * MAX_POWER_LEVEL)) : 0;
+	}
+
 	/** Enables/disables the MMTR explicit control path (used by the future input layer). */
 	public void setMmtrManualOverride(boolean enabled) { mmtrManualOverride = enabled; }
 
@@ -2869,14 +2904,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * Returns true when MMTR control is active (never for DEFAULT mode).
 	 */
 	private boolean tryInitMmtrController() {
-		if (mmtrDriveController != null) {
+		// 车底是**按车**解析的（车型映射 / 车厢声明，见 MmtrCarTypeResolver），不是按维度：
+		// 连挂或解挂改了车列 ⇒ "说话的车"可能换了 ⇒ 返回 true 并作废缓存的控制器。
+		final boolean carTypeChanged = !isClientside && mmtrRefreshConsistTypeFromCars();
+		if (mmtrDriveController != null && !carTypeChanged) {
 			return true;
 		}
-		if (!isClientside) {
-			if (data instanceof Simulator simulator && simulator.mmtrConsistTypes != null && simulator.mmtrDefaultConsistTypeId != null) {
-				mmtrConsistType = simulator.mmtrConsistTypes.get(simulator.mmtrDefaultConsistTypeId);
-			}
-		} else {
+		if (isClientside) {
 			mmtrConsistType = createMirrorConsistTypeFromSync();
 		}
 		if (mmtrConsistType != null) {
@@ -2884,14 +2918,57 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				case NOTCHED -> new org.mtr.core.mmtr.NotchedDriveController();
 				case STEPLESS -> new org.mtr.core.mmtr.SteplessDriveController();
 				case AIR_BRAKE -> new org.mtr.core.mmtr.AirBrakeController();
+				case THREE_HANDLE -> new org.mtr.core.mmtr.ThreeHandleDriveController();
 				default -> null;
 			};
-			if (isClientside && mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeController airBrakeController) {
-				// Seed the fresh mirror controller with the authoritative air state from the snapshot.
-				airBrakeController.setState(mmtrPipePressure, mmtrBrakeCylinderPressure);
+			// 车型一确定就把手柄规格写进镜像：否则"还没人开过"的车客户端拿不到位置表
+			// （客户端没有 consist-types.json，只能靠这条字符串知道自己有几档油门、制动几位）。
+			if (!isClientside) {
+				final String specText = mmtrConsistType.getHandles() == null ? "" : mmtrConsistType.getHandles().encode();
+				if (!specText.equals(mmtrHandleSpec)) {
+					mmtrHandleSpec = specText;
+					vehicleExtraData.mmtrMarkSyncDirty();
+				}
 			}
+			if (isClientside && mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeStateful airBrakeStateful) {
+				// Seed the fresh mirror controller with the authoritative air state from the snapshot.
+				// (按能力判断而不是按具体类：三手柄控制器同样带气制动状态。)
+				airBrakeStateful.setState(mmtrPipePressure, mmtrBrakeCylinderPressure);
+			}
+		} else {
+			mmtrDriveController = null;
 		}
 		return mmtrDriveController != null;
+	}
+
+	/**
+	 * 服务端：按本车车列解析操纵车底（{@link org.mtr.core.mmtr.MmtrCarTypeResolver}）。
+	 *
+	 * @return 说话的车换人了（车列变了）⇒ 调用方必须重建控制器与编组视图
+	 */
+	private boolean mmtrRefreshConsistTypeFromCars() {
+		if (!(data instanceof final Simulator simulator) || simulator.mmtrConsistTypes == null) {
+			return false;
+		}
+		final int carCount = vehicleExtraData.immutableVehicleCars.size();
+		// 便宜的车列变化判据：连挂/解挂/重建编组都会改**车节数**，所以先比一个 int 就退出 ——
+		// 这个方法在每 tick 的驱动路径上，解析一次要拼字符串，不能无条件跑。
+		// （已知边界：同样长度的两车"换车"不会触发重解；那种情形在本仓只出现在手工改模板，配置改动本来就要重启。）
+		if (mmtrResolvedCarTypeKey != null && carCount == mmtrResolvedCarCount) {
+			return false;
+		}
+		mmtrResolvedCarCount = carCount;
+		final org.mtr.core.mmtr.MmtrCarTypeResolver.Resolution resolution = org.mtr.core.mmtr.MmtrCarTypeResolver.resolve(
+			vehicleExtraData.immutableVehicleCars, simulator.mmtrConsistTypes, simulator.mmtrDefaultConsistTypeId);
+		if (resolution.key().equals(mmtrResolvedCarTypeKey)) {
+			return false;
+		}
+		mmtrResolvedCarTypeKey = resolution.key();
+		mmtrConsistType = resolution.consistTypeId() == null ? null : simulator.mmtrConsistTypes.get(resolution.consistTypeId());
+		// 说话的车换了 ⇒ 控制器（含气制动状态）与编组视图都要重建，否则会拿旧参数继续跑。
+		mmtrDriveController = null;
+		mmtrComposition = null;
+		return true;
 	}
 
 	/** Client-side: rebuild the ConsistType mirrored in the latest vehicle snapshot. */
@@ -2915,7 +2992,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrEmergencyDecelerationMps2, mmtrTractionBreakpointKmh, mmtrResistanceA, mmtrResistanceB, mmtrResistanceC,
 			mmtrAirPipeChargeRatePerSecond, mmtrAirPipeDischargeRatePerSecond,
 			mmtrAirBrakeApplyRatePerSecond, mmtrAirBrakeReleaseRatePerSecond, mmtrManualMaxSpeedKmh,
-			mmtrMassRatio
+			mmtrMassRatio,
+			// 三手柄规格走紧凑字符串镜像（位置表是数组，逐帧传不划算；只有车型变化时它才变）。
+			org.mtr.core.mmtr.ThreeHandleSpec.decode(mmtrHandleSpec)
 		);
 	}
 
@@ -2923,6 +3002,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private ControlState createMirrorControlStateFromSync() {
 		return new ControlState()
 			.setThrottleNotch((int) mmtrThrottleNotch).setBrakeNotch((int) mmtrBrakeNotch).setReverser((int) mmtrReverser)
+			.setDriveHandle((int) mmtrDriveHandle).setCruiseSpeedKmh((int) mmtrCruiseKmh)
 			.setThrottleAxis(mmtrThrottleAxis).setBrakeAxis(mmtrBrakeAxis).setEmergency(mmtrEmergency);
 	}
 
@@ -3043,6 +3123,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrActiveControl != null) {
 			mmtrThrottleNotch = mmtrActiveControl.getThrottleNotch();
 			mmtrBrakeNotch = mmtrActiveControl.getBrakeNotch();
+			mmtrDriveHandle = mmtrActiveControl.getDriveHandle();
+			mmtrCruiseKmh = mmtrActiveControl.getCruiseSpeedKmh();
 			mmtrReverser = mmtrActiveControl.getReverser();
 			mmtrThrottleAxis = mmtrActiveControl.getThrottleAxis();
 			mmtrBrakeAxis = mmtrActiveControl.getBrakeAxis();
@@ -3051,6 +3133,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrConsistType != null) {
 			mmtrPowerNotches = mmtrConsistType.getPowerNotches();
 			mmtrBrakeNotches = mmtrConsistType.getBrakeNotches();
+			mmtrHandleSpec = mmtrConsistType.getHandles() == null ? "" : mmtrConsistType.getHandles().encode();
 			mmtrMaxSpeedKmh = mmtrConsistType.getMaxSpeedKmh();
 			mmtrManualMaxSpeedKmh = mmtrConsistType.getManualMaxSpeedMetersPerSecond() * 3.6;
 			mmtrTractionAccelerationMps2 = mmtrConsistType.getTractionAccelerationMps2();
@@ -3066,9 +3149,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrAirBrakeReleaseRatePerSecond = mmtrConsistType.getAirBrakeReleaseRatePerSecond();
 			mmtrMassRatio = mmtrConsistType.getMassRatio();
 		}
-		if (mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeController airBrakeController) {
-			mmtrPipePressure = airBrakeController.getPipePressure();
-			mmtrBrakeCylinderPressure = airBrakeController.getBrakeCylinderPressure();
+		if (mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeStateful airBrakeStateful) {
+			mmtrPipePressure = airBrakeStateful.getPipePressure();
+			mmtrBrakeCylinderPressure = airBrakeStateful.getBrakeCylinderPressure();
 		}
 		// Signal display fields (HUD): AWS warning state, occupancy hold and the current per-rail
 		// directional speed limit follow the live internal state into the mirror payload.
@@ -3114,6 +3197,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public String getMmtrDriverFromSync() { return mmtrDriver == null ? "" : mmtrDriver; }
 	public int getMmtrThrottleFromSync() { return (int) mmtrThrottleNotch; }
 	public int getMmtrBrakeFromSync() { return (int) mmtrBrakeNotch; }
+	/** 三手柄：油门手柄位置（±97，0 = 关闭）。非三手柄车底恒为 0。 */
+	public int getMmtrDriveHandleFromSync() { return (int) mmtrDriveHandle; }
+	/** 三手柄：定速巡航设定值（km/h，0 = 关闭）。 */
+	public int getMmtrCruiseKmhFromSync() { return (int) mmtrCruiseKmh; }
+	/**
+	 * 三手柄：本车操纵规格的紧凑字符串（客户端没有 consist-types.json，靠它把位置表镜像过来）。
+	 * 空串 = 本车不是三手柄车底。
+	 */
+	public String getMmtrHandleSpecFromSync() { return mmtrHandleSpec == null ? "" : mmtrHandleSpec; }
 	public int getMmtrReverserFromSync() { return (int) mmtrReverser; }
 	public boolean isMmtrProtectionFromSync() { return mmtrProtection; }
 	public boolean isMmtrEmergencyFromSync() { return mmtrEmergency; }
@@ -3292,12 +3384,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				if (mmtrProtectionNow) {
 					vehicleExtraData.setPowerLevel(-MAX_POWER_LEVEL - 1);
 				} else {
-					vehicleExtraData.setPowerLevel(mmtrControl.getThrottleNotch() > 0 ? mmtrControl.getThrottleNotch()
-						: mmtrControl.getBrakeNotch() > 0 ? -mmtrControl.getBrakeNotch() : 0);
+					vehicleExtraData.setPowerLevel(mmtrLegacyPowerLevelFromControl(mmtrControl));
 				}
 				updateMmtrSyncFields();
 				if (speed != mmtrSpeed || mmtrDistanceTravelled > 0) {
-					org.mtr.core.mmtr.MmtrTrace.log("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " speed=" + speed + "->" + mmtrSpeed + " dist=" + mmtrResult.distanceMeters + " prot=" + mmtrProtectionNow);
+					org.mtr.core.mmtr.MmtrTrace.log("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " drive=" + mmtrControl.getDriveHandle() + " afb=" + mmtrControl.getCruiseSpeedKmh() + " speed=" + speed + "->" + mmtrSpeed + " dist=" + mmtrResult.distanceMeters + " prot=" + mmtrProtectionNow);
 				}
 			}
 			speed = mmtrSpeed;

@@ -36,10 +36,30 @@ public final class MmtrDriveSanitizeTests {
 		final ControlState valid = new ControlState()
 			.setThrottleNotch(5)
 			.setBrakeNotch(2)
+			.setDriveHandle(-40)
+			.setCruiseSpeedKmh(120)
 			.setReverser(-1);
 		MmtrDriveAccess.sanitize(valid);
 		assertEquals(5, valid.getThrottleNotch());
 		assertEquals(2, valid.getBrakeNotch());
+		assertEquals(-40, valid.getDriveHandle());
+		assertEquals(120, valid.getCruiseSpeedKmh());
 		assertEquals(-1, valid.getReverser());
+	}
+
+	/** 三手柄的两个新字段同样要有外层守卫：a hostile client must not push them out of range. */
+	@Test
+	public void clampsDriveHandleAndCruiseSpeed() {
+		final ControlState hostile = new ControlState()
+			.setDriveHandle(9999)
+			.setCruiseSpeedKmh(99999);
+		MmtrDriveAccess.sanitize(hostile);
+		assertEquals(MmtrDriveAccess.MAX_DRIVE_HANDLE, hostile.getDriveHandle(), "油门手柄钳到外层上限");
+		assertEquals(MmtrDriveAccess.MAX_CRUISE_KMH, hostile.getCruiseSpeedKmh(), "定速值钳到外层上限");
+
+		final ControlState negative = new ControlState().setDriveHandle(-9999).setCruiseSpeedKmh(-50);
+		MmtrDriveAccess.sanitize(negative);
+		assertEquals(-MmtrDriveAccess.MAX_DRIVE_HANDLE, negative.getDriveHandle(), "负侧同样钳位");
+		assertEquals(0, negative.getCruiseSpeedKmh(), "定速不能为负");
 	}
 }

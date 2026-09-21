@@ -27,6 +27,13 @@ public final class MmtrDriveAccess {
 	public static final int MAX_NOTCH = 16;
 
 	/**
+	 * 三手柄机车的外层守卫：油门手柄量程（规格里是 ±97，这里留 ±100 的余量）与定速巡航量程
+	 * （规格里是 0…160）。按车型的精确范围由 {@link ThreeHandleSpec} 再钳一次。
+	 */
+	public static final int MAX_DRIVE_HANDLE = 100;
+	public static final int MAX_CRUISE_KMH = 320;
+
+	/**
 	 * Server-side sanitisation of an incoming ControlState (client -> server). Notches, reverser
 	 * and HID axes are clamped to valid ranges before they are stored or mirrored; emergency
 	 * remains a plain boolean.
@@ -34,6 +41,8 @@ public final class MmtrDriveAccess {
 	public static void sanitize(ControlState state) {
 		state.setThrottleNotch(clamp(state.getThrottleNotch(), 0, MAX_NOTCH));
 		state.setBrakeNotch(clamp(state.getBrakeNotch(), 0, MAX_NOTCH));
+		state.setDriveHandle(clamp(state.getDriveHandle(), -MAX_DRIVE_HANDLE, MAX_DRIVE_HANDLE));
+		state.setCruiseSpeedKmh(clamp(state.getCruiseSpeedKmh(), 0, MAX_CRUISE_KMH));
 		state.setReverser(clamp(state.getReverser(), -1, 1));
 		state.setThrottleAxis(clamp(state.getThrottleAxis(), -1, 1));
 		state.setBrakeAxis(clamp(state.getBrakeAxis(), -1, 1));

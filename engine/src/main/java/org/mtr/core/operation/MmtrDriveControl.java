@@ -24,6 +24,10 @@ public final class MmtrDriveControl implements SerializedDataBase {
 	private long vehicleId;
 	private int throttleNotch;
 	private int brakeNotch;
+	/** 三手柄机车的油门手柄位置（±97：正牵引 / 负电阻制动 / 0 关闭）。 */
+	private int driveHandle;
+	/** 三手柄机车的定速巡航设定值（km/h，0 = 关闭，步长 5）。 */
+	private int cruiseSpeedKmh;
 	private int reverser;
 	private double throttleAxis;
 	private double brakeAxis;
@@ -39,6 +43,8 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		this.vehicleId = vehicleId;
 		this.throttleNotch = state.getThrottleNotch();
 		this.brakeNotch = state.getBrakeNotch();
+		this.driveHandle = state.getDriveHandle();
+		this.cruiseSpeedKmh = state.getCruiseSpeedKmh();
 		this.reverser = state.getReverser();
 		this.throttleAxis = state.getThrottleAxis();
 		this.brakeAxis = state.getBrakeAxis();
@@ -56,6 +62,8 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		vehicleId = readerBase.getLong("vehicleId", 0);
 		throttleNotch = readerBase.getInt("throttleNotch", 0);
 		brakeNotch = readerBase.getInt("brakeNotch", 0);
+		driveHandle = readerBase.getInt("driveHandle", 0);
+		cruiseSpeedKmh = readerBase.getInt("cruiseSpeedKmh", 0);
 		reverser = readerBase.getInt("reverser", 0);
 		throttleAxis = readerBase.getDouble("throttleAxis", 0);
 		brakeAxis = readerBase.getDouble("brakeAxis", 0);
@@ -67,7 +75,8 @@ public final class MmtrDriveControl implements SerializedDataBase {
 
 	public void apply(Simulator simulator) {
 		final ControlState state = new ControlState()
-			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setReverser(reverser)
+			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setDriveHandle(driveHandle)
+			.setCruiseSpeedKmh(cruiseSpeedKmh).setReverser(reverser)
 			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency).setAcknowledge(acknowledge);
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
 			if (vehicle.getId() == vehicleId && vehicle.canTakeMmtrControl(driverUuid)) {
@@ -81,6 +90,8 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		writerBase.writeLong("vehicleId", vehicleId);
 		writerBase.writeInt("throttleNotch", throttleNotch);
 		writerBase.writeInt("brakeNotch", brakeNotch);
+		writerBase.writeInt("driveHandle", driveHandle);
+		writerBase.writeInt("cruiseSpeedKmh", cruiseSpeedKmh);
 		writerBase.writeInt("reverser", reverser);
 		writerBase.writeDouble("throttleAxis", throttleAxis);
 		writerBase.writeDouble("brakeAxis", brakeAxis);

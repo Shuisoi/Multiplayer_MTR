@@ -56,8 +56,9 @@ public final class VehicleSyncPatch {
 		"mmtrCabCarIndex", "mmtrCabEnd", "mmtrCabArcM",
 		// 调车授权
 		"mmtrShuntAuthority", "mmtrShuntSpeedLimitKmh", "mmtrShuntRemainingS",
-		// 司机控制与保护
+		// 司机控制与保护（三手柄：油门手柄位置、定速巡航设定值、手柄规格字符串）
 		"mmtrThrottleNotch", "mmtrBrakeNotch", "mmtrReverser", "mmtrThrottleAxis", "mmtrBrakeAxis",
+		"mmtrDriveHandle", "mmtrCruiseKmh", "mmtrHandleSpec",
 		"mmtrEmergency", "mmtrProtection",
 		// 空气制动读数
 		"mmtrPipePressure", "mmtrBrakeCylinderPressure", "mmtrAirState",

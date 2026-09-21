@@ -97,6 +97,18 @@
 			"type": "integer",
 			"default": 0
 		},
+		"mmtrDriveHandle": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrCruiseKmh": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrHandleSpec": {
+			"type": "string",
+			"default": ""
+		},
 		"mmtrThrottleAxis": {
 			"type": "number",
 			"default": 0
