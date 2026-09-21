@@ -750,6 +750,29 @@
   **代价（已告知用户）**：20%+30° 在 854 宽下把字号压到 28.8 且放不下 "AWS" 字样；要保住 36 号字与
   字样，楔形底边需约 270 单位（≈32% 屏宽）。验收：斜边 28 / 楔形 36 / 四边形 24 / 限速牌 25 项
   全 0 违规，形状像素 3 组 0 出界，JUnit 9/9，客户端 437 源/643 类。
+  **226 = 上车后收起物品栏与手（用户：「上车后能隐藏物品栏和手吗」）+ 一个离线守卫**：
+  两个客户端 mixin —— `InGameHud.renderHotbar`（物品栏）与 `HeldItemRenderer.renderItem` 的
+  **第一人称那一档重载**（手/物品；另一个 `renderItem(LivingEntity, ItemStack, …)` 是任何实体手里的东西，
+  掐错就把别的玩家的手持物也抹了）。判据集中在 `MmtrVanillaHud.hideHotbarAndHand()`
+  = `MmtrDriverSeat.ridingVehicle() != null`（乘客上车与进驾驶室两条路都会置上，且会确认车在客户端列表里），
+  改口径只动这一行（例如换成 `isAtControls()` 就只在司机位收）。血量/饥饿/经验条/准星/聊天不动 ——
+  用户说的是"物品栏"；要连整条 HUD 收，改的是 `GameOptions.hudHidden`（等同 F1）。
+  **新增离线守卫**：`@Inject(method = "…")` 是个字符串，写错了编译不报、启动才炸
+  `InjectionError`（和 notes/224b"贴图落在哪里"同一类"只有进游戏才看得见"的坑）。
+  `sandbox/run-mixin-probe.ps1` + `sandbox/MixinTargetProbe.java` 读 mixin 源码抠出 `@Mixin` 与
+  `method=`，用 `import` 还原全名，再挂**映射名** jar 反射比对描述符（描述符交给 JDK 的逻辑生成，
+  不手写解析 javap）。**4/4 目标通过（含原有的两个 mixin，以前没人验证过）**；
+  red-proof：把 `renderHotbar` 描述符的参数顺序颠倒 → 守卫 FAIL 并打印同名方法的真实签名。
+  验收：3 个新文件 javac 通过。**另注：本轮工作区有并行会话在改一套 "board player" 代码**
+  （`MmtrBoardPlayer`/`PacketMmtrBoardPlayer`/`Init` 注册，未入库），全量编译的间歇失败来自那批
+  改到一半的文件，本轮提交只含自己的 5 个文件、未触碰它们。
+  **226b = 提交踩坑：`org/mtr/mixin/` 被 .gitignore 挡着**：`game/.gitignore:36` 有一条 upstream 留下的
+  `**/org/mtr/mixin/`，于是该目录里**新建**的 mixin 会被 git 静默忽略（第一次提交就漏了两个新 mixin）。
+  更糟的是查下来**这个目录从没有过任何提交**（`git ls-files` 为空），而 `mtr.mixins.json` **是**跟踪的
+  并引用着其中的类 ⇒ **干净克隆根本起不来**。处理：本轮用 `git add -f` 把自己的两个 mixin 入库；
+  另外三个不是本轮写的、未动（留给用户决定改 `.gitignore` 还是逐个 `-f`）。
+  这条坑也做进了守卫：`run-mixin-probe.ps1` 核对完目标后会 `git ls-files`，把"在盘上但没被跟踪"的
+  mixin 列出来并提示 `git add -f`。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
