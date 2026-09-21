@@ -647,7 +647,11 @@
   处置：`sync-engine.ps1` 加护栏（检测到 loom 开发进程就拒绝同步，要换 jar 得先停服或显式 `-Force`）；
   并把三类静默失败改成**默认可见**的日志（操纵被拒的理由 / 手柄语义与车底不匹配 / 车底解析结果），
   附"重启后按这个顺序查"的判据表（类加载 → 车底模式 → 准入 → 运动层 → T4 闸门）。
-  引擎 753/0/5（只改诊断与护栏，未动物理）。
+  引擎 753/0/5（只改诊断与护栏，未动物理）。**同一批日志还挖出第二次"车不动"**：`apply-consist-config.ps1`
+  只装 `run\saves`，而 loom 的 dev server 读 **`run\world`**（引擎自己打印 `config=.\world\.\mtr\…` 就是权威路径），
+  且脚本逻辑是"文件已存在就跳过"，于是那份 9/5 的老配置永远拿不到 `carTypeIds` ⇒ 全车退回 NOTCHED、
+  `driveHandle` 被无声忽略（准入是通的：`mmtrOverrides=1`）。脚本重写为"两个位置都装 + 增量合并
+  （缺哪个车底补哪个、按 key 合并映射、现场参数不覆盖）"，6 份配置已同步。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
