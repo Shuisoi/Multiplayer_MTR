@@ -40,6 +40,10 @@ import javax.annotation.Nullable;
  * 扫描用**墙钟时间**而不是 tick 计数：客户端 tick 在一帧里可能被调用多次（阴影通道），
  * 按 tick 计会双倍速。</p>
  *
+ * <p><b>HID（手柄/摇杆）</b>与键盘并存：DirectInput 的 X = 定速巡航、Y = 油门手柄、Z = 气制动手柄
+ * （{@link MmtrHidInput}，换算在引擎的 {@code MmtrHidMapping}）。轴是**绝对量**，所以它压在键盘之后：
+ * 有真杆时以杆位为准；没插手柄就纯键盘。</p>
+ *
  * <p>量程来自**车辆快照镜像的手柄规格**（{@code mmtrHandleSpec}）：客户端没有 consist-types.json，
  * 用它才知道这列车有几档油门、制动几位。镜像还没到（没人开过的车）时退回出厂规格。</p>
  */
@@ -118,12 +122,38 @@ public final class MmtrDriveInput {
 		}
 
 		applyKeyDeltas(nowMillis);
+		applyHidAxes();
 		if (handleChangedThisTick) {
 			// 动了手柄 ⇒ 顺手把这个驾驶室接管过来（引擎要的"哪一端在前"由它决定，见 MmtrCabInteraction）。
 			MmtrCabInteraction.claimSeatWhenDriving(seat);
 		}
 		if (changedSinceLastSend() || nowMillis - lastSendMillis >= REFRESH_INTERVAL_MILLIS) {
 			send(vehicleId);
+		}
+	}
+
+	/**
+	 * HID（手柄/摇杆）：轴值就是**杆位**（绝对量），所以它压在键盘之后 —— 有真杆时以杆为准。
+	 *
+	 * <p>没插手柄时 {@link MmtrHidInput#poll} 返回 {@code null}，这一支什么都不做：纯键盘照常，
+	 * 零回归。轴号/方向/死区可用 {@code -Dmmtr.hid.*} 校准（见 {@code MmtrHidInput}）。</p>
+	 */
+	private static void applyHidAxes() {
+		final MmtrHidInput.State hid = MmtrHidInput.poll(activeSpec);
+		if (hid == null) {
+			return;
+		}
+		if (hid.cruiseKmh() != cruiseKmh) {
+			cruiseKmh = hid.cruiseKmh();
+			handleChangedThisTick = true;
+		}
+		if (hid.driveHandle() != driveHandle) {
+			driveHandle = hid.driveHandle();
+			handleChangedThisTick = true;
+		}
+		if (hid.brakePosition() != brakePosition) {
+			brakePosition = hid.brakePosition();
+			handleChangedThisTick = true;
 		}
 	}
 
