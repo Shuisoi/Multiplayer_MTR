@@ -638,6 +638,16 @@
   新增 `MmtrDriverHud`（右上角两列五行：速度/油门/制动/定速/换向；只在司机位显示，判据与"能不能操作"同源，
   所以不会出现"HUD 在、按键没反应"）。引擎 753/0/5（两条旧契约用例按新契约改写）、
   `check-java-compile` 435 源/639 类、`check-paths` OK、shadowJar 已同步；实机验收清单见 notes/215 §6。
+  **216 = 实机「车不动」的真因：运行中换了引擎 jar**：**不是服务端的运动限制** —— dev server（13:26 起）
+  运行期间我在 15:28:58 覆盖了 `game/libs/Transport-Simulation-Core-0.0.1.jar`，Fabric 懒加载到坏 zip
+  （`ZipException: invalid LOC header`），服务端每个驾驶包都在 `PacketDriveControl.runServer` 抛异常
+  （295 次），`mmtrOverrides=0` 说明引擎从未收到过手柄；而**上驾驶室走另一条路**（`PacketMmtrCabOp`
+  不碰 `ControlState`），所以"能进驾驶室却一动不动"。另外那份世界配置（`br101_three_handle` +
+  `carTypeIds`）是 15:10 写的，也在服务端启动之后 ⇒ 同一个重启同时修两件事。
+  处置：`sync-engine.ps1` 加护栏（检测到 loom 开发进程就拒绝同步，要换 jar 得先停服或显式 `-Force`）；
+  并把三类静默失败改成**默认可见**的日志（操纵被拒的理由 / 手柄语义与车底不匹配 / 车底解析结果），
+  附"重启后按这个顺序查"的判据表（类加载 → 车底模式 → 准入 → 运动层 → T4 闸门）。
+  引擎 753/0/5（只改诊断与护栏，未动物理）。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。

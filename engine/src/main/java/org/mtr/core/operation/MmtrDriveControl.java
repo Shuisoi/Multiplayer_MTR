@@ -79,8 +79,14 @@ public final class MmtrDriveControl implements SerializedDataBase {
 			.setCruiseSpeedKmh(cruiseSpeedKmh).setReverser(reverser)
 			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency).setAcknowledge(acknowledge);
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
-			if (vehicle.getId() == vehicleId && vehicle.canTakeMmtrControl(driverUuid)) {
-				vehicle.applyMmtrControl(state, driverUuid);
+			if (vehicle.getId() == vehicleId) {
+				if (vehicle.canTakeMmtrControl(driverUuid)) {
+					vehicle.applyMmtrControl(state, driverUuid);
+				} else {
+					// 被拒的操纵请求必须**说出来**：三种拒绝在客户端看起来一模一样（都是"按了没反应"），
+					// 而现场只能靠日志区分（notes/216）。限频在 Vehicle 里，这里只管上报。
+					vehicle.mmtrLogControlRefusal(driverUuid, state);
+				}
 			}
 		}));
 	}

@@ -84,6 +84,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private @Nullable String mmtrResolvedCarTypeKey;
 	/** 上一次解析时的车节数：廉价判据，见 {@link #mmtrRefreshConsistTypeFromCars()}。 */
 	private int mmtrResolvedCarCount = -1;
+	/** 诊断限频（"操纵被拒"与"手柄语义不匹配"各一条，见 notes/216）。 */
+	private static final long MMTR_DIAG_LOG_INTERVAL_MILLIS = 2000;
+	private String mmtrLastRefusalReason = "";
+	private long mmtrLastRefusalLogMillis;
+	private String mmtrLastMismatchNote = "";
+	private long mmtrLastMismatchLogMillis;
 	/**
 	 * MMTR: explicit control override. Only engaged by the future input layer that sends a real
 	 * ControlState (keyboard/HID). Until then manual driving follows the legacy single handle so
@@ -2337,8 +2343,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrActiveControl.setAcknowledge(false);
 		}
 		if (!wasOverride && driverUuid != null) {
-			System.out.println("[MMTR-DRV] driver=" + driverUuid + " engaged override T" + controlState.getThrottleNotch() + " B" + controlState.getBrakeNotch() + " R" + controlState.getReverser());
+			System.out.println("[MMTR-DRV] driver=" + driverUuid + " engaged override T" + controlState.getThrottleNotch() + " B" + controlState.getBrakeNotch() + " R" + controlState.getReverser()
+				+ " 三手柄[油门=" + mmtrActiveControl.getDriveHandle() + " 制动=" + mmtrActiveControl.getBrakeNotch() + " 定速=" + mmtrActiveControl.getCruiseSpeedKmh() + "]");
 		}
+		mmtrLogHandleMismatch(mmtrActiveControl);
 		mmtrControlApplySeq++;
 	}
 
@@ -2870,10 +2878,21 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * （{@link MmtrDriveAccess#canControl}：当前持有者还在司机位上时别人抢不走）。</p>
 	 */
 	public boolean canTakeMmtrControl(@Nullable UUID uuid) {
+		return mmtrControlRefusalReason(uuid).isEmpty();
+	}
+
+	/**
+	 * 服务端：这次操纵请求**为什么**被拒（空串 = 允许）。
+	 *
+	 * <p>与 {@link #canTakeMmtrControl} 同源（后者就是"理由为空"），但把理由说出来。
+	 * 存在的理由：三种拒绝（不是司机位 / 无任务 / 别人在开）在客户端看起来**一模一样** ——
+	 * 都是"按了没反应"，而现场只能靠日志区分（notes/216：用户报"车不动"，先花了一轮才发现是别的原因）。</p>
+	 */
+	public String mmtrControlRefusalReason(@Nullable UUID uuid) {
 		// T4 准入闸门：无任务不得操纵（策略开关；默认关，见 MmtrDriveAccess.taskAdmitsDriving）。
 		if (!MmtrDriveAccess.taskAdmitsDriving(data instanceof final Simulator simulator && simulator.mmtrRequireTaskToDrive,
 			mmtrMission != null && !mmtrMission.isTerminal())) {
-			return false;
+			return "无任务不得操纵（T4 闸门 mmtrRequireTaskToDrive 开着）";
 		}
 		if (uuid == null) {
 			final boolean[] anyDriverRiding = {false};
@@ -2882,11 +2901,63 @@ public class Vehicle extends VehicleSchema implements Utilities {
 					anyDriverRiding[0] = true;
 				}
 			});
-			return anyDriverRiding[0];
+			return anyDriverRiding[0] ? "" : "没有司机在司机位上（无身份操纵路径）";
 		}
-		final boolean senderIsRidingDriver = hasMmtrDriverRiding(uuid);
+		if (!hasMmtrDriverRiding(uuid)) {
+			return "请求者不在司机位上（ride 包的 isDriver 为假）";
+		}
 		final boolean holderStillRiding = mmtrDriverUuid == null || hasMmtrDriverRiding(mmtrDriverUuid);
-		return MmtrDriveAccess.canControl(senderIsRidingDriver, mmtrManualOverride, mmtrDriverUuid, uuid, holderStillRiding);
+		if (!MmtrDriveAccess.canControl(true, mmtrManualOverride, mmtrDriverUuid, uuid, holderStillRiding)) {
+			return "另一名司机正持有操纵权（占用锁；持有者仍在司机位上）";
+		}
+		return "";
+	}
+
+	/**
+	 * 服务端：把一次被拒的操纵请求说出来（限频 2 s；理由变了立刻说）。
+	 *
+	 * <p>刻意**不放在 trace 开关后面**：它是"人正在试图开车但没开成"的状态类消息，默认就该看得见
+	 * （同 {@code MmtrTrace} 类注释里对"状态类消息"的规定）。</p>
+	 */
+	public void mmtrLogControlRefusal(@Nullable UUID uuid, ControlState state) {
+		final String reason = mmtrControlRefusalReason(uuid);
+		if (reason.isEmpty()) {
+			return;
+		}
+		final long now = System.currentTimeMillis();
+		if (reason.equals(mmtrLastRefusalReason) && now - mmtrLastRefusalLogMillis < MMTR_DIAG_LOG_INTERVAL_MILLIS) {
+			return;
+		}
+		mmtrLastRefusalReason = reason;
+		mmtrLastRefusalLogMillis = now;
+		System.out.println("[MMTR-DRV] 操纵被拒：车=" + id + " 理由=" + reason + "（油门手柄=" + state.getDriveHandle()
+			+ " 制动=" + state.getBrakeNotch() + " 定速=" + state.getCruiseSpeedKmh() + " reverser=" + state.getReverser()
+			+ " uuid=" + uuid + "）");
+	}
+
+	/**
+	 * 服务端：客户端送来三手柄语义、但本车底没有三手柄规格时说出来（限频）。
+	 *
+	 * <p>这是"按了不走"的第二大原因：车底是 NOTCHED/STEPLESS（例如车型没配进 {@code carTypeIds}、
+	 * 或世界配置改了但服务端没重启），控制器读的是 {@code throttleNotch}，于是 {@code driveHandle} 被无声忽略。</p>
+	 */
+	private void mmtrLogHandleMismatch(ControlState state) {
+		if (mmtrConsistType == null || mmtrConsistType.getHandles() != null) {
+			return;
+		}
+		if (state.getDriveHandle() == 0 && state.getCruiseSpeedKmh() == 0) {
+			return;
+		}
+		final String note = "本车底是 " + mmtrConsistType.getControlMode() + "（" + mmtrConsistType.getId()
+			+ "），没有三手柄规格：接收到的油门手柄/定速不驱动它";
+		final long now = System.currentTimeMillis();
+		if (note.equals(mmtrLastMismatchNote) && now - mmtrLastMismatchLogMillis < MMTR_DIAG_LOG_INTERVAL_MILLIS) {
+			return;
+		}
+		mmtrLastMismatchNote = note;
+		mmtrLastMismatchLogMillis = now;
+		System.out.println("[MMTR-DRV] 手柄语义不匹配：车=" + id + " " + note + "（油门手柄=" + state.getDriveHandle()
+			+ " 定速=" + state.getCruiseSpeedKmh() + "）");
 	}
 
 	private boolean hasMmtrDriverRiding(UUID uuid) {
@@ -2976,6 +3047,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		mmtrResolvedCarTypeKey = resolution.key();
 		mmtrConsistType = resolution.consistTypeId() == null ? null : simulator.mmtrConsistTypes.get(resolution.consistTypeId());
+		// 车底解析结果是一条**状态类**消息（决定这台车用哪套操纵语义）：默认可见，否则"三手柄键位不驱动它"
+		// 这类问题只能靠猜（notes/216）。
+		System.out.println("[MMTR-DRV] 车底解析：车=" + id + " 说话的车=" + (resolution.key().isEmpty() ? "（谁都没配）" : resolution.key())
+			+ " → " + (mmtrConsistType == null ? "无（维度缺省也没配）" : mmtrConsistType.getId() + "/" + mmtrConsistType.getControlMode()));
 		// 说话的车换了 ⇒ 控制器（含气制动状态）与编组视图都要重建，否则会拿旧参数继续跑。
 		mmtrDriveController = null;
 		mmtrComposition = null;
