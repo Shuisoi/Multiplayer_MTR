@@ -675,6 +675,15 @@
   `Could not get unknown property 'archivePath'`（Gradle 9 已移除该属性；game pin 8.14，IDEA 用 wrapper 所以不会遇到），
   顺手把 `game/fabric/build.gradle` 那行换成 `shadowJar.archiveFile.get().asFile`。
   规矩两面写全：护栏防"运行中同步"（216），这条防"忘了同步"。
+  **220 = IDEA 拉不起来（续）：导入时 `:forge:compileJava` 把整个导入带崩**：游戏日志**零新增**
+  （判据：JVM 没起 ⇒ IDE 侧），IDEA 自己的 `idea.log` 里是
+  `ExternalSystemException: Compilation failed` + `forge/.../MmtrSignalSync.java: 程序包 net.fabricmc… 不存在`；
+  `.idea/modules.xml` 里**只有 forge 模块** ⇒ 运行配置引用的 `Minecraft-Transit-Railway.fabric.main` 不存在。
+  真因是**早就在的缺陷**：被复制进 `game/forge/src/main/java/org/mtr/mod/mmtr/**` 的 MMTR 源码是按
+  fabric/Yarn 写的，forge 映射下编不过，而 **IDEA 导入会编译所有子工程** ⇒ 导入中断 ⇒ fabric 模块不注册。
+  先用 IDEA 那条命令原样起过一次证明游戏没问题（44 mod、`[MMTR-HLTH] vehicles=8`），
+  再把 forge 改成**可选子工程**（`settings.gradle`，`-Pmmtr.forge=true` 才包含）：根项目 `compileJava`
+  BUILD SUCCESSFUL、`projects` 只剩 `:fabric`。用户侧只需**重新导入 Gradle 项目**。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
