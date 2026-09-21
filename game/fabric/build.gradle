@@ -21,6 +21,21 @@ dependencies {
 	modImplementation "net.fabricmc:fabric-loader:${buildTools.getFabricVersion()}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${buildTools.getFabricApiVersion()}"
 	modApi("com.terraformersmc:modmenu:${buildTools.getModMenuVersion()}") { exclude group: "net.fabricmc", module: "fabric-loader" }
+	// —— 光影（dev 客户端专用，modLocalRuntime 不进发布产物）——
+	// Iris 是光影加载器，Sodium 是它的渲染后端，两者版本必须成对：
+	// iris-1.7.2+mc1.20.4 的 fabric.mod.json 写着 "sodium": ["0.5.8", "0.5.11"]（精确值，不是区间），
+	// 所以 sodium 钉 0.5.8（1.20.4 上最新的 0.5.x），写成 0.5.+ 之类的动态版本会解析失败。
+	// 光影包放 fabric/run/shaderpacks/（run/ 不入库）；游戏内：选项 → 视频设置 → 光影包。
+	modLocalRuntime "maven.modrinth:sodium:mc1.20.4-0.5.8"
+	modLocalRuntime "maven.modrinth:iris:1.7.2+1.20.4"
+	// Iris 把这三个库用 Jar-in-Jar 内嵌在 META-INF/jars/ 里（jcpp 读 shaders.properties、
+	// antlr4-runtime + glsl-transformer 编译光影包 GLSL）。**Loom dev 不展开 classpath mod 的嵌套 jar**
+	// （fabric-loom#1275：Jar-in-jar dependencies are not loaded for modImplementation mods），
+	// 于是点「应用/选包」时 Iris 抛 NoClassDefFoundError: org/anarres/cpp/PreprocessorListener 直接崩
+	// —— prod 包没这问题，只有 dev 客户端要在这里单独补一份（版本对齐 iris-1.7.2 内嵌的那三个）。
+	runtimeOnly "org.anarres:jcpp:1.4.14"
+	runtimeOnly "org.antlr:antlr4-runtime:4.13.1"
+	runtimeOnly "io.github.douira:glsl-transformer:2.0.1"
 	shadowImplementation "org.mtr:Minecraft-Mappings-fabric-${minecraftVersion}:0.0.1-dev"
 	testImplementation "org.junit.jupiter:junit-jupiter-api:5.+"
 	testImplementation "org.junit.platform:junit-platform-launcher:1.+"
@@ -37,6 +52,8 @@ dependencies {
 
 repositories {
 	maven { url = "https://maven.terraformersmc.com/" }
+	// 上面三个光影库只挂在 Maven Central（工作区其它仓库如 maven4.bai.lol 没有）。
+	mavenCentral()
 }
 
 java {
@@ -131,7 +148,11 @@ shadowJar {
 remapJar {
 	dependsOn(shadowJar)
 	mustRunAfter(shadowJar)
-	inputFile = file(shadowJar.archivePath)
+	// Gradle 9 移除了 `shadowJar.archivePath`（8.x 起就已废弃）：用 `archiveFile` 才是它的替代。
+	// 现场教训（notes/219）：用 Gradle 9.5.1 跑这个模块会直接
+	// `Could not get unknown property 'archivePath'` —— 配置期就失败，看着像"服务端拉不起来"，
+	// 其实是构建脚本与 Gradle 版本不匹配（本模块 pin 的是 8.14）。
+	inputFile = shadowJar.archiveFile.get().asFile
 }
 
 test {

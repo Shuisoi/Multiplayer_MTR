@@ -668,6 +668,13 @@
   死区只做吸附不做量程缩放。方向/轴号/死区全部走启动参数校准（`-Dmmtr.hid.*`），
   换设备/掉线各打一行"生效的映射"。引擎 759/0/5（+5）；客户端 436 源/641 类（用新 shadowJar 顶在
   classpath 最前验证，未碰 game/libs —— 护栏要求停服才同步）。
+  **219 = IDEA 里服务端拉不起来 = 引擎 jar 没同步**：`game/libs` 还是旧 jar（缺 `MmtrHidMapping` /
+  `getMmtrHoldReasonFromSync`），IDEA 的 runConfiguration 带 before-launch **Make** ⇒ 编译不过 ⇒ 起不来；
+  端口与配置都无辜。停服同步后**用 game 自己的 Gradle 8.14**跑 `:fabric:compileJava` = BUILD SUCCESSFUL。
+  附一条**假警报**：用引擎的 9.5.1 wrapper 跑 game 会得到
+  `Could not get unknown property 'archivePath'`（Gradle 9 已移除该属性；game pin 8.14，IDEA 用 wrapper 所以不会遇到），
+  顺手把 `game/fabric/build.gradle` 那行换成 `shadowJar.archiveFile.get().asFile`。
+  规矩两面写全：护栏防"运行中同步"（216），这条防"忘了同步"。
 ## 历史与参考（已入库）
 - `docs/00-历史/`：M0 之前的环境搭建、MTR 源码分析、可行性论证、架构决策与里程碑（00–03）。文档里的旧路径换算表见该目录的 `README.md`；其中 03 里程碑仍被多处文字引用。
 - `docs/reference/`：MTR 官方 JSON Schema（`customResources/vehicleResource/vehicleModel/modelProperties*` 等，含 legacy 旧版）与官方示例资源包 `MTR-Custom-Resources-example.zip`。体积小、文档要引用，故随仓库入库（第三方产物，只读）。
