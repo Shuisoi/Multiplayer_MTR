@@ -28,6 +28,29 @@ public final class KeyBindings {
 		// C7: aim at a train and press K to couple onto it / cut a coupler in front of the aimed car.
 		MMTR_COUPLE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.couple", GLFW.GLFW_KEY_K, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		/*
+		 * **计划内接管**：坐在司机位上按一下，把本车当前挂着的作业单接过来（再按一下还回去）。
+		 *
+		 * 为什么要有这个键：接管是**司机自己的决定**，不该要求他切出去到网页指令栏敲一行。
+		 * 引擎侧的闸门（车必须停稳）照旧 —— 车在动时按键会被如实拒绝，并在动作栏说清原因。
+		 */
+		MMTR_TASK = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.task", GLFW.GLFW_KEY_B, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
+		 * **子任务的双向确认**：司机按下它 = "我这边确认这一步"（上行那一半）。
+		 *
+		 * 客户端也会在**看到引擎把某一条判为完成**时自动回一次确认（"我显示的和你判的一致"），
+		 * 所以这个键是**人工追加确认**用的，不是链能否往下的必要条件 —— 链的推进始终由引擎的观测说了算
+		 * （车停没停稳、门开没开）。
+		 */
+		MMTR_TASK_CONFIRM = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.task.confirm", GLFW.GLFW_KEY_N, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
+		 * **司机的车门键**（用户口径"按键开门 … 关门"）。
+		 *
+		 * Y = 本列车两侧门一起开/关（站台作业最常用的一下）；U = 只动右侧（靠站台那一侧的日常做法）。
+		 * 站在站台上瞄准任意一节车的门按 Y 也有效（引擎侧 {@code doors} 指令本来就不要求驾驶权）。
+		 */
+		MMTR_DOORS = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.doors", GLFW.GLFW_KEY_Y, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_DOORS_SIDE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.doors.side", GLFW.GLFW_KEY_U, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
 		 * 三手柄机车（BR101）的驾驶输入，见 docs/01-设计/驾驶输入与控制模型.md §7。
 		 *
 		 * 油门手柄是一根**双向**手柄：↑ 往牵引侧、↓ 往电阻制动侧，中央 = 关闭；1% 一档，长按会扫。
@@ -58,6 +81,14 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_CAB_INTERACT;
 	/** C7: the coupling interaction key. */
 	public static final KeyBinding MMTR_COUPLE;
+	/** 计划内接管：把本车的作业单接过来 / 还回去（B）。 */
+	public static final KeyBinding MMTR_TASK;
+	/** 子任务确认（N）：司机对当前子任务清单的人工确认（双向确认的上行）。 */
+	public static final KeyBinding MMTR_TASK_CONFIRM;
+	/** 司机车门键（Y）：本列车两侧门一起开/关。 */
+	public static final KeyBinding MMTR_DOORS;
+	/** 司机车门键（U）：只动右侧门。 */
+	public static final KeyBinding MMTR_DOORS_SIDE;
 	/** One key, three positions: the windshield wiper stalk (关 / 慢 / 快). */
 	public static final KeyBinding MMTR_WIPER;
 	/** 三手柄：油门手柄往牵引侧（+1%，长按扫）。 */

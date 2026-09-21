@@ -587,6 +587,25 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final MmtrMission mission = mmtrMission;
 		final boolean motionMission = mmtrMotionWalker != null;
+		/*
+		 * **站台作业的子任务链**（2026-09-21 用户口径）：到站停稳 → 开门 → 停够 → 关门。
+		 *
+		 * 建链放在这里而不是 {@code attachTask}：默认停留是可改的引擎参数（在 {@code Simulator} 上），
+		 * 而作业单只给"计划停留"；两者取大者的那一句必须发生在**能看见引擎默认值**的地方。
+		 * 幂等，所以每 tick 调一次没有代价。
+		 */
+		if (motionMission && data instanceof final Simulator subTaskSimulator) {
+			/*
+			 * **任务目标**（变量）在这里解析：目标的**人话名字**住在站台/股道/车站对象上，
+			 * 只有拿到 Simulator 才解析得出来（客户端更没有这些东西）。解析一次、挂住，
+			 * 之后子任务文案与到站判定都从它取"停在哪儿"。
+			 */
+			if (!mission.getTarget().isNamed()) {
+				mission.attachTaskShape(null, org.mtr.core.mmtr.MmtrTaskTarget.resolve(subTaskSimulator,
+					mission.getTargetSidingId(), mission.getTargetRailHex(), mission.getTargetRailFraction()));
+			}
+			mission.ensureSubTasks(subTaskSimulator.mmtrSubTaskDwellMillis());
+		}
 		// Motion-mode missions self-execute: whoever attached the mission (mission control op, job
 		// scheduler, periodic source) does not need to arm anything - the vehicle resolves the target
 		// platform/siding rail, plans the run and arms the auto step-run itself on the next tick.
@@ -633,8 +652,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				break;
 			case DISPATCHED:
 				// Motion-mode missions arrive when the armed stop target is reached exactly;
-				// legacy-path missions use their path/platform stop semantics.
-				if (motionMission ? isMmtrMotionStoppedAtTarget() : isStoppedAtMissionTarget()) {
+				// legacy-path missions use their path/platform stop semantics - except a
+				// player-driven station stop, which uses the loose "any car on the platform" rule
+				// (see mmtrArrivedAtMissionTarget) because nobody brakes for the driver.
+				if (mmtrArrivedAtMissionTarget(mission, motionMission)) {
 					mission.atTarget();
 					mmtrMissionTargetArrivedMillis = data.getCurrentMillis();
 					if (!motionMission && mission.getExecutor() == MmtrMission.Executor.AUTOPILOT && vehicleExtraData.getIsManualAllowed()) {
@@ -651,16 +672,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				 * notes/155：站台作业按**计划给的停留**，不是引擎默认那几秒 —— 否则"停留 30s"
 				 * 这条配置等于没有（车到站闪一下就走的根就在这里）。
 				 *
-				 * 而**不带停站作业的任务**（`DRIVE_TO_PLATFORM` 那类）到站就该算完成：它的语义就是
-				 * "到站停稳"（见 {@code DriveToPlatformTask} 的类注释），停留是**下一步**的活。
-				 * 修前一律给 5 秒默认停留，于是每一站都白停 5 秒 —— 十站一趟就是 50 秒，
-				 * 计划里的到达/发车时刻被整体推后，越跑越晚。
+				 * 2026-09-21（用户口径「拆一个任务到基础的操作以简化逻辑判定」）：**每个主任务都有清单**了 ——
+				 * "开往" = [停在目标]，"停站乘降" = [停在目标, 开门, 等待上下客, 关门]。
+				 * 于是这里只剩一句话：**清单全达成 ⇒ 这一步完成**；不再有"有链走链、没链走老口径"的分叉
+				 * （那条分叉正是当天"开往车站那一步永远到不了站"的根因）。
+				 * 链里的"等待上下客"自己带时长，"开往"那一步的清单只有一条、到站即达成。
 				 */
-				final org.mtr.core.mmtr.task.MmtrTask targetTask = mission.getTask();
-				final long targetDwell = targetTask == null ? MMTR_MISSION_DWELL_MILLIS
-					: (targetTask instanceof final org.mtr.core.mmtr.task.StationServiceTask targetService
-						? targetService.effectiveDwellMillis(MMTR_MISSION_DWELL_MILLIS) : 0L);
-				if (!isMoving() && data.getCurrentMillis() - mmtrMissionTargetArrivedMillis >= targetDwell) {
+				if (mission.hasSubTasks()) {
+					mmtrTickSubTasks(mission);
+					if (mission.allSubTasksDone()) {
+						/*
+						 * **出站确认**：最后一条基础操作达成 = 这一步真做完了（停站乘降那类就是"门关好"）。
+						 * 时刻记在 mission 上（"实际发车时刻"），与进站时刻配对 —— 报点与事后分析都要它。
+						 */
+						mmtrMarkStationDeparture(mission);
+						mission.complete();
+					}
+				} else if (!isMoving() && data.getCurrentMillis() - mmtrMissionTargetArrivedMillis >= MMTR_MISSION_DWELL_MILLIS) {
+					// 没有清单可拆的任务（换端这类原地动作、以及临时任务）：保持老口径（默认停留后完成）
 					mission.complete();
 				}
 				break;
@@ -684,6 +713,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrMotionFlipDone = true;
 			vehicleExtraData.closeDoors();
 			vehicleExtraData.mmtrMarkSyncDirty();
+			// 子任务的自白节流跟着任务一起清（下一步的"等司机开门"要能再喊一次）
+			mmtrSubTaskWarnMillis = 0;
+			mmtrSubTaskDoorsWarned = false;
 		}
 
 		// P3: while an auto mission run is armed, replenish the forks that just entered the
@@ -912,11 +944,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " self-armed to rail " + plan.targetRailHex + " stop @" + Math.round(plan.stopCumulativeM) + "m"
 				+ (plan.stopRailHex.isEmpty() ? "" : "（锚点 " + plan.stopRailHex.substring(0, 8) + " × " + Math.round(plan.stopFraction * 100.0) / 100.0 + "）"));
 		} else {
-			// T4: 玩家执行 —— **只发布进路与授权，不接管油门**。司机自己开，联锁替他设进路/扳道岔/给信号；
-			// 引擎只观测（位置、门、停车点），到点由任务状态机照常推进。
+			/*
+			 * T4：玩家执行 —— **只发布进路、不接管油门**，也不给停车点。
+			 *
+			 * <h3>2026-09-21 改：停车点对玩家撤掉（用户口径「不能干预玩家停车的行为」）</h3>
+			 *
+			 * <p>修前这里也给停车点，为的是让状态机能走到 AT_TARGET（判据原先只有
+			 * {@code isMmtrMotionStoppedAtTarget()} 这一个）。代价是**引擎每 tick 按包线替司机刹车**：
+			 * 停车点一进刹车距离，{@code autoBraking} 就压住司机的牵引 —— 司机想再往前挪半米对
+			 * 车门，车却被按住。用户明确要求不许干预，所以停车点撤掉、到站判据换成宽松那条
+			 * （{@link #mmtrAnyCarOnMissionStation}：站台轨上有车 + 停稳，见 {@link #mmtrArrivedAtMissionTarget}）。
+			 * 两件事是一体的：撤掉刹车就必须换判据，否则步骤永远停在 DISPATCHED（这正是当初加停车点的原因）。</p>
+			 *
+			 * <p>**进路照发**：联锁、道岔、信号一个不少 —— 玩家执行的任务与自动车走同一条路，
+			 * 区别只剩"油门与刹车归谁"。</p>
+			 */
 			System.out.println("[MMTR-MSG] motion mission " + mission.getKind() + " (PLAYER) 进路已发布到 rail " + plan.targetRailHex
-				+ "，道岔已申请；油门留给司机");
-			// 玩家任务不设 auto / 停车目标，所以那两个不能当"已自臂"的标志 —— 单独记一个闩，
+				+ "，道岔已申请；**不设停车点**（到站按「站台轨上有车且停稳」判，刹车完全归司机）");
+			// 玩家任务不设 auto，所以那个当不了"已自臂"的标志 —— 单独记一个闩，
 			// 否则每 tick 都会重规划一遍（幂等，但日志会刷屏）。
 			mmtrPlayerRoutePublished = true;
 		}
@@ -933,6 +978,355 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final Rail rail = org.mtr.core.mmtr.MmtrRunPlanner.findSavedRailRail(simulator, railOrSidingId);
 		return rail != null && rail.getHexId().equals(mmtrMotionWalker.railHex());
+	}
+
+	/*
+	 * ============================== 站台作业：进出站判定 + 子任务 ==============================
+	 *
+	 * 用户口径（2026-09-21）：
+	 *
+	 * > 「这个东西需要做子任务，比如说到某站台。首先不能干预玩家停车的行为，所以判定可以宽松点，
+	 * >   在站台上停车就算完成停车目标，然后按键开门，等段时间，关门。这几个子任务完成后才算任务完成。」
+	 *
+	 * 三件事在这里落地：
+	 * ① **到站**用宽松判据（编组里任意一节车在站台上 + 停稳），不看停车点精确度；
+	 * ② 到站之后按链逐条判定（开门 / 停够 / 关门），**每一步都是观测**，不向车发操作指令；
+	 * ③ 进站/出站各记一个实际时刻（用于报点与事后分析），并打一条双向确认日志。
+	 */
+
+	/** "停稳"的速度阈值（m/ms）：约 0.036 km/h —— 比它慢就算停住了，不必等于 0（物理积分有残差）。 */
+	private static final double MMTR_SUB_TASK_STOPPED_SPEED = 1e-5;
+	/** 无人掌权时，到站后等司机开门的宽限（超时由引擎代开，见 {@link #mmtrTickSubTasks}）。 */
+	private static final long MMTR_SUB_TASK_DRIVER_DOOR_WAIT_MILLIS = 15000;
+	/** "等司机开门/关门"这类自白的节流间隔。 */
+	private static final long MMTR_SUB_TASK_LOG_INTERVAL_MILLIS = 5000;
+
+	/** 子任务自白的上次时刻（节流用）。 */
+	private long mmtrSubTaskWarnMillis;
+	/** 这一步有没有已经喊过"门没开/门没关"（每步只喊一次，避免刷屏）。 */
+	private boolean mmtrSubTaskDoorsWarned;
+
+	/** 车是不是停稳了（子任务判据用的宽松"停住"，不是 {@code speed == 0}）。 */
+	private boolean mmtrStoppedForSubTask() {
+		return Math.abs(speed) <= MMTR_SUB_TASK_STOPPED_SPEED;
+	}
+
+	/**
+	 * **这次任务该用宽松到站判据吗**：玩家执行 + 走行模式。
+	 *
+	 * <p>只对玩家放宽，理由是用户那句话的**原因**本身：「不能干预玩家停车的行为」——
+	 * 引擎不再给玩家的车设停车点（见 {@link #mmtrMotionSelfArmMission}），所以"停准了没有"
+	 * 引擎根本没资格判。自动车的停车点是引擎按包线自己刹的，精确判据才是它真实的语义
+	 * （换宽松判据会在"被信号按在站台轨上停着"时误判到站）。</p>
+	 *
+	 * <h3>2026-09-21 实机修：判据原来多要了一个"有子任务链"</h3>
+	 *
+	 * <p>第一版写成 {@code executor == PLAYER && 有子任务链}，于是只有**站台作业**那一步是宽松的，
+	 * 而作业表里"开往某站台"那一步（{@code MOVE_TO}/{@code DriveToPlatformTask}）**没有子任务链**，
+	 * 掉回精确判据 {@code isMmtrMotionStoppedAtTarget()} —— 而玩家任务恰恰**没有停车点**，
+	 * 那个标志永远不会置位。现场症状：司机把车停在 2 站 1 台上、作业却停在「去程到 2 站 1 台」
+	 * 的 DISPATCHED 上不动，**下一步的开关门提示因此永远不来**（用户报的就是这一条）。</p>
+	 *
+	 * <p>现在只按"是不是玩家在开"分叉 —— 没有停车点的车，"到没到"只能靠观测回答，
+	 * 与"这一步有没有子任务"无关。</p>
+	 */
+	static boolean mmtrArrivalIsLoose(@Nullable MmtrMission mission) {
+		return mission != null && mission.getExecutor() == MmtrMission.Executor.PLAYER;
+	}
+
+	/**
+	 * 到站判据（宽严二选一，见 {@link #mmtrArrivalIsLoose}）—— **任务状态机的前进判据**：
+	 * "此刻该不该宣布到站了"。
+	 *
+	 * <p>与子任务 {@code STOP_AT_TARGET} 的分工：状态机管**宣布时机**（自动车按精确停车点、
+	 * 玩家按观测），子任务管**记录事实**（{@link #mmtrObservedAtTarget()}，执行者无关）。
+	 * 两者共用同一个观测，但"谁说了算"不同 —— 自动车没到停车点就不许宣布到站
+	 * （哪怕已经站在站台轨上、只是被信号按住），而一旦宣布了，子任务记的就是
+	 * "车确实停在目标上"这件可观测的事（原地动作那条捷径就是从这里进来的：
+	 * 它直接把状态推到 AT_TARGET，没有经过停车点）。</p>
+	 *
+	 * @param motionMission 本车是不是走行模式（老口径下两种语义不同）
+	 */
+	private boolean mmtrArrivedAtMissionTarget(MmtrMission mission, boolean motionMission) {
+		if (motionMission && mmtrArrivalIsLoose(mission)) {
+			return mmtrObservedAtTarget();
+		}
+		return motionMission ? isMmtrMotionStoppedAtTarget() : isStoppedAtMissionTarget();
+	}
+
+	/**
+	 * **观测到的"已停在目标"**（与执行者无关）：编组在目标轨上 + 停稳。
+	 *
+	 * <p>判据两段：①站台/股道/车站目标（以及任务自己的目标轨 hex）—— 占用段与那些轨有交集
+	 * （"有车在站上"）；②一个都解析不出来 —— 退回"车头已站在目标轨上"
+	 * （{@code walker.atTarget()}），免得目标解析失败变成永远到不了。</p>
+	 */
+	private boolean mmtrObservedAtTarget() {
+		if (!mmtrStoppedForSubTask()) {
+			return false;
+		}
+		if (mmtrAnyCarOnMissionStation()) {
+			return true;
+		}
+		return mmtrMotionWalker != null && mmtrMotionWalker.atTarget();
+	}
+
+	/**
+	 * **编组里有没有任意一节车停在目标站台上**（宽松到站判据的本体）。
+	 *
+	 * <p>为什么不是"车头在站台轨上"：站台在物理上是一段轨，一列车停在站台上时，编组跨着好几根轨 ——
+	 * 车头早过了站台，车门却正对着站台。所以判据是**占用段与站台轨有交集**，取的是"有车在站上"。</p>
+	 *
+	 * <p>站台轨从哪来：目标 id 可能是站台、股道，也可能是车站 —— 三种都收（车站取它的全部站台轨）。
+	 * 另外把任务自己的目标轨也算进来（折返点之类没有站台对象的目标，靠它兜底），
+	 * 这样一个目标对象都没解析出来时不至于"永远到不了站"而卡死。</p>
+	 */
+	private boolean mmtrAnyCarOnMissionStation() {
+		if (mmtrMotionWalker == null || !mmtrStoppedForSubTask() || !(data instanceof final Simulator simulator)) {
+			return false;
+		}
+		final java.util.HashSet<String> stationRails = new java.util.HashSet<>();
+		final MmtrMission mission = mmtrMission;
+		if (mission != null) {
+			final long targetId = mission.getTargetSidingId();
+			final org.mtr.core.data.Platform platform = targetId == 0 ? null : simulator.platformIdMap.get(targetId);
+			if (platform != null) {
+				// 站台 → 它所在的**车站**的全部站台轨：同一站的多站台都算"在站上"（宽松口径要的就是这个）
+				final org.mtr.core.data.Station station = platform.area;
+				if (station != null && !station.savedRails.isEmpty()) {
+					station.savedRails.forEach(savedRail -> addMmtrRailHex(stationRails, savedRail.mmtrGraphRail()));
+				} else {
+					addMmtrRailHex(stationRails, platform.mmtrGraphRail());
+				}
+			} else {
+				final org.mtr.core.data.Siding siding = targetId == 0 ? null : simulator.sidingIdMap.get(targetId);
+				if (siding != null) {
+					addMmtrRailHex(stationRails, siding.mmtrGraphRail());
+				} else {
+					final org.mtr.core.data.Station station = targetId == 0 ? null : simulator.stationIdMap.get(targetId);
+					if (station != null) {
+						station.savedRails.forEach(savedRail -> addMmtrRailHex(stationRails, savedRail.mmtrGraphRail()));
+					}
+				}
+			}
+			addMmtrRailHex(stationRails, org.mtr.core.mmtr.MmtrRunPlanner.findRailByHex(simulator, mission.getTargetRailHex()));
+		}
+		if (stationRails.isEmpty()) {
+			return false;
+		}
+		/*
+		 * 编组体车看**占用段**（任意一节车在这根轨上就算）；单点走行体没有占用段，退回"车头在这根轨上"。
+		 * 玩家任务是编组体，走上面那一条；这一句是给老走行体留的正确退化路径，不是死代码。
+		 */
+		final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		if (consistWalker == null) {
+			return stationRails.contains(mmtrMotionWalker.railHex());
+		}
+		for (final org.mtr.core.mmtr.consist.MmtrConsistBody.OccupiedSegment segment : consistWalker.occupancy()) {
+			if (stationRails.contains(segment.railHex())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static void addMmtrRailHex(java.util.Set<String> into, @Nullable Rail rail) {
+		if (rail != null) {
+			into.add(rail.getHexId());
+		}
+	}
+
+	/**
+	 * **推进基础操作清单**（用户口径：「拆一个任务到基础的操作以简化逻辑判定」），每条都是"看见什么算什么"：
+	 *
+	 * <ol>
+	 *   <li>{@code STOP_AT_TARGET} **停在目标** —— 与任务状态机的 {@code DISPATCHED→AT_TARGET}
+	 *       **共用同一处判据**（{@link #mmtrArrivedAtMissionTarget}）：自动车按精确停车点，玩家按观测
+	 *       （站台轨上有车 / 车头站在目标轨上，且停稳）；</li>
+	 *   <li>{@code OPEN_DOORS} **开门** —— 门到"开"。**司机在开就等他开**（用户要的"按键开门"是作业的一部分），
+	 *       车里没人掌权时引擎代开（自动那一半保留，也免得作业链在没人时永远卡住）；</li>
+	 *   <li>{@code WAIT_PASSENGERS} **等待上下客** —— 从开门起计够模板给的时长（默认 20 秒，可改）；</li>
+	 *   <li>{@code CLOSE_DOORS} **关门** —— 门回到"关"（同上，司机在就等他关）。</li>
+	 * </ol>
+	 *
+	 * <p><b>链是顺序的</b>：当前这条没达成，后面的不评（否则"门一开就同时算停够"）。</p>
+	 *
+	 * <p><b>不干预司机</b>：门开着的时候司机想关门就关，引擎不拦；真提前关了，等待照样按时间走完
+	 * （宽松口径），只是打一条日志说明"提前关门"，因为那是要被人看见的偏差而不是失败。</p>
+	 */
+	private void mmtrTickSubTasks(MmtrMission mission) {
+		if (isClientside) {
+			return;
+		}
+		final long now = data.getCurrentMillis();
+		final boolean onStation = mmtrAnyCarOnMissionStation();
+		final boolean stopped = mmtrStoppedForSubTask();
+		// 进站确认：AT_TARGET 达成的那一刻状态机已经确认过，这里只**记实际到站时刻**并喊一次
+		if (mission.markStationArrival(now)) {
+			System.out.println("[MMTR-SUB] 进站确认：车 " + getId() + " 已到 " + mission.getTarget().label()
+				+ "（任务 " + mission.getTemplate() + "，执行者 " + mission.getExecutor() + "，"
+				+ (stopped ? "停稳" : "未停稳") + "，占用车节在目标轨上=" + onStation + "）");
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
+
+		for (final org.mtr.core.mmtr.MmtrSubTask subTask : mission.subTasks()) {
+			if (subTask.isDone()) {
+				continue;
+			}
+			if (subTask.state() == org.mtr.core.mmtr.MmtrSubTask.State.PENDING) {
+				subTask.markActive(now);
+				mission.bumpSubTaskRevision();
+				vehicleExtraData.mmtrMarkSyncDirty();
+				System.out.println("[MMTR-SUB] ▶ 基础操作开始：" + subTask.kind() + "（车 " + getId() + "，"
+					+ mission.describeSubTasks(now) + "）");
+			}
+			switch (subTask.kind()) {
+				case STOP_AT_TARGET -> {
+					// **记录事实**（执行者无关）：车确实停在目标上。宣布时机那件事归状态机
+					// （自动车按精确停车点、玩家按观测），这里只回答"现在停在目标上吗"
+					if (!mmtrObservedAtTarget()) {
+						break;
+					}
+					mmtrCompleteSubTask(mission, subTask, now, "已停在 " + mission.getTarget().label());
+					continue;
+				}
+				case OPEN_DOORS -> {
+					/*
+					 * 门的读数**每次现读**，不用方法开头那一份：同一 tick 里引擎刚把门开掉，
+					 * 缓存的那一份还是"关"，于是等待那一条会立刻报"司机提前关门"（第一版实测的假警报）。
+					 */
+					if (!vehicleExtraData.mmtrDoorsOpen()) {
+						if (mmtrDriverIsOperating(mission)) {
+							// 司机在开：门是他的活（用户口径"按键开门"）
+							mmtrAnnounceSubTaskWait(now, "等司机开门（按开门键）");
+							break;
+						}
+						if (mission.getExecutor() == MmtrMission.Executor.PLAYER
+							&& now - mmtrMissionTargetArrivedMillis < MMTR_SUB_TASK_DRIVER_DOOR_WAIT_MILLIS) {
+							// 执行者是司机、但他此刻不在操纵台上：给他一个宽限窗口再兜底
+							mmtrAnnounceSubTaskWait(now, "司机不在操纵台，超时将自动开门");
+							break;
+						}
+						vehicleExtraData.openDoors();
+						System.out.println("[MMTR-SUB] 引擎开门（"
+							+ (mission.getExecutor() == MmtrMission.Executor.PLAYER ? "司机未操作，引擎兜底" : "自动执行")
+							+ "，车 " + getId() + "）");
+					}
+					mmtrCompleteSubTask(mission, subTask, now, "门已开");
+					continue;
+				}
+				case WAIT_PASSENGERS -> {
+					if (subTask.elapsedMillis(now) >= mission.subTaskDwellMillis()) {
+						mmtrCompleteSubTask(mission, subTask, now, "等待了 " + Math.round(mission.subTaskDwellMillis() / 1000.0) + "s");
+						continue;
+					}
+					if (!vehicleExtraData.mmtrDoorsOpen() && !mmtrSubTaskDoorsWarned) {
+						// 司机提前关门：不拦、不改判据（宽松），但必须留下一条可查的记录
+						mmtrSubTaskDoorsWarned = true;
+						System.out.println("[MMTR-SUB] 司机在等待未满时关了门（车 " + getId() + "，已等 "
+							+ Math.round(subTask.elapsedMillis(now) / 1000.0) + "s / 要求 "
+							+ Math.round(mission.subTaskDwellMillis() / 1000.0) + "s）—— 按宽松口径仍放行");
+					}
+				}
+				case CLOSE_DOORS -> {
+					if (vehicleExtraData.mmtrDoorsOpen()) {
+						if (mmtrDriverIsOperating(mission)) {
+							mmtrAnnounceSubTaskWait(now, "等司机关门（按关门键）");
+							break;
+						}
+						vehicleExtraData.closeDoors();
+						System.out.println("[MMTR-SUB] 引擎关门（"
+							+ (mission.getExecutor() == MmtrMission.Executor.PLAYER ? "司机未在操纵台，引擎兜底" : "自动执行")
+							+ "，车 " + getId() + "）");
+					}
+					mmtrCompleteSubTask(mission, subTask, now, "门已关");
+					continue;
+				}
+			}
+			// 链是顺序的：当前这条没达成，后面的不评
+			break;
+		}
+	}
+
+	/**
+	 * **门归谁管**：司机在开这一步（执行者是 PLAYER **且**此刻手上有操纵权）⇒ 门是他的活，引擎只等；
+	 * 其余情形（自动执行 / 司机不在操纵台）⇒ 引擎自己动手。
+	 *
+	 * <p>这就是用户那句「司机手动开门和自动可以都保留」的判据：同一条链、同一套判定，
+	 * 唯一的分叉是"谁动手"，而不是"两套逻辑"。</p>
+	 */
+	private boolean mmtrDriverIsOperating(MmtrMission mission) {
+		return mission.getExecutor() == MmtrMission.Executor.PLAYER && mmtrManualOverride;
+	}
+
+	private void mmtrCompleteSubTask(MmtrMission mission, org.mtr.core.mmtr.MmtrSubTask subTask, long now, String why) {
+		subTask.markDone(now);
+		mission.bumpSubTaskRevision();
+		vehicleExtraData.mmtrMarkSyncDirty();
+		System.out.println("[MMTR-SUB] ✔ 子任务完成：" + subTask.kind() + " —— " + why + "（车 " + getId() + "，"
+			+ mission.subTasksDoneCount() + "/" + mission.subTasks().size() + "，"
+			+ mission.describeSubTasks(now) + "，确认 rev " + mission.subTaskRevision() + "）");
+	}
+
+	/** "还在等司机某个操作"的自白（节流）。 */
+	private void mmtrAnnounceSubTaskWait(long now, String what) {
+		if (now - mmtrSubTaskWarnMillis < MMTR_SUB_TASK_LOG_INTERVAL_MILLIS) {
+			return;
+		}
+		mmtrSubTaskWarnMillis = now;
+		System.out.println("[MMTR-SUB] " + what + "（车 " + getId() + "）");
+	}
+
+	/** **出站确认**：门关好、这一步作业做完 —— 记实际发车时刻，并把两边的确认状态一起打出来。 */
+	private void mmtrMarkStationDeparture(MmtrMission mission) {
+		final long now = data.getCurrentMillis();
+		if (!mission.markStationDeparture(now)) {
+			return;
+		}
+		final long arrival = mission.getStationArrivalMillis();
+		System.out.println("[MMTR-SUB] 出站确认：车 " + getId() + " 本步作业完成（作业 " + mission.getJobId()
+			+ " 第 " + (mission.getJobStepIndex() + 1) + "/" + mission.getJobStepCount() + " 步，"
+			+ (arrival < 0 ? "进站时刻未知" : "实际到站 " + arrival + " → 实际发车 " + now
+				+ "，站停 " + Math.round((now - arrival) / 1000.0) + "s")
+			+ "；引擎判定 " + mission.describeSubTasks(now)
+			+ "；客户端确认 " + mission.subTaskAcks() + " 次，rev " + mission.subTaskRevision() + "）");
+		vehicleExtraData.mmtrMarkSyncDirty();
+	}
+
+	/**
+	 * **双向确认的上行那一半**：客户端说他确认了第 {@code index} 条子任务（{@code revision} 是他看到的那一版）。
+	 *
+	 * <p>为什么要带 revision：两端"看到的状态"必须能对上。客户端确认的是**它当时显示的那一版**；
+	 * 若引擎已经往前走了一版，这一次确认就不该被当成"确认了现在这一版" —— 打一条日志说明对不上，
+	 * 而不是静默接受（静默接受会让"双向确认"退化成一句口号）。</p>
+	 *
+	 * @return 拒绝理由；{@code null} = 接受
+	 */
+	@Nullable
+	public String mmtrConfirmSubTask(int index, long revision, @Nullable UUID crewUuid) {
+		final MmtrMission mission = mmtrMission;
+		if (mission == null || !mission.hasSubTasks()) {
+			return "这一步没有子任务";
+		}
+		if (mission.getExecutor() != MmtrMission.Executor.PLAYER || mission.getExecutorPlayer() == null
+			|| crewUuid == null || !mission.getExecutorPlayer().equals(crewUuid)) {
+			return "本步不是由你执行（确认只认当前司机）";
+		}
+		final org.mtr.core.mmtr.MmtrSubTask subTask = index >= 0 && index < mission.subTasks().size() ? mission.subTasks().get(index) : null;
+		if (subTask == null) {
+			return "子任务序号越界：" + index;
+		}
+		final long now = data.getCurrentMillis();
+		final boolean fresh = subTask.markDriverAck(now);
+		mission.recordSubTaskAck();
+		vehicleExtraData.mmtrMarkSyncDirty();
+		final boolean revisionMatches = revision == mission.subTaskRevision();
+		System.out.println("[MMTR-SUB] 双向确认（客户端→引擎）：车 " + getId() + " 子任务 " + (index + 1) + "/"
+			+ mission.subTasks().size() + " " + subTask.kind() + " 状态 " + subTask.state()
+			+ "，客户端看到 rev " + revision + "，引擎当前 rev " + mission.subTaskRevision()
+			+ (revisionMatches ? "（一致）" : "（**不一致**：客户端显示的可能已经过期）")
+			+ (fresh ? "，首次确认" : "，重复确认"));
+		return null;
 	}
 
 	/**
@@ -977,6 +1371,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			 * 开着门的那几十秒里本方法每 tick 都要再进来一次，才有机会关门。
 			 */
 			case STATION_SERVICE -> {
+				/*
+				 * 2026-09-21：站台作业改由**子任务链**执行（到站→开门→停够→关门，见
+				 * {@link #mmtrTickSubTasks}），这里不再插手 —— 两个执行者各带一套计时器
+				 * 只会互相打架（一个刚关、另一个又开）。链存在时不进这一支；链不存在（老任务/
+				 * 单元测试直接构造的 mission）保留下面这条老路子，行为一字不改。
+				 */
+				if (mission.hasSubTasks()) {
+					break;
+				}
 				final long dwell = task instanceof final org.mtr.core.mmtr.task.StationServiceTask service
 					? service.effectiveDwellMillis(MMTR_MISSION_DWELL_MILLIS) : MMTR_MISSION_DWELL_MILLIS;
 				if (!mmtrStationServiceAnnounced) {
@@ -1932,7 +2335,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// A consist-body train runs whichever way the reverser points (R1); the legacy single-point
 		// walker has no reverse and keeps the old rule (reverser must be forward).
 		final boolean forwardRequested = control != null && (consistBody ? control.getReverser() != 0 : control.getReverser() > 0);
-		final boolean wantPower = overridden && forwardRequested && !mmtrReverserPending && control.getThrottleNotch() > 0 && !(control.getBrakeNotch() > 0 || control.isEmergency());
+		final boolean wantPower = overridden && forwardRequested && !mmtrReverserPending
+			&& (control.getThrottleNotch() > 0 || control.getDriveHandle() > 0)
+			&& !(control.getBrakeNotch() > 0 || control.isEmergency());
 		final boolean braking = overridden && (control.getBrakeNotch() > 0 || control.isEmergency());
 		final boolean stopTargetActive = mmtrMotionStopTargetM >= 0;
 
@@ -1972,6 +2377,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrMotionStoppedAtTarget = false;
 				mmtrMotionArrivalControlSeq = -1;
 				mmtrRunStopTarget = -1;
+				// 玩家任务的自臂闩跟着停车点一起清：下一步（或这一次的重规划）才能再自臂一次。
+				mmtrPlayerRoutePublished = false;
 				vehicleExtraData.mmtrMarkSyncDirty();
 				System.out.println("[MMTR-DRV] motion departed stop target");
 			}
@@ -2122,6 +2529,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// clamped away defensively (braking/coasting already stay non-negative in ConsistDynamics).
 			speed = Math.max(0, speed);
 			integratedDistance = mmtrResult.distanceMeters;
+			mmtrLogConsistBranch(overridden, control, mmtrDriveController, mmtrResult.distanceMeters);
 			if (mmtrCompositionNow != null) {
 				mmtrAirState = MmtrComposition.encodeAirStates(mmtrCompositionNow);
 				mmtrPipePressure = mmtrCompositionNow.averagePipePressure();
@@ -2131,6 +2539,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// No consist-type policy: linear legacy-style integration from the driver's ControlState
 			// notches. Stored VED values are SI (m/s^2) scaled by 1e-3; the internal per-ms rate is
 			// SI * 1e-6, so the per-tick speed change is value * 1e-3 * millisElapsed (m/ms).
+			mmtrLogLegacyBranch(control, wantPower);
 			final double accelPerMs = vehicleExtraData.getAcceleration() * 1e-3;
 			final double decelPerMs = vehicleExtraData.getDeceleration() * 1e-3;
 			if (braking) {
@@ -2159,8 +2568,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				remaining = Math.min(remaining, toAnchorM);
 			}
 			if (remaining <= 1e-6) {
-				integratedDistance = 0;
-				speed = 0;
+				/*
+				 * ★ **停车点在身后 ≠ 到了停车点**（2026-09-21 实机："车开不动"）。
+				 *
+				 * <p>累计停车点与锚点都可能落在车头**后面**（让位后重规划、估计偏短、或者车被人工开过头），
+				 * 那时这一支每 tick 把 speed 钉成 0 —— 而"到了"那条路（{@code mmtrMotionArriveAtStopTarget}）
+				 * 只认 {@code stopTargetConsumed} 的**累计**判据与"{@code speed == 0}"入口，
+				 * 两者都够不着这个分支；于是**司机与自动都推不动它，而且全链路一句日志都没有**
+				 * （HUD 的"状态"行也是空的 —— 那里只报 protection/闭塞/到点/尽头，没有"停车点过期"这一种）。</p>
+				 *
+				 * <p>判据：有效刹车点比车头**落后**超过一个到达容差 ⇒ 判为过期的估算，放掉目标让任务
+				 * 重新自臂（与"停车里程估短了"那一支同一个处置），并**把理由打出来**。</p>
+				 */
+				if (brakeTargetM - mmtrMotionWalker.distanceM() < -MMTR_ARRIVAL_EPS_M) {
+					mmtrDiscardStaleStopTarget(brakeTargetM);
+				} else {
+					integratedDistance = 0;
+					speed = 0;
+				}
 			} else if (integratedDistance > remaining) {
 				integratedDistance = remaining; // land exactly on the effective stop (target or block)
 			}
@@ -2282,6 +2707,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 
 		if (!isClientside) {
+			mmtrLogStuckIfNeeded(overridden, wantPower, control, brakeTargetM);
 			final int displayPower = mmtrProtection ? MmtrSupport.LEGACY_EMERGENCY_POWER_LEVEL : mmtrBlockedWaiting ? 0 : overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
 			vehicleExtraData.setPowerLevel(displayPower);
 			vehicleExtraData.setSpeedTarget(speed);
@@ -2289,9 +2715,128 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * **过期的停车点**：放掉它并说清理由（见刹车包线里那一段的注释）。
+	 *
+	 * <p>放掉之后任务会在下一 tick 用当前位置重新自臂（{@code mmtrMotionSelfArmMission}），
+	 * 于是"开过头 / 估算偏短"变成一次重规划，而不是把车永久钉死在原地。</p>
+	 */
+	private void mmtrDiscardStaleStopTarget(double effectiveBrakeTargetM) {
+		System.out.println("[MMTR-DRV] 停车点在身后（有效刹车点 " + Math.round(effectiveBrakeTargetM) + "m < 车头 "
+			+ Math.round(mmtrMotionWalker.distanceM()) + "m）—— 判为过期的估算，放掉停车目标让任务重新自臂"
+			+ "（不放就会每 tick 把车速钉成 0，司机与自动都开不动）");
+		mmtrMotionAuto = false;
+		mmtrMotionStopTargetM = -1;
+		mmtrMotionStopRailHex = "";
+		mmtrMotionStopFraction = -1;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrBlockedWaiting = false;
+		mmtrPlayerRoutePublished = false;
+	}
+
+	/** "推着油门却一动不动"的自白节流。 */
+	private long mmtrStuckLogMillis;
+	/** 走哪一条物理分支的自白节流（有级/遗留 vs 车底类型）。 */
+	private long mmtrBranchLogMillis;
+
+	/**
+	 * **走了车底类型分支**（ConsistDynamics + 控制器）：把手柄、控制器算出的比例与本次距离打出来。
+	 *
+	 * <p>为什么需要它：2026-09-21 现场"手柄推到底、控制器牵引却只有 2%、车不动"，
+	 * 光看 `[MMTR-STUCK]` 分不清"控制器没跑（比例是上一次的残留）"与"控制器跑了但算出 2%"。
+	 * 这一条只在**真的走了这一支**时打，两者立刻分开。</p>
+	 */
+	private void mmtrLogConsistBranch(boolean overridden, @Nullable ControlState control, @Nullable DriveController controller, double distanceM) {
+		if (!overridden || control == null || control.getDriveHandle() == 0 || isClientside) {
+			return;
+		}
+		final long now = data.getCurrentMillis();
+		if (now - mmtrBranchLogMillis < 2000) {
+			return;
+		}
+		mmtrBranchLogMillis = now;
+		final String traction = controller instanceof final org.mtr.core.mmtr.ThreeHandleDriveController threeHandle
+			? Math.round(threeHandle.getLastTractionRatio() * 100) + "%"
+			: controller == null ? "无控制器" : controller.getClass().getSimpleName();
+		System.out.println("[MMTR-CONSIST] 车底类型分支：手柄=" + control.getDriveHandle()
+			+ " 制动=" + control.getBrakeNotch() + " 换向=" + control.getReverser()
+			+ " 控制器=" + (controller == null ? "null" : controller.getClass().getSimpleName())
+			+ " 牵引比=" + traction + " 速度=" + speed + " 本次距离=" + Math.round(distanceM * 1000) / 1000.0 + "m");
+	}
+
+	/** **走了遗留（无车底类型）分支** —— 三手柄车掉进这里就是"油门没反应"的真因。 */
+	private void mmtrLogLegacyBranch(@Nullable ControlState control, boolean wantPower) {
+		if (isClientside) {
+			return;
+		}
+		final long now = data.getCurrentMillis();
+		if (now - mmtrBranchLogMillis < 2000) {
+			return;
+		}
+		mmtrBranchLogMillis = now;
+		System.out.println("[MMTR-LEGACY] 走了**遗留线性分支**（车底类型="
+			+ (mmtrConsistType == null ? "null" : mmtrConsistType.getId())
+			+ " 控制器=" + (mmtrDriveController == null ? "null" : mmtrDriveController.getClass().getSimpleName())
+			+ "）：手柄=" + (control == null ? "?" : control.getDriveHandle())
+			+ " 有级油门=" + (control == null ? "?" : control.getThrottleNotch())
+			+ " wantPower=" + wantPower
+			+ " —— 三手柄车掉进这一支就意味着牵引完全没被按手柄算");
+	}
+
+	/**
+	 * **司机推着油门却一动不动时，把内情逐项打出来**（每 2 秒一条，只在真的"想走却走不了"时）。
+	 *
+	 * <p>2026-09-21 实机：车停在原地、司机与自动都推不动，而 HUD 的"状态"行是空的、日志里一句都没有 ——
+	 * 因为那个分支不在 {@link #mmtrMotionHoldReason()} 的任何一条判据里。
+	 * 这一条只做事后取证：把"距离 / 累计停车点 / 锚点剩余 / 有效刹车点 / 各种闩"摆在一行里，
+	 * 下次这种现场不需要再猜。</p>
+	 */
+	private void mmtrLogStuckIfNeeded(boolean overridden, boolean wantPower, @Nullable ControlState control, double brakeTargetM) {
+		if (isClientside || !overridden || speed > 1e-9 || mmtrMotionWalker == null) {
+			return;
+		}
+		/*
+		 * 判据刻意**不**只认 {@code wantPower}：那条读的是 {@code control.getThrottleNotch()}，
+		 * 而三手柄车底**故意发 0**（牵引看 {@code driveHandle}）—— 上一版据此把它写成哑判据，
+		 * 于是在真正需要自白的那台 BR101 上一行都不打（2026-09-21 实机）。
+		 * 现在：只要司机**表达了要走**（三根手柄任一非中性、或定了速、或有级油门>0），
+		 * 而车不动，就说。
+		 */
+		final boolean driverWantsMotion = wantPower
+			|| control != null && (control.getDriveHandle() != 0 || control.getCruiseSpeedKmh() > 0);
+		if (!driverWantsMotion) {
+			return;
+		}
+		final long now = data.getCurrentMillis();
+		if (now - mmtrStuckLogMillis < 2000) {
+			return;
+		}
+		mmtrStuckLogMillis = now;
+		final double anchorRemaining = mmtrRemainingToStopAnchor();
+		final String gate = mmtrMotionHoldReason();
+		final String traction = mmtrDriveController instanceof final org.mtr.core.mmtr.ThreeHandleDriveController threeHandle
+			? Math.round(threeHandle.getLastTractionRatio() * 100) + "%（电阻制动 " + Math.round(threeHandle.getLastRheostaticRatio() * 100) + "%）"
+			: "n/a";
+		System.out.println("[MMTR-STUCK] 推着油门却不动："
+			+ "司机手柄[油门=" + (control == null ? "?" : control.getDriveHandle())
+			+ " 制动=" + (control == null ? "?" : control.getBrakeNotch())
+			+ " 换向=" + (control == null ? "?" : control.getReverser())
+			+ " 定速=" + (control == null ? "?" : control.getCruiseSpeedKmh()) + "]"
+			+ " 控制器牵引=" + traction
+			+ " 距离=" + Math.round(mmtrMotionWalker.distanceM()) + "m"
+			+ " 累计停车点=" + (mmtrMotionStopTargetM < 0 ? "无" : Math.round(mmtrMotionStopTargetM) + "m")
+			+ " 锚点=" + (mmtrMotionStopRailHex.isEmpty() ? "无" : mmtrMotionStopRailHex.substring(0, 8))
+			+ " 锚点剩余=" + (anchorRemaining == Double.MAX_VALUE ? "不适用" : Math.round(anchorRemaining * 10) / 10.0 + "m")
+			+ " 有效刹车点=" + (brakeTargetM == Double.MAX_VALUE ? "无" : Math.round(brakeTargetM * 10) / 10.0 + "m")
+			+ " auto=" + mmtrMotionAuto + " 到点闩=" + mmtrMotionStoppedAtTarget + " 闭塞等待=" + mmtrBlockedWaiting
+			+ " 走行器[到目标=" + mmtrMotionWalker.atTarget() + " 尽头=" + mmtrMotionWalker.endOfLine()
+			+ " 被权威扣=" + mmtrMotionWalker.haltedAtAuthority() + "]"
+			+ " 任务=" + (mmtrMission == null ? "无" : mmtrMission.getState() + "/" + mmtrMission.getExecutor())
+			+ " 闸门=" + (gate.isEmpty() ? "（引擎认为自己没被任何东西按住）" : gate));
+	}
+
 	/** Marks the exact arrival at the armed stop target: rest, doors per the stop request, hold. */
-	private void mmtrMotionArriveAtStopTarget() {
-		speed = 0;
+	private void mmtrMotionArriveAtStopTarget() {		speed = 0;
 		mmtrMotionStoppedAtTarget = true;
 		mmtrMotionArrivalControlSeq = mmtrControlApplySeq;
 		vehicleExtraData.closeDoors();
@@ -2579,6 +3124,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * **计划内接管用**：把"自动车那一份"停车点与自臂闩清掉，让这一步按 PLAYER 口径重新自臂一次。
+	 *
+	 * <p>交接时车上可能还留着自动车的停车点（那是按"引擎接管油门"算出来的）。不清它，
+	 * 玩家任务会带着一份给自动车准备的停车目标继续跑；清掉之后下一 tick 的
+	 * {@code mmtrMotionSelfArmMission} 会重新规划、并给出**同样是停车点、但不接管油门**的那一份。</p>
+	 */
+	public void clearMmtrMotionStopTargetForHandover() {
+		if (isClientside) {
+			return;
+		}
+		mmtrMotionStopTargetM = -1;
+		mmtrMotionStopRailHex = "";
+		mmtrMotionStopFraction = -1;
+		mmtrMotionStoppedAtTarget = false;
+		mmtrPlayerRoutePublished = false;
+	}
+
+	/**
 	 * MMTR (L3, server-only): switches this vehicle to live Motion-Core run mode. The walker becomes
 	 * the motion authority: every tick the vehicle advances it by the physically integrated distance;
 	 * the walker crosses nodes by the CURRENT turnout/task state (an unset fork halts and waits, never
@@ -2705,6 +3268,94 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * **传送上车 / 计划内接管时该进哪个驾驶室** —— 由"这列车接下来要往哪边走"决定，
+	 * 而不是"第一个可用的驾驶室"。
+	 *
+	 * <h3>为什么需要它（2026-09-21 实机）</h3>
+	 * <p>原先挑的是车节 0 的 A 端（{@code 1A}）。但**方向恰恰是由被占用的驾驶室决定的**：
+	 * {@code MmtrConsistWalker.towardB() = cabs.travelsToward(B) != travelReversed}。
+	 * 车场刷出来的车带着引擎的 SYSTEM 占位钥匙、方向已经定死；人再坐进另一端的驾驶室，
+	 * 结果只有两种，两种都是**司机坐在车尾朝前看**：要么把方向拧反，要么自臂发现规划不出来、
+	 * 把换向器翻过去反向行驶（{@code mmtrMotionSelfArmMission} 的 flip 分支）。</p>
+	 *
+	 * <h3>判据（与自臂用同一条）</h3>
+	 * <p>"任务要往哪边走"只有规划器知道，而且**方向是它的输入不是输出**（同一条进路按当前方向规划，
+	 * 规划不出来时自臂就翻换向器再试）。所以这里照抄那条判据：先按当前方向规划 ——
+	 * 可行 ⇒ 任务方向 = 当前方向；不可行 ⇒ 任务方向 = 当前方向的反面。然后取**那一边端头的驾驶室**，
+	 * 并要求换向器归位（驾驶室朝前）。</p>
+	 *
+	 * @return 驾驶室写法 {@code <车节序号><A|B>}（1 起，例如 {@code 1A} / {@code 1B}）；
+	 *         空串 = 不是编组体车（没有驾驶室模型），调用方按"不指定"处理
+	 */
+	public String mmtrPreferredCabSpec() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		if (consistWalker == null || !(data instanceof final Simulator simulator)) {
+			return "";
+		}
+		// 已经有乘务员拿着钥匙：方向由他的驾驶室决定 —— 把人塞到另一端等于把方向拧过来，
+		// 那不是"帮他把驾驶室纠正"，那是抢方向盘。
+		if (consistWalker.cabs().isCrewKey()) {
+			return mmtrCabSpecOf(consistWalker, consistWalker.cabs().activeCab());
+		}
+		final boolean requiredTowardB = mmtrRequiredTravelTowardB(simulator, consistWalker);
+		return mmtrCabSpecOf(consistWalker, requiredTowardB ? MmtrCabState.Cab.CAB_B : MmtrCabState.Cab.CAB_A);
+	}
+
+	/**
+	 * 这列车接下来**必须朝 B 端跑吗**（{@code travelsTowardB()} 的目标值）。
+	 *
+	 * <p>没有可判的目标（无任务 / 原地任务 / 尽头换端）时维持现状：那种情形下方向不是问题，
+	 * 而"随便翻一个"会让司机坐进反的那一端。</p>
+	 */
+	private boolean mmtrRequiredTravelTowardB(Simulator simulator, MmtrConsistWalker consistWalker) {
+		final boolean currentTowardB = consistWalker.travelsTowardB();
+		final Rail targetRail = mmtrMissionTargetRail(simulator);
+		if (targetRail == null || targetRail.getHexId().equals(consistWalker.railHex())) {
+			return currentTowardB;
+		}
+		final double stopFraction = mmtrMission != null && mmtrMission.hasTargetRail() ? mmtrMission.getTargetRailFraction() : 1.0;
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), stopFraction);
+		return plan.feasible ? currentTowardB : !currentTowardB;
+	}
+
+	/** 当前任务的**目的轨**（站台/股道 id 或轨目标）；没有可判的目标时 {@code null}。 */
+	private org.mtr.core.data.@Nullable Rail mmtrMissionTargetRail(Simulator simulator) {
+		final MmtrMission mission = mmtrMission;
+		if (mission == null || mission.isTerminal() || mission.isInPlace()) {
+			return null;
+		}
+		if (mission.hasTargetRail()) {
+			return MmtrRunPlanner.findRailByHex(simulator, mission.getTargetRailHex());
+		}
+		final long targetSidingId = mission.getTargetSidingId();
+		return targetSidingId == 0 ? null : MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
+	}
+
+	/** 端头驾驶室的写法：A 端 = 第 1 节的 A；B 端 = 最后一节的 B。 */
+	private static String mmtrCabSpecOf(MmtrConsistWalker consistWalker, MmtrCabState.Cab cab) {
+		if (cab == MmtrCabState.Cab.CAB_B) {
+			return Math.max(1, consistWalker.body().carCount()) + "B";
+		}
+		if (cab == MmtrCabState.Cab.CAB_A) {
+			return "1A";
+		}
+		return "";
+	}
+
+	/**
+	 * 交接给司机时把**换向器归位**（驾驶室朝前）。
+	 *
+	 * <p>自动运行为了走得通会把换向器翻过去（尾在前），那是引擎的事；人接手时要的是"我坐在车头往前看"。
+	 * 只在停稳时动 —— 滚行中翻换向器是红线（{@code setTravelReversed} 的注释）。</p>
+	 *
+	 * @return 是否真的改了方向
+	 */
+	public boolean mmtrResetTravelDirectionForDriver() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		return consistWalker != null && speed <= 1e-9 && consistWalker.setTravelReversed(false);
+	}
+
+	/**
 	 * S5: the live 进路 of this train. The registry is the source of truth, not the field: a coupling
 	 * surgery rebuilds the Vehicle object (MmtrCoupleSurgery creates a merged Vehicle from JSON), so a
 	 * route published by the pre-surgery object would otherwise be invisible to the new one - and leak
@@ -2718,6 +3369,22 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public MmtrCabState.KeyHolder getMmtrCabKeyHolder() {
 		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
 		return consistWalker == null ? MmtrCabState.KeyHolder.NONE : consistWalker.cabs().keyHolder();
+	}
+
+	/**
+	 * **这列车当前握着驾驶室钥匙的那位乘务员**（编组体车；没有、或只有引擎的 SYSTEM 占位钥匙时 {@code null}）。
+	 *
+	 * <p>用途是"计划内接管"的身份来源：玩家进驾驶室时就写了这把钥匙（{@code cab <id> <车节><端> <uuid>}），
+	 * 所以引擎不必再让人把 uuid 报一遍 —— {@code job take <车id>} 直接问这里"现在是谁在开"。
+	 * 与 {@link #getMmtrDriverUuid()}（谁在推手柄）的区别是**时机**：钥匙在"坐进驾驶室"时就有，
+	 * 手柄要等第一次动作，而"等待发车时接管"恰恰发生在还没动手柄的时候。</p>
+	 */
+	public @Nullable UUID getMmtrCrewUuid() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		if (consistWalker == null || !consistWalker.cabs().isCrewKey()) {
+			return null;
+		}
+		return consistWalker.cabs().crewUuid();
 	}
 
 	/**
@@ -3243,6 +3910,46 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrActiveCab = getMmtrActiveCab().name();
 		mmtrCabKeyHolder = getMmtrCabKeyHolder().name();
 		mmtrCabCrew = cabWalker == null || cabWalker.cabs().crewUuid() == null ? "" : cabWalker.cabs().crewUuid().toString();
+		/*
+		 * 任务提示（"玩家与作业表相连"）：司机要知道自己在做哪一步。
+		 *
+		 * <p>四个字段都从 mission 上取（作业调度器在建 mission 时就把它挂在 mission 上了），
+		 * 引擎在这里**算好原话**发给客户端 —— 客户端不做任何反查（它既没有站台对象也没有作业单）。
+		 * 变化时主动标脏：车停在站台上等发车时速度/门都不变，不标脏这几个字就永远推不过去。</p>
+		 */
+		final org.mtr.core.mmtr.MmtrMission promptMission = mmtrMission;
+		final String jobIdNow = promptMission == null ? "" : promptMission.getJobId();
+		final String taskNoteNow = promptMission == null ? "" : (promptMission.getJobStepNote().isEmpty()
+			? (promptMission.getTask() == null ? "" : promptMission.getTask().note) : promptMission.getJobStepNote());
+		final int taskStepNow = promptMission == null ? -1 : promptMission.getJobStepIndex();
+		final int taskStepsNow = promptMission == null ? 0 : promptMission.getJobStepCount();
+		final String missionStateNow = promptMission == null ? "" : promptMission.getState().name();
+		final String missionExecutorNow = promptMission == null ? "" : promptMission.getExecutor().name();
+		/*
+		 * 子任务链（站台作业：到站停稳 → 开门 → 停够 → 关门）—— 与任务提示同一套下发方式：
+		 * 引擎算好清单与"现在该做什么"的原话，客户端只负责画。子任务只写了几行字，但停在站台上的
+		 * 那几十秒里速度、门、里程都不变，**不主动标脏这几个字永远推不过去**（同 jobId 那段）。
+		 */
+		final String subTasksNow = promptMission == null ? "" : promptMission.encodeSubTasks();
+		final String subTaskHintNow = promptMission == null ? "" : promptMission.subTaskHint(data.getCurrentMillis());
+		final long subTaskRevisionNow = promptMission == null ? 0 : promptMission.subTaskRevision();
+		final int subTaskAcksNow = promptMission == null ? 0 : promptMission.subTaskAcks();
+		if (!jobIdNow.equals(mmtrJobId) || !taskNoteNow.equals(mmtrTaskNote) || taskStepNow != mmtrTaskStep
+			|| taskStepsNow != mmtrTaskSteps || !missionStateNow.equals(mmtrMissionState) || !missionExecutorNow.equals(mmtrMissionExecutor)
+			|| !subTasksNow.equals(mmtrSubTasks) || !subTaskHintNow.equals(mmtrSubTaskHint)
+			|| subTaskRevisionNow != mmtrSubTaskRevision || subTaskAcksNow != mmtrSubTaskAcks) {
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
+		mmtrJobId = jobIdNow;
+		mmtrTaskNote = taskNoteNow;
+		mmtrTaskStep = taskStepNow;
+		mmtrTaskSteps = taskStepsNow;
+		mmtrMissionState = missionStateNow;
+		mmtrMissionExecutor = missionExecutorNow;
+		mmtrSubTasks = subTasksNow;
+		mmtrSubTaskHint = subTaskHintNow;
+		mmtrSubTaskRevision = subTaskRevisionNow;
+		mmtrSubTaskAcks = subTaskAcksNow;
 		// C3a: the subsidiary-aspect authority the driver's display shows (main head stays red).
 		final org.mtr.core.mmtr.signal.MmtrShuntAuthority shunt = getMmtrShuntAuthority();
 		final String shuntKind = shunt == null ? "" : shunt.getKind().name();
@@ -3343,6 +4050,46 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * 客户端 HUD 用它回答"手柄有反应但车不动"这个最常见的困惑。
 	 */
 	public String getMmtrHoldReasonFromSync() { return mmtrHoldReason == null ? "" : mmtrHoldReason; }
+
+	/**
+	 * **任务提示**（"玩家与作业表相连"的那一半：司机得知道自己在做哪一步）。
+	 *
+	 * <p>要点：这四项由**引擎**算好、按原话发给客户端，客户端不做任何反查 —— 目标名要从
+	 * 站台/股道对象取，作业步骤的人话说明在作业单里，客户端两样都没有（notes/170 §8.4）。</p>
+	 */
+	public String getMmtrJobIdFromSync() { return mmtrJobId == null ? "" : mmtrJobId; }
+
+	/** 这一步的人话说明（作业单步骤的 {@code note}，例如"去程到 1 站 1 台"）。 */
+	public String getMmtrTaskNoteFromSync() { return mmtrTaskNote == null ? "" : mmtrTaskNote; }
+
+	/** 0 起的步号；{@code -1} = 不属于任何作业表。 */
+	public int getMmtrTaskStepFromSync() { return (int) mmtrTaskStep; }
+
+	public int getMmtrTaskStepsFromSync() { return (int) mmtrTaskSteps; }
+
+	/** mission 状态（ASSIGNED/DISPATCHED/AT_TARGET/COMPLETE/FAILED）。 */
+	public String getMmtrMissionStateFromSync() { return mmtrMissionState == null ? "" : mmtrMissionState; }
+
+	/** 谁在执行（AUTOPILOT/PLAYER/AI）—— HUD 用它回答"现在是我在开还是引擎在开"。 */
+	public String getMmtrMissionExecutorFromSync() { return mmtrMissionExecutor == null ? "" : mmtrMissionExecutor; }
+
+	/**
+	 * **子任务清单**（`KIND:STATE:ACK;…`）—— 站台作业的 到站停稳 / 开门 / 停够 / 关门。
+	 *
+	 * <p>为什么把"引擎判定"与"客户端是否确认"编在同一格里：用户要的"明确的双向确认"应该是一条
+	 * 能看见的数据，而不是靠两端各自的行为去猜 —— HUD 因此能直接画出 `✔✔`（两边都确认）
+	 * 与 `✔-`（引擎说做完了、客户端还没确认）这两种不同的格子。</p>
+	 */
+	public String getMmtrSubTasksFromSync() { return mmtrSubTasks == null ? "" : mmtrSubTasks; }
+
+	/** **现在该做什么**（引擎算好的一句人话，客户端不拼中文、不判状态）。 */
+	public String getMmtrSubTaskHintFromSync() { return mmtrSubTaskHint == null ? "" : mmtrSubTaskHint; }
+
+	/** 子任务状态版本号：客户端确认时回传，用来发现"两端看到的不一样"。 */
+	public long getMmtrSubTaskRevisionFromSync() { return mmtrSubTaskRevision; }
+
+	/** 客户端已确认的次数（0 = 还没确认过任何一条）。 */
+	public int getMmtrSubTaskAcksFromSync() { return (int) mmtrSubTaskAcks; }
 	public int getMmtrReverserFromSync() { return (int) mmtrReverser; }
 	public boolean isMmtrProtectionFromSync() { return mmtrProtection; }
 	public boolean isMmtrEmergencyFromSync() { return mmtrEmergency; }

@@ -16,6 +16,8 @@ import org.mtr.core.mmtr.signal.MmtrShuntAuthority;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Utilities;
 
+import java.util.UUID;
+
 /**
  * Executes {@link MmtrConsistJob}s against the live simulator. One job = one consist for one
  * (operational) day: at the job's spawn time-of-day the consist standing on the job's siding
@@ -110,12 +112,51 @@ public final class MmtrJobScheduler {
 
 	/** Human takeover: the AI stops auto-starting outbound legs until released back to autopilot. */
 	public boolean humanTakeover(String jobId) {
+		return humanTakeover(jobId, null);
+	}
+
+	/**
+	 * **计划内接管**：把这条作业单交给某位司机（{@code driverUuid}）或只做"人工保留"（{@code null}）。
+	 *
+	 * <h3>两种含义的分别</h3>
+	 * <ul>
+	 *   <li>{@code driverUuid == null}（老语义）：AI 不发车，但**也没有执行者** —— 作业表会停在原地
+	 *       （步骤的完成要读车上的 mission，而没人建 mission）。</li>
+	 *   <li>{@code driverUuid != null}（本轮新增）：调度器照常进入这一步、照常发布进路与停车点，
+	 *       只是把 mission 的**执行者标成 PLAYER** —— 油门留给司机，联锁照旧为他工作，他停到位就
+	 *       算这一步完成、作业表继续往下走。</li>
+	 * </ul>
+	 */
+	public boolean humanTakeover(String jobId, @Nullable UUID driverUuid) {
 		final JobInstance instance = ensureInstance(jobId);
 		if (instance == null) {
 			return false;
 		}
 		instance.humanHold = true;
+		instance.driverUuid = driverUuid;
 		return true;
+	}
+
+	/** 这把车现在挂在哪条作业单上（没有则 {@code null}）；接管入口用它把"车"翻成"作业"。 */
+	@Nullable
+	public String jobIdOfVehicle(long vehicleId) {
+		if (vehicleId == 0) {
+			return null;
+		}
+		for (final JobInstance instance : instances.values()) {
+			if (instance.vehicleId == vehicleId) {
+				return instance.job.jobId;
+			}
+		}
+		// 还没认领实车（vehicleId 尚未确定）时，退一步按"作业单自己的股道上停着哪台车"找
+		for (final MmtrConsistJob job : jobs) {
+			for (final JobInstance instance : instances.values()) {
+				if (instance.job.jobId.equals(job.jobId) && instance.vehicleId == vehicleId) {
+					return job.jobId;
+				}
+			}
+		}
+		return null;
 	}
 
 	public boolean isPaused(String jobId) {
@@ -128,12 +169,19 @@ public final class MmtrJobScheduler {
 		return instance != null && instance.humanHold;
 	}
 
+	/** 计划内接管的司机（{@code null} = 没有绑定司机，AI 在执行或只是人工保留）。 */
+	public @Nullable UUID driverOf(String jobId) {
+		final JobInstance instance = instances.get(jobId);
+		return instance == null ? null : instance.driverUuid;
+	}
+
 	public boolean releaseToAutopilot(String jobId) {
 		final JobInstance instance = ensureInstance(jobId);
 		if (instance == null) {
 			return false;
 		}
 		instance.humanHold = false;
+		instance.driverUuid = null;
 		return true;
 	}
 
@@ -735,7 +783,12 @@ public final class MmtrJobScheduler {
 	 */
 	private boolean startOutbound(JobInstance instance, Simulator simulator) {
 		final Vehicle current = findVehicle(simulator, instance.vehicleId);
-		if (instance.humanHold || current != null && current.isCurrentlyManual()) {
+		/*
+		 * 有**司机绑定**时这一步照常"开始"（建 mission、发布进路与停车点），只是执行者是他、
+		 * 油门不接管 —— 这是"计划内接管"与老的"人工保留"唯一的分界，见 humanTakeover(String, UUID)。
+		 */
+		final boolean driverBound = instance.humanHold && instance.driverUuid != null;
+		if (!driverBound && (instance.humanHold || current != null && current.isCurrentlyManual())) {
 			// A human is at the controls (operator hold or an in-cab driver): the AI yields - it
 			// never auto-starts, and step completion keeps following position/door events.
 			return true;
@@ -831,11 +884,21 @@ public final class MmtrJobScheduler {
 		}
 		final MmtrMission mission = new MmtrMission(vehicle.getId(), kind, instance.job.sidingId, targetId, simulator.getCurrentMillis());
 		mission.setNeedsShuntAuthority(shuntNeeded);
+		// 任务身份：作业号 + 第几步 + 这一步的人话说明（客户端提示与"做完了算哪一步"都读它）
+		mission.attachJobStep(instance.job.jobId, (int) instance.stepIndex, instance.job.steps.size(), step.note);
 		if (railTargetStep) {
 			mission.setTargetRail(railTarget.getHexId(), step.targetRailFraction);
 		}
 		if (task != null) {
 			mission.attachTask(task);
+		}
+		/*
+		 * **计划内接管**：司机绑定在这条作业单上时，每一步都标成 PLAYER —— 引擎不接管油门，
+		 * 只替他发布进路、申请道岔、给出停车点，并由他到点来判定这一步完成。
+		 */
+		if (instance.humanHold && instance.driverUuid != null) {
+			mission.setExecutor(MmtrMission.Executor.PLAYER, instance.driverUuid);
+			System.out.println("[MMTR-JOB] manual step " + step.stepId + " 交给司机 " + instance.driverUuid + "（PLAYER：进路照发、油门留给司机）");
 		}
 		if (!vehicle.setMmtrMission(mission)) {
 			fail(instance, "could not attach mission for step " + step.stepId);
@@ -1344,6 +1407,8 @@ public final class MmtrJobScheduler {
 		boolean autoDepartureKickLogged;
 		boolean paused;
 		boolean humanHold;
+		/** 计划内接管的司机（{@code null} = 只是人工保留、没有执行者）。见 {@link #humanTakeover(String, java.util.UUID)}。 */
+		@Nullable UUID driverUuid;
 			long curSidingId;
 		long nextCycleAtMs;
 		/** 圈间静置日志的上一次打印时刻（倒计时节流用，见 {@code loopAdvance}）。 */

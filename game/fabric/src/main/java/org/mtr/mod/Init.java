@@ -95,6 +95,8 @@ public final class Init implements Utilities {
 		REGISTRY.registerPacket(PacketMmtrCabOp.class, PacketMmtrCabOp::new);
 		REGISTRY.registerPacket(PacketMmtrCoupleOp.class, PacketMmtrCoupleOp::new);
 		REGISTRY.registerPacket(PacketMmtrRoutes.class, PacketMmtrRoutes::new);
+		// 服务端 → 客户端：「把这位玩家放进那辆车的驾驶室」（/mtr mmtrboard、引擎指令栏的 train board）
+		REGISTRY.registerPacket(PacketMmtrBoardPlayer.class, PacketMmtrBoardPlayer::new);
 		REGISTRY.registerPacket(PacketFetchArrivals.class, PacketFetchArrivals::new);
 		REGISTRY.registerPacket(PacketForwardClientRequest.class, PacketForwardClientRequest::new);
 		REGISTRY.registerPacket(PacketUpdateKeyDispenserConfig.class, PacketUpdateKeyDispenserConfig::new);
@@ -126,6 +128,28 @@ public final class Init implements Utilities {
 			// Clear depot(s) by name
 			// Instant deploy depot(s) by name
 			// Force copy a world backup from one folder another
+			/*
+			 * /mtr mmtrboard <vehicleId> [<车厢序号><A|B>] [玩家名]
+			 *
+			 * 把某位玩家送到某辆车的驾驶室里（"传送上车 + 进入驾驶状态"）。没有它就只能自己走到车门口
+			 * 用准星对着司机门按 G —— 那条路要求人已经站在车旁边，而"作业表驱动的车停在车场深处"
+			 * 恰恰是人不方便走过去的情形。
+			 *
+			 * 分工：服务端把玩家挪到那节车上（客户端镜像按位置同步，人不到车旁就算不出座位点），
+			 * 再由 PacketMmtrBoardPlayer 让**那个客户端**执行进驾驶室（与按 G 同一段代码）。
+			 * 玩家名省略 = 执行这条指令的人。权限 2（OP）—— 它挪的是别的玩家的位置。
+			 */
+			commandBuilderMtr.then("mmtrboard", commandBuilderBoard -> {
+				commandBuilderBoard.permissionLevel(2);
+				commandBuilderBoard.then("vehicleId", StringArgumentType.string(), commandBuilderVehicleId -> {
+					commandBuilderVehicleId.executes(contextHandler -> mmtrBoard(contextHandler, "", ""));
+					commandBuilderVehicleId.then("cab", StringArgumentType.string(), commandBuilderCab -> {
+						commandBuilderCab.executes(contextHandler -> mmtrBoard(contextHandler, contextHandler.getString("cab"), ""));
+						commandBuilderCab.then("player", StringArgumentType.string(), commandBuilderPlayer ->
+							commandBuilderPlayer.executes(contextHandler -> mmtrBoard(contextHandler, contextHandler.getString("cab"), contextHandler.getString("player"))));
+					});
+				});
+			});
 			commandBuilderMtr.then("restoreWorld", commandBuilderRestoreWorld -> {
 				commandBuilderRestoreWorld.permissionLevel(4);
 				commandBuilderRestoreWorld.then("worldDirectory", StringArgumentType.string(), innerCommandBuilder1 -> innerCommandBuilder1.then("backupDirectory", StringArgumentType.string(), innerCommandBuilder2 -> innerCommandBuilder2.executes(contextHandler -> {
@@ -397,6 +421,41 @@ public final class Init implements Utilities {
 		serverPlayerEntity.setNoGravity(isRiding);
 		serverPlayerEntity.setNoClipMapped(isRiding);
 		((PlayerTeleportationStateAccessor) serverPlayerEntity.data).setInTeleportationState(isRiding);
+	}
+
+	/**
+	 * {@code /mtr mmtrboard <vehicleId> [<车厢序号><A|B>] [玩家名]} 的实际执行体。
+	 *
+	 * <p>真正的活在 {@link org.mtr.mod.mmtr.MmtrBoardPlayer#board}，这里只负责把指令参数解成人/车、
+	 * 并把失败原因说清楚 —— 玩家看不到服务端日志，只回一句"没成功"是最难排查的那种反馈。</p>
+	 *
+	 * @return brigadier 的返回码（>0 = 成功）
+	 */
+	private static int mmtrBoard(CommandBuilder.ContextHandler contextHandler, String cabSpec, String playerName) {
+		final String rawVehicleId = contextHandler.getString("vehicleId").trim();
+		final long vehicleId;
+		try {
+			vehicleId = Long.parseLong(rawVehicleId);
+		} catch (NumberFormatException e) {
+			contextHandler.sendFailure("vehicleId 必须是数字：" + rawVehicleId);
+			return 0;
+		}
+		final org.mtr.mapping.holder.ServerPlayerEntity target = playerName == null || playerName.isEmpty()
+				? contextHandler.getServerPlayer()
+				: org.mtr.mod.mmtr.MmtrBoardPlayer.findPlayer(contextHandler.getServer(), playerName);
+		if (target == null) {
+			contextHandler.sendFailure(playerName == null || playerName.isEmpty()
+					? "这条指令要由玩家执行，或显式给出 <玩家名>（控制台里没有执行者）"
+					: "找不到在线玩家 " + playerName);
+			return 0;
+		}
+		if (!org.mtr.mod.mmtr.MmtrBoardPlayer.board(contextHandler.getServer(), target, vehicleId, cabSpec)) {
+			contextHandler.sendFailure("找不到车辆 " + vehicleId + "（用 vehicle list 看看场上有哪些车）");
+			return 0;
+		}
+		contextHandler.sendSuccess("已把 " + target.getName().getString() + " 送到车 " + vehicleId + " 的驾驶室"
+				+ (cabSpec == null || cabSpec.isEmpty() ? "（自动挑第一个）" : " " + cabSpec), true);
+		return 1;
 	}
 
 

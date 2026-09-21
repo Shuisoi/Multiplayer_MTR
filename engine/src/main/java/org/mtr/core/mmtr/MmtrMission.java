@@ -78,9 +78,305 @@ public final class MmtrMission {
 	private String targetRailHex = "";
 	private double targetRailFraction = 1.0;
 
-	/** Attach the task definition this mission executes (where/when/what for timetable/interlocking). */
+	/**
+	 * Attach the task definition this mission executes (where/when/what for timetable/interlocking).
+	 *
+	 * <p>同时**翻译成"模板 + 参数"**（用户口径：「主任务和子任务分离，并将任务目标分离」）：
+	 * 任务类型只说"要做哪一类事"，{@link MmtrTaskTemplate} 说"这类事由哪几件基础操作组成"，
+	 * 而目标是**变量**（由 {@code Vehicle} 用引擎对象解析出人话名字后挂上，因为名字住在站台/股道对象上）。</p>
+	 */
 	public void attachTask(@Nullable MmtrTask task) {
 		this.task = task;
+		if (task instanceof final org.mtr.core.mmtr.task.StationServiceTask service) {
+			template = MmtrTaskTemplate.STOP_AND_SERVE;
+			plannedDwellMillis = Math.max(0, service.dwellMs);
+		} else if (task instanceof org.mtr.core.mmtr.task.DriveToPlatformTask) {
+			template = MmtrTaskTemplate.DRIVE_TO;
+			plannedDwellMillis = 0;
+		}
+	}
+
+	/**
+	 * **这一趟挂在作业表的哪一步上**（作业号 / 第几步 / 共几步 / 这一步的人话说明）。
+	 *
+	 * <h3>为什么要把它摆在 mission 上</h3>
+	 * <p>"玩家与作业表相连"要求三件事同时成立：玩家知道自己在做哪一步、联锁照样为他设进路、
+	 * 做完了这一趟能算完成。前两件已经分别有 {@code Vehicle}（进路）与驾驶层（操作），
+	 * 而"知道在做哪一步"与"算不算完成"都缺一个**任务身份** —— 它既不属于进路也不属于车，
+	 * 属于**这一次执行**。摆在 mission 上是唯一不重复的一份：车辆侧同步字段与 HUD 都从这里读。</p>
+	 *
+	 * @param note 人话说明（作业单步骤自己的 {@code note}，例如"去程到 1 站 1 台"）——
+	 *             直接发给客户端当提示用，引擎不替它改写
+	 */
+	public void attachJobStep(String jobId, int stepIndex, int stepCount, @Nullable String note) {
+		this.jobId = jobId == null ? "" : jobId;
+		this.jobStepIndex = stepIndex;
+		this.jobStepCount = stepCount;
+		this.jobStepNote = note == null ? "" : note;
+	}
+
+	public String getJobId() {
+		return jobId;
+	}
+
+	/** 0 起的步号；{@code -1} = 这一步不属于任何作业表。 */
+	public int getJobStepIndex() {
+		return jobStepIndex;
+	}
+
+	public int getJobStepCount() {
+		return jobStepCount;
+	}
+
+	public String getJobStepNote() {
+		return jobStepNote;
+	}
+
+	private String jobId = "";
+	private int jobStepIndex = -1;
+	private int jobStepCount;
+	private String jobStepNote = "";
+
+	/*
+	 * ============================ 子任务（主任务 → 基础操作） ============================
+	 *
+	 * 用户口径（2026-09-21）：
+	 *
+	 * > 「任务系统应该将主任务和子任务分离，并且将任务目标分离…主任务：停站乘降 —3站1台；
+	 * >   子任务：1.停在3站1台 2.开门 3.等待上下客 4.关门。其中 3站1台则为变量，任务为一对象。
+	 * >   同理主任务 开往——车厂987654股道1；子任务：1.停在车厂987654股道1。
+	 * >   这样拆一个任务到基础的操作以简化逻辑判定。」
+	 *
+	 * 于是这一层只保留三样东西：**模板**（要做哪几件基础操作）、**目标**（变量）、
+	 * **展开出来的清单**（基础操作 + 每条的达成状态）。判定全在 {@code Vehicle}（有观测的那一方）。
+	 */
+
+	/** 主任务模板（开往 / 停站乘降 / …）—— 由作业调度器从步骤类型翻译过来。 */
+	private MmtrTaskTemplate template = MmtrTaskTemplate.NONE;
+	/** **任务目标**（变量：站台 / 股道 / 车站 / 轨 hex，带人话名字）。 */
+	private MmtrTaskTarget target = MmtrTaskTarget.none();
+	/** 这一步的基础操作清单（顺序 = 必须依次达成）；空 = 原地动作那类，没有可拆的基础操作。 */
+	private final it.unimi.dsi.fastutil.objects.ObjectArrayList<MmtrSubTask> subTasks = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+	/** 展开时用的等待时长（毫秒）—— {@link MmtrSubTask.Kind#WAIT_PASSENGERS} 读它。 */
+	private long subTaskDwellMillis;
+	/** 计划给的停留（毫秒，0 = 计划没给）—— 展开时与引擎默认取大者。 */
+	private long plannedDwellMillis;
+	/** 子任务状态每次变化都 +1：客户端把它回传，用来做**双向确认**（对不上就是两边看到的不一样）。 */
+	private long subTaskRevision;
+	/** 客户端确认过几次（人工按键或镜像自动确认）。 */
+	private int subTaskAcks;
+	/** 实际到站时刻（引擎时钟，毫秒）；{@code -1} = 还没到。 */
+	private long stationArrivalMillis = -1;
+	/** 实际出站时刻（门关好、这一步作业做完）—— 任务完成的时刻就是它。 */
+	private long stationDepartureMillis = -1;
+
+	/** 记下这次执行的**模板与目标**（作业调度器在派车时从步骤翻译过来）。 */
+	public void attachTaskShape(@Nullable MmtrTaskTemplate template, @Nullable MmtrTaskTarget target) {
+		if (template != null) {
+			this.template = template;
+		}
+		if (target != null) {
+			this.target = target;
+		}
+	}
+
+	public MmtrTaskTemplate getTemplate() {
+		return template;
+	}
+
+	/** **任务目标**（变量）—— 子任务文案与到站判定都从它取"停在哪儿 / 开往哪儿"。 */
+	public MmtrTaskTarget getTarget() {
+		return target;
+	}
+
+	/** 计划给的停留时长（毫秒；0 = 计划没给，用引擎默认）。 */
+	public void setPlannedDwellMillis(long millis) {
+		plannedDwellMillis = Math.max(0, millis);
+	}
+
+	/**
+	 * **按"模板 + 目标"展开基础操作清单**（幂等：链已存在就返回 false）。
+	 *
+	 * @param engineDefaultDwellMillis 引擎默认等待时长（模板里的"等待上下客"取它；计划给了更长的取计划那条）
+	 * @return 是否真的建了链
+	 */
+	public boolean ensureSubTasks(long engineDefaultDwellMillis) {
+		if (!subTasks.isEmpty()) {
+			return false;
+		}
+		final long dwell = plannedDwellMillis > 0 ? Math.max(plannedDwellMillis, engineDefaultDwellMillis) : engineDefaultDwellMillis;
+		subTasks.addAll(template.expand(target, dwell));
+		if (subTasks.isEmpty()) {
+			return false;
+		}
+		subTaskDwellMillis = dwell;
+		bumpSubTaskRevision();
+		return true;
+	}
+
+	public it.unimi.dsi.fastutil.objects.ObjectArrayList<MmtrSubTask> subTasks() {
+		return subTasks;
+	}
+
+	/** 这一步有没有子任务链（没有 = 老口径：到点停够就算完成）。 */
+	public boolean hasSubTasks() {
+		return !subTasks.isEmpty();
+	}
+
+	/** 这条链要求的停留（毫秒）；引擎默认与计划停留取大者。 */
+	public long subTaskDwellMillis() {
+		return subTaskDwellMillis;
+	}
+
+	public long subTaskRevision() {
+		return subTaskRevision;
+	}
+
+	public int subTaskAcks() {
+		return subTaskAcks;
+	}
+
+	public void bumpSubTaskRevision() {
+		subTaskRevision++;
+	}
+
+	/** 记一次客户端确认（双向确认的上行那一半）。 */
+	public void recordSubTaskAck() {
+		subTaskAcks++;
+	}
+
+	/** 链上第一条还没达成的基础操作（全部达成时返回 null）—— 这就是"现在该做什么"。 */
+	@Nullable
+	public MmtrSubTask currentSubTask() {
+		for (final MmtrSubTask subTask : subTasks) {
+			if (!subTask.isDone()) {
+				return subTask;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 链上的第一条（**"到没到目标"就是它**）——
+	 * 任务状态机的前进判据与子任务判据共用这一条，于是"到站"只有一处定义。
+	 */
+	@Nullable
+	public MmtrSubTask firstSubTask() {
+		return subTasks.isEmpty() ? null : subTasks.get(0);
+	}
+
+	/** @return 达成的基础操作条数 */
+	public int subTasksDoneCount() {
+		int count = 0;
+		for (final MmtrSubTask subTask : subTasks) {
+			if (subTask.isDone()) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/** 全部基础操作都达成了没有（没有链时恒 false —— 调用方用 {@link #hasSubTasks()} 分开判）。 */
+	public boolean allSubTasksDone() {
+		if (subTasks.isEmpty()) {
+			return false;
+		}
+		for (final MmtrSubTask subTask : subTasks) {
+			if (!subTask.isDone()) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 线上一格：{@code STOP_AT_TARGET:DONE:A:停在 3站1台;…}（见 {@link MmtrSubTask#encode}）。 */
+	public String encodeSubTasks() {
+		final StringBuilder builder = new StringBuilder();
+		for (final MmtrSubTask subTask : subTasks) {
+			if (builder.length() > 0) {
+				builder.append(';');
+			}
+			builder.append(subTask.encode());
+		}
+		return builder.toString();
+	}
+
+	/** 给 HUD/日志用的一行人话：{@code ✔停在 3站1台 ▶开门 ·等待上下客 20s ·关门}。 */
+	public String describeSubTasks(long now) {
+		final StringBuilder builder = new StringBuilder();
+		for (final MmtrSubTask subTask : subTasks) {
+			if (builder.length() > 0) {
+				builder.append(' ');
+			}
+			builder.append(subTask.describe());
+		}
+		return builder.toString();
+	}
+
+	/**
+	 * **现在该做什么**（给司机的一句提示，含**当前那条基础操作的人话**与实时进度）。
+	 *
+	 * <p>话从引擎出、按原话下发（与作业步骤的 note 同一个规矩）：客户端不拼中文、不判状态。
+	 * 实时进度（"还差 5s"）只在这里出现，链上的文案保持稳定 —— 否则每一秒都在推全量字符串。</p>
+	 */
+	public String subTaskHint(long now) {
+		if (subTasks.isEmpty()) {
+			return "";
+		}
+		final MmtrSubTask current = currentSubTask();
+		if (current == null) {
+			return "本步作业完成（" + target.label() + "，已到站 " + describeSecondsUntil(now, stationArrivalMillis) + "）";
+		}
+		return switch (current.kind()) {
+			case STOP_AT_TARGET -> mmtrStopHint(current);
+			case OPEN_DOORS -> "开门：" + (current.state() == MmtrSubTask.State.PENDING ? "等车停稳" : "请按开门键");
+			case WAIT_PASSENGERS -> "等待上下客（" + target.label() + "）：还差 "
+				+ Math.max(0, Math.round((subTaskDwellMillis - current.elapsedMillis(now)) / 1000.0)) + "s";
+			case CLOSE_DOORS -> "关门：请按关门键";
+		};
+	}
+
+	/** 到站那一条的提示：目标**指名道姓**（"停在 3站1台"），并说清宽松口径。 */
+	private String mmtrStopHint(MmtrSubTask current) {
+		if (current.state() == MmtrSubTask.State.PENDING) {
+			return "出发前往 " + target.label();
+		}
+		return "进站：把车停在 " + target.label() + (target.kind() == MmtrTaskTarget.Kind.PLATFORM
+			? "（停稳即可，不必对准停车点）" : "（停稳即可）");
+	}
+
+	private static String describeSecondsUntil(long now, long millis) {
+		return millis < 0 ? "?" : Math.round(Math.max(0, now - millis) / 1000.0) + "s";
+	}
+
+	/** 到站确认（宽松判据达成的那一刻记一次，只记第一次）。 */
+	public boolean markStationArrival(long now) {
+		if (stationArrivalMillis >= 0) {
+			return false;
+		}
+		stationArrivalMillis = now;
+		return true;
+	}
+
+	public long getStationArrivalMillis() {
+		return stationArrivalMillis;
+	}
+
+	public boolean hasStationArrival() {
+		return stationArrivalMillis >= 0;
+	}
+
+	/** 出站确认（门关好、这一步做完）。 */
+	public boolean markStationDeparture(long now) {
+		if (stationDepartureMillis >= 0) {
+			return false;
+		}
+		stationDepartureMillis = now;
+		return true;
+	}
+
+	public long getStationDepartureMillis() {
+		return stationDepartureMillis;
 	}
 
 	/**

@@ -41,12 +41,13 @@ final class MmtrTrainCommands {
 			case "doors":
 			case "changeends":
 			case "cab":
+			case "board":
 			case "shunt":
 			case "interlock":
 			case "trace":
 				return relayToGame(simulator, verb, positional, options);
 			default:
-				return MmtrCommandDispatcher.usage("train 支持 couple / uncouple / doors / changeends / cab / shunt / interlock / trace");
+				return MmtrCommandDispatcher.usage("train 支持 couple / uncouple / doors / changeends / cab / board / shunt / interlock / trace");
 		}
 	}
 
@@ -176,6 +177,7 @@ final class MmtrTrainCommands {
 			case "doors" -> result.line("用法：train doors <车辆id> [open|close|toggle] [--side=left|right|both]");
 			case "changeends" -> result.line("用法：train changeends <车辆id>");
 			case "cab" -> result.line("用法：train cab <车辆id> <A|B|out>");
+			case "board" -> result.line("用法：train board <车辆id> [<车厢序号><A|B>] [玩家名]（把玩家传送到车上的驾驶室；玩家名省略 = 场上唯一那名玩家）");
 			case "shunt" -> result.line("用法：train shunt <车辆id> <目标轨hex|off> [--minutes=n] [--kmh=n] [--kind=SUBSIDIARY_SHUNT|CALLING_ON]");
 			case "interlock" -> result.line("用法：train interlock <车辆id|all>");
 			case "trace" -> result.line("用法：train trace [on|off|status]");

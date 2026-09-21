@@ -109,8 +109,12 @@ public final class MmtrInteractPrompt {
 	 */
 	private static final Action ACTION_ENTER_CAB = new Action(keyLabel("MMTR_CAB_INTERACT", "G"), "进入驾驶室", true);
 
-	/** Doors. The per-side keys went with the riding layer for the same reason. */
-	private static final Action ACTION_DOORS = new Action(keyLabel("MMTR_DOOR_LEFT", "Y"), "开门", false);
+	/**
+	 * Doors. <b>LIVE since 2026-09-21</b>: {@code MmtrDoorInteraction} consumes Y (both sides) and
+	 * U (right side only) — the station sub-task chain requires the driver to actually open and close
+	 * the doors, and the riding-layer rebuild had left no key bound to that engine command at all.
+	 */
+	private static final Action ACTION_DOORS = new Action(keyLabel("MMTR_DOORS", "Y"), "开门/关门", true);
 
 	/** Coupling is LIVE: {@code MmtrCoupleInteraction} still handles the key. */
 	private static final Action ACTION_COUPLE = new Action(keyLabel("MMTR_COUPLE", "K"), "连挂", true);
@@ -204,6 +208,7 @@ public final class MmtrInteractPrompt {
 							vehicle.getId(),
 							carNumber,
 							anchor.cab,
+							car.vehicleId,
 							car.rotation
 					));
 				}
@@ -224,6 +229,26 @@ public final class MmtrInteractPrompt {
 			default:
 				return null;
 		}
+	}
+
+	/**
+	 * **玩家此刻瞄准的那扇车门属于哪台车**（0 = 没瞄准任何车门）。
+	 *
+	 * <p>给司机车门键用（{@code MmtrDoorInteraction}）：没坐在车上时，站在站台上也能开一列停着的车。
+	 * 判据复用本类自己的搜索（{@link #collect}），所以"提示里写着 [Y] 开门"与"按 Y 真的有反应"
+	 * 永远是同一个目标 —— 这是这个类存在的**全部理由**，门键必须走它。</p>
+	 */
+	public static long aimedDoorVehicleId() {
+		final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
+		if (player == null) {
+			return 0;
+		}
+		for (final Candidate candidate : collect(player)) {
+			if (candidate.action == ACTION_DOORS) {
+				return candidate.vehicleId;
+			}
+		}
+		return 0;
 	}
 
 	/**
@@ -640,7 +665,14 @@ public final class MmtrInteractPrompt {
 	 * (the prompt lists every candidate, the action must pick exactly one).</p>
 	 */
 	private record Candidate(double x, double y, double z, double distanceSquared, String text, Action action,
-			long vehicleId, int carNumber, int cab, PositionAndRotation carTransform) {
+			long vehicleId, int carNumber, int cab, String modelId, PositionAndRotation carTransform) {
+
+		/** 准星选中的那个门 → 给动作层用的目标（引擎端在这里算，见 CabTarget 的注释）。 */
+		CabTarget toCabTarget() {
+			final MmtrVehicleAnchors.CabView view = MmtrVehicleAnchors.cabView(MmtrVehicleAnchors.get(modelId), cab);
+			final int engineEnd = view == null ? cab : MmtrVehicleAnchors.engineEndOfSeat(view.z);
+			return new CabTarget(vehicleId, carNumber, cab, carTransform, engineEnd);
+		}
 	}
 
 	/**
@@ -658,14 +690,76 @@ public final class MmtrInteractPrompt {
 	public static CabTarget findCabTarget(ClientPlayerEntity player) {
 		for (final Candidate candidate : collect(player)) {
 			if (candidate.action == ACTION_ENTER_CAB) {
-				return new CabTarget(candidate.vehicleId, candidate.carNumber, candidate.cab, candidate.carTransform);
+				return candidate.toCabTarget();
 			}
 		}
 		return null;
 	}
 
 	/** @see #findCabTarget(ClientPlayerEntity) */
-	public record CabTarget(long vehicleId, int carNumber, int cab, PositionAndRotation carTransform) {
+	/**
+	 * @param cab       模型自己的驾驶室编号（{@code mmtr_cabdoor_<cab>}）
+	 * @param engineEnd **引擎的端**（1 = A，2 = B）—— 由座位点的 Z 符号定，**不**等于 {@code cab}：
+	 *                  锚点编号是模型约定，引擎端是脊柱约定，两者在 BR101 上是反的
+	 *                  （见 {@link MmtrVehicleAnchors#engineEndOfSeat}）。
+	 */
+	public record CabTarget(long vehicleId, int carNumber, int cab, PositionAndRotation carTransform, int engineEnd) {
+	}
+
+	/**
+	 * **这辆车上所有可进入的驾驶室**，与准星/距离无关。
+	 *
+	 * <h3>为什么需要它</h3>
+	 * <p>{@link #findCabTarget} 回答的是"我正瞄着哪个门"，因此要求玩家站在门口、且在视野锥里 ——
+	 * 那是**人自己走进去**时的口径。而"把人直接放进驾驶室"（{@code /mtr mmtrboard}、引擎指令栏的
+	 * {@code train board}）没有准星可用，它需要的是"这辆车有哪些驾驶室"这件事本身。</p>
+	 *
+	 * <p>刻意复用同一条 {@link #carTransforms} + {@code MmtrVehicleAnchors.get} + {@code Anchor.cab} 的取法：
+	 * 两个入口对"哪节车的哪个端算驾驶室"必须永远一致，各推一遍就会分叉（notes/163 的教训）。</p>
+	 *
+	 * @return 按"车节从前往后、每节 A 端在前"排序；车不在客户端镜像里时返回空表
+	 */
+	public static ObjectArrayList<CabTarget> cabTargetsOf(long vehicleId) {
+		final ObjectArrayList<CabTarget> result = new ObjectArrayList<>();
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		if (vehicle == null) {
+			return result;
+		}
+		final ObjectArrayList<CarTransform> cars = carTransforms(vehicle);
+		for (int carNumber = 0; carNumber < cars.size(); carNumber++) {
+			final CarTransform car = cars.get(carNumber);
+			final ObjectArrayList<Anchor> anchors = MmtrVehicleAnchors.get(car.vehicleId);
+			for (final Anchor anchor : anchors) {
+				if (anchor.kind == MmtrVehicleAnchors.Kind.CABDOOR && anchor.cab > 0) {
+					// 引擎端由座位点的 Z 符号定，不是锚点编号 —— 见 MmtrVehicleAnchors.engineEndOfSeat
+					final MmtrVehicleAnchors.CabView view = MmtrVehicleAnchors.cabView(anchors, anchor.cab);
+					final int engineEnd = view == null ? anchor.cab : MmtrVehicleAnchors.engineEndOfSeat(view.z);
+					result.add(new CabTarget(vehicleId, carNumber, anchor.cab, car.rotation, engineEnd));
+				}
+			}
+		}
+		return result;
+	}
+
+	/** 客户端镜像里的这辆车；不在镜像里（太远 / 还没同步）时为 {@code null}。 */
+	@Nullable
+	private static VehicleExtension vehicleById(long vehicleId) {
+		for (final VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
+			if (vehicle.getId() == vehicleId) {
+				return vehicle;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 这辆车**在不在客户端的车辆镜像里**。
+	 *
+	 * <p>与 {@link #cabTargetsOf} 分开问，是为了让"车还没同步过来"（等一等就好）与"这辆车的模型没有
+	 * 驾驶室锚点"（等多久都不会好）在调用方那里是两件不同的事 —— 合成一个空表就分不出来了。</p>
+	 */
+	public static boolean isVehicleMirrored(long vehicleId) {
+		return vehicleById(vehicleId) != null;
 	}
 
 	/**

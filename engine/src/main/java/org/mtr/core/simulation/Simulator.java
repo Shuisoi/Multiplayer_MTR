@@ -1328,6 +1328,131 @@ public class Simulator extends Data implements Utilities {
 		mmtrShuntAuthorities.revoke(vehicleId);
 	}
 
+	/**
+	 * **计划内接管**：把某列车当前挂着的那条作业单交给它的司机（油门给司机、进路与停车点仍由引擎给）。
+	 *
+	 * <h3>为什么只在静止时允许</h3>
+	 * <p>用户口径（2026-09-21）："比如在车辆还在等待发车，到站停站等静止状态时接管"。
+	 * 这不只是偏好 —— 车在动时换执行者，进路/道岔持有/protection 都处在"为自动驾驶算出来的"状态，
+	 * 交接窗口里的任何一拍都可能在两个执行者之间空转。停在原地交接则是干净的：谁都不用抢。</p>
+	 *
+	 * <h3>司机是谁</h3>
+	 * <p>给了 {@code driverUuid} 就用它（客户端按键那条路自己报自己的 uuid，最权威）；
+	 * 没给就从**驾驶室钥匙**读（{@link Vehicle#getMmtrCrewUuid()}）—— 控制台里敲指令时用这一条，
+	 * 于是不必让人把 uuid 抄一遍。两者都没有 ⇒ 拒绝（"驾驶室里没人"）。</p>
+	 *
+	 * @return {@code null} = 接管成功；非空 = 拒绝原因（给操作者看的一句人话）
+	 */
+	public @org.jspecify.annotations.Nullable String mmtrJobTakeover(long vehicleId, @org.jspecify.annotations.Nullable UUID driverUuid) {
+		final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			return "找不到车辆 " + vehicleId;
+		}
+		if (mmtrJobScheduler == null) {
+			return "这局里没有作业单调度器";
+		}
+		if (vehicle.getSpeed() > 1e-9 || vehicle.isMoving()) {
+			return "车还在动 —— 计划内接管只允许在静止状态（等待发车 / 到站停站）时进行";
+		}
+		final java.util.UUID driver = driverUuid != null ? driverUuid : vehicle.getMmtrCrewUuid();
+		if (driver == null) {
+			return "这列车没有司机（驾驶室钥匙不在任何人手里）—— 先上车再接管";
+		}
+		final String jobId = mmtrJobScheduler.jobIdOfVehicle(vehicleId);
+		if (jobId == null) {
+			return "车 " + vehicleId + " 没有挂在任何作业单上";
+		}
+		mmtrJobScheduler.humanTakeover(jobId, driver);
+		/*
+		 * 驾驶室朝向：人接手时要的是"坐在车头往前看"。自动运行为了走得通可能把换向器翻着
+		 * （尾在前），那正是"被传送到与行进方向相反的驾驶室"的现场成因之一 —— 交接时归位。
+		 * 上面的静止闸门已经保证了这里 speed == 0，符合"只在停稳时翻换向器"的红线。
+		 */
+		vehicle.mmtrResetTravelDirectionForDriver();
+		// 正在跑的那一步也要立刻换执行者：否则这一步仍在等自动车到点，司机开了也不算数。
+		final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+		if (mission != null && !mission.isTerminal()) {
+			mission.setExecutor(org.mtr.core.mmtr.MmtrMission.Executor.PLAYER, driver);
+		}
+		// 停车点可能还是"自动车那一份"：清掉让玩家任务自己按 PLAYER 口径重新自臂一次
+		// （不设 auto、**也不设停车点** —— 到站判据换成"站台轨上有车且停稳"，
+		//   见 Vehicle#mmtrMotionSelfArmMission 的 PLAYER 分支与 Vehicle#mmtrAnyCarOnMissionStation）。
+		vehicle.setMmtrMotionAuto(false);
+		vehicle.clearMmtrMotionStopTargetForHandover();
+		System.out.println("[MMTR-JOB] 计划内接管：车 " + vehicleId + " 的作业 " + jobId + " 交给司机 " + driver
+			+ "（静止交接；进路照发、油门留给司机）");
+		return null;
+	}
+
+	/**
+	 * 传送上车用：这列车现在该进**哪个驾驶室**（{@code <车节><A|B>}，空串 = 不是编组体车）。
+	 *
+	 * <p>判据在 {@link Vehicle#mmtrPreferredCabSpec()}；这里只是个按 id 的取数口，让游戏端的
+	 * "把玩家送到车上"（{@code /mtr mmtrboard} / 引擎指令栏的 {@code train board}）能问一句
+	 * "该坐哪一端"，而不是自己挑第一个驾驶室。</p>
+	 */
+	public String mmtrPreferredCabSpec(long vehicleId) {
+		final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		return vehicle == null ? "" : vehicle.mmtrPreferredCabSpec();
+	}
+
+	/** 计划内接管的归还：作业单回到自动执行，车上这一步的执行者也换回 AUTOPILOT。 */	public @org.jspecify.annotations.Nullable String mmtrJobRelease(long vehicleId) {
+		final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			return "找不到车辆 " + vehicleId;
+		}
+		if (mmtrJobScheduler == null) {
+			return "这局里没有作业单调度器";
+		}
+		final String jobId = mmtrJobScheduler.jobIdOfVehicle(vehicleId);
+		if (jobId == null) {
+			return "车 " + vehicleId + " 没有挂在任何作业单上";
+		}
+		mmtrJobScheduler.releaseToAutopilot(jobId);
+		final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+		if (mission != null && !mission.isTerminal()) {
+			mission.setExecutor(org.mtr.core.mmtr.MmtrMission.Executor.AUTOPILOT, null);
+			vehicle.setMmtrMotionAuto(true);
+		}
+		System.out.println("[MMTR-JOB] 归还给自动：车 " + vehicleId + " 的作业 " + jobId);
+		return null;
+	}
+
+	/*
+	 * ====================== 站台作业的子任务：停留时长与客户端确认 ======================
+	 *
+	 * 用户口径（2026-09-21）：「等段时间」的时间**暂定 20 秒，但保留修改接口**，
+	 * 并且「司机手动开门和自动可以都保留」。
+	 */
+
+	/** 站台作业的默认停留（毫秒）—— 用户暂定 20 秒。作业单给了更长的计划停留时取计划那条。 */
+	private long mmtrSubTaskDwellMillis = 20_000;
+
+	public long mmtrSubTaskDwellMillis() {
+		return mmtrSubTaskDwellMillis;
+	}
+
+	/**
+	 * **改站台停留时长的接口**（用户要的那个"修改接口"）。
+	 *
+	 * <p>已经在做的那一步不受影响（链上的 DWELL 是建链时读的值，改它只影响**之后**建的链）——
+	 * 这是刻意的：半路改时间会让"这一站该停多久"在同一个司机眼皮底下变来变去。</p>
+	 *
+	 * @param seconds 秒；&lt;= 0 或太大时被夹到 [1, 3600]
+	 */
+	public void mmtrSetSubTaskDwellSeconds(long seconds) {
+		mmtrSubTaskDwellMillis = Math.max(1, Math.min(3600, seconds)) * 1000L;
+	}
+
+	/** 客户端（司机）确认某一条子任务：上行那一半的双向确认，转发给车辆。 */
+	public @org.jspecify.annotations.Nullable String mmtrConfirmSubTask(long vehicleId, int index, long revision, @org.jspecify.annotations.Nullable UUID crewUuid) {
+		final Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			return "找不到车辆 " + vehicleId;
+		}
+		return vehicle.mmtrConfirmSubTask(index, revision, crewUuid);
+	}
+
 	private Object[] mmtrLinesCache; // {signature, lines}
 
 	/**

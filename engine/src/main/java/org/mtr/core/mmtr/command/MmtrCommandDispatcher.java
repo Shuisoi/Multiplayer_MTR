@@ -117,6 +117,8 @@ public final class MmtrCommandDispatcher {
 				return MmtrPointCommands.execute(simulator, verb, positional, options);
 			case "manifest":
 				return MmtrManifestCommands.execute(simulator, verb, positional, options);
+			case "job":
+				return MmtrJobCommands.execute(simulator, verb, positional, options);
 			case "query":
 			case "world":
 				return MmtrQueryCommands.execute(simulator, namespace, verb, positional, options);
@@ -172,6 +174,7 @@ public final class MmtrCommandDispatcher {
 		result.line("  signal bind <x> <y> <z> --node=<x,y,z> [--angle=n] [--aspects=n]                   ← 按节点绑定（旧）");
 		result.line("  signal why <x> <y> <z>");
 		result.line("  manifest list | manifest reload | manifest add <depotId> <sidingId> [车型...] | manifest remove <depotId> [sidingId]");
+		result.line("  job take <车辆id> [司机uuid] | job release <车辆id> | job status [车辆id]   ← 计划内接管（只在车静止时）");
 		result.line("  point set <x> <y> <z> --via=<轨hex> --branch=n | point lock|unlock|release <x> <y> <z> --via=<轨hex>");
 		result.line("  point unlock --all                                               ← 解开全部人工锁（含界面上没有按钮的进向）");
 		result.line("  point locks                                                      ← 引擎现在锁着哪些（逐进向列出）");

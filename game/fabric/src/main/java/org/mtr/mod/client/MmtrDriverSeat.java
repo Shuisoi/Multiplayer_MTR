@@ -36,13 +36,15 @@ public final class MmtrDriverSeat {
 	/**
 	 * @param vehicleId 正在骑的车
 	 * @param carNumber 车节下标（0 起）
-	 * @param cab       1 = A 端驾驶室，2 = B 端驾驶室
+	 * @param cab       **模型自己的**驾驶室编号（{@code mmtr_cabdoor_<cab>}）
+	 * @param engineEnd **引擎的端**（1 = A，2 = B）—— 由座位点的 Z 符号定，与 {@code cab} 不一定同号
+	 *                  （见 {@link MmtrVehicleAnchors#engineEndOfSeat}）
 	 */
-	public record Seat(long vehicleId, int carNumber, int cab) {
+	public record Seat(long vehicleId, int carNumber, int cab, int engineEnd) {
 
 		/** 引擎侧的驾驶室名（{@code MmtrCommandExecutor} 的 {@code <car><A|B>}，车节号从 1 起）。 */
 		public String cabSpec() {
-			return (carNumber + 1) + (cab == 2 ? "B" : "A");
+			return (carNumber + 1) + (engineEnd == 2 ? "B" : "A");
 		}
 	}
 
@@ -69,7 +71,13 @@ public final class MmtrDriverSeat {
 			return null;
 		}
 		final int cab = MmtrVehicleAnchors.nearestCab(MmtrVehicleAnchors.get(modelId), carNumber, playerOffset.getZMapped());
-		return cab <= 0 ? null : new Seat(ridingVehicleId, carNumber, cab);
+		if (cab <= 0) {
+			return null;
+		}
+		// 引擎端由风挡锚点的 Z 符号定（+Z = 引擎的 B 端），不是锚点编号。
+		final ObjectArrayList<MmtrVehicleAnchors.Anchor> windshields = MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(modelId), carNumber, cab);
+		final int engineEnd = windshields.isEmpty() ? cab : MmtrVehicleAnchors.engineEndOfSeat(windshields.get(0).position.z());
+		return new Seat(ridingVehicleId, carNumber, cab, engineEnd);
 	}
 
 	/** 简写：我现在是不是坐在司机位上（= 能不能操作手柄 / 要不要告诉引擎"我是司机"）。 */

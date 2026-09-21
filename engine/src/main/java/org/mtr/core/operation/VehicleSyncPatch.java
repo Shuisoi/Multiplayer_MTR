@@ -65,7 +65,13 @@ public final class VehicleSyncPatch {
 		// 任务/许可读数
 		"mmtrMotionMirror", "mmtrRunTotalDistance", "mmtrRunStopTarget",
 		"mmtrAwsWarningPending", "mmtrAwsWarningAcknowledged", "mmtrBlockHeld", "mmtrSpeedLimitKmh",
-		"mmtrLzbSupervising", "mmtrLzbCeilingKmh", "mmtrLzbTargetKmh", "mmtrLzbTargetDistanceM"
+		"mmtrLzbSupervising", "mmtrLzbCeilingKmh", "mmtrLzbTargetKmh", "mmtrLzbTargetDistanceM",
+		// 任务提示（作业号 / 这一步的人话说明 / 第几步 / mission 状态与执行者）—— 司机 HUD 读它。
+		// 停在站台等发车时速度与门都不变，所以它靠引擎侧的"变了就标脏"推，不靠这些读数顺带带出去。
+		"mmtrJobId", "mmtrTaskNote", "mmtrTaskStep", "mmtrTaskSteps", "mmtrMissionState", "mmtrMissionExecutor",
+		// 站台作业子任务（到站停稳 / 开门 / 停够 / 关门）：清单 + "现在该做什么" + 版本号与确认数。
+		// 同样靠"变了就标脏"推 —— 这些字变化的时刻（车稳稳停着、门开着）恰恰是读数全都不变的时候。
+		"mmtrSubTasks", "mmtrSubTaskHint", "mmtrSubTaskRevision", "mmtrSubTaskAcks"
 		/*
 		 * 刻意**不**在白名单里的：`ridingEntities`。
 		 *

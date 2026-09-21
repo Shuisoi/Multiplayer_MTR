@@ -113,6 +113,13 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			org.mtr.mod.client.MmtrCoupleInteraction.tick();
 			// B2: the "aim at a driver's door and press G to take/give back that cab" interaction.
 			org.mtr.mod.client.MmtrCabInteraction.tick();
+			// 服务端请求的"把这位玩家放进驾驶室"（/mtr mmtrboard、引擎指令栏的 train board）：
+			// 车镜像还没到位时在这里逐拍重试。
+			org.mtr.mod.client.MmtrBoardRequest.tick();
+			// 计划内接管：坐在司机位上按 B 把本车的作业单接过来 / 还回去。
+			org.mtr.mod.client.MmtrTaskInteraction.tick();
+			// 司机的车门键（Y 两侧 / U 右侧）：站台作业的"按键开门 … 关门"子任务靠它达成。
+			org.mtr.mod.client.MmtrDoorInteraction.tick();
 			// 三手柄机车的驾驶输入（油门/制动/定速/换向）：只在握着驾驶室钥匙时才产生控制意图。
 			org.mtr.mod.client.MmtrDriveInput.tick();
 			// Windshield wiper stalk (关 / 慢 / 快): a driver input, so it is ticked with the other keys.

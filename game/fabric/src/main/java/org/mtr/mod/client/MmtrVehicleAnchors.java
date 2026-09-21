@@ -29,13 +29,47 @@ import java.nio.charset.StandardCharsets;
  * <p>Anchor names (see {@code docs/MMTR-OBJ车辆资源包-标准化工作流.md} §1.1):</p>
  * <ul>
  *     <li>{@code mmtr_hud} / {@code mmtr_hud_1} — the dashboard face; its normal points at the driver.</li>
- *     <li>{@code mmtr_cabdoor_<cab>_<n>} — a door into cab {@code <cab>} (1 = A end, 2 = B end).</li>
+ *     <li>{@code mmtr_cabdoor_<cab>_<n>} — a door into cab {@code <cab>}（<b>模型自己的编号</b>，
+ *         见 {@link #engineEndOfSeat}：它<b>不</b>必然等于引擎的 A/B 端）。</li>
  *     <li>{@code mmtr_seat_<cab>} — optional explicit seat point; takes priority over the HUD offset.</li>
  * </ul>
  */
 public final class MmtrVehicleAnchors {
 
 	private MmtrVehicleAnchors() {
+	}
+
+	/**
+	 * **锚点驾驶室 ↔ 引擎端**的唯一换算处：只看座位点的**车体局部 Z 的符号**，不看锚点名里的编号。
+	 *
+	 * <h3>为什么不能按锚点编号当引擎端（2026-09-21 实机）</h3>
+	 * <p>车体局部的 <b>+Z 由 bogie1→bogie2 定义</b>（{@code PositionAndRotation.getYaw} 取
+	 * {@code atan2(x2−x1, z2−z1)}），而 MTR 把 bogie1 放在编组脊柱的 <b>A 端</b>
+	 * （{@code Vehicle.getVehicleCarsAndPositions()} 从 A 端起算、先 bogie1 后 bogie2）。
+	 * 所以 <b>+Z = 朝引擎的 B 端</b>。</p>
+	 *
+	 * <p>而锚点编号是**模型自己的**约定：BR101 的 {@code mmtr_cabdoor_1} 座位点在 {@code z=+7.71}
+	 * （= B 端），{@code mmtr_cabdoor_2} 在 {@code z=−7.71}（= A 端）。把编号直接当引擎端用，
+	 * 结果就是"引擎以为人坐在 B 端、人实际坐在 A 端" —— 而**方向是由被占用的驾驶室决定的**，
+	 * 于是司机永远坐在车尾（现场："被传送至了与行进方向相反的驾驶室"）。</p>
+	 *
+	 * @return 1 = 引擎的 A 端，2 = 引擎的 B 端
+	 */
+	public static int engineEndOfSeat(double seatZ) {
+		return seatZ > 0 ? 2 : 1;
+	}
+
+	/** 反过来：引擎的端（1 = A，2 = B）落在哪个锚点驾驶室编号上（找不到时按同号兜底）。 */
+	public static int anchorCabOfEngineEnd(ObjectArrayList<Anchor> anchors, int engineEnd) {
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.CABDOOR) {
+				final CabView view = cabView(anchors, anchor.cab);
+				if (view != null && engineEndOfSeat(view.z) == engineEnd) {
+					return anchor.cab;
+				}
+			}
+		}
+		return engineEnd;
 	}
 
 	/** The anchor files live in MTR's own namespace, next to the vehicle model. */

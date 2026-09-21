@@ -114,9 +114,95 @@ public final class MmtrCabInteraction {
 
 		confirm(player);
 		refreshConfirmation();
+		followEngineChangeEnds(player);
 		if (justPressed) {
 			handle(player);
 		}
+	}
+
+	/**
+	 * **引擎换端了 ⇒ 把人跟过去**（作业单的"换端"步骤由引擎执行）。
+	 *
+	 * <h3>为什么必须有这一条（2026-09-21 实机）</h3>
+	 * <p>作业单在两端的折返点有一步 {@code CHANGE_ENDS}：引擎把钥匙从一端**移到另一端**
+	 * （{@code MmtrCabState.changeEnds} 只是换 {@code activeCab} —— "人走过去"是这句话的物理含义）。
+	 * 但钥匙是引擎的，**坐在驾驶室里的人不会因此站起来走过去**：不跟过去的话，回程就变成
+	 * "车朝 B 端开、司机还坐在 A 端往前看"，与"被传送到与行进方向相反的驾驶室"是同一件事，
+	 * 只不过这一次是作业单自己造成的。</p>
+	 *
+	 * <h3>判据（三道，都是为了"不会跟错"）</h3>
+	 * <ol>
+	 *   <li>**钥匙确实在我手里**：镜像里的乘务员 uuid 就是我（不是"有 crew 就行"—— 那可能是别人）；</li>
+	 *   <li>**只在镜像"变过去"的那一拍跟**：记上一次看到的镜像驾驶室，只有它**变化**且变成不是我
+	 *       现在坐的那一端时才动。否则会与"司机自己在另一端动了手柄"打架 ——
+	 *       他申领了 B 端、引擎还没确认的那几拍里，本条会把他拽回 A 端；</li>
+	 *   <li>跟随动作走的是**同一段 {@code enterCab}**（与按 G、与被传送进来完全一致）。</li>
+	 * </ol>
+	 */
+	private static void followEngineChangeEnds(ClientPlayerEntity player) {
+		final long vehicleId = VehicleRidingMovement.mmtrCabVehicleId();
+		if (vehicleId == 0) {
+			lastMirroredVehicleId = 0;
+			lastMirroredCab = 0;
+			return;
+		}
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		final int mirroredCab = vehicle == null ? 0 : mirroredCabNumber(vehicle);
+		final int previousCab = lastMirroredVehicleId == vehicleId ? lastMirroredCab : 0;
+		lastMirroredVehicleId = vehicleId;
+		lastMirroredCab = mirroredCab;
+		if (previousCab <= 0 || mirroredCab <= 0 || mirroredCab == previousCab) {
+			return;
+		}
+		if (vehicle == null || !vehicleOwnsTheCab(vehicle)) {
+			return;
+		}
+		final int takenCab = VehicleRidingMovement.mmtrCabNumber();
+		final ObjectArrayList<MmtrInteractPrompt.CabTarget> targets = MmtrInteractPrompt.cabTargetsOf(vehicleId);
+		// 比的都是**引擎端**（1=A/2=B），不是锚点编号 —— 两者在 BR101 上是反的。
+		final int takenEnd = engineEndOfAnchorCab(targets, takenCab, mirroredCab);
+		if (mirroredCab == takenEnd) {
+			return;
+		}
+		for (final MmtrInteractPrompt.CabTarget target : targets) {
+			if (target.engineEnd() == mirroredCab) {
+				Init.LOGGER.info("[MMTR-CAB] 引擎换端：镜像驾驶室={}（我原来在 {} 端）—— 把人跟过去（作业单的 CHANGE_ENDS 步骤）",
+						mirroredCab, takenEnd);
+				enterCab(player, target);
+				return;
+			}
+		}
+		Init.LOGGER.warn("[MMTR-CAB] 引擎换端到 {} 端，但这个车型没有对应的驾驶室锚点，人留在原处", mirroredCab);
+	}
+
+	/** 我现在坐的这个锚点驾驶室，按引擎口径是**哪一端**（找不到时退回"镜像那一端"以避免误跟）。 */
+	private static int engineEndOfAnchorCab(ObjectArrayList<MmtrInteractPrompt.CabTarget> targets, int anchorCab, int fallbackEnd) {
+		for (final MmtrInteractPrompt.CabTarget target : targets) {
+			if (target.cab() == anchorCab) {
+				return target.engineEnd();
+			}
+		}
+		return fallbackEnd;
+	}
+
+	/** 镜像里那个被占用的驾驶室**是不是我拿的**（比 uuid，不是"有 crew 就算"）。 */
+	private static boolean vehicleOwnsTheCab(VehicleExtension vehicle) {
+		final String crew = vehicle.getMmtrCabCrewFromSync();
+		final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
+		return player != null && !crew.isEmpty() && crew.equalsIgnoreCase(player.getUuidAsString());
+	}
+
+	/** 上一次看到的那辆车的镜像驾驶室（判断"变过去的那一拍"用）。 */
+	private static long lastMirroredVehicleId;
+	private static int lastMirroredCab;
+
+	/** 引擎镜像里被占用的那一端（1 = A 端，2 = B 端，0 = 不知道）。 */
+	private static int mirroredCabNumber(VehicleExtension vehicle) {
+		final String activeCab = vehicle.getMmtrActiveCabFromSync();
+		if ("CAB_A".equals(activeCab)) {
+			return 1;
+		}
+		return "CAB_B".equals(activeCab) ? 2 : 0;
 	}
 
 	/**
@@ -159,7 +245,11 @@ public final class MmtrCabInteraction {
 		enterCab(player, target);
 	}
 
-	private static void enterCab(ClientPlayerEntity player, MmtrInteractPrompt.CabTarget target) {
+	/**
+	 * 把玩家放进这个驾驶室：写骑乘坐标（由 {@link VehicleRidingMovement#mmtrEnterCab} 独占）、
+	 * 向引擎申领该驾驶室、把座位朝向摆正。**按 G 与 {@code /mtr mmtrboard} 走的是同一段**。
+	 */
+	public static void enterCab(ClientPlayerEntity player, MmtrInteractPrompt.CabTarget target) {
 		final VehicleExtension vehicle = vehicleById(target.vehicleId());
 		if (vehicle == null) {
 			message(player, "找不到这辆车 / vehicle not found");
@@ -177,7 +267,9 @@ public final class MmtrCabInteraction {
 		}
 
 		// The engine's cab naming is "<car><A|B>" (MmtrCommandExecutor.executeCabCommand), 1-based car.
-		final String cabSpec = (target.carNumber() + 1) + (target.cab() == 2 ? "B" : "A");
+		// **端由引擎口径给**：+Z（车体局部）= 引擎的 B 端，见 MmtrVehicleAnchors.engineEndOfSeat ——
+		// 锚点编号是模型自己的约定，BR101 上两者是反的（按编号发就把人放进车尾，2026-09-21 实机）。
+		final String cabSpec = (target.carNumber() + 1) + (target.engineEnd() == 2 ? "B" : "A");
 		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(target.vehicleId(), PacketMmtrCabOp.Op.ENTER, cabSpec));
 
 		// Face the way the cab faces: the seat anchor's normal is the direction of travel, so the world

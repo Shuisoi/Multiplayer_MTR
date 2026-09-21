@@ -248,6 +248,46 @@
 		"mmtrLzbTargetDistanceM": {
 			"type": "number",
 			"default": -1
+		},
+		"mmtrJobId": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrTaskNote": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrTaskStep": {
+			"type": "integer",
+			"default": -1
+		},
+		"mmtrTaskSteps": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrMissionState": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrMissionExecutor": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrSubTasks": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrSubTaskHint": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrSubTaskRevision": {
+			"type": "integer",
+			"default": 0
+		},
+		"mmtrSubTaskAcks": {
+			"type": "integer",
+			"default": 0
 		}
 	}
 }

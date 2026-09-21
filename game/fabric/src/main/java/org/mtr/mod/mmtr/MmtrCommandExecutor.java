@@ -274,13 +274,70 @@ public final class MmtrCommandExecutor {
 			executeCoupleCommand(simulator, parts);
 			return;
 		}
+		// 玩家上车: board <vehicleId> [<车厢序号><A|B>] [玩家名]（"传送上车 + 进入驾驶状态"）
+		if (parts.length >= 2 && parts[0].equals("board")) {
+			executeBoardCommand(simulator, serverWorld, parts);
+			return;
+		}
 		// 诊断开关: trace [on|off|status] - 每 tick 的走行/同步日志（默认关）
 		if (parts[0].equals("trace")) {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
-		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | tracks [<railHex>] | lamps | totals | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | trace [on|off])"
-			+ "（这些也都能用名词打头的写法从网页指令栏发：train doors <id> open / train couple <a> <b> / …）");
+		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | tracks [<railHex>] | lamps | totals | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | board <id> [<车节><A|B>] [玩家名] | trace [on|off])"
+			+ "（这些也都能用名词打头的写法从网页指令栏发：train doors <id> open / train couple <a> <b> / train board <id> / …）");
+	}
+
+	/**
+	 * 玩家上车: {@code board <vehicleId> [<车厢序号><A|B>] [玩家名]} —— 把某位玩家送到那辆车的驾驶室里。
+	 *
+	 * <p>为什么要在游戏端做：这件事动的是**玩家实体与客户端**（服务端权威挪人 + 客户端建立骑乘状态），
+	 * 引擎侧只负责转交（{@code train board …}）。</p>
+	 *
+	 * <p>不点名时：场上**恰好一名**玩家就用他，多于一名就要求点名 —— 猜错人等于把人瞬移走，
+	 * 那是比"多打一个参数"贵得多的错误。</p>
+	 */
+	private static void executeBoardCommand(Simulator simulator, ServerWorld serverWorld, String[] parts) {
+		final long vehicleId;
+		try {
+			vehicleId = Long.parseLong(parts[1].trim());
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[board] vehicleId 必须是数字: " + parts[1] + "（用法: board <vehicleId> [<车厢序号><A|B>] [玩家名]）");
+			return;
+		}
+		String cabSpec = "";
+		String playerName = "";
+		for (int i = 2; i < parts.length; i++) {
+			if (cabSpec.isEmpty() && parts[i].matches("(?i)\\d+[AB]")) {
+				cabSpec = parts[i];
+			} else if (playerName.isEmpty()) {
+				playerName = parts[i];
+			}
+		}
+		final org.mtr.mapping.holder.MinecraftServer mappedServer = new org.mtr.mapping.holder.MinecraftServer(serverWorld.getServer());
+		final org.mtr.mapping.holder.ServerPlayerEntity player;
+		if (!playerName.isEmpty()) {
+			player = MmtrBoardPlayer.findPlayer(mappedServer, playerName);
+			if (player == null) {
+				simulator.mmtrCommandResult("[board] 找不到在线玩家 " + playerName);
+				return;
+			}
+		} else {
+			final java.util.ArrayList<org.mtr.mapping.holder.ServerPlayerEntity> online = new java.util.ArrayList<>();
+			org.mtr.mapping.mapper.MinecraftServerHelper.iteratePlayers(mappedServer, online::add);
+			if (online.size() != 1) {
+				simulator.mmtrCommandResult("[board] 场上有 " + online.size() + " 名玩家，请点名一位: board " + vehicleId + (cabSpec.isEmpty() ? "" : " " + cabSpec) + " <玩家名>");
+				return;
+			}
+			player = online.get(0);
+		}
+		if (!MmtrBoardPlayer.board(mappedServer, player, vehicleId, cabSpec)) {
+			simulator.mmtrCommandResult("[board] 找不到车辆 " + vehicleId + "（用 vehicle list 看看场上有哪些车）");
+			return;
+		}
+		simulator.mmtrCommandResult("[board] 已把 " + player.getName().getString() + " 送到车 " + vehicleId
+			+ " 的驾驶室" + (cabSpec.isEmpty() ? "（自动挑第一个）" : " " + cabSpec)
+			+ " —— 客户端 5 秒内没进驾驶室的话，看游戏日志的 [MMTR-BOARD] / [MMTR-CAB] 两行");
 	}
 
 	/**
