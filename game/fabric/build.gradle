@@ -9,9 +9,40 @@ plugins {
 
 final BuildTools buildTools = new BuildTools(minecraftVersion, "fabric", project)
 
+// —— 第三方模组（WorldEdit，只给服务端）：**按端注入，不要放 fabric/run/mods** ——
+// 为什么不能放 run/mods：dev 服务端与 dev 客户端共用同一个 run/ 目录，也就共用
+// `.fabric\processedMods` 这个重映射缓存；Fabric 的运行时重映射**每次启动都重写**输出 jar，
+// 而先起的那一端正锁着它 —— 于是服务端在跑时客户端直接启动失败：
+//   Failed to remap mods! FileSystemException: ...\<mod>-<hash>.jar: 另一个程序正在使用此文件
+// （2026-09-25 实测；记录见 notes/287）。只给服务端注入 ⇒ 客户端根本不加载它，也就不会抢同一个文件。
+// jar 本体放 vendor\mods\（第三方只读输入，见工作区 README）；缺文件就大声失败，不静默降级。
+// （客户端曾按同样方式装过 Axiom 5.4.2，因中文界面下 Dear ImGui 字体图集必崩 + 用法太重，
+//   2026-09-25 用户决定卸下 —— 见 notes/287 §8。）
+final File worldEditJar = file("${rootDir}/../../vendor/mods/worldedit-mod-7.3.0.jar")
+if (!worldEditJar.isFile()) {
+	throw new GradleException("WorldEdit 缺失：${worldEditJar}（清单与装法见 mmtr/notes/287）")
+}
+
 loom {
 	accessWidenerPath = file("src/main/resources/mtr.accesswidener")
-	runConfigs.configureEach { ideConfigGenerated = true }
+	runConfigs.configureEach {
+		ideConfigGenerated = true
+		if (name == "server") {
+			property "fabric.addMods", worldEditJar.absolutePath
+		}
+		if (name == "client") {
+			// —— 固定 dev 客户端的玩家名 ——
+			// Loom **不给** dev 客户端传 `--username`，于是 Minecraft 用它的默认值：
+			// `Player` + 随机三位数（实测日志：`Setting user: Player497`）。
+			// 而本服是 `online-mode=false`（离线服）⇒ **UUID 由玩家名推出来**
+			// （`OfflinePlayer:<name>` 的 MD5 版本 3）⇒ 每次启动都是"新玩家"：
+			// 新的 playerdata、位置/背包/进度全丢，ops.json 也会一路堆（实测已堆到 264 条、
+			// playerdata 11 个不同 UUID）。2026-09-26 用户口径：「把客户端的玩家固定一下，
+			// 每次退出重进都会换个 ID，导致位置有变化」。
+			// 钉死名字就同时钉死了 UUID。名字用 `Shuisoi`（ops.json 里已是 level 4 的那个）。
+			programArgs "--username", "Shuisoi"
+		}
+	}
 	mixin { setDefaultRefmapName("mtr.refmap.json") }
 }
 
@@ -28,6 +59,49 @@ dependencies {
 	// 光影包放 fabric/run/shaderpacks/（run/ 不入库）；游戏内：选项 → 视频设置 → 光影包。
 	modLocalRuntime "maven.modrinth:sodium:mc1.20.4-0.5.8"
 	modLocalRuntime "maven.modrinth:iris:1.7.2+1.20.4"
+
+	// ★ 2026-09-29：Sodium 也必须出现在 **compile** classpath 上，否则 `:fabric:compileJava` 直接失败：
+	//     SodiumGlProgramMixin.java:24  错误: Mixin target me.jellysquid.mods.sodium.client.gl.shader.GlProgram could not be found
+	//     SodiumShaderLoaderMixin.java:38 错误: Mixin target …ShaderLoader could not be found
+	// 那两个 mixin 用的是**字符串**目标（`@Mixin(targets = "…")`），Mixin 的注解处理器会去
+	// compile classpath 上核实目标类存在；`modLocalRuntime` 只进 runtime，处理器找不到就报错。
+	// 和下面 Iris 那条 `compileOnly` 同一个道理（它是因为要借 IncludeProcessor 的**类型**；
+	// 这里是因为注解处理器要核实**目标**）。只编译期可见，不进发布产物、不重复进 runtime。
+	// 副作用（想要的）：两个 mixin 因此可以改写成 `@Mixin(GlProgram.class)` 类字面量形式，
+	// 注解处理器那条"target is public and should be specified in value"警告随之消失。
+	compileOnly "maven.modrinth:sodium:mc1.20.4-0.5.8"
+
+	// compileOnly：光场要往**光影包**的顶点着色器里注入取光（与包无关的那种注入，见
+	// MmtrShaderPackLightField），需要一个挂点 —— IncludeProcessor.getIncludedFile 是 Iris 装配
+	// include 的出口。这里只借它的**类型**（IncludeProcessor/AbsolutePackPath）。
+	// 运行时的安全性由独立的 mtr.iris.mixins.json（required:false）保证：Iris 不在时只是记日志、不动任何东西。
+	compileOnly "maven.modrinth:iris:1.7.2+1.20.4"
+	// —— 地图 mod（dev 客户端专用，modLocalRuntime 不进发布产物）——
+	// JourneyMap：客户端地图（小地图 + 全屏图 + 航点），**零依赖**。
+	// 用途：航点与**航点传送**（走 `/tp`，所以要 op / 开 cheats）—— 跑线路时快速跳点。
+	// 2026-09-26 用户要求「给客户端加个地图mod，用于快速传送什么的」。
+	//
+	// ⚠ 为什么不是 Xaero's（试过，客户端直接起不来）：
+	//   xaeros-minimap 26.5.0 / xaeros-world-map 1.46.0 的 `fabric.mod.json` 里写着
+	//   `"xaerolib": ">=1.0"`（硬依赖），而 jar 里**没有**内嵌（无 META-INF/jars）；
+	//   偏偏 Modrinth 上 **xaerolib 只有 Forge 版**（1.12.2 / 1.16.5），**没有 Fabric 版**。
+	//   ⇒ Fabric Loader 直接判 Mod resolution failed。Modrinth 的 `dependencies` 元数据
+	//     **没记这条**，所以光看 API 查不出来 —— 要看 jar 里的 fabric.mod.json（或直接启动一次）。
+	//   （要装 Xaero's 就得另找 xaerolib 的 Fabric 包，再走 vendor/mods + fabric.addMods 那条路。）
+	//
+	// 与 WorldEdit 那种 `vendor/mods + fabric.addMods` 不同：这里走 Modrinth maven，
+	// 由 Loom 解析下载，**只进 dev 客户端**，天然不会和服务端抢 `run/.fabric` 的重映射缓存（notes/287）。
+	modLocalRuntime "maven.modrinth:journeymap:1.20.4-5.10.0-fabric"
+	// ⚠ JourneyMap 把 **API 内嵌在 `META-INF/jars/`** 里，而 **Loom dev 不展开 classpath mod 的嵌套 jar**
+	//   （fabric-loom#1275 —— 与上面 Iris 那三个库同一个坑）⇒ 客户端启动时直接崩：
+	//     NoClassDefFoundError: journeymap/client/api/IClientAPI
+	//       at journeymap.client.JourneymapClient …
+	//   实测（2026-09-26）：`Loading 61 mods` 之后 `Initializing game` 崩，crash-report 里就是这条。
+	//   修法照 Iris 的先例：把那个内嵌 jar 抽出来单独加载。它**自带 fabric.mod.json**（是个 mod，不是纯库），
+	//   所以用 `modLocalRuntime` 而不是 `runtimeOnly`。
+	//   抽出来的那份放在 `vendor/mods/`（第三方只读输入，见工作区 README）：
+	//     jar xf <journeymap.jar> META-INF/jars/journeymap-api-1.20.4-1.9-fabric-SNAPSHOT.jar
+	modLocalRuntime files("${rootDir}/../../vendor/mods/journeymap-api-1.20.4-1.9-fabric-SNAPSHOT.jar")
 	// Iris 把这三个库用 Jar-in-Jar 内嵌在 META-INF/jars/ 里（jcpp 读 shaders.properties、
 	// antlr4-runtime + glsl-transformer 编译光影包 GLSL）。**Loom dev 不展开 classpath mod 的嵌套 jar**
 	// （fabric-loom#1275：Jar-in-jar dependencies are not loaded for modImplementation mods），
