@@ -130,6 +130,15 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		final double oldRailProgress = railProgress;
 		oldSpeed = speed;
 		simulate(millisElapsed, null, null);
+		/*
+		 * **③ 显示模型的每 tick 一步**（notes/369 §5）：把 ① 的 10 Hz 位置采样当成误差信号，
+		 * 用固定时间常数连续吸收掉 —— 而不是"误差攒到阈值再一次性写位置"（那正是台阶）。
+		 *
+		 * 必须放在引擎的 `simulate` **之后**：先让本地物理（同一条 ConsistDynamics）推进一步，
+		 * 再由显示模型把这一步与"服务端现在应该在哪"之间的差吸收掉。① 没管到的车没有样本，
+		 * 这一步就是空操作（{@code mmtrDisplayTick} 自己查表）。
+		 */
+		MmtrVehicleMotionClient.mmtrDisplayTick(this, millisElapsed);
 		persistentVehicleData.tick(railProgress, millisElapsed, vehicleExtraData);
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final ClientWorld clientWorld = minecraftClient.getWorldMapped();
@@ -380,9 +389,19 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		if (MmtrVehicleMotionClient.isMotionManaged(getId())) {
 			final double oldRailProgress = railProgress;
 			final double shadowEnd = mmtrShadowEndM();
-			if (railProgress > shadowEnd) {
+			/*
+			 * ★ 允许**一点点**越界（{@link #MMTR_SHADOW_OVERRUN_ALLOWANCE_M}）：阴影末端就是"上一次刷新
+			 * 时车头所在那根轨的末端"，所以车头**正好走到一根轨的末端**那一刻，阴影末端==车头位置，
+			 * 而下一根腿的 `LEGS` 增量还在路上（≤100 ms）—— 实测这一小段是 `阴影越界=8次/0.445m`。
+			 * 夹在 0 的表现是"每根轨接头处停一小下"。
+			 *
+			 * <p>为什么允许越界是安全的：摆车那条路对超出末端的里程是**沿最后一根轨的走向外推**
+			 * （{@code railMath.getPosition}），0.75 m 的外推在画面上与真实位置没有区别；而当初"车重叠
+			 * 且横过来"是**几米到几十米**的越界（阴影完全不更新）才有的现象，不是这个量级。</p>
+			 */
+			if (railProgress > shadowEnd + MMTR_SHADOW_OVERRUN_ALLOWANCE_M) {
 				MmtrVehicleMotionClient.noteShadowOverrun(railProgress - shadowEnd);
-				railProgress = shadowEnd;
+				railProgress = shadowEnd + MMTR_SHADOW_OVERRUN_ALLOWANCE_M;
 			}
 			final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> positions = getVehicleCarsAndPositions();
 			railProgress = oldRailProgress;
@@ -396,6 +415,12 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	}
 
 	/**
+	 * 腿阴影允许的**渲染越界**（米）：见 {@code getSmoothedVehicleCarsAndPositions} 里那段说明。
+	 * 0.75 m 是"一根轨接头处那一小段"的量级（车头正好压在轨末端时，下一根腿还在路上）。
+	 */
+	private static final double MMTR_SHADOW_OVERRUN_ALLOWANCE_M = 0.75;
+
+	/**
 	 * 腿阴影覆盖到哪（米，与 {@code railProgress} 同一坐标空间）= 最后一条腿的 {@code endDistance}。
 	 *
 	 * <p>阴影是"车尾 → 车头、车头落在 railProgress 上"建的，所以这个数就是**上一次刷新时车头的位置**；
@@ -404,6 +429,28 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	private double mmtrShadowEndM() {
 		final int size = vehicleExtraData.immutablePath.size();
 		return size == 0 ? Double.MAX_VALUE : vehicleExtraData.immutablePath.get(size - 1).getEndDistance();
+	}
+
+	/**
+	 * **① 的 {@code LEGS} 增量落到镜像的腿阴影上**（notes/369 S3b，客户端那一半）。
+	 *
+	 * <p>腿阴影（{@code immutablePath}）原来只在 ② 的**整份快照**重建时才更新，而整份快照跟着"脏拍"
+	 * 走 —— 也就是走行器新踏上一根轨的那一刻（60 km/h 下 1.5–6 秒一次）。中间那几秒车头已经跑出阴影末端，
+	 * 摆车只能把它夹回去 ⇒ 现场就是"走一下停一下"。{@code LEGS} 通道把"服务端新加了哪几根轨"按增量
+	 * 每拍送过来（只有变化时才发，稳态 0 字节），这里就把它接上，于是阴影跟着车头连续延长。</p>
+	 *
+	 * <p>几何与里程的规矩（没有基准就不接 / 整表替换就等 ② / 接不上就停在那）全在引擎的
+	 * {@link org.mtr.core.path.MmtrLegAppender} 里 —— 那边有单元测试，这里只负责把"本地轨表"
+	 * 与"车尾在哪"（{@code railProgress - 车长}，只用来判断车尾端那几根腿能不能丢）这两件
+	 * mod 侧才知道的事递进去。</p>
+	 */
+	public org.mtr.core.path.MmtrLegAppender.Applied mmtrApplyLegDeltaFromSync(int droppedFromTrainTail, java.util.List<String> newLegHexIds) {
+		return vehicleExtraData.mmtrApplyLegDelta(
+			droppedFromTrainTail,
+			newLegHexIds,
+			MinecraftClientData.getInstance().railIdMap,
+			getRailProgress() - vehicleExtraData.getTotalVehicleLength()
+		);
 	}
 
 	public void playMotorSound(VehicleResource vehicleResource, int carNumber, Vector bogiePosition) {

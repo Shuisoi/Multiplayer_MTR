@@ -34,7 +34,7 @@ import java.util.UUID;
  * <ul>
  *   <li><b>一个客户端一帧一个包</b>（默认 10 Hz = 每 2 tick）：通道头的固定开销只付一次；</li>
  *   <li><b>只发变的</b>：位置每帧（7 B/车），速度每 5 帧（+4 B），手柄与旗标/夹紧量走**边沿**
- *       （变了才发），腿阴影走增量（默认关，等 S3b 客户端那一半）；</li>
+ *       （变了才发），腿阴影走增量（默认开；稳态 0 字节，只有新踏上一根轨时才发那根轨的 hex id）；</li>
  *   <li><b>可见集与 ② 同源</b>：用 {@link Client#tracksVehicle}（② 上次真的发过镜像给这个客户端的那些车）——
  *       于是不会出现"① 有包、客户端没镜像"或"有镜像、① 永远不动它"；</li>
  *   <li><b>槽位是每客户端一份</b>的 u16，随 {@code SLOT} 记录一次性告知，{@code DROP} 时归还。</li>
@@ -44,7 +44,8 @@ import java.util.UUID;
  * <pre>
  *   -Dmmtr.motion.stream=false   ⇒ 完全回到旧行为（一个字节都不发）
  *   -Dmmtr.motion.hz=5|10|20     ⇒ 帧率（默认 10）
- *   -Dmmtr.motion.legs=true      ⇒ 打开腿阴影增量（需要 S3b 的客户端接头，默认关）
+ *   -Dmmtr.motion.legs=false     ⇒ 关掉腿阴影增量（**默认开**：客户端那一半已落地，见 notes/369 S3b。
+ *                                   关掉的表现是"车头走到阴影末端就停住、等下一拍整份再跳"）
  * </pre>
  */
 public final class MmtrVehicleMotionSync {
@@ -52,7 +53,7 @@ public final class MmtrVehicleMotionSync {
 	private static final int HZ = Math.max(1, Math.min(20, Integer.getInteger("mmtr.motion.hz", 10)));
 	private static final int FRAME_TICKS = Math.max(1, 20 / HZ);
 	private static final boolean ENABLED = !"false".equalsIgnoreCase(System.getProperty("mmtr.motion.stream", "true"));
-	private static final boolean LEGS_ENABLED = Boolean.parseBoolean(System.getProperty("mmtr.motion.legs", "false"));
+	private static final boolean LEGS_ENABLED = !"false".equalsIgnoreCase(System.getProperty("mmtr.motion.legs", "true"));
 	/** 每隔这么多帧带一次速度（客户端本地积分够准，用不着每帧校速：省 4 B/车/帧）。 */
 	private static final int SPEED_EVERY_FRAMES = 5;
 	/** 每隔这么多帧带一次服务端时钟（误差缓冲要按时间收敛）。 */
