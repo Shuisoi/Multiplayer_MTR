@@ -342,17 +342,50 @@ public class BuildTools {
 	}
 
 	private static JsonElement getJson(String url, String... requestProperties) {
-		for (int i = 0; i < 5; i++) {
+		JsonElement lastResult = null;
+		// ★ 有缓存就只试一次：这条路的失败代价是"每次重试 15 s 连接超时 + 20 s 读超时"，
+		//   五次就是一分半，而它有 **两个** 这样的取版本口（yarn + loader）⇒ 启动会白等三分钟。
+		//   缓存是兜底不是判据：网络好时第一次就成功、顺便刷新缓存；网络坏时立刻用缓存。
+		final JsonElement cachedFirst = readCache(url);
+		final int attempts = cachedFirst == null ? 5 : 1;
+		for (int i = 0; i < attempts; i++) {
 			try {
 				final HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
 				connection.setUseCaches(false);
+				// ★ 2026-09-24: these two MUST be set; they are the difference between "the build works"
+				// and "the build hangs forever with no output". meta.fabricmc.net sits behind Cloudflare and
+				// ONE of its two A records is intermittently blackholed on this network (measured:
+				// 104.21.33.240 times out while 172.67.151.177 answers in 200 ms). Java has NO connect/read
+				// timeout by default, so getInputStream() below blocks FOREVER on that IP - and because this
+				// runs during CONFIGURATION (fabric/build.gradle:20, the dependencies block) the whole
+				// Gradle build stops before a single task starts: IDEA's console last shows
+				// "> Task :buildSrc:compileGroovy NO-SOURCE" and then nothing at all, and jstack shows
+				// exactly this frame (getJson -> getYarnVersion). The retry loop below can only help if an
+				// attempt is able to FAIL, which is what these two lines buy.
+				connection.setConnectTimeout(15_000);
+				connection.setReadTimeout(20_000);
 
 				for (int j = 0; j < requestProperties.length / 2; j++) {
 					connection.setRequestProperty(requestProperties[2 * j], requestProperties[2 * j + 1]);
 				}
 
 				try (final InputStream inputStream = connection.getInputStream()) {
-					return JsonParser.parseString(IOUtils.toString(inputStream, StandardCharsets.UTF_8));
+					final JsonElement parsed = JsonParser.parseString(IOUtils.toString(inputStream, StandardCharsets.UTF_8));
+					// ★ 2026-10-03: an EMPTY OBJECT is NOT a success. When every attempt times out this method
+					// used to return `{}` (see the return at the bottom), and the caller then died with
+					// "Not a JSON Array: {}" in the middle of CONFIGURATION - the whole build stops before a
+					// single task runs, and from the outside the symptom is just "the dev server won't start".
+					// That happened twice (2026-10-02 / 10-03: Clash was up, but the JVM's DIRECT route to
+					// meta.fabricmc.net - it is in gradle.properties' nonProxyHosts on purpose - resolved to the
+					// blackholed Cloudflare address, while the same request through the proxy answered in ms).
+					// So: treat an empty object as a failed attempt, and fall back to the last good answer that
+					// was cached on disk (see cacheFile/writeCache/readCache below).
+					if (parsed != null && !(parsed.isJsonObject() && parsed.getAsJsonObject().size() == 0)) {
+						writeCache(url, parsed);
+						return parsed;
+					}
+					lastResult = parsed;
+					LOGGER.error("空 JSON（当成失败，准备重试）：" + url);
 				} catch (Exception e) {
 					LOGGER.error("", e);
 				}
@@ -366,7 +399,53 @@ public class BuildTools {
 			}
 		}
 
-		return new JsonObject();
+		final JsonElement cached = cachedFirst == null ? readCache(url) : cachedFirst;
+		if (cached != null) {
+			// log4j 1.x 的 Category.warn 只有 (Object) / (Object, Throwable)，不吃 `{}` 占位符 —— 拼字符串
+			LOGGER.warn("网络取不到，改用本地缓存：" + url + "（缓存文件 " + cacheFile(url) + "）");
+			return cached;
+		}
+		return lastResult == null ? new JsonObject() : lastResult;
+	}
+
+	/**
+	 * 接口答复的本地缓存文件（MMTR 加，2026-10-03）。
+	 *
+	 * <p>为什么要有它：`getJson` 取的是**构建期**的版本号（yarn / fabric-loader / forge），而构建期一失败
+	 * 整个 `runServer` 连第一个任务都跑不到。网线不通、代理没开、DNS 挑了黑洞 IP —— 这些都不该让
+	 * "起服务端"变成一次运气。缓存落在 Gradle 用户目录（`GRADLE_USER_HOME`，本工作区是
+	 * `sandbox/gradle-home`）下的 `mmtr-http-cache/`，文件名 = URL 里的非字母数字换成下划线。</p>
+	 */
+	private static Path cacheFile(String url) {
+		final String gradleHome = System.getenv("GRADLE_USER_HOME");
+		final Path root = gradleHome == null || gradleHome.isEmpty()
+				? Path.of(System.getProperty("user.home"), ".gradle")
+				: Path.of(gradleHome);
+		return root.resolve("mmtr-http-cache").resolve(url.replaceAll("[^A-Za-z0-9]", "_") + ".json");
+	}
+
+	/** 成功的答复写一份到磁盘（失败就算了：缓存是兜底，不是判据）。 */
+	private static void writeCache(String url, JsonElement json) {
+		try {
+			final Path file = cacheFile(url);
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, json.toString(), StandardCharsets.UTF_8);
+		} catch (Exception e) {
+			LOGGER.error("", e);
+		}
+	}
+
+	/** 读缓存；没有 / 读坏了都返回 {@code null}（调用方维持"返回空对象"的老行为）。 */
+	private static JsonElement readCache(String url) {
+		try {
+			final Path file = cacheFile(url);
+			if (Files.isRegularFile(file)) {
+				return JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
+			}
+		} catch (Exception e) {
+			LOGGER.error("", e);
+		}
+		return null;
 	}
 
 	private static String getGemini(String key, String content, String systemInstruction) throws IOException {
