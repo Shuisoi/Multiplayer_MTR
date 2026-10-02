@@ -45,7 +45,6 @@ import {
 	ROW_OPERATORS,
 	ROW_OPERATOR_LABELS,
 	appendElement,
-	buildExtensionSkeleton,
 	buildLogic,
 	canAddGroup,
 	clampProportion,
@@ -57,15 +56,12 @@ import {
 	deletePath,
 	elementBox,
 	elementSummary,
-	extensionReportIsEmpty,
 	formatPath,
 	getPath,
 	groupDepth,
 	handleAtPoint,
 	isBuilderRepresentable,
-	isNamespacedName,
 	isPlainObject,
-	javaClassFromType,
 	logicFieldChoices,
 	moveItem,
 	moveLabel,
@@ -86,7 +82,6 @@ import {
 	replaceRoot,
 	resizeBox,
 	sameJson,
-	scanFaceForExtensions,
 	setPath,
 	snapBox,
 	snapLabel,
@@ -153,14 +148,6 @@ const state = {
 	droppedValues: [],
 	/** 上次读盘/写盘时的 JSON（判"有没有未保存的改动"）。 */
 	savedJson: null,
-	/** 「导出 Java 骨架」的最近一次产物（下载/保存都用它；null = 还没生成过）。 */
-	exportResult: null,
-	/** 导出时扫整块面（所有页 + 文档级 vars/require/pageExpr）还是只扫当前页。 */
-	exportWholeFace: true,
-	/** 类名是不是用户手改过（改过就不再跟着面名自动变）。 */
-	exportClassNameEdited: false,
-	/** `?export=1` 要求过"读完锚点就生成一次"（见 openExportFromQuery）。 */
-	exportPending: false,
 };
 
 const $ = id => document.getElementById(id);
@@ -281,24 +268,6 @@ $('btnSaveAsCancel').addEventListener('click', () => {
 	$('saveAsRow').hidden = true;
 });
 
-// ---- 导出 Java 骨架（F4）的接线 ------------------------------------------------------------------
-$('exportWholeFace').checked = state.exportWholeFace;
-$('exportPackage').value = 'vendor.faceaddon';
-$('btnExportJava').addEventListener('click', () => {
-	showExportPanel();
-	generateExportSkeleton();
-});
-$('btnExportGo').addEventListener('click', () => {
-	state.exportClassNameEdited = true;
-	generateExportSkeleton();
-});
-$('exportWholeFace').addEventListener('change', generateExportSkeleton);
-$('btnExportDownload').addEventListener('click', downloadExportJava);
-$('btnExportSave').addEventListener('click', saveExportJava);
-$('btnExportHide').addEventListener('click', () => {
-	$('exportPanel').hidden = true;
-});
-
 bindCanvas();
 bindKeyboard();
 window.addEventListener('beforeunload', event => {
@@ -319,13 +288,8 @@ loadSchema()
 		const fromQuery = new URLSearchParams(location.search).get('anchors');
 		if (fromQuery) {
 			state.sourcePath = workspacePathFromQuery(fromQuery);
-			// `&export=1`：打开就把「导出 Java 骨架」展开并生成一次 —— 给扩展作者一条直接可分享的链接
-			// （例：?anchors=/data/sandbox/.../anchors.json&export=1），也顺便让"这条链子到底通不通"
-			// 不必靠人手点一遍（无头截图与自动化都读它）。
-			openExportFromQuery(new URLSearchParams(location.search).get('export'));
 			loadFromQuery(fromQuery);
 		} else {
-			openExportFromQuery(new URLSearchParams(location.search).get('export'));
 			setBanner('选一份锚点 JSON 开始（也可以用 face-studio.ps1 -Anchors <工作区相对路径> 直接把文件喂进来）。'
 				+ '\n打开之后：点一块面 → 在牌面上拖元素 / 拉把手 / 方向键微调 → 右边改属性 → 顶部「保存」写回磁盘。', true);
 		}
@@ -513,7 +477,6 @@ function loadAnchors(text, label) {
 
 	const first = state.faceNames.length > 0 ? { kind: 'face', name: state.faceNames[0] } : { kind: 'builtin', board: 'pid' };
 	select(first);
-	runPendingExport();
 }
 
 /**
@@ -626,13 +589,6 @@ function select(entry) {
 	renderLayers();
 	renderProperties();
 	renderUndoButtons();
-	// 换了一块面：类名跟着新面名走（手改过就不动），面板开着就顺手重扫一遍 ——
-	// 免得作者看着上一块面的骨架以为这就是当前这块的。
-	state.exportClassNameEdited = false;
-	state.exportResult = null;
-	if (!$('exportPanel').hidden) {
-		generateExportSkeleton();
-	}
 	setStatus('当前：' + (entry.label || entry.name || entry.board) + (state.selection.kind === 'builtin' ? '（内置翻译，只读）' : ''));
 }
 
@@ -3250,7 +3206,7 @@ async function saveTo(path) {
 		return;
 	}
 	const content = serializeRoot();
-	const result = await saveTextTo(path, content, '已保存');
+	const result = await saveTextTo(path, content, '已保存到');
 	if (result !== null) {
 		state.sourcePath = path;
 		state.savedJson = JSON.stringify(state.root);
@@ -3303,152 +3259,6 @@ async function saveTextTo(path, content, okWord) {
 	setStatus(okWord + ' · ' + path);
 	return parsed || { saved, backup };
 }
-
-// ---- 导出 Java 骨架（F4 代码面） -----------------------------------------------------------------
-/*
- * 这一块只做三件事：把"当前正在编辑的这块面"交给 designer.mjs 的纯函数扫一遍、把生成的 Java
- * 放进文本框、把下载/保存接上。**扫描与生成一个字都不在这里写**（那些都在纯函数层，有 Node 自检）。
- *
- * 为什么值得在作者手边：一块面里写了 `vendor:bar`，作者下一步要干的是"在模组里注册它"。
- * 让他自己从零写一个 MmtrFaceExtension 实现，最容易错的不是画法，而是
- * ① 类名/包名对不对、② 要不要带命名空间、③ ServiceLoader 那个声明文件放哪 ——
- * 这三件事骨架里都直接写好了。
- */
-
-/** 打开面板（没生成也要能打开：先让作者看见"这块面用了哪些扩展"）。 */
-function showExportPanel() {
-	$('exportPanel').hidden = false;
-}
-
-/**
- * `?export=1`：请求里带了就展开导出面板。
- *
- * <p>为什么要有它：面板默认是收着的（页面上那一排按钮已经有"保存/另存为"，再摊开一大块会挤掉牌面），
- * 但"我要看这块面的骨架"这件事得能**一条链接直达** —— 否则扩展作者每次都要先点一次按钮，
- * 而无头截图/自动化连"点一次"都做不到。</p>
- *
- * <p>这里**只展开、不生成**：真正的生成要等锚点读完（没读到面就生成只会得到一句"要一块面文档"）。</p>
- */
-function openExportFromQuery(value) {
-	if (value === null || value === undefined || value === '' || value === '0') {
-		return;
-	}
-	showExportPanel();
-	state.exportPending = true;
-}
-
-/** 锚点读完、也选好了面：如果请求里要过导出，就在这里生成一次（见 openExportFromQuery）。 */
-function runPendingExport() {
-	if (!state.exportPending) {
-		return;
-	}
-	state.exportPending = false;
-	generateExportSkeleton();
-}
-
-/** 生成一次骨架：读当前面 → 扫 → 造 Java → 上屏。 */
-function generateExportSkeleton() {
-	const face = faceObject();
-	if (!isPlainObject(face)) {
-		setBanner('「导出 Java 骨架」要一块**面文档**：先在左边点一块面（或一份内置水牌）。', false);
-		showExportPanel();
-		return;
-	}
-	const wholeFace = $('exportWholeFace').checked;
-	state.exportWholeFace = wholeFace;
-	// 只扫"这一页"时，交给扫描器的就是那一页（它只看 elements / require）；整块面就直接给面对象
-	const scanned = wholeFace ? face : (currentPageObject() || face);
-	const report = scanFaceForExtensions(scanned, state.schema, (state.fieldSpecs || []).map(spec => spec.name), wholeFace);
-
-	// 类名：没被手改过就跟着面名走（面名可能有非标识符字符，用 javaClassFromType 洗一遍）
-	const suggested = javaClassFromType(state.faceName || 'face', 'Vendor') + 'FaceExtension';
-	if (!state.exportClassNameEdited || !$('exportClass').value.trim()) {
-		$('exportClass').value = suggested;
-	}
-	const className = $('exportClass').value.trim();
-	const packageName = $('exportPackage').value.trim() || 'vendor.faceaddon';
-
-	const result = buildExtensionSkeleton(report, {
-		className,
-		packageName,
-		faceName: state.faceName,
-		sourcePath: state.sourcePath,
-		wholeFace,
-	});
-	result.report = report;
-	state.exportResult = result;
-
-	$('exportJava').value = result.java;
-	$('exportJava').scrollTop = 0;
-	$('exportService').textContent = '放这里：' + result.serviceFileDir
-		+ '\n文件名：' + result.serviceFileName
-		+ '\n内容（就一行）：' + result.serviceFileContent.trim();
-
-	const summary = [];
-	summary.push('面：' + (state.faceName || '（未命名）') + '　扫描范围：' + (wholeFace ? '整块面（所有页 + 文档级 vars/require/pageExpr）' : '只当前这一页'));
-	if (result.empty) {
-		summary.push('★ 这块面只用内置的东西 —— 不需要扩展。下面是一份**最小可用骨架**（一个空 register），');
-		summary.push('  留着它以后加东西，或者干脆不装。');
-	} else {
-		summary.push('① 非内置元素类型 ' + report.elements.length + ' 个：'
-			+ (report.elements.map(item => item.type + '[' + item.keys.join(',') + ']').join('　') || '（没有）'));
-		summary.push('② 非内置算子 ' + report.operators.length + ' 个：' + (report.operators.join('　') || '（没有）'));
-		summary.push('③ 非内置过滤器 ' + report.filters.length + ' 个：' + (report.filters.join('　') || '（没有）'));
-		summary.push('④ 不在 fields.json 里的字段 ' + report.fields.length + ' 个：' + (report.fields.join('　') || '（没有）'));
-	}
-	if (report.localNames.length) {
-		summary.push('（vars / forEach 绑定名，不算缺字段：' + report.localNames.join('、') + '）');
-	}
-	for (const warning of result.warnings) {
-		summary.push('⚠ ' + warning);
-	}
-	$('exportSummary').textContent = summary.join('\n');
-	$('exportPanel').className = result.warnings.length ? 'warn' : '';
-
-	if (result.empty) {
-		setBanner('这块面只用内置的东西，不需要扩展 —— 已经给你生成了一份「最小可用骨架」（一个空 register）。', 'warn');
-	} else {
-		setBanner('已按面「' + (state.faceName || '未命名') + '」生成扩展骨架：四类桩共 ' + result.total + ' 个'
-			+ '（元素 ' + report.elements.length + ' / 算子 ' + report.operators.length
-			+ ' / 过滤器 ' + report.filters.length + ' / 字段 ' + report.fields.length + '）。'
-			+ (result.warnings.length ? '\n⚠ 有 ' + result.warnings.length + ' 个名字会被引擎拒绝 —— 见面板里的黄字。' : ''), true);
-	}
-}
-
-/** 默认落点：白名单里的 sandbox\face-studio\export\（写端点认 .java，见 FaceServe 的类注释）。 */
-function defaultExportPath() {
-	const name = state.exportResult ? state.exportResult.className : 'VendorFaceExtension';
-	return 'sandbox\\face-studio\\export\\' + name + '.java';
-}
-
-/** 「下载 .java」：走 Blob + 一次性链接，不依赖服务器。 */
-function downloadExportJava() {
-	if (!state.exportResult) {
-		setBanner('先点「导出 Java 骨架」生成一份，再下载。', false);
-		return;
-	}
-	const blob = new Blob([state.exportResult.java], { type: 'text/x-java-source;charset=utf-8' });
-	const url = URL.createObjectURL(blob);
-	const link = document.createElement('a');
-	link.href = url;
-	link.download = state.exportResult.className + '.java';
-	document.body.appendChild(link);
-	link.click();
-	document.body.removeChild(link);
-	// 立刻回收：blob 留着不放会把整份源码常驻内存（这个页面开一整天是常态）
-	URL.revokeObjectURL(url);
-	setStatus('已下载 ' + state.exportResult.className + '.java');
-}
-
-/** 「保存到工作区」：与面文档同一个写端点（POST /save），落点必须在白名单目录里。 */
-function saveExportJava() {
-	if (!state.exportResult) {
-		setBanner('先点「导出 Java 骨架」生成一份，再保存。', false);
-		return;
-	}
-	saveTextTo(defaultExportPath(), state.exportResult.java, '已写出扩展骨架');
-}
-
 // ---- 自检（浏览器里跑同一份向量） ----------------------------------------------------------------
 
 async function runSelfTest() {

@@ -190,48 +190,13 @@ public final class MmtrFaceSchema {
 		return new LinkedHashSet<>(ANIM_KEYS.keySet());
 	}
 
-	/**
-	 * 扩展元素类型自己声明的键（F4 的 SPI）：{@code MmtrFaceRegistrar.element(type, renderer, keys…)} 登记进来。
-	 *
-	 * <p>为什么要让扩展**报键名**：不报的话，{@code vendor:bar} 上写的每一个键都会被"未知键"守卫
-	 * 记一条账（那是给拼错用的提示）—— 一个合法的扩展会天天刷假警告。报上来之后，
-	 * 拼写守卫对这个类型一样有效（写错 {@code vlaue} 照样提示）。</p>
-	 *
-	 * <p>这些键**不进** {@link #exportJson()}（那份文件是"随包发行的最小集"，要和工作室逐字比对），
-	 * 所以装没装扩展，{@code schema.json} 都是同一份。</p>
-	 */
-	private static final Map<String, Set<String>> EXTENSION_KEYS = new LinkedHashMap<>();
-
-	/** 登记一个扩展类型的键名（名字不合法时忽略）。 */
-	public static void registerExtensionKeys(String type, String... keys) {
-		if (type == null || type.isEmpty()) {
-			return;
-		}
-		final Set<String> names = EXTENSION_KEYS.computeIfAbsent(type.trim().toLowerCase(Locale.ROOT), ignored -> new LinkedHashSet<>());
-		for (final String key : keys) {
-			if (key != null && !key.isEmpty()) {
-				names.add(key);
-			}
-		}
-	}
-
-	/** 清掉扩展声明的键（资源重载、用例）。 */
-	public static void clearExtensionKeys() {
-		EXTENSION_KEYS.clear();
-	}
-
-	/** 这个类型认得的全部键（公共 + 专属 + 扩展自己声明的）。 */
+	/** 这个类型认得的全部键（公共 + 专属）。 */
 	public static Set<String> knownKeys(String type) {
 		final Set<String> names = new LinkedHashSet<>();
 		COMMON_KEYS.forEach(key -> names.add(key.name()));
-		final String name = type == null ? "" : type.toLowerCase(Locale.ROOT);
-		final List<Key> extra = ELEMENT_KEYS.get(name);
+		final List<Key> extra = ELEMENT_KEYS.get(type == null ? "" : type.toLowerCase(Locale.ROOT));
 		if (extra != null) {
 			extra.forEach(key -> names.add(key.name()));
-		}
-		final Set<String> extension = EXTENSION_KEYS.get(name);
-		if (extension != null) {
-			names.addAll(extension);
 		}
 		return names;
 	}

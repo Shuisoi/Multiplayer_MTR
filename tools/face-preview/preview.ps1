@@ -103,14 +103,7 @@ if (-not (Test-Path (Join-Path $outDir 'mmtr\facepreview\FacePreview.class'))) {
 		'mmtr\face\MmtrFaceAnim.java',
 		'mmtr\face\MmtrFaceGeometry.java',
 		'mmtr\face\MmtrFaceSchema.java',
-		# notes/361（F4）：SPI 那一组 —— MmtrFaceData 会问"扩展字段登记表"，
-		# 于是这几个也必须一起编（否则 javac 报找不到 MmtrFaceExtension 等符号）。
-		'mmtr\face\MmtrFaceWarnings.java',
-		'mmtr\face\MmtrFaceFilter.java',
-		'mmtr\face\MmtrFaceExtension.java',
-		'mmtr\face\MmtrFaceField.java',
-		'render\panel\MmtrFaceElementRenderer.java',
-		'render\panel\MmtrFaceRegistrar.java'
+		'render\panel\MmtrFaceElementRenderer.java'
 	) | ForEach-Object { Join-Path $fabric "src\main\java\org\mtr\mod\$_" } | Where-Object { Test-Path $_ }
 	$sources += (Join-Path $PSScriptRoot 'FacePreview.java')
 

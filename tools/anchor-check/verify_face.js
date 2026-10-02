@@ -24,19 +24,11 @@
  *   `forEach.elements`（`as`/`index` 绑的名字会加进"已知 var 名"，所以 {"var":"call.name"} 不会被 P3 误报）。
  *   每一条问题都带**页名/页下标**（例如 faces.pid_1.pages[1].elements[0]），作者不用去猜是哪一页。
  *
- * ★ 扩展作者的三个放宽开关（F4，都是**显式**的，不给就与从前逐字相同）：
- *   --allow-type <名字>      可重复，也可用逗号分隔。把这些类型当成"认得"（P4 不再报），并算作"元素类型里的一种"。
- *                            报告里会单列一行 `扩展类型：vendor:bar（--allow-type 给的）`。
- *   --extra-fields <json>    一个 JSON **文件**：数组 ["vendor:traction"] 或对象 {"vendor:traction":"牵引状态"}。
- *                            P3 查字段名时把这些名字算作存在。
- *   --allow-filter <名字>    同上，给 P7 用：`{v|vendor:kmh}` 这种扩展过滤器（名字自带冒号）。
- *                            ★ 这一个不在原始派单里，是**补出来的**：P7 与 P4/P3 是同一类假警告
- *                            （离线看不到那个模组），不给它，用扩展过滤器的面就永远拿不到全 PASS。
- *   三个开关都做了什么，报告结尾的「这次放宽了什么」一节会逐条写清 —— **不许悄悄放行**。
+ * ★ 判据的清单就是**随包发行的那么多种**（没有"装了什么才多出来"的）：9 种元素、32 个算子、8 个过滤器、
+ *   53 行字段表。所以 P3/P4/P7 报出来就是真的写错了 —— **没有任何放行开关**（口径见 notes/363）。
  *
  * 用法：
  *   node mmtr/tools/anchor-check/verify_face.js --anchors <mmtr_anchors_x.json> [--fields <fields.json>] [--schema <schema.json>]
- *     [--allow-type vendor:bar[,…]] [--extra-fields <extra-fields.json>] [--allow-filter vendor:kmh[,…]]
  *   --anchors 收两种东西：打包出来的 mmtr_anchors_*.json，或者车辆配置（consist）里那份锚点 JSON。
  *
  * 退出码：0 = 全过；1 = 有 FAIL；2 = 输入缺失/读不了。
@@ -50,8 +42,8 @@
 const fs = require('fs');
 const path = require('path');
 
-/** ★ 与 MmtrFaceLogic.operators() 一致（不含 fn:* 那种自定义前缀规则）。
- *  这张清单受 MmtrFaceToolingTests 逐字核对 —— 不要在这里加"文档里写了但 Java 没实现"的算子。 */
+	/** ★ 与 MmtrFaceLogic.operators() 一致（随包发行的 32 个）。
+	 *  这张清单受 MmtrFaceToolingTests 逐字核对 —— 不要在这里加"文档里写了但 Java 没实现"的算子。 */
 const OPERATORS = ['var', 'if', 'and', 'or', '!', '!!', '==', '!=', '===', '!==', '<', '<=', '>', '>=',
 	'+', '-', '*', '/', '%', 'min', 'max', 'cat', 'substr', 'in', 'missing', 'missing_some', '?:',
 	'some', 'all', 'none', 'filter', 'map'];
@@ -78,15 +70,8 @@ function filterNameOf(text, known) {
 	return source;
 }
 
-/**
- * P7 认得的过滤器 = 内置 8 个 + `--allow-filter` 显式声明的扩展名。
- * 为什么要这个开关：扩展过滤器随模组来（名字自带冒号，如 `vendor:kmh`），离线看不到装没装
- * —— 与元素类型 / 字段完全同一类假警告（见文件头）。
- *
- * ★ 为什么在这里赋值而不是在 FILTERS 旁边：`allowFilters` 要等命令行解析完才有值。
- *   声明与赋值分开写，就是为了不在**暂时性死区**里读它（第一版踩过：ReferenceError）。
- */
-let KNOWN_FILTERS = FILTERS.slice();
+/** P7 认得的过滤器 = 随包发行的 8 个（没有"装了才有"的那种）。 */
+const KNOWN_FILTERS = FILTERS.slice();
 
 /** `foreach` 的嵌套深度上限（跟引擎的 MmtrFaceDocument.MAX_FOREACH_DEPTH 一致：超了那一层根本不画）。 */
 const MAX_FOREACH_DEPTH = 4;
@@ -97,94 +82,18 @@ let anchorsPath = null;
 let fieldsPath = path.join(__dirname, '..', 'face-studio', 'fields.json');
 // 与 fields.json 走同一条路（同目录、同一个 --x 覆盖口径），因为两份都是 Java 导出的机读表
 let schemaPath = path.join(__dirname, '..', 'face-studio', 'schema.json');
-/** --allow-type 累积到的原始值（可重复给，也可以一次给逗号分隔的一串）。 */
-const allowTypeRaw = [];
-/** --allow-filter 累积到的原始值（同上）。 */
-const allowFilterRaw = [];
-let extraFieldsPath = null;
 for (let i = 0; i < argv.length; i++) {
 	if (argv[i] === '--anchors') anchorsPath = argv[++i];
 	else if (argv[i] === '--fields') fieldsPath = argv[++i];
 	else if (argv[i] === '--schema') schemaPath = argv[++i];
-	else if (argv[i] === '--allow-type') allowTypeRaw.push(argv[++i]);
-	else if (argv[i] === '--allow-filter') allowFilterRaw.push(argv[++i]);
-	else if (argv[i] === '--extra-fields') extraFieldsPath = argv[++i];
 	else if (!argv[i].startsWith('--')) anchorsPath = argv[i];
 }
 if (!anchorsPath) {
-	console.error('用法: node verify_face.js --anchors <mmtr_anchors_x.json> [--fields <fields.json>] [--schema <schema.json>]'
-		+ ' [--allow-type vendor:bar[,…]] [--extra-fields <extra-fields.json>] [--allow-filter vendor:kmh[,…]]');
+	console.error('用法: node verify_face.js --anchors <mmtr_anchors_x.json> [--fields <fields.json>] [--schema <schema.json>]');
 	process.exit(2);
 }
 if (!fs.existsSync(anchorsPath)) { console.error('[verify_face] 找不到锚点文件：' + anchorsPath); process.exit(2); }
 if (!fs.existsSync(fieldsPath)) { console.error('[verify_face] 找不到字段表：' + fieldsPath); process.exit(2); }
-
-// ---- F4 的两个放宽开关：只影响"认得什么"，不影响任何别的判据 ------------------------------------------
-/**
- * --allow-type 给的扩展元素类型（去重、保序）。
- * 为什么要这个开关：装了扩展的客户端才认得那些 `type`，而自检是**离线**的、看不到那个模组，
- * 于是 P4 会把文档里每一个 `vendor:bar` 报成"不认识的元素类型" —— 整天给扩展作者刷假警告。
- * 给了它 ⇒ 这些类型算"认得"，于是 P9（未知键）也**不再**拿内置键表去比它们（那是扩展自己的键）。
- */
-const allowTypes = [];
-for (const chunk of allowTypeRaw) {
-	for (const piece of String(chunk === undefined ? '' : chunk).split(',')) {
-		const name = piece.trim();
-		if (name !== '' && !allowTypes.includes(name)) allowTypes.push(name);
-	}
-}
-/**
- * --allow-filter 给的扩展**过滤器**名（去重、保序、小写）。
- * 与 --allow-type 同一个理由：装了那个模组客户端才认得 `{v|vendor:kmh}`，离线自检看不到它，
- * 于是 P7 会把文档里每一个扩展过滤器报成"不认识的过滤器"。
- */
-const allowFilters = [];
-for (const chunk of allowFilterRaw) {
-	for (const piece of String(chunk === undefined ? '' : chunk).split(',')) {
-		const name = piece.trim().toLowerCase();
-		if (name !== '' && !allowFilters.includes(name)) allowFilters.push(name);
-	}
-}
-// 到这里命令行已经解析完，KNOWN_FILTERS 才并进扩展过滤器名单（见它上面那段注释）
-KNOWN_FILTERS = FILTERS.concat(allowFilters);
-/**
- * --extra-fields 给的扩展字段名（去重、保序）。值是人话说明，只用来打一行提示。
- * 同一个开关也能收一个对象（{"vendor:traction":"牵引状态"}），键才是字段名。
- */
-const extraFields = new Map();
-if (extraFieldsPath !== null) {
-	if (!fs.existsSync(extraFieldsPath)) { console.error('[verify_face] 找不到扩展字段表：' + extraFieldsPath); process.exit(2); }
-	let parsedExtra = null;
-	try {
-		parsedExtra = JSON.parse(fs.readFileSync(extraFieldsPath, 'utf8'));
-	} catch (e) {
-		console.error('[verify_face] 读不了扩展字段表 ' + extraFieldsPath + '：' + e.message);
-		process.exit(2);
-	}
-	if (Array.isArray(parsedExtra)) {
-		for (const item of parsedExtra) {
-			if (typeof item !== 'string' || item.trim() === '') {
-				console.error('[verify_face] --extra-fields 的数组里只能放字段名字符串，收到 ' + JSON.stringify(item));
-				process.exit(2);
-			}
-			if (!extraFields.has(item.trim())) extraFields.set(item.trim(), '');
-		}
-	} else if (parsedExtra !== null && typeof parsedExtra === 'object') {
-		for (const [name, doc] of Object.entries(parsedExtra)) {
-			if (!extraFields.has(name)) extraFields.set(name, typeof doc === 'string' ? doc : '');
-		}
-	} else {
-		console.error('[verify_face] --extra-fields 要一个 JSON 数组（["vendor:traction"]）或对象（{"vendor:traction":"牵引状态"}）');
-		process.exit(2);
-	}
-	// 名字里带点的会被引擎拒掉（MmtrFaceField.Registry.register：扩展字段必须是一段）—— 早点说，别让作者白高兴
-	for (const name of extraFields.keys()) {
-		if (name.includes('.')) {
-			console.error('[verify_face] 扩展字段名不能带点（引擎会拒绝注册，那它永远不会进快照）：' + name);
-			process.exit(2);
-		}
-	}
-}
 
 const anchorFile = JSON.parse(fs.readFileSync(anchorsPath, 'utf8'));
 const fieldList = (JSON.parse(fs.readFileSync(fieldsPath, 'utf8')).fields || []).map(f => f.name);
@@ -226,11 +135,6 @@ const DRUM_KEYS = keysOf('drum');
 const ELEMENT_TYPES = schema && Array.isArray(schema.elementTypes) && schema.elementTypes.length
 	? schema.elementTypes.slice()
 	: ['text', 'rect', 'roundrect', 'line', 'circle', 'arc', 'gauge', 'image', 'foreach'];
-// ★ --allow-type 给的扩展类型算"认得"，所以它们也是"元素类型里的一种"（报告里的类型数会跟着变）
-const ALLOW_TYPE_SET = new Set(allowTypes);
-for (const type of allowTypes) {
-	if (!ELEMENT_TYPES.includes(type)) ELEMENT_TYPES.push(type);
-}
 const ANIM_KINDS = schema && Array.isArray(schema.animKinds) ? schema.animKinds.slice() : [];
 
 /** 一个元素类型认得的全部键 = common + element:<type>。 */
@@ -240,15 +144,8 @@ function elementKeys(type) {
 	return keys;
 }
 
-/**
- * 这个类型认得的键；`null` = **不知道**（别报未知键）。
- *
- * <p>两种"不知道"：① schema.json 里根本没有这个类型的段（键表缺一段）；② 这是 --allow-type 给的
- * 扩展类型 —— 它的键由那个扩展在 `registrar.element(type, …, declaredKeys)` 里自己报，离线看不到，
- * 那些键**不进 schema.json**（那是随包发行的最小集）。两种都不该变成"整份文档全是未知键"。</p>
- */
+/** 这个类型认得的键 = common + element:<type>（键表里没这一段时只有 common）。 */
 function elementKeysOrNull(type) {
-	if (ALLOW_TYPE_SET.has(type) && keysOf('element:' + type).size === 0) return null;
 	return elementKeys(type);
 }
 
@@ -299,12 +196,6 @@ for (const anchor of anchors) {
 function pathOk(p, varNames) {
 	if (p === '' || varNames.has(p)) return true;
 	if (fieldList.includes(p)) return true;
-	// ★ --extra-fields 给的扩展字段名（客户端算出来的那些）：P3 也算它"存在"。
-	//   只认两种写法：整个路径就是它，或者它是个分层前缀（vendor:x.a）—— 与"字段表里查前缀"同一口径。
-	if (extraFields.has(p)) return true;
-	for (const name of extraFields.keys()) {
-		if (p.startsWith(name + '.')) return true;
-	}
 	// forEach 绑的名字本身是个"数据根"：{"var":"call.name"} 的第一段就是它
 	// （引擎按路径走：先取到 call 那一项，再从里面取 name）—— 所以看第一段就够了。
 	const first = p.split('.')[0];
@@ -324,7 +215,6 @@ function walkExpression(node, label, varNames, bucket) {
 	if (node === null || typeof node !== 'object') return;
 	if (Array.isArray(node)) { node.forEach((item, i) => walkExpression(item, label + '[' + i + ']', varNames, bucket)); return; }
 	for (const [key, value] of Object.entries(node)) {
-		if (key.startsWith('fn:')) { notes.push('  自定义算子 ' + key + '（' + label + '）—— 静态检查管不了，得靠注册它的那个模组'); continue; }
 		if (!OPERATORS.includes(key)) { bucket.P5.push(label + '：不认识的算子「' + key + '」'); continue; }
 		seenOperators++;
 		if (key === 'var') {
@@ -349,11 +239,8 @@ function walkTemplate(text, label, varNames, bucket) {
 		const p = parts[0].trim();
 		checkPath(p, label, varNames, bucket);
 		for (const filter of parts.slice(1)) {
-			// ★ F4 修的一个**解析错**：这里原来按第一个冒号切名字（`filter.trim().split(':')[0]`）。
-			//   可扩展过滤器名自带冒号（`{v|vendor:kmh:mph}`），按第一个冒号切会把名字切成 `vendor`
-			//   —— 于是"装没装那个模组"根本判不出来，还会给扩展作者刷一条**假**的 P7。
-			//   最长匹配才与引擎一致（MmtrFaceExtensionTests 钉着："参数是 kmh 之后那一段，
-			//   不是第一个冒号之后那一段"）。清单里只有内置 8 个 + 用户显式声明的扩展名 ⇒ 不新增误报。
+			// 过滤器名与参数按**最长匹配**解析（`pad:7` 的名字是 `pad`、参数是 `7`），
+			// 与引擎 MmtrFaceText.applyFilter 同一口径；对不上任何一个内置名时整段当名字（下面报 P7）。
 			const name = filterNameOf(filter, KNOWN_FILTERS);
 			if (!KNOWN_FILTERS.includes(name)) bucket.P7.push(label + '：不认识的过滤器「' + name + '」');
 		}
@@ -403,12 +290,9 @@ function walkElements(elements, prefix, varNames, depth) {
 			return;   // 类型都不认得，下面按类型比的键就别报了（免得一屏全是"未知键"）
 		}
 		// P9：这个类型不认的键（colour/siz/filt 这种拼错；引擎会照画但记一次账）
-		// 扩展类型（--allow-type）不知道它认哪些键 ⇒ null ⇒ 这一条对它不跑（见 elementKeysOrNull）
-		const knownForType = elementKeysOrNull(type);
-		if (knownForType !== null) {
-			for (const key of unknownKeysOf(element, knownForType)) {
-				problems.P9.push(label + '：这个类型不认的键「' + key + '」（认得的：' + [...knownForType].join('/') + '）');
-			}
+		const knownForType = elementKeys(type);
+		for (const key of unknownKeysOf(element, knownForType)) {
+			problems.P9.push(label + '：这个类型不认的键「' + key + '」（认得的：' + [...knownForType].join('/') + '）');
 		}
 		// ★ "这一层能直接用哪些名字"：foreach 的 as/index 绑的名字对**它自己的子元素**可见
 		//   （引擎在 MmtrFaceDocument.bind 里就是把这两项并进子元素的数据副本）。
@@ -611,59 +495,16 @@ function report(id, title, detail, ran) {
 }
 report('P1', 'faces 键 = 锚点名', Object.keys(faces).length + ' 个键');
 report('P2', 'face 锚点有文档', anchors.filter(a => a.kind === 'face').length + ' 个 face 锚点');
-report('P3', '字段名存在', [...usedFields].filter(Boolean).length + ' 个字段被用到'
-	+ (extraFields.size ? ' + ' + extraFields.size + ' 个扩展字段（--extra-fields 给的）' : ''));
-report('P4', '元素类型与必需键', elementCount + ' 个元素 / ' + ELEMENT_TYPES.length + ' 种类型'
-	+ (allowTypes.length ? '，其中 ' + allowTypes.length + ' 种是 --allow-type 给的扩展类型' : ''));
+	report('P3', '字段名存在', [...usedFields].filter(Boolean).length + ' 个字段被用到');
+	report('P4', '元素类型与必需键', elementCount + ' 个元素 / ' + ELEMENT_TYPES.length + ' 种类型');
 report('P5', '算子与 var 形状', seenOperators + ' 处算子 / 清单 ' + OPERATORS.length + ' 个');
 report('P6', '几何与结构范围', '比例 0..1、字号 0.02..1.5、image.src、foreach.elements、drum.count 2..8');
-report('P7', '模板过滤器', FILTERS.length + ' 个：' + FILTERS.join('/')
-	+ (allowFilters.length ? ' + ' + allowFilters.length + ' 个扩展过滤器（--allow-filter 给的）' : ''));
+	report('P7', '模板过滤器', FILTERS.length + ' 个：' + FILTERS.join('/'));
 report('P8', '动画（anim）', schema ? ANIM_KINDS.length + ' 种：' + ANIM_KINDS.join('/') : '需要 schema.json', !!schema);
 report('P9', '未知键（按键表比）', schema ? Object.keys(SECTION_KEYS).length + ' 段键表' : '需要 schema.json', !!schema);
 
 console.log('  用到的字段：' + ([...usedFields].filter(Boolean).sort().join(', ') || '（没有）'));
-// ★ 放宽要看得见：这两行只在给了开关时出现（不给 ⇒ 输出与从前逐字相同）
-if (allowTypes.length) {
-	const knownBySchema = new Set(schema && Array.isArray(schema.elementTypes) ? schema.elementTypes : []);
-	for (const type of allowTypes) {
-		console.log('  扩展类型：' + type + (knownBySchema.has(type) ? '（--allow-type 给的；键表里本来就有这个类型）' : '（--allow-type 给的）'));
-	}
-}
-if (extraFields.size) {
-	for (const [name, doc] of extraFields) {
-		console.log('  扩展字段：' + name + '（--extra-fields 给的' + (doc ? '：' + doc : '') + '）');
-	}
-}
-if (allowFilters.length) {
-	for (const name of allowFilters) {
-		console.log('  扩展过滤器：' + name + '（--allow-filter 给的）');
-	}
-}
 notes.forEach(text => console.log(text));
-
-/** 给了放宽开关就逐条写清"放宽了什么" —— 不允许悄悄放行。 */
-function reportRelaxations() {
-	if (!allowTypes.length && !extraFields.size && !allowFilters.length) return;
-	console.log('');
-	console.log('[verify_face] 这次放宽了什么（不给开关时这些判据照旧）：');
-	if (allowTypes.length) {
-		console.log('  · P4：把 ' + allowTypes.join('、') + ' 当成"认得"的元素类型（扩展类型；离线看不到装没装那个模组）');
-		console.log('  · P4：它们算作"元素类型里的一种"（所以上面那行的类型数含它们；它们**不进** schema.json）');
-		console.log('  · P9：不再拿内置键表去比这些类型上的键（它们认哪些键由扩展的 registrar.element(…, declaredKeys) 自己报）');
-	}
-	if (extraFields.size) {
-		console.log('  · P3：把 ' + [...extraFields.keys()].join('、') + ' 当成"存在"的字段名（客户端算出来的扩展字段 MmtrFaceField；它们**不进** fields.json）');
-	}
-	if (allowFilters.length) {
-		console.log('  · P7：把 ' + allowFilters.join('、') + ' 当成"认得"的模板过滤器（扩展过滤器 MmtrFaceFilter；它们**不进** MmtrFaceText.filters() 那 8 个）');
-	}
-	console.log('  · 没放宽的：元素几何/结构（P6）、算子与 var 形状（P5）、动画（P8）、未知键（P9，只对内置类型）照旧按内置清单判');
-}
-
-// ★ 放宽说明写在"判据全跑完、结论出来之前" —— PASS 与 FAIL 两种结局下都看得见这次放宽了什么
-reportRelaxations();
-
 if (!schema) {
 	// ★ 缺键表 ⇒ P8/P9 是"没跑"，不是"通过"：作者至少知道这两条判据这次没帮他把关
 	console.log('\n[verify_face] 没有 schema.json ⇒ 跳过 P8/P9（键表检查没跑）—— ' + schemaSkip);

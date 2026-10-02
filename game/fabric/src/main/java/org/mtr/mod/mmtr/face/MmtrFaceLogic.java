@@ -4,7 +4,6 @@ import org.mtr.libraries.com.google.gson.JsonArray;
 import org.mtr.libraries.com.google.gson.JsonElement;
 import org.mtr.libraries.com.google.gson.JsonObject;
 import org.mtr.libraries.com.google.gson.JsonParser;
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -90,28 +89,7 @@ public final class MmtrFaceLogic {
 	}
 
 	/**
-	 * 自定义算子（SPI：附属模组给面文档加的算子，名字自带命名空间，如 {@code fn:eta}）。
-	 *
-	 * <p>注册进来的算子**不进** {@link #operators()}（那是"随包发行的最小集"，工具一致性用例
-	 * 拿它与 {@code verify_face.js} 逐项比对）；要看"这个客户端现在认得哪些算子"用
-	 * {@link #allOperators()}。</p>
-	 */
-	public static java.util.Set<String> allOperators() {
-		final java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>(operators());
-		names.addAll(REGISTERED.keySet());
-		return names;
-	}
-
-	@FunctionalInterface
-	public interface Op {
-
-		Object apply(List<Object> args, Object data);
-	}
-
-	private static final Object2ObjectOpenHashMap<String, Op> REGISTERED = new Object2ObjectOpenHashMap<>();
-
-	/**
-	 * 这个子集支持的算子名（不含 {@code fn:*} 那种自定义前缀规则）。
+	 * 这个子集支持的算子名。
 	 *
 	 * <p>它是**给工具看的清单**：web 工作室的自动补全、{@code tools/anchor-check/verify_face.js}
 	 * 的静态检查都读它的一份副本；{@code MmtrFaceToolingTests} 负责核对"这三份（本方法的清单 /
@@ -129,16 +107,6 @@ public final class MmtrFaceLogic {
 	}
 
 	private MmtrFaceLogic() {
-	}
-
-	/** 注册一个算子（同名覆盖）。名字建议带前缀（{@code "fn:xxx"}），别占用规范里的算子名。 */
-	public static void register(String name, Op op) {
-		REGISTERED.put(name, op);
-	}
-
-	/** 清掉所有注册的算子（**只给用例用**：注册是全局的，用例之间必须互不串味）。 */
-	public static void clearRegisteredOps() {
-		REGISTERED.clear();
 	}
 
 	/**
@@ -204,11 +172,6 @@ public final class MmtrFaceLogic {
 	}
 
 	private static Object applyOperator(String operator, JsonElement argument, Object data, int depth, int[] nodes) {
-		final Op registered = REGISTERED.get(operator);
-		if (registered != null) {
-			return registered.apply(args(argument, data, depth, nodes), data);
-		}
-
 		return switch (operator) {
 			case "var" -> {
 				final List<Object> values = args(argument, data, depth, nodes);

@@ -45,9 +45,6 @@ public final class MmtrFaceData {
 			}
 		}
 		derive(values);
-		// 扩展字段（F4 的 SPI）：在内置量与派生量都就绪之后算 —— 于是扩展可以引用 speedKmh 之类。
-		// 放在最后还有一个好处：内置字段的语义**不会**被任何扩展改写。
-		MmtrFaceField.Registry.contribute(values);
 		return new MmtrFaceData(values);
 	}
 
@@ -113,7 +110,7 @@ public final class MmtrFaceData {
 		}
 	}
 
-	/** 按类型强制转换（{@link MmtrFaceField} 的扩展值也走这一条，于是两边口径一致）。 */
+	/** 按类型强制转换（值取不到 ⇒ {@code null}，不编造 0/空串）。 */
 	static Object coerce(MmtrFaceFields.Type type, Object raw) {
 		if (raw == null) {
 			return null;

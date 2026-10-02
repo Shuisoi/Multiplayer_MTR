@@ -28,17 +28,12 @@ import java.util.Map;
  *
  * <h2>为什么绑回环 + 白名单 + 先备份</h2>
  * <p>这是一个"给作者在自己机器上开着的工具"，不是服务：只绑 {@code 127.0.0.1}。</p>
- * <p>写端点只认三个目录（规范化之后必须落在里面）且扩展名必须是 {@code .json} 或 {@code .java}：</p>
+ * <p>写端点只认三个目录（规范化之后必须落在里面）且扩展名必须是 {@code .json}：</p>
  * <ul>
- *   <li>{@code sandbox/} —— 试画、探针、截图、以及「导出 Java 骨架」的落点；</li>
+ *   <li>{@code sandbox/} —— 试画、探针、截图；</li>
  *   <li>{@code mmtr/tools/} —— 工作室自己、打包器的车辆配置（面文档的**事实来源**就在这里）；</li>
  *   <li>{@code mmtr/game/fabric/run/resourcepacks/} —— 直接改一份已解包/在用的资源包。</li>
  * </ul>
- * <p><b>为什么连 {@code .java} 也放开了</b>（F4 加的）：工作室的「导出 Java 骨架」要给扩展作者
- * 一份能直接编译的 {@code .java}，而它得落在工作区里（这台机器上 java 进程的 {@code %TEMP%} 不可写，
- * 见 {@code MmtrFaceExtensionTests} 里同一条注释）。所以写端点的判据从"必须是 .json"放宽成
- * "必须是 .json 或 .java"——**目录白名单与先备份两条一个字都没放松**，而且
- * {@code mmtr/game/} 的 Java **不在**任何白名单目录里（那条硬规矩靠白名单挡着，不靠扩展名）。</p>
  * <p>其余一律 403 并回一句人话；覆盖已有文件前先在**同目录**写一份 {@code <文件名>.bak-studio}；
  * 目录不存在就创建；除了 {@code POST /save} 之外的方法与路径仍然是 405 / 404。
  * 目录穿越（{@code ..}、绝对路径）在规范化之后会被 {@code startsWith} 挡掉 —— 与 {@code /data} 同一套守卫。</p>
@@ -57,14 +52,8 @@ public final class FaceServe {
 	/** 请求体上限：面文档是文本 JSON，8 MiB 已经很宽松了（防的是"手滑指向一个巨大的东西"）。 */
 	private static final int MAX_BODY_BYTES = 8 * 1024 * 1024;
 
-	/**
-	 * 写端点允许的扩展名。
-	 *
-	 * <p>{@code .json} 是面文档与车辆配置；{@code .java} 是「导出 Java 骨架」（F4 加的，
-	 * 见类注释里那段"为什么连 .java 也放开了"）。别的后缀仍然一律 403 —— 这条放宽只服务于
-	 * "把工作室生成的那份骨架交到作者手里"，不是开放任意写。</p>
-	 */
-	private static final String[] WRITABLE_EXTENSIONS = {".json", ".java"};
+	/** 写端点允许的扩展名：面文档与车辆配置都是 {@code .json}，别的后缀一律 403。 */
+	private static final String[] WRITABLE_EXTENSIONS = {".json"};
 
 	static {
 		CONTENT_TYPES.put("html", "text/html; charset=utf-8");
@@ -177,11 +166,11 @@ public final class FaceServe {
 					+ "。你写的是 " + root.relativize(target) + " —— 想改引擎源码/构建产物请另走 git。");
 			return;
 		}
-		// ③ 只写 .json / .java
+		// ③ 只写 .json
 		final String name = target.getFileName() == null ? "" : target.getFileName().toString();
 		if (!writableExtension(name)) {
 			respondError(exchange, 403, "只允许写 " + String.join(" 或 ", WRITABLE_EXTENSIONS) + "（这一个文件是「" + name
-					+ "」）—— 面文档与车辆配置是 JSON，导出 Java 骨架是 .java。");
+						+ "」）—— 面文档与车辆配置都是 JSON。");
 			return;
 		}
 

@@ -1,6 +1,5 @@
 package org.mtr.mod.mmtr.face;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mtr.libraries.com.google.gson.JsonArray;
 import org.mtr.libraries.com.google.gson.JsonElement;
@@ -40,11 +39,6 @@ public final class MmtrFaceLogicTests {
 
 	/** 向量条数的下限：文件被删空、路径读错、JSON 被截断，都要在这里拦住（不是"跑 0 条也算绿"）。 */
 	private static final int MINIMUM_VECTORS = 60;
-
-	@AfterEach
-	public void clearOps() {
-		MmtrFaceLogic.clearRegisteredOps();
-	}
 
 	@Test
 	public void everyConformanceVectorHolds() {
@@ -109,18 +103,6 @@ public final class MmtrFaceLogicTests {
 	@Test
 	public void anUnknownOperatorIsRejected() {
 		assertThrows(MmtrFaceLogic.UnknownOperatorException.class, () -> MmtrFaceLogic.evalJson("{\"nope\": [1]}", Map.of()));
-	}
-
-	/** SPI：注册的算子能被面文档直接用；注销之后又不认识了（保证用例之间不串味）。 */
-	@Test
-	public void registeredOpsAreUsableAndRemovable() {
-		MmtrFaceLogic.register("fn:double", (args, data) -> {
-			final Double number = MmtrFaceLogic.asNumber(args.isEmpty() ? null : args.get(0));
-			return number == null ? null : number * 2;
-		});
-		assertEquals(42D, MmtrFaceLogic.evalJson("{\"fn:double\": [21]}", Map.of()));
-		MmtrFaceLogic.clearRegisteredOps();
-		assertThrows(MmtrFaceLogic.UnknownOperatorException.class, () -> MmtrFaceLogic.evalJson("{\"fn:double\": [21]}", Map.of()));
 	}
 
 	/** ★ 多键对象 = and，且**遇假即停**：第二个算子根本不认识，也不该被求值。 */

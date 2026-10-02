@@ -251,27 +251,6 @@
 		#selftestOut { max-height: 300px; overflow: auto; font: 12px Consolas, monospace; }
 		#selftestOut div { white-space: pre-wrap; }
 
-		/* 导出 Java 骨架（F4）：与"另存为"同一排按钮下面那一块 */
-		#exportRow input { background: #15181c; color: var(--text); border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; font: 12px Consolas, monospace; }
-		#exportPanel { border: 1px solid var(--line); border-radius: 3px; padding: 8px 10px; margin-top: 6px; }
-		#exportPanel.warn { border-color: var(--warn); }
-		#exportSummary { white-space: pre-wrap; font: 12px Consolas, monospace; color: var(--muted); margin: 4px 0; }
-		#exportJava {
-			width: 100%;
-			min-height: 260px;
-			background: #15181c;
-			color: var(--text);
-			border: 1px solid var(--line);
-			border-radius: 3px;
-			padding: 6px;
-			font: 12px Consolas, monospace;
-			white-space: pre;
-			overflow: auto;
-		}
-		#exportService { white-space: pre-wrap; font: 12px Consolas, monospace; color: var(--text); background: #15181c; border: 1px dashed var(--line); border-radius: 3px; padding: 4px 6px; margin: 4px 0; }
-		.exportWhy { color: var(--muted); font-size: 12px; }
-		.exportWhy code { color: var(--accent); }
-
 		.toolbarGroup { display: inline-block; margin-right: 10px; }
 	</style>
 </head>
@@ -290,7 +269,6 @@
 			&nbsp;|&nbsp;
 			<button class="mini" id="btnSave">保存</button>
 			<button class="mini" id="btnSaveAs">另存为…</button>
-			<button class="mini" id="btnExportJava" title="按当前正在编辑的这块面，生成一份能直接编译的 MmtrFaceExtension 骨架（元素/算子/过滤器/字段四类各留一个 TODO 桩）">导出 Java 骨架</button>
 			<span id="savePath" class="muted">（没有可写路径）</span>
 			&nbsp;|&nbsp;
 			<a href="http://127.0.0.1:8900/" target="_blank" rel="noopener">仿真台 → http://127.0.0.1:8900/</a>
@@ -302,40 +280,6 @@
 			<button class="mini" id="btnSaveAsCancel">取消</button>
 		</p>
 
-		<!-- 导出 Java 骨架（F4 代码面）：这一块的每一句都在回答"作者下一步该干什么" -->
-		<div id="exportPanel" hidden>
-			<h2 style="margin-top:0">导出 Java 骨架（F4 代码面）</h2>
-			<p class="exportWhy">
-				把<strong>当前正在编辑的这块面</strong>里用到的扩展点捞出来，写成一份<strong>能直接编译</strong>的
-				<code>MmtrFaceExtension</code> 实现：四类各留一个带 TODO 的桩 ——
-				① 非内置元素类型（不在 <code>schema.json.elementTypes</code> 里的那些）、
-				② 非内置算子（不在 32 个里的）、③ 非内置过滤器（不在 8 个里的）、
-				④ 不在 <code>fields.json</code> 里的字段名。
-			</p>
-			<p id="exportRow">
-				<label>类名 <input type="text" id="exportClass" size="26" spellcheck="false"></label>
-				<label>包名 <input type="text" id="exportPackage" size="18" spellcheck="false"></label>
-				<button class="mini" id="btnExportGo">重新生成</button>
-				<label><input type="checkbox" id="exportWholeFace"> 扫整块面（所有页 + 文档级 vars/require/pageExpr）</label>
-				<button class="mini" id="btnExportDownload">下载 .java</button>
-				<button class="mini" id="btnExportSave">保存到工作区</button>
-				<button class="mini" id="btnExportHide">收起</button>
-			</p>
-			<div id="exportSummary"></div>
-			<label class="exportWhy">Java（可全选复制；改完类名/包名点「重新生成」）
-				<textarea id="exportJava" spellcheck="false" wrap="off"></textarea>
-			</label>
-			<h3>ServiceLoader 声明（SPI 就是靠它找到你的类，不是反射）</h3>
-			<div id="exportService"></div>
-			<p class="exportWhy">
-				装扩展的客户端才认得那些 <code>type</code>：没装那个模组时，游戏里表现是"这块面少画一样/整块不出现"，
-				而<strong>离线自检会把它们报成 P4「不认识的元素类型」、P3「字段不在字段表里」、P7「不认识的过滤器」</strong>。
-				这三条都是"假警告"（自检看不到装了没装那个模组），所以自检有对应的放宽开关：
-				<code>--allow-type 厂家:名字</code> / <code>--extra-fields &lt;扩展字段.json&gt;</code> /
-				<code>--allow-filter 厂家:名字</code>。骨架开头那一段注释里已经把该敲的命令写好了。
-				放宽了什么，自检报告结尾会<strong>逐条列出来</strong>（不许悄悄放行）。
-			</p>
-		</div>
 	</header>
 
 	<div id="banner" hidden></div>

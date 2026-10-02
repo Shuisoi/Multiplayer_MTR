@@ -475,6 +475,12 @@ public final class InitClient {
 		// 判据与"能不能操作手柄"同源（MmtrDriverSeat），所以能看到 HUD 就一定能操作。
 		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(org.mtr.mod.render.MmtrDriverHud::render);
 
+		// MMTR: 左上角的作业（任务）卡片 + 任务提示音（用户口径 2026-09-25：任务 UI 放左上角、
+		// 完成时用音符盒音效）。显示面比右上角那块宽：坐在这列车上就有，不限司机位。
+		// ★ 它同时是全客户端**唯一**的任务跃迁探测点（子任务完成 / 换步 / 整趟完成）——
+		//   因为客户端拿到的是每拍刷新的镜像快照，没有任务事件流，"响不响提示音"只能靠相邻两拍相比。
+		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(org.mtr.mod.render.MmtrTaskHud::tick);
+
 		// MMTR: 左下角大号速度读数（三位数字、DIN、右斜体、逐位固定格宽居中）。
 		REGISTRY_CLIENT.eventRegistryClient.registerGuiRendering(org.mtr.mod.render.MmtrSpeedHud::render);
 

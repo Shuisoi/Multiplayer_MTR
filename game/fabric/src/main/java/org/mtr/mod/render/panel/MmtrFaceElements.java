@@ -70,9 +70,6 @@ public final class MmtrFaceElements {
 	}
 
 	private static final Map<String, MmtrFaceElementRenderer> PAINTERS = new LinkedHashMap<>();
-	/** 运行时注册进来的（{@link #register}）；清单与记账都单独放，免得和内置的混在一起。 */
-	private static final Map<String, MmtrFaceElementRenderer> REGISTERED = new LinkedHashMap<>();
-
 	/** 出过问题的元素只提示一次（文档 id + 元素下标 + 原因）。 */
 	private static final Set<String> WARNED = ConcurrentHashMap.newKeySet();
 
@@ -94,34 +91,13 @@ public final class MmtrFaceElements {
 	private MmtrFaceElements() {
 	}
 
-	/** 认得的元素类型（打包校验与工作室的"元素表"都读它）。 */
+	/** 认得的元素类型（打包校验与工作室的"元素表"都读它）：只有随包发行的这几种。 */
 	public static Set<String> types() {
-		final Set<String> names = new LinkedHashSet<>(PAINTERS.keySet());
-		names.addAll(REGISTERED.keySet());
-		return names;
+		return new LinkedHashSet<>(PAINTERS.keySet());
 	}
 
 	public static boolean knows(String type) {
-		final String name = type == null ? "" : type.toLowerCase(Locale.ROOT);
-		return PAINTERS.containsKey(name) || REGISTERED.containsKey(name);
-	}
-
-	/**
-	 * 代码级加一种元素（F4 的升级阶梯：资源包里写 {@code type} 的名字，画法由附属模组给）。
-	 *
-	 * <p>加进来的类型**不进** {@link MmtrFaceSchema#ELEMENT_TYPES}（那是随包发行的清单），
-	 * 所以作者侧的校验脚本不会认得它 —— 这是有意的：SPI 扩展是"装了模组才有的画法"，
-	 * 而 schema 是"任何客户端都该认得的最小集"。</p>
-	 */
-	public static void register(String type, MmtrFaceElementRenderer painter) {
-		if (type != null && !type.isEmpty() && painter != null) {
-			REGISTERED.put(type.toLowerCase(Locale.ROOT), painter);
-		}
-	}
-
-	/** 撤掉运行时注册的画法（用例、资源重载）。 */
-	public static void clearRegistered() {
-		REGISTERED.clear();
+		return PAINTERS.containsKey(type == null ? "" : type.toLowerCase(Locale.ROOT));
 	}
 
 	/**
@@ -166,7 +142,7 @@ public final class MmtrFaceElements {
 				continue;
 			}
 			final String type = element.type().toLowerCase(Locale.ROOT);
-			final MmtrFaceElementRenderer painter = REGISTERED.containsKey(type) ? REGISTERED.get(type) : PAINTERS.get(type);
+			final MmtrFaceElementRenderer painter = PAINTERS.get(type);
 			if (painter == null) {
 				warnOnce(document, index, "不认识的元素类型「" + element.type() + "」（认得的有 " + types() + "）");
 				continue;

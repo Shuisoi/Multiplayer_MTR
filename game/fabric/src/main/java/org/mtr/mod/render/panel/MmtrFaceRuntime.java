@@ -66,8 +66,6 @@ public final class MmtrFaceRuntime {
 	/** 每帧一次（{@code MainRenderer} 里与 {@code MmtrPanelTexture.tick()} 同一处）：丢掉上一帧的数据快照。 */
 	public static void tick() {
 		DATA.clear();
-		// 扩展那边攒下的账（F4）：队列空时这一步是零代价的
-		MmtrFaceExtensions.flushWarnings();
 	}
 
 	/** 资源重载时清缓存。 */

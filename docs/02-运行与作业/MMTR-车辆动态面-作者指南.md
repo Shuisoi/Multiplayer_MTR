@@ -1,6 +1,7 @@
 # MMTR 车辆动态面 · 作者指南
 
-> 面向：**车体作者**（Blender）、**资源包作者**（JSON）、**附属模组开发者**（Java）。
+> 面向：**车体作者**（Blender）、**资源包作者**（JSON）。
+> **作者只写数据**：一份 `faces` 文档 + 几张贴图 —— **不装任何模组、不写一行 Java**（§10）。
 > 系统设计见 `01-设计/车辆动态面系统-设计.md`，实现过程与判据见 `notes/359`。
 > **逐键的权威表见 [`车辆动态面-面文档格式.md`](../01-设计/车辆动态面-面文档格式.md)**（v2）——
 > 本文讲"怎么上手、怎么查"，那份讲"每个键是什么、缺省多少、什么语义"。
@@ -19,8 +20,8 @@
 | **一块牌要显示好几页**（去程/回程、停站表）、或者要**翻牌机**那种翻转水牌 | 写 `pages`（+ `pageSeconds` / `pageExpr` / `drum`），见 §5.1 / §5.2。 |
 | 屏上要**会动**（闪、走马灯、淡入淡出、转） | 元素上写 `anim`，见 §6。 |
 | 牌上要**贴图**（路徽、标志） | `image` 元素，图放资源包 `assets/<命名空间>/…`，见 §5.3。 |
-| 屏上要显示一个**现在没有**的量 | 能从已有字段算出来 ⇒ 让附属模组加一个**扩展字段**（§10 第 5 级，现在就能做）；要引擎里多一个**权威量** ⇒ 走"加字段四步曲"（§10 第 2 级）。 |
-| 要一个**现成元素画不出**的东西（渐变条、贴图动画） | 升级阶梯第 3 级：附属模组注册一个元素类型（§10）——**现在就能做**；工作室顶部有「导出 Java 骨架」帮你把桩搭好（§10.1）。 |
+| 屏上要显示一个**现在没有**的量 | 先从**内置字段**能算的算起：用 `vars` + 算子（§8）把已有字段拼出来，纯 JSON、谁都不用动（§10 第 1 级）；确实要引擎里多一个**权威量** ⇒ 提需求走"加字段四步曲"（§10 第 2 级）。 |
+| 要一个**现成元素画不出**的东西（渐变条、贴图动画） | 升级阶梯第 3 级：**向引擎提需求**，由引擎把它做成内置元素（§10.1 的清单可以直接附在需求里）。 |
 
 ---
 
@@ -348,96 +349,69 @@ pwsh -File mmtr\tools\face-preview\preview.ps1 -Anchor <json> -Face face_1 -Pack
   `cab.end`、`lzb.targetKmh` / `lzb.targetM`、`light.a` / `light.b`、`pinned`、`active`、`clock`。
 - **节拍**那一列很重要：`tick` = 变了就随稀疏补丁推（每 tick 都可能变）；`snapshot` = 只在整份快照时更新
   （别拿它做"实时读数"）。
-- 要显示**表里没有**的量 ⇒ §10：能算的走第 5 级（扩展字段，现在就能做），要权威量的走第 2 级（四步曲）。
+- 要显示**表里没有**的量 ⇒ §10：先看能不能拿已有字段在文档里算（`vars` + 算子，第 1 级，谁都不用动）；
+  算不出来的提需求走第 2 级（加字段四步曲）。
 
 ---
 
-## 10. 卡住了怎么办（升级阶梯，每一级都不用改资源包格式）
+## 10. 卡住了怎么办（升级阶梯：缺什么就提需求让引擎内置）
 
-先记住一句：**第 3 / 4 / 5 级现在就能用**（F4 已落地 —— 元素画法 / 算子 / 过滤器 / 客户端算的字段
-四样都能由附属模组用 SPI 加），所以"我要一个现成元素画不出的东西"不再是"等引擎支持"。
+**先把口径记住**：作者**只写数据** —— 一份 `faces` 文档 + 几张贴图，**不装任何模组、不写一行 Java**。
+能力只有内置那一套：9 种元素、32 个算子、8 个模板过滤器、内置字段表（§5–§9）。
+所以"现成元素画不出我要的东西"只有一个出口：**向引擎提需求，由引擎把它做成内置**。
 
-| 级 | 卡在哪 | 谁做 | 交付物 |
+| 级 | 缺什么 | 找谁 | 现在能不能用 |
 | --- | --- | --- | --- |
-| 1 | 能用现成的元素与条件表达（`text`/`rect`/`gauge`/`image`/`foreach` + 32 个算子 + 8 个过滤器） | 你自己，只写 JSON | 一份 `faces` 段 |
-| 2 | 缺**字段**（要一个引擎里没有的权威量，例如"车门开度%"） | 引擎/模组维护者（或你自己提 PR） | 走四步曲：① 引擎算出来 + 进镜像（`schema/data/vehicle.json`、标脏、每 tick 变的量必须进 `VehicleSyncPatch.DYNAMIC_KEYS`）② `MmtrVehicleFaceSource` 加 `case` ③ `MmtrFaceFields` 加一行 ④ 重生成 `fields.json`（用例会写出 `.actual`，拷过去）。**四方核对用例**保证不会漏步 |
-| 3 | 缺**公式**（新的算子）或**格式化**（新的过滤器） | 附属模组（现在就能做） | `registrar.function("厂家:名字", (arguments, data) -> …)` / `registrar.filter("厂家:名字", (value, parameter) -> …)`；文档里写 `{"厂家:名字": [...]}` / `{字段\|厂家:名字}`。**必须带命名空间** |
-| 4 | 缺**画法**（渐变条、贴图动画、画不出来的形状） | 附属模组（现在就能做） | `registrar.element("厂家:名字", (canvas, document, element, paint) -> …, "它认的键"…)`；文档里写 `{"type": "厂家:名字"}` |
-| 5 | 缺**取值，但可以从已有数据算**（例如由 `motor.forceN` 算"牵引/惰行/制动"） | 附属模组（现在就能做） | 一个 `MmtrFaceField`：`registrar.field(new MmtrFaceField(){ … value(Map<String,Object> values){…} })`。它只能读**已经收集好的快照**，于是扩展字段与内置字段在面文档里行为完全一样（一样进重画签名、一样能离线出图） |
-| 6 | 跨面协同（整列车同步翻页等） | 还没有这条路 | 提需求：目前只有"文档级 `vars` + 数据字段"这两样，没有面级 state |
+| 1 | 能用现成的元素与条件表达（`text`/`rect`/`gauge`/`image`/`foreach` + 32 个算子 + 8 个过滤器 + 内置字段） | 你自己，只写 JSON | **现在就能用**（这一级也包括"拿已有字段在文档里算"：`vars` + 算子，纯 JSON） |
+| 2 | 缺**字段**（要一个引擎里没有的权威量，例如"车门开度%"） | 引擎（提需求，或你自己提 PR） | **不能**：走下面的"加字段四步曲" |
+| 3 | 缺**画法**（渐变条、贴图动画、画不出来的形状） | 引擎（提需求） | **不能**：要做成新的**内置元素类型**（改动点见 10.1） |
+| 4 | 缺**公式**（新的算子）或**格式化**（新的过滤器） | 引擎（提需求） | **不能**：要做成**内置算子/过滤器**（改动点见 10.2） |
+| 5 | 跨面协同（整列车同步翻页等） | 引擎（提需求） | **不能**：目前只有"文档级 `vars` + 数据字段"这两样，没有面级 state |
 
-**第 6 级与第 2 级的区别一句话**：第 2 级是"让**引擎**多一个权威量"（要动同步与镜射，不是 SPI 的活）；
-第 5 级是"拿**已有的**快照算一个新量"（客户端算，附属模组自己就能加）。
+**第 2 级与第 1 级（"客户端算"）的区别一句话**：第 1 级里作者可以**拿已有的字段在文档里算**
+（`vars` + 算子，纯 JSON，谁都不用动）；第 2 级是"让**引擎**多一个**权威量**"（数据从服务器来，
+要动同步与镜射）—— 两件事，别混。第 3/4 级是"让引擎多一种画法/算法"，不动数据。
+这三级都是**引擎改动**，作者侧**都不用改资源包格式**：做完之后你仍然只是 JSON 里多一个字段名、
+一个 `type` 或一个算子名。
 
-### 10.1 最小可抄的例子：给文档加一个 `{"type": "vendor:bar"}`
+**第 2 级怎么走（加字段四步曲）**：
+① 引擎算出来 + 进镜像（`schema/data/vehicle.json` 加字段、写的地方标脏、每 tick 变的量必须进
+`VehicleSyncPatch.DYNAMIC_KEYS`，否则客户端只在整份快照时更新）；② 取值口 `MmtrVehicleFaceSource`
+加一个 `case`；③ `MmtrFaceFields` 加一行；④ 重生成 `fields.json`（用例不一致时会写出 `fields.json.actual`，
+拷过去）。**四方核对用例**（`MmtrFaceFieldsTests`）保证不漏步。
 
-这是**完整的一份**（能直接编译；下面把注释压到最少，完整带注释的一版在参考实现里），改编自
-[`sandbox/face-addon/src/vendor/faceaddon/AddonFaceExtension.java`](../../../sandbox/face-addon/src/vendor/faceaddon/AddonFaceExtension.java)：
+### 10.1 提需求时直接附上：加一个内置元素要改哪些文件（约半天到一天）
 
-```java
-package vendor.faceaddon;                                    // ← 你自己的包名，别用 org.mtr.*
+以"新增一个内置**元素类型**"为例（例如渐变条）—— 这张清单就是"向引擎提需求"时可以直接附上的改动点：
 
-import org.mtr.mod.mmtr.face.MmtrFaceExtension;
-import org.mtr.mod.mmtr.face.MmtrFaceLogic;
-import org.mtr.mod.render.panel.MmtrFaceRegistrar;
-
-public final class FaceaddonFaceExtension implements MmtrFaceExtension {
-
-	@Override
-	public void register(MmtrFaceRegistrar registrar) {
-		// ① 元素画法：文档里写 {"type": "vendor:bar", "value": 0.42} 就画一根横条
-		//    ★ 名字必须带命名空间（厂家:名字）：不带冒号会被引擎拒绝并记一条账
-		registrar.element("vendor:bar", (canvas, document, element, paint) -> {
-			// canvas 是**米制**：x/w 乘牌宽，y/h 乘牌高，(0,0) 是左下角、y 朝上
-			final double x = element.x() * canvas.widthM();
-			final double y = element.y() * canvas.heightM();
-			final double height = Math.max(element.h(), 0.02) * canvas.heightM();
-			// element.raw().get("value") 拿的是**原始 JSON**（表达式还没求值）；
-			// 要表达式的结果就用 MmtrFaceLogic.eval(...) + paint.data()
-			final Double fraction = MmtrFaceLogic.asNumber(MmtrFaceLogic.eval(element.raw().get("value"), paint.data()));
-			final double width = Math.max(0, Math.min(1, fraction == null ? 0 : fraction)) * element.w() * canvas.widthM();
-			canvas.fill(x, y, element.w() * canvas.widthM(), height, 0x40FFFFFF);          // 底槽
-			canvas.fill(x, y, width, height, element.color() == 0 ? document.textColor() : element.color());
-		}, "value");   // ← ★ 报上它认的键：报了之后，作者写 {"value":…} 不会被"未知键"守卫当成拼错
-	}
-}
-```
-
-**装法**（SPI 走 `ServiceLoader`，不是反射）：
-
-1. 把这个 `.java` 放进你模组的源码树（包名 `vendor.faceaddon`）；
-2. 在**资源**目录放一个文件
-   `src/main/resources/META-INF/services/org.mtr.mod.mmtr.face.MmtrFaceExtension`，
-   **内容就一行**：`vendor.faceaddon.FaceaddonFaceExtension`（类的全限定名）；
-3. 打模组、装客户端。资源包**一个字节都不用改** —— 它只是写了 `vendor:bar` 这个名字。
-
-**不用手抄**：工作室（`face-studio.ps1`）打开一块面之后，顶部有「**导出 Java 骨架**」——
-按这块面用到的四类东西（非内置元素类型 / 非内置算子 / 非内置过滤器 / 不在 `fields.json` 里的字段）
-各生成一个带 TODO 的桩，并把上面那个 ServiceLoader 声明的内容与放置目录一并显示出来。
-一份这样的骨架已经真的编译过（见 `sandbox/face-addon/export-probe/`）。
-
-### 10.2 怎么让自检认得我的扩展（三个放宽开关）
-
-`verify_face.js` 是**离线**跑的，看不到你装没装那个模组，所以会把扩展用的名字报成三类**假警告**：
-
-| 报什么 | 为什么 | 怎么放行 |
+| # | 改哪 | 改什么 |
 | --- | --- | --- |
-| **P4**「不认识的元素类型 `vendor:bar`」 | 键表（`schema.json`）里只有随包发行的 9 种 | `--allow-type vendor:bar` |
-| **P3**「字段 `vendor:traction` 不在字段表里」 | `fields.json` 里只有内置字段 | `--extra-fields <扩展字段.json>`（数组 `["vendor:traction"]` 或对象 `{"vendor:traction":"牵引状态"}`） |
-| **P7**「不认识的过滤器 `vendor:kmh`」 | `MmtrFaceText.filters()` 只列内置 8 个 | `--allow-filter vendor:kmh` |
+| 1 | [`schema.json`](../../tools/face-studio/schema.json) | `elementTypes` 加名字 + `sections` 加这个类型的键表（键名 / 类型 / 缺省） |
+| 2 | [`MmtrFaceSchema.java`](../../game/fabric/src/main/java/org/mtr/mod/mmtr/face/MmtrFaceSchema.java) | `ELEMENT_TYPES`（必须**不多不少**地实现 `schema.json` 里那份）与键表 |
+| 3 | [`MmtrFaceElements.java`](../../game/fabric/src/main/java/org/mtr/mod/render/panel/MmtrFaceElements.java) | `PAINTERS` 加一条 + 写一个 `paintXxx(...)` 画法 |
+| 4 | 工作室 JS：[`painter.mjs`](../../tools/face-studio/painter.mjs) · [`schema.mjs`](../../tools/face-studio/schema.mjs) · [`app.mjs`](../../tools/face-studio/app.mjs) | 依次是 `ELEMENT_TYPES`、内嵌兜底缺省、属性面板（多数情况跟着 `schema.json` 自动出来） |
+| 5 | [`verify_face.js`](../../tools/anchor-check/verify_face.js) | P4/P6/P9 的口径（新类型认哪些键、必需键、范围） |
+| 6 | 文档 | [`车辆动态面-面文档格式.md`](../01-设计/车辆动态面-面文档格式.md) §5 元素表、本文 §5 元素表 |
+| 7 | 用例与一致性 | `MmtrFaceSchemaTests` / `MmtrFaceToolingTests`（拿 `schema.json` 与 Java 导出逐项核对）、工作室 [`selftest.mjs`](../../tools/face-studio/selftest.mjs) 的清单核对（元素类型 9 → 10、键数、缺省逐字） |
+| 8 | 跑一遍 | `pwsh -File mmtr\scripts\run-fabric-tests-offline.ps1` + `node mmtr\tools\face-studio\selftest.mjs` |
 
-```powershell
-node mmtr\tools\anchor-check\verify_face.js --anchors <打包出来的 anchors.json> `
-    --allow-type vendor:bar --extra-fields sandbox\face-addon\probe\extra-fields.json --allow-filter vendor:kmh
-```
+### 10.2 同样可以附上的另外两类改动
 
-- 三个开关都可以重复给，也可以一次给逗号分隔的一串（`--allow-type vendor:bar,vendor:gauge2`）。
-- 报告里会**单列**出放行了什么（`扩展类型：vendor:bar（--allow-type 给的）`），
-  结尾还有一节「这次放宽了什么」逐条写清 —— **不许悄悄放行**。
-- **不给开关时行为与从前逐字相同**（回归用过：既存锚点的输出一个字符都没变）。
-- 放宽的只有"认得什么"：几何/结构（P6）、算子形状（P5）、动画（P8）照旧按内置清单判。
-- 扩展的键**不进** `schema.json`，扩展字段**不进** `fields.json`，扩展算子/过滤器**不进**
-  `operators()`/`filters()` 那两份最小集 —— 那三份是"随包发行"的口径，工具一致性用例逐项钉着它们。
+- **新增一个内置算子/过滤器**（同样**约半天到一天**）：改 `MmtrFaceLogic.operators()` 的实现 +
+  `MmtrFaceText.filters()` 的实现、[`verify_face.js`](../../tools/anchor-check/verify_face.js)
+  里那两张清单（必须**逐字一致**，`MmtrFaceToolingTests` 钉着）、工作室
+  [`logic.mjs`](../../tools/face-studio/logic.mjs) / [`text.mjs`](../../tools/face-studio/text.mjs)、
+  [`designer-selftest.mjs`](../../tools/face-studio/designer-selftest.mjs) 的"32 个算子同序一致"那条、
+  格式文档 §6.1。
+- **新增一个权威字段**：走 §10 第 2 级的"加字段四步曲"（`MmtrFaceFields` 字段表 + 引擎取值口 +
+  镜像同步键 + 重新导出 [`fields.json`](../../tools/face-studio/fields.json)），再跑用例与工作室
+  `selftest.mjs`。
+
+### 10.3 自检报 P4 / P3 / P7 就是真错了
+
+**类型 / 字段 / 过滤器现在只有内置的那些**（9 种元素 / 32 个算子 / 8 个过滤器 + 内置字段表），
+`verify_face.js` 也只认那一套：报出来说明**名字拼错**，或者用了**根本不存在的东西** ——
+**没有放行开关**。
 
 ---
 
@@ -447,6 +421,7 @@ node mmtr\tools\anchor-check\verify_face.js --anchors <打包出来的 anchors.j
 | --- | --- |
 | 那块面**完全不出现** | ① `faces` 的键是不是锚点名（`verify_face.js` P1）；② 锚点的法线是不是朝车外（朝里 ⇒ 被背面剔除，站台上看不见）；③ `require` 是不是不成立（`preview.ps1` 会直接说"按 require 不画"）；④ 用的是不是 `mmtr_face_*`（`mmtr_dest_board_*` 会被 `groupMap.body` 吞掉） |
 | 少画了一样东西 | 元素类型写错 / 算子写错 / 字段名写错 —— 这三种游戏里都是**静默跳过 + 一条日志**（`[MMTR] 面文档 … 被跳过`），先看日志，再跑 `verify_face.js` |
+| 自检报 **P4**（不认识的元素类型）/ **P3**（字段不在字段表里）/ **P7**（不认识的过滤器） | **报了就是真错了**：类型 / 字段 / 过滤器现在只有内置的那些（9 / 32 / 8 + 内置字段表），报出来说明名字拼错、或用了根本不存在的东西 —— **没有放行开关**（§10.3） |
 | 字被牌边切掉 | `shrinkToFit`（默认 0.9）没起作用？或字号太大：`size` 是**牌高**的比例（牌很扁时 0.5 已经占满高度） |
 | 字很小/很糊 | 牌太大而像素密度不够：长边被 512 px 上限夹住（1.24 m ⇒ 约 413 px/m）。把屏拆成两块锚点，或调 `pxPerMetre`（上限不变） |
 | 某个字段永远空 | 字段名对不对（`fields.json`）；它在引擎里是不是**这个状态下**有值（`preview.ps1 -Preset` 换状态看）；节拍是不是 `snapshot`（那就要等整份快照） |
@@ -489,17 +464,11 @@ pwsh -File mmtr\tools\face-preview\preview.ps1 -Anchor <anchors.json> -Face <面
 
 # 静态自检（P1..P9，退出码 0 = 全过、1 = 有 FAIL、2 = 输入缺失）
 # P8 = 动画 kind 白名单，P9 = 未知键（colour/siz 这种拼错）；缺 schema.json 时这两条会写「没跑」
+# P4/P3/P7 报了就是真错了：类型/字段/过滤器只有内置的那些，没有放行开关（§10.3）
 node mmtr\tools\anchor-check\verify_face.js --anchors <anchors.json>
 
-# 用了扩展的文档（装了那个模组才认得的名字）：显式放行那三条假警告（§10.2）
-node mmtr\tools\anchor-check\verify_face.js --anchors <anchors.json> `
-    --allow-type vendor:bar --extra-fields sandbox\face-addon\probe\extra-fields.json --allow-filter vendor:kmh
-
-# 工作室：改排版 + 一键导出扩展骨架（F4）
+# 工作室：改排版（本地 8910，只读服务 + 白名单写；改完刷新即见）
 pwsh -File mmtr\tools\face-studio\face-studio.ps1 -Action open -Anchors <anchors.json>
-# 页面顶部「导出 Java 骨架」按当前这块面生成一份能编译的 MmtrFaceExtension（四类桩各留 TODO），
-# 并把 META-INF/services 声明的内容与放置目录一并显示；面板也可以一条链接直达：
-#   http://127.0.0.1:8910/?anchors=/data/<工作区相对路径>&export=1
 
 # 锚点几何自检（水牌那条老链，仍然有用）
 node mmtr\tools\anchor-check\verify_pid.js --anchors <anchors.json>

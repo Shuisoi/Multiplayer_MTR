@@ -24,7 +24,6 @@ import {
 	ROW_OPERATORS,
 	appendElement,
 	applyKnownPatch,
-	buildExtensionSkeleton,
 	buildLogic,
 	canAddGroup,
 	clampProportion,
@@ -38,7 +37,6 @@ import {
 	elementSummary,
 	emptyExpr,
 	estimateTextWidth,
-	extensionReportIsEmpty,
 	filterNameOf,
 	formatPath,
 	getPath,
@@ -50,8 +48,6 @@ import {
 	isBuilderRepresentable,
 	isEmptyExpr,
 	isHasValueExpr,
-	isNamespacedName,
-	javaClassFromType,
 	moveItem,
 	moveLabel,
 	newElement,
@@ -69,7 +65,6 @@ import {
 	readLogic,
 	replaceRoot,
 	resizeBox,
-	scanFaceForExtensions,
 	setPath,
 	snapBox,
 	snapLabel,
@@ -648,137 +643,8 @@ check('cloneJson：改副本不影响原件（撤销栈靠这条）', () => {
 	return true;
 });
 
-// ---- 11. 导出 Java 骨架（F4 代码面，"导出 Java 骨架"按钮的纯函数层） ----------------------------
-/*
- * 这几条钉的是"按钮生成的东西对不对"，理由是这两类错在页面上都看不出来：
- *   · **漏捞一类**：作者照骨架写完，游戏里那块面还是不认识那个 type/字段；
- *   · **捞错**：把内置的东西也当扩展（生成一堆没用的桩）、或者把 vars/forEach 绑定名当缺字段。
- * ④ 那一层"真的能编译"由 sandbox/face-addon/export-probe/compile-probe.ps1 钉（真的跑 javac）。
- */
-
-const EXPORT_SCHEMA = {
-	elementTypes: ['text', 'rect', 'gauge', 'foreach'],
-	sections: [
-		{ name: 'common', keys: [{ name: 'type' }, { name: 'x' }, { name: 'y' }, { name: 'w' }, { name: 'h' }, { name: 'text' }] },
-		{ name: 'element:text', keys: [] },
-	],
-};
-const EXPORT_FIELDS = ['pid.service', 'pid.terminus', 'speedKmh', 'motor.forceN'];
-
-check('★ 骨架：四类扩展各捞一个（元素/算子/过滤器/字段），且内置的一个都不生成', () => {
-	const face = {
-		vars: { fast: { '>': [{ var: 'speedKmh' }, 80] } },
-		elements: [
-			{ type: 'vendor:bar', x: 0.1, y: 0.1, w: 0.8, h: 0.2, value: { 'vendor:percent': [{ var: 'vendor:traction' }, 100] }, pulse: true },
-			{ type: 'text', x: 0.5, y: 0.5, size: 0.3, text: '{vendor:traction|vendor:kmh}' },
-			{ type: 'gauge', x: 0.5, y: 0.5, radius: 0.4, needle: { var: 'speedKmh' } },
-			{ type: 'text', x: 0.5, y: 0.9, size: 0.2, text: '开往 {pid.terminus}' },
-		],
-	};
-	const report = scanFaceForExtensions(face, EXPORT_SCHEMA, EXPORT_FIELDS, true);
-	eq(report.elements.map(item => item.type), ['vendor:bar'], '非内置类型');
-	eq(report.elements[0].keys, ['pulse', 'value'], '报给拼写守卫的键（common 的 x/y/w/h 不报）');
-	eq(report.operators, ['vendor:percent'], '非内置算子（32 个之外的）');
-	eq(report.filters, ['vendor:kmh'], '★ 非内置过滤器：名字自带冒号，必须整体捞出来（不能切成 vendor）');
-	eq(report.fields, ['vendor:traction'], '不在 fields.json 里的字段名');
-	eq(extensionReportIsEmpty(report), false);
-	return true;
-});
-
-check('★ 骨架：vars / forEach 绑定名不算"缺字段"（不然会给内置数据路径刷一堆桩）', () => {
-	const face = {
-		vars: { arriving: { '<': [{ var: 'lzb.targetM' }, 200] } },
-		elements: [{
-			type: 'foreach',
-			var: 'calls',
-			as: 'call',
-			index: 'i',
-			elements: [
-				{ type: 'text', x: 0.5, y: 0.5, size: 0.3, text: '{call.name} #{i}' },
-				{ type: 'text', x: 0.5, y: 0.2, size: 0.2, text: '{pid.service}' },
-			],
-		}],
-	};
-	const report = scanFaceForExtensions(face, EXPORT_SCHEMA, ['pid.service', 'calls', 'lzb.targetM'], true);
-	eq(report.fields, [], '绑定的名字、vars 的值、字段表里的名字都不该进"缺字段"');
-	eq(report.elements, [], 'foreach 是内置类型，不该生成元素桩');
-	return true;
-});
-
-check('★ 骨架：只用内置东西的一块面 = 空报告（页面要说"不需要扩展"，并给最小骨架）', () => {
-	const face = { elements: [{ type: 'text', x: 0.5, y: 0.5, size: 0.3, text: '开往 {pid.terminus|upper}' }] };
-	const report = scanFaceForExtensions(face, EXPORT_SCHEMA, EXPORT_FIELDS, true);
-	eq(extensionReportIsEmpty(report), true);
-	const skeleton = buildExtensionSkeleton(report, { className: 'PlainFaceExtension', packageName: 'vendor.demo', faceName: 'pid_1' });
-	eq(skeleton.empty, true);
-	eq(skeleton.total, 0);
-	// 判"一个桩都没有"要**逐条**数，不能拿 `registrar.element(` 去 includes：
-	// 最小骨架里那句"以后要加就在这里加一行"的 TODO 注释本身就写着 registrar.element(
-	const generated = (skeleton.java.match(/^\t\tregistrar\.(element|function|filter|field)\(/gm) || []).length;
-	eq(generated, 0, '没有扩展就不该出现任何桩（实际 ' + generated + ' 个）');
-	eq(skeleton.java.includes('// 这个类是**最小可用骨架**'), true, '要说清这是最小可用骨架');
-	eq(skeleton.java.includes('package vendor.demo;'), true);
-	return true;
-});
-
-check('★ 骨架：生成的 Java 里四类桩都在，且声明了它认的键', () => {
-	const face = {
-		elements: [
-			{ type: 'vendor:bar', x: 0.1, y: 0.1, w: 0.8, h: 0.2, value: { 'vendor:percent': [1, 2] }, pulse: true },
-			{ type: 'text', x: 0.5, y: 0.5, size: 0.3, text: '{vendor:traction|vendor:kmh}' },
-		],
-	};
-	const report = scanFaceForExtensions(face, EXPORT_SCHEMA, EXPORT_FIELDS, true);
-	const skeleton = buildExtensionSkeleton(report, { className: 'VendorBarExtension', packageName: 'vendor.demo', faceName: 'pid_1' });
-	const java = skeleton.java;
-	eq(skeleton.total, 4);
-	eq(java.includes('public final class VendorBarExtension implements MmtrFaceExtension {'), true);
-	eq(java.includes('public void register(MmtrFaceRegistrar registrar) {'), true);
-	eq(java.includes('registrar.element("vendor:bar", (canvas, document, element, paint) -> {'), true);
-	eq(java.includes('}, "pulse", "value");'), true, '声明的键要报全（报少了 → 作者写那个键会被当拼错）');
-	eq(java.includes('registrar.function("vendor:percent", (arguments, data) -> {'), true);
-	eq(java.includes('registrar.filter("vendor:kmh", (value, parameter) -> {'), true);
-	eq(java.includes('registrar.field(new MmtrFaceField() {'), true);
-	eq(java.includes('return "vendor:traction";'), true);
-	eq(java.includes('public Object value(Map<String, Object> values) {'), true);
-	eq(java.includes('return null;'), true, '字段桩必须 return null（与"取不到 = 不放进去"同一条口径）');
-	// 四类都缺注释（作者照着写要看得懂）
-	for (const marker of ['// TODO 画「vendor:bar」', '// TODO 实现「vendor:percent」', '// TODO 实现「vendor:kmh」', '// TODO 实现「vendor:traction」']) {
-		eq(java.includes(marker), true, '缺注释：' + marker);
-	}
-	// 服务声明：一行全限定名 + 该放哪
-	eq(skeleton.serviceFileContent, 'vendor.demo.VendorBarExtension\n');
-	eq(skeleton.serviceFileName, 'META-INF/services/org.mtr.mod.mmtr.face.MmtrFaceExtension');
-	eq(java.includes('--allow-type vendor:bar'), true, '骨架里要写好自检那条命令（免得作者被 P4 吓一跳）');
-	eq(java.includes('--extra-fields'), true);
-	return true;
-});
-
-check('★ 骨架：不带命名空间的名字要警告（引擎会拒绝注册，作者得先改名字）', () => {
-	const face = { elements: [{ type: 'bar', x: 0.1, y: 0.1, w: 0.5, h: 0.1 }] };
-	const report = scanFaceForExtensions(face, EXPORT_SCHEMA, EXPORT_FIELDS, true);
-	const skeleton = buildExtensionSkeleton(report, { faceName: 'pid_1' });
-	eq(report.elements.map(item => item.type), ['bar'], '不带冒号也算"非内置类型"（要生成桩）');
-	eq(skeleton.warnings.length, 1);
-	eq(skeleton.warnings[0].includes('没有命名空间'), true);
-	return true;
-});
-
-check('骨架：类名从名字洗成合法 Java 标识符；带点/怪字符一律清掉', () => {
-	eq(javaClassFromType('mmtr_pid_1'), 'MmtrPid1');
-	eq(javaClassFromType('vendor:dest-bar'), 'VendorDestBar');
-	eq(javaClassFromType('——'), 'Vendor', '洗不出东西就回退');
-	eq(isNamespacedName('vendor:bar'), true);
-	eq(isNamespacedName('vendor:'), false);
-	eq(isNamespacedName(':bar'), false);
-	eq(isNamespacedName('bar'), false);
-	return true;
-});
-
-check('★ 过滤器名最长匹配：`vendor:kmh:mph` 的名字是 `vendor:kmh`（不是 `vendor`）', () => {
-	eq(filterNameOf('vendor:kmh:mph', ['vendor:kmh']).name, 'vendor:kmh');
-	eq(filterNameOf('vendor:kmh:mph', ['vendor:kmh']).parameter, 'mph');
-	eq(filterNameOf('pad:7').name, 'pad', '内置的照旧');
+check('★ 过滤器名解析：`pad:7` 的名字是 `pad`、参数是 `7`（对不上的整段当名字）', () => {
+	eq(filterNameOf('pad:7').name, 'pad');
 	eq(filterNameOf('pad:7').parameter, '7');
 	eq(filterNameOf('upper').name, 'upper');
 	eq(filterNameOf('upper').parameter, '');

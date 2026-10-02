@@ -40,44 +40,16 @@ public final class MmtrFaceText {
 	/** 不认识的过滤器只提示一次（每个模板+过滤器名一条），免得每帧刷屏。 */
 	private static final Set<String> WARNED_FILTERS = ConcurrentHashMap.newKeySet();
 
-	/** 扩展过滤器（F4 的 SPI；键是小写的 `厂家:名字`）。 */
-	private static final java.util.Map<String, MmtrFaceFilter> REGISTERED_FILTERS = new java.util.concurrent.ConcurrentHashMap<>();
-
 	/**
 	 * 支持的过滤器名（给工具看的清单：web 工作室的补全、{@code verify_face.js} 的静态检查；
 	 * {@code MmtrFaceToolingTests} 负责核对它与 JS 那份、与 {@link #applyFilter} 的 {@code case} 一致）。
 	 *
-	 * <p>这里只列**内置**的 8 个：扩展过滤器（F4）随模组来，工具查不到是正常的（见 {@link #allFilters()}）。</p>
+	 * <p>这里就是全部：只有随包发行的这 8 个（没有"装了什么才多出来"的那种）。</p>
 	 */
 	public static Set<String> filters() {
 		final java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
 		java.util.Collections.addAll(names, "upper", "lower", "trim", "int", "num", "pad", "len", "default");
 		return names;
-	}
-
-	/** 内置 + 已注册的扩展过滤器（日志与调试用；工具清单仍是 {@link #filters()}）。 */
-	public static Set<String> allFilters() {
-		final java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>(filters());
-		names.addAll(REGISTERED_FILTERS.keySet());
-		return names;
-	}
-
-	/**
-	 * 注册一个扩展过滤器（F4 的 SPI）：名字**必须带命名空间**（{@code 厂家:名字}），否则拒绝。
-	 *
-	 * @return 是否注册成功（名字不合法返回 false，调用方记一条账）
-	 */
-	public static boolean registerFilter(String name, MmtrFaceFilter filter) {
-		if (!MmtrFaceExtension.isNamespaced(name) || filter == null) {
-			return false;
-		}
-		REGISTERED_FILTERS.put(name.trim().toLowerCase(Locale.ROOT), filter);
-		return true;
-	}
-
-	/** 撤掉扩展过滤器（资源重载、用例）。 */
-	public static void clearRegisteredFilters() {
-		REGISTERED_FILTERS.clear();
 	}
 
 	private MmtrFaceText() {
@@ -140,23 +112,6 @@ public final class MmtrFaceText {
 	public static Object applyFilter(Object value, String filter) {
 		if (filter == null || filter.isEmpty()) {
 			return value;
-		}
-		// ★ 扩展过滤器用**最长匹配**解析，不能按第一个冒号切：扩展名自带冒号（`厂家:名字`），
-		//   按第一个冒号切会把 `vendor:kmh:2` 解析成名字 `vendor`、参数 `kmh:2`。
-		final String lowerCase = filter.trim().toLowerCase(Locale.ROOT);
-		for (final java.util.Map.Entry<String, MmtrFaceFilter> entry : REGISTERED_FILTERS.entrySet()) {
-			final String key = entry.getKey();
-			if (lowerCase.equals(key) || lowerCase.startsWith(key + ":")) {
-				final String parameter = lowerCase.equals(key) ? "" : filter.trim().substring(key.length() + 1);
-				try {
-					return entry.getValue().apply(value, parameter);
-				} catch (RuntimeException e) {
-					if (WARNED_FILTERS.add(filter)) {
-						Init.LOGGER.warn("[MMTR] 扩展过滤器「{}」算失败（原样返回上游的值）：{}", filter, e.toString());
-					}
-					return value;
-				}
-			}
 		}
 		final int colon = filter.indexOf(':');
 		final String name = (colon < 0 ? filter : filter.substring(0, colon)).toLowerCase(Locale.ROOT);

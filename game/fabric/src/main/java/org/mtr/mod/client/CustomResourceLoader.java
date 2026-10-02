@@ -11,9 +11,11 @@ import org.mtr.mapping.mapper.ResourceManagerHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.Keys;
 import org.mtr.mod.config.Config;
+import org.mtr.mod.render.panel.MmtrFaceRuntime;
 import org.mtr.mod.render.panel.MmtrHudLayout;
 import org.mtr.mod.render.panel.MmtrPanelFont;
 import org.mtr.mod.render.panel.MmtrPanelTexture;
+import org.mtr.mod.render.panel.MmtrPidLayout;
 import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.resource.*;
 
@@ -93,10 +95,12 @@ public class CustomResourceLoader {
 		// their textures
 		MmtrVehicleAnchors.clearCache();
 		MmtrHudLayout.clearCache();
+		// notes/359：动态面的文档缓存/数据快照/元素日志也随资源重载一起清（改完资源包不必重启客户端）
+		MmtrFaceRuntime.clearCache();
+		MmtrPidLayout.clearCache();
 		MmtrPanelFont.reset();
 		MmtrPanelTexture.clear();
-		// 屏幕 UI 侧同理：左下角速度读数的"固定格宽"是按字体量出来的，换字体后必须重新量（notes/223）
-		org.mtr.mod.render.MmtrSpeedHud.reset();
+		// （左下/右下角速度 HUD 的贴图也走 MmtrPanelTexture，上面这一句一起清掉，下次绘制会重绘）
 		// MMTR: windshield precipitation/wiper state (per-anchor drops and the generated rain image)
 		MmtrWindshield.clear();
 		TEST_DURATION = 0;
