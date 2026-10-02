@@ -44,6 +44,10 @@ import java.util.List;
  *                         blockStopM(f32)                                               17 B
  * kind 0x05 DROP          slot(u16)                                                      3 B
  * kind 0x06 PING          serverMillis(u32)                                              5 B
+ * kind 0x07 SLOT          slot(u16) vehicleId(i64) flags(u16) runStopTarget(f32)
+ *                         runTotalDistance(f32) blockStopM(f32)                         25 B
+ * kind 0x08 LEGS          slot(u16) droppedFromTail(u16) count(u8)
+ *                         [hexLength(u8) hexBytes]×count                          6 + 101n B
  * </pre>
  *
  * <h2>量化口径（用例钉死）</h2>
@@ -64,6 +68,8 @@ public final class MmtrMotionFrame {
 	public static final int KIND_STATE = 0x04;
 	public static final int KIND_DROP = 0x05;
 	public static final int KIND_PING = 0x06;
+	public static final int KIND_SLOT = 0x07;
+	public static final int KIND_LEGS = 0x08;
 
 	/** 帧头字节数（byteCount u16 + version u8 + recordCount u8）。 */
 	public static final int HEADER_BYTES = 4;
@@ -93,7 +99,7 @@ public final class MmtrMotionFrame {
 	 * 一条记录。解出来的对象只用于**读**，写永远是 {@link Writer} 的职责 ——
 	 * 于是"线上是什么形状"只有一处定义。
 	 */
-	public sealed interface Record permits Motion, Control, State, Drop, Ping {
+	public sealed interface Record permits Motion, Control, State, Drop, Ping, Slot, Legs {
 		int kind();
 	}
 
@@ -168,6 +174,46 @@ public final class MmtrMotionFrame {
 		@Override
 		public int kind() {
 			return KIND_DROP;
+		}
+	}
+
+	/**
+	 * 这辆车在本客户端上的**槽位与长 id**（每"客户端 × 车"一次）：`STATE` 的初值 + 8 字节 id。
+	 *
+	 * <p>槽位刻意是**每客户端一份**的：这样 ① 不必依赖 ② 的脏拍把槽位捎过来
+	 * （那种依赖正是 notes/368 的病根 —— "② 没发 ⇒ 客户端不知道槽位 ⇒ ① 的话全听不懂 ⇒ 镜像冻住"）。</p>
+	 */
+	public record Slot(int slot, long vehicleId, int flags, double runStopTarget, double runTotalDistance, double blockStopM) implements Record {
+
+		@Override
+		public int kind() {
+			return KIND_SLOT;
+		}
+
+		public boolean hasFlag(int flag) {
+			return (flags & flag) != 0;
+		}
+	}
+
+	/**
+	 * **腿阴影增量**（notes/369 §4.4）：走行器新踏上一根轨时告诉客户端"车头那几根轨是什么"，
+	 * 并让它把尾巴上多余的几根丢掉。
+	 *
+	 * <p>{@code newLegs} 是**按顺序**加在车头那一端的新腿（每项 = 那根轨的 hex id，
+	 * 客户端本地 `railIdMap` 就是按这个字符串索引的）；{@code droppedFromTail} =
+	 * 客户端应当从自己那份列表尾部丢掉的条数。于是客户端只做两件事：丢尾巴、接头，然后
+	 * **按 `MOTION.railProgress` 重新锚定**累加里程（车头正好落在它上面 —— 这是
+	 * {@code refreshMmtrMotionLegs} 的定义）。</p>
+	 *
+	 * <p>一条腿的 hex 是 {@code x-y-z-x-y-z} 各 16 位十六进制 ⇒ 约 101 字符 ⇒ 一条新腿 107 字节，
+	 * 而新腿是每 25–100 m（60 km/h 下 1.5–6 秒）才出现一次 ⇒ **18–71 B/s**；
+	 * 相比之下把它留在 ② 里是"每长一条腿一份 7.4 KB 整份"。</p>
+	 */
+	public record Legs(int slot, int droppedFromTail, List<String> newLegs) implements Record {
+
+		@Override
+		public int kind() {
+			return KIND_LEGS;
 		}
 	}
 
@@ -309,6 +355,33 @@ public final class MmtrMotionFrame {
 			return this;
 		}
 
+		public Writer slot(int slot, long vehicleId, int flags, double runStopTarget, double runTotalDistance, double blockStopM) {
+			start(KIND_SLOT, 24);
+			u16(slot);
+			i64(vehicleId);
+			u16(flags);
+			f32(runStopTarget);
+			f32(runTotalDistance);
+			f32(blockStopM);
+			return this;
+		}
+
+		/**
+		 * 腿阴影增量。{@code newLegs} 每项是那根轨的 hex id（ASCII）；超过 255 字符或超过 255 条时
+		 * **截断**而不是抛异常（丢一根腿最多让一节车摆错一帧，抛异常会作废整帧的所有车）。
+		 */
+		public Writer legs(int slot, int droppedFromTail, List<String> newLegs) {
+			final int count = Math.min(newLegs.size(), 0xFF);
+			start(KIND_LEGS, 3 + count * (1 + 255));
+			u16(slot);
+			u16(droppedFromTail);
+			u8(count);
+			for (int i = 0; i < count; i++) {
+				ascii(newLegs.get(i));
+			}
+			return this;
+		}
+
 		public int recordCount() {
 			return records;
 		}
@@ -359,6 +432,28 @@ public final class MmtrMotionFrame {
 			ensure(2);
 			buffer[size++] = (byte) ((value >>> 8) & 0xFF);
 			buffer[size++] = (byte) (value & 0xFF);
+		}
+
+		private void u8(int value) {
+			ensure(1);
+			buffer[size++] = (byte) (value & 0xFF);
+		}
+
+		private void i64(long value) {
+			ensure(8);
+			for (int shift = 56; shift >= 0; shift -= 8) {
+				buffer[size++] = (byte) ((value >>> shift) & 0xFF);
+			}
+		}
+
+		/** 长度前缀的 ASCII（hex id 就是 ASCII）。超长截断，尾部补 0 由长度字段兜住。 */
+		private void ascii(String text) {
+			final int length = Math.min(text.length(), 255);
+			u8(length);
+			ensure(length);
+			for (int i = 0; i < length; i++) {
+				buffer[size++] = (byte) (text.charAt(i) & 0xFF);
+			}
 		}
 
 		private void u32(int value) {
@@ -480,10 +575,70 @@ public final class MmtrMotionFrame {
 					final Integer millis = readU32();
 					return millis == null ? null : new Ping(millis & 0xFFFFFFFFL);
 				}
+				case KIND_SLOT: {
+					final Integer slot = readU16();
+					final Long vehicleId = readI64();
+					final Integer flags = readU16();
+					final Double runStopTarget = readF32();
+					final Double runTotalDistance = readF32();
+					final Double blockStopM = readF32();
+					if (slot == null || vehicleId == null || flags == null || runStopTarget == null || runTotalDistance == null || blockStopM == null) {
+						return null;
+					}
+					return new Slot(slot, vehicleId, flags, runStopTarget, runTotalDistance, blockStopM);
+				}
+				case KIND_LEGS: {
+					final Integer slot = readU16();
+					final Integer droppedFromTail = readU16();
+					final Integer count = readU8();
+					if (slot == null || droppedFromTail == null || count == null) {
+						return null;
+					}
+					final List<String> newLegs = new ArrayList<>(count);
+					for (int i = 0; i < count; i++) {
+						final String hex = readAscii();
+						if (hex == null) {
+							return null;
+						}
+						newLegs.add(hex);
+					}
+					return new Legs(slot, droppedFromTail, List.copyOf(newLegs));
+				}
 				default:
 					malformed = true;
 					return null;
 			}
+		}
+
+		private @Nullable Integer readU8() {
+			if (!has(1)) {
+				return null;
+			}
+			return frame[cursor++] & 0xFF;
+		}
+
+		private @Nullable Long readI64() {
+			if (!has(8)) {
+				return null;
+			}
+			long value = 0;
+			for (int i = 0; i < 8; i++) {
+				value = (value << 8) | (frame[cursor + i] & 0xFFL);
+			}
+			cursor += 8;
+			return value;
+		}
+
+		private @Nullable String readAscii() {
+			final Integer length = readU8();
+			if (length == null || !has(length)) {
+				return null;
+			}
+			final StringBuilder stringBuilder = new StringBuilder(length);
+			for (int i = 0; i < length; i++) {
+				stringBuilder.append((char) (frame[cursor++] & 0xFF));
+			}
+			return stringBuilder.toString();
 		}
 
 		private @Nullable Integer readU16() {

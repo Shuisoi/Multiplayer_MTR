@@ -49,6 +49,46 @@ public final class MmtrMotionFrameTests {
 		assertEquals(4 + 17, new MmtrMotionFrame.Writer().state(1, 0, 0, 0, 0).byteCount(), "STATE = 头 + 17 B");
 		assertEquals(4 + 3, new MmtrMotionFrame.Writer().drop(1).byteCount(), "DROP = 头 + 3 B");
 		assertEquals(4 + 5, new MmtrMotionFrame.Writer().ping(0).byteCount(), "PING = 头 + 5 B");
+		assertEquals(4 + 25, new MmtrMotionFrame.Writer().slot(1, 0, 0, 0, 0, 0).byteCount(), "SLOT = 头 + 25 B");
+		assertEquals(4 + 6, new MmtrMotionFrame.Writer().legs(1, 0, List.of()).byteCount(), "LEGS 空 = 头 + 6 B");
+	}
+
+	/**
+	 * ★ 腿阴影增量的字节数（notes/369 §4.4）：**一条腿 107 字节**，而一条腿是每 25–100 m
+	 * （60 km/h 下 1.5–6 秒）才出现一次 ⇒ 18–71 B/s。把它留在 ② 里则是"每长一条腿一份 7.4 KB 整份"。
+	 */
+	@Test
+	public void legRecordsStayAtAboutOneHundredBytesPerNewLeg() {
+		final String hex = "0000000000000F51-0000000000000047-000000000000090B-000000000000102D-0000000000000047-000000000000090B";
+		assertEquals(101, hex.length(), "一条腿的 hex 是 101 字符（6 组 16 位十六进制 + 5 个连字符）");
+		final int oneLeg = new MmtrMotionFrame.Writer().legs(3, 1, List.of(hex)).byteCount();
+		assertEquals(4 + 6 + 1 + 101, oneLeg, "一条新腿 = 107 字节（+ 4 字节帧头）");
+		final int fourLegs = new MmtrMotionFrame.Writer().legs(3, 1, List.of(hex, hex, hex, hex)).byteCount();
+		assertEquals(4 + 6 + 4 * (1 + 101), fourLegs, "四条新腿 = 408 字节（+ 头）");
+	}
+
+	@Test
+	public void slotAndLegsRoundTrip() {
+		final long vehicleId = 4_548_773_940_558_821_130L;
+		final List<Record> slotRecords = MmtrMotionFrame.decode(new MmtrMotionFrame.Writer()
+			.slot(9, vehicleId, MmtrMotionFrame.FLAG_MMTR_ACTIVE | MmtrMotionFrame.FLAG_MOTION_MIRROR, 45_948.0, 50_000.0, 46_100.25)
+			.toCharArray());
+		assertEquals(1, slotRecords.size());
+		final MmtrMotionFrame.Slot slot = (MmtrMotionFrame.Slot) slotRecords.get(0);
+		assertEquals(9, slot.slot(), "槽位");
+		assertEquals(vehicleId, slot.vehicleId(), "长 id（i64，八字节原样）");
+		assertTrue(slot.hasFlag(MmtrMotionFrame.FLAG_MOTION_MIRROR), "镜像旗标");
+		assertEquals(45_948.0f, (float) slot.runStopTarget(), "初值 = 停车目标");
+		assertEquals(46_100.25f, (float) slot.blockStopM(), "初值 = 闭塞停车点");
+
+		final String hexA = "0000000000000F51-0000000000000047-000000000000090B-000000000000102D-0000000000000047-000000000000090B";
+		final String hexB = "FFFFFFFFFFFFE3FA-0000000000000041-000000000000067D-FFFFFFFFFFFFE435-0000000000000041-0000000000000683";
+		final List<Record> legRecords = MmtrMotionFrame.decode(new MmtrMotionFrame.Writer().legs(4, 2, List.of(hexA, hexB)).toCharArray());
+		assertEquals(1, legRecords.size());
+		final MmtrMotionFrame.Legs legs = (MmtrMotionFrame.Legs) legRecords.get(0);
+		assertEquals(4, legs.slot(), "槽位");
+		assertEquals(2, legs.droppedFromTail(), "从尾巴丢两根");
+		assertEquals(List.of(hexA, hexB), legs.newLegs(), "车头新增的两根腿按顺序");
 	}
 
 	/**
