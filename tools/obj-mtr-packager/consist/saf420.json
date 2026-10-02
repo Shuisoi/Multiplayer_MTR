@@ -1,0 +1,1055 @@
+{
+  "packName": "SAF420_v39",
+  "description": "SAF420 commuter EMU - control car A / control car B / trailer",
+  "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
+  "packFormat": 18,
+  "cars": [
+    {
+      "id": "saf420cab_a",
+      "name": "SAF420 控制车（A 端）",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 19.5,
+      "carWidthBlocks": 2.95,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -6.625,
+      "bogie2OffsetBlocks": 6.625,
+      "couplingPadding1": 0.525,
+      "couplingPadding2": 0.525,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf420cab/saf420cab.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf420cab",
+      "rotationDegY": 180,
+      "_orientationNote": "A 端车必须 rotationDegY=180 **且不改名**：模型作者的驾驶室1在 -Z，而锚点 JSON 是文件空间、客户端用 (x,y,z)->(-x,y,-z) 转骑乘空间，engineEndOfSeat 又按骑乘空间 z 判端 —— 所以【文件 z>0 = cab1 = 引擎 A 端】。rotation 0 会把 cab1 送到引擎 B 端（整列车头尾朝向反过来，2026-09-28 实机遇到的就是这个）。B 端车是 rotation 0 + _1->_2 改名。判据：mmtr/tools/anchor-check/verify_lights.js 的 L4。",
+      "_recenterNote": "false：模型本来就以【车体中心】为原点（z ±9.75 / x ±1.475）。车头清障铲与自动车钩必然伸出端面，若仍 recenter:true，打包器按旋转后包围盒中心平移会把整节车多挪 0.19 m（实测），车钩会连着转向架、门、锚点一起偏。",
+      "recenter": false,
+      "flipTextureV": true,
+      "untexturedUv": [
+        0.5,
+        0.5
+      ],
+      "_interiorRenderStageNote": "内装走 INTERIOR（不透明 CUTOUT_BRIGHT，全亮），与 MTR 官方车一致；窗户是真正的洞 + 单独的 glass 部件（半透明）。默认的 INTERIOR_TRANSLUCENT 会把座椅/墙板当半透明件画（底层 getEntityTranslucentCull 有背面剔除），实测从车外看不到内装、从车内看像破面（notes/345 §7.11）。",
+      "interiorRenderStage": "INTERIOR",
+      "groupMap": {
+        "body": [
+          "cab_body",
+          "bogies",
+          "plow",
+          "coupler",
+          "underbox",
+          "roof_ac"
+        ],
+        "interior": [
+          "interior"
+        ],
+        "door_l": [
+          "door_l"
+        ],
+        "door_r": [
+          "door_r"
+        ],
+        "anchor": [
+          "mmtr_"
+        ],
+        "headlights": [
+          "headlights"
+        ],
+        "glass": [
+          "glass"
+        ]
+      },
+      "_glassNote": "玻璃在模型里是【独立对象】glass ⇒ 独立部件，所以能带自己的一套材质/贴图（interior_translucent + saf420_glass.png）与自己的 renderStage。**不要**退回成【在 interior 组内部换材质】：实测那样整个 interior 会按玻璃贴图画，从车外看不见内装（notes/345 §7.9）。",
+      "_pidNote": "水牌（notes/357）★ 2026-10-02 临时桥已拆：模型里那块牌现在**自己就叫** `mmtr_pid_1`（`sandbox/saf420_destboard.py` 生成的**单个四边形**，面心 (0, 3.41, −9.756)、1.24 × 0.22 m、法线 −Z 朝车外、up = +Y），所以 `groupRename.dest_board` 这条改名**已删除** —— 留着它一旦模型再出现同名组就会把同一块牌产出两次（verify_pid.js P1 红）。名字必须是 `mmtr_pid_*`：叫 `mmtr_dest_board_*` 会被 body 的 `dest_board` 模式按【最长匹配】吞成可见件（实测）。判据 mmtr/tools/anchor-check/verify_pid.js（P4 朝车外 / P5 立着 / P6 端号）。",
+      "_pidLayoutNote": "水牌版式（notes/358，**每个车型独立**）：这块牌 1.24 × 0.22 m 很扁 ⇒ 一行并排（班次号靠左、『开往 终点』靠右）。位置/字号全是比例，换尺寸自动等比。要改排版就改这个 pid 段（rows 自上而下、y 自己写）；删掉整段就回默认两行。离线看效果：pwsh -File mmtr/tools/pid-preview/preview.ps1 -Anchor <锚点json>。",
+      "pid": {
+        "background": "#FF101418",
+        "textColor": "#FFF2F4F6",
+        "rows": [
+          {
+            "field": "service",
+            "x": 0.03,
+            "y": 0.5,
+            "size": 0.46,
+            "align": "left",
+            "color": "#FF9FB3C8"
+          },
+          {
+            "field": "terminus",
+            "x": 0.97,
+            "y": 0.5,
+            "size": 0.62,
+            "align": "right",
+            "prefix": "开往 "
+          }
+        ]
+      },
+      "_facesNote": "★ 动态面（notes/359 · F1）：pid_1 这块牌改由 **faces 段**的文档画 —— 键必须是**锚点名**（这里 = groupRename 之后的 mmtr_pid_1 → 去掉 mmtr_ 前缀的 pid_1）。文档与上面 pid 段的排版**逐字等价**（班次号靠左、『开往 终点』靠右、回库趟不写孤零零的『开往』），另外多了一条**琥珀色细线**：它是【动态面这条路真的活着】的证据（老渲染器画不出它）。上面那段 pid 保留 = 给不认识 faces 的旧客户端当退路，两段不冲突（有 faces 的锚点由面系统接管，见 MmtrPidRegistry/MmtrPidBoard）。离线看效果：pwsh -File mmtr\\tools\\face-preview\\preview.ps1 -Anchor <锚点json> -List；不想要那条线就删掉 elements 里的 accent 那一个元素。",
+      "faces": {
+        "pid_1": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.03,
+              "y": 0.47,
+              "size": 0.44,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.97,
+              "y": 0.44,
+              "size": 0.58,
+              "align": "right",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_2": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_3": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_4": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_5": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "_lightNote": "车灯必须是独立组：一个组只能有一个 renderStage。condition 管【画不画】，renderStage 管【发不发光】（ALWAYS_ON_LIGHT = 恒亮、不吃世界光也不吃方向光）。当前只有白前照灯；红尾灯（tail_lights / LAMP_R 灯罩格）已删，加回来 = 模型里重建该组 + 这里补一条 groupMap 与两条 part（倒行 + 在段）。",
+      "_lightAnchorNote": "车灯的【光源】是锚点、不是这个可见组：模型里另有 mmtr_light_<驾驶室>_<第几盏> 的独立四边形（面中心=灯罩中心，面法线=射出方向，必须朝车外）。cab 1 = A 端（-Z，与 mmtr_hud_1 / mmtr_windshield_1_1 同一个约定）。实测车头是左右两盏一样的 0.26 m 方块灯（x=±1.020, y=1.580, 外表面 z=-9.780），所以编号只是序号、【强度按灯罩面积算】—— 不是【1=主灯 2=标志灯】。锚点的面被剥掉、不进渲染几何，只进 mmtr_anchors_<id>.json。判据与规则见 notes/345，离线自检 mmtr/tools/anchor-check/verify_lights.js。",
+      "partSpecs": {
+        "headlights": [
+          {
+            "renderStage": "ALWAYS_ON_LIGHT",
+            "condition": "ON_ROUTE_FORWARDS"
+          }
+        ],
+        "glass": [
+          {
+            "renderStage": "INTERIOR_TRANSLUCENT"
+          }
+        ]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "_doorSlideNote": "两叶门：默认是【整侧一个符号】(door_l* + / door_r* -)，会把每对叶里的一片送进自己门洞。这里逐叶给符号。★★ 符号口径 = **OBJ 运行期空间**：MTR 对 **OBJ 模型**的 doorZMultiplier 是**取反**用的（`LegacyVehicleResource.java:398` `(isObj ? -1 : 1) * …`；同处 OBJ 部件的包围盒三个轴也全取反 `ModelPropertiesPart.java:191`）⇒ 文件空间里 **+Z 侧那片取 −、−Z 侧取 +**。实机判据（2026-10-01）：按“文件空间远离门洞中心”写的那一版（v30–v32）用户看到的就是「开门还是反的」；本车回到这条口径（数值 = v9–v28 那一套）。判据 mmtr/tools/anchor-check/verify_doors.js（**不要**把坐标转回模型空间再判 —— 那是把两套空间混起来，notes/354 §2）。",
+      "doorSlideByGroup": {
+        "door_l_1": -14,
+        "door_l_2": 14,
+        "door_l_3": -14,
+        "door_l_4": 14,
+        "door_l_5": -14,
+        "door_l_6": 14,
+        "door_r_1": -14,
+        "door_r_2": 14,
+        "door_r_3": -14,
+        "door_r_4": 14,
+        "door_r_5": -14,
+        "door_r_6": 14
+      },
+      "extraDoorways": [
+        "cabdoor_1_1",
+        "cabdoor_1_2"
+      ]
+    },
+    {
+      "id": "saf420cab_b",
+      "name": "SAF420 控制车（B 端）",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 19.5,
+      "carWidthBlocks": 2.95,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -6.625,
+      "bogie2OffsetBlocks": 6.625,
+      "couplingPadding1": 0.525,
+      "couplingPadding2": 0.525,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf420cab/saf420cab.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf420cab",
+      "rotationDegY": 0,
+      "_orientationNote": "B 端车 = rotationDegY 0 + 下面的 groupRename 把 _1 改写成 _2，两者必须成对：rotation 0 让作者的驾驶室1 落在文件 z<0（= 骑乘 z>0 = 引擎 B 端），改名让它自称 cab2。只改一个 = 整列车头尾朝向反过来（见 saf420cab_a 的 _orientationNote）。",
+      "recenter": false,
+      "flipTextureV": true,
+      "untexturedUv": [
+        0.5,
+        0.5
+      ],
+      "_interiorRenderStageNote": "内装走 INTERIOR（不透明 CUTOUT_BRIGHT，全亮），与 MTR 官方车一致；窗户是真正的洞 + 单独的 glass 部件（半透明）。默认的 INTERIOR_TRANSLUCENT 会把座椅/墙板当半透明件画（底层 getEntityTranslucentCull 有背面剔除），实测从车外看不到内装、从车内看像破面（notes/345 §7.11）。",
+      "interiorRenderStage": "INTERIOR",
+      "groupMap": {
+        "body": [
+          "cab_body",
+          "bogies",
+          "plow",
+          "coupler",
+          "underbox",
+          "roof_ac"
+        ],
+        "interior": [
+          "interior"
+        ],
+        "door_l": [
+          "door_l"
+        ],
+        "door_r": [
+          "door_r"
+        ],
+        "anchor": [
+          "mmtr_"
+        ],
+        "headlights": [
+          "headlights"
+        ],
+        "glass": [
+          "glass"
+        ]
+      },
+      "_glassNote": "玻璃在模型里是【独立对象】glass ⇒ 独立部件，所以能带自己的一套材质/贴图（interior_translucent + saf420_glass.png）与自己的 renderStage。**不要**退回成【在 interior 组内部换材质】：实测那样整个 interior 会按玻璃贴图画，从车外看不见内装（notes/345 §7.9）。",
+      "_pidLayoutNote": "水牌版式（notes/358）：与 A 端同一套（这块牌两端同尺寸）；两端各写一份是因为版式**按节车**读 —— 想让 B 端长得不一样，就在这里改成另一套 rows。",
+      "pid": {
+        "background": "#FF101418",
+        "textColor": "#FFF2F4F6",
+        "rows": [
+          {
+            "field": "service",
+            "x": 0.03,
+            "y": 0.5,
+            "size": 0.46,
+            "align": "left",
+            "color": "#FF9FB3C8"
+          },
+          {
+            "field": "terminus",
+            "x": 0.97,
+            "y": 0.5,
+            "size": 0.62,
+            "align": "right",
+            "prefix": "开往 "
+          }
+        ]
+      },
+      "_facesNote": "★ 动态面（notes/359 · F1 / notes/360 · F3）：B 端这块牌叫 pid_2（见下面 groupRename），所以文档的键也是 pid_2。F3 把它升级成**两页翻牌水牌**：第 0 页写下一站、第 1 页写终点，每 7 秒翻一次（drum 绕锚点的水平轴转，turnFraction 0.3 = 用 30% 的时间翻过去、其余停住）。第 1 页的终点名用走马灯（anim.kind=marquee）：名字长的时候自己滚，不再被压缩到看不清。琥珀色细线仍是【动态面这条路真的活着】的证据。老 pid/next 段保留 = 给不认识 faces 的旧客户端当退路。想退回静态：把下面 pages 换成单个 elements（或删掉 faces.pid_2），重新跑 pack_consist.js。",
+      "faces": {
+        "pid_2": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "fps": 10,
+          "pageSeconds": 7,
+          "pages": [
+            {
+              "name": "下一站",
+              "elements": [
+                {
+                  "type": "rect",
+                  "x": 0,
+                  "y": 0.94,
+                  "w": 1,
+                  "h": 0.06,
+                  "color": "#FFFFB300"
+                },
+                {
+                  "type": "text",
+                  "text": "{pid.service}",
+                  "x": 0.03,
+                  "y": 0.47,
+                  "size": 0.44,
+                  "align": "left",
+                  "color": "#FF9FB3C8"
+                },
+                {
+                  "type": "text",
+                  "text": "下一站 {pid.next}",
+                  "x": 0.97,
+                  "y": 0.44,
+                  "size": 0.58,
+                  "align": "right",
+                  "when": {
+                    "!!": [
+                      {
+                        "var": "pid.next"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "终点",
+              "elements": [
+                {
+                  "type": "rect",
+                  "x": 0,
+                  "y": 0.94,
+                  "w": 1,
+                  "h": 0.06,
+                  "color": "#FFFFB300"
+                },
+                {
+                  "type": "text",
+                  "text": "{pid.service}",
+                  "x": 0.03,
+                  "y": 0.47,
+                  "size": 0.44,
+                  "align": "left",
+                  "color": "#FF9FB3C8"
+                },
+                {
+                  "type": "text",
+                  "text": "开往 {pid.terminus}",
+                  "x": 0.55,
+                  "y": 0.44,
+                  "size": 0.58,
+                  "w": 0.42,
+                  "when": {
+                    "!!": [
+                      {
+                        "var": "pid.terminus"
+                      }
+                    ]
+                  },
+                  "anim": {
+                    "kind": "marquee",
+                    "spanMs": 6000,
+                    "gap": 0.3
+                  }
+                }
+              ]
+            }
+          ],
+          "drum": {
+            "count": 2,
+            "turnFraction": 0.3,
+            "radiusM": 0.02
+          }
+        },
+        "pid_2_2": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_2_3": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_2_4": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_2_5": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "_lightNote": "B 端控制车：整车由 rotationDegY 180 烘到另一端。**可见灯组**（headlights）不用改名 —— 几何跟着旋转走；但 **mmtr_light_* 锚点必须改名**（_1 -> _2，见下面 groupRename），否则 B 车的灯锚点会自称【驾驶室1】却长在车体另一端 —— 与 hud/seat/cabdoor/windshield 是同一条规则。用通配符一条覆盖任意数量的灯，避免【下次再加一盏就漏了】。当前只有白前照灯。",
+      "_pidNote": "水牌（notes/357）★ 2026-10-02 临时桥已拆：模型里那块牌现在**自己就叫** `mmtr_pid_1`（单个四边形，见 A 端那条 _pidNote），所以 `dest_board` 改名**已删除**。这端要改的只剩下面两条：无序号写法 `mmtr_pid_1` → `mmtr_pid_2`，带序号写法 `mmtr_pid_1_*` → `mmtr_pid_2_*`（通配符匹配不到无序号写法，少一个 `_`，所以两种都写）。理由同灯 —— B 车由 rotationDegY 180 打出来，作者的驾驶室1 落在文件 z<0 = 引擎 B 端。漏改的后果是 B 车水牌【自称 cab1 却长在另一端】，verify_pid.js 的 P6 会红。",
+      "partSpecs": {
+        "headlights": [
+          {
+            "renderStage": "ALWAYS_ON_LIGHT",
+            "condition": "ON_ROUTE_FORWARDS"
+          }
+        ],
+        "glass": [
+          {
+            "renderStage": "INTERIOR_TRANSLUCENT"
+          }
+        ]
+      },
+      "groupRename": {
+        "mmtr_hud_1": "mmtr_hud_2",
+        "mmtr_seat_1": "mmtr_seat_2",
+        "mmtr_cabdoor_1_1": "mmtr_cabdoor_2_1",
+        "mmtr_cabdoor_1_2": "mmtr_cabdoor_2_2",
+        "mmtr_windshield_1_1": "mmtr_windshield_2_1",
+        "mmtr_wipersweep_1_1": "mmtr_wipersweep_2_1",
+        "mmtr_wipersweep_1_1_2": "mmtr_wipersweep_2_1_2",
+        "mmtr_light_1_*": "mmtr_light_2_*",
+        "mmtr_pid_1": "mmtr_pid_2",
+        "mmtr_pid_1_*": "mmtr_pid_2_*",
+        "mmtr_next_1": "mmtr_next_2",
+        "mmtr_next_1_*": "mmtr_next_2_*",
+        "wiper_1_1": "wiper_2_1",
+        "wiper_1_1_2": "wiper_2_1_2",
+        "wiperarm_1_1": "wiperarm_2_1",
+        "wiperarm_1_1_2": "wiperarm_2_1_2"
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "_doorSlideNote": "反向车（rotationDegY=0，几何没有被烘成镜像）⇒ 逐叶符号与 A 端车相反（A 端车 rotationDegY=180 ⇒ 顶点被镜像 ⇒ 同一片叶落在文件的另一侧）。口径与证据见 A 端那条注 / notes/354 §2。",
+      "doorSlideByGroup": {
+        "door_l_1": 14,
+        "door_l_2": -14,
+        "door_l_3": 14,
+        "door_l_4": -14,
+        "door_l_5": 14,
+        "door_l_6": -14,
+        "door_r_1": 14,
+        "door_r_2": -14,
+        "door_r_3": 14,
+        "door_r_4": -14,
+        "door_r_5": 14,
+        "door_r_6": -14
+      },
+      "extraDoorways": [
+        "cabdoor_2_1",
+        "cabdoor_2_2"
+      ]
+    },
+    {
+      "id": "saf420car",
+      "name": "SAF420 拖车",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 16.95,
+      "carWidthBlocks": 2.95,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5.5,
+      "bogie2OffsetBlocks": 5.5,
+      "couplingPadding1": 0.525,
+      "couplingPadding2": 0.525,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf420car/saf420car.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf420car",
+      "rotationDegY": 180,
+      "recenter": true,
+      "flipTextureV": true,
+      "untexturedUv": [
+        0.5,
+        0.5
+      ],
+      "groupMap": {
+        "body": [
+          "cab_body",
+          "bogies",
+          "underbox",
+          "roof_ac"
+        ],
+        "interior": [
+          "interior"
+        ],
+        "door_l": [
+          "door_l"
+        ],
+        "door_r": [
+          "door_r"
+        ],
+        "glass": [
+          "glass"
+        ],
+        "anchor": [
+          "mmtr_"
+        ]
+      },
+      "partSpecs": {
+        "glass": [
+          {
+            "renderStage": "INTERIOR_TRANSLUCENT"
+          }
+        ]
+      },
+      "_glassNote": "2026-09-30：拖车的车窗**不再是内装上的面**，而是独立 `glass` 物体 ⇒ 与车头同构：自己的材质（interior_translucent → saf420_glass.png，黑半透 + 20 mm 纯黑窗框）与自己的 renderStage。**不给它这条 partSpecs 的话，窗户会跟着 `interior` 走 INTERIOR（不透明）**，在游戏里就是发蓝的实色（这正是改之前的样子：与车头一亮一暗）。",
+      "_pidNote": "水牌（notes/357）★ 2026-10-02：拖车也挂**车身侧面水牌 4 块**（`mmtr_pid_1_2`/`_1_3` 车头端两侧、`_1_4`/`_1_5` 车尾端两侧，与 A/B 端控制车完全同位置同尺寸：墙段中心 z=−4.4975 / +4.495，y 2.3613…2.7588，0.9 × 0.3975 m）。拖车**没有驾驶室**，所以没有车头正脸那块 `mmtr_pid_1`；端号仍是 cab1（`verify_pid.js` 的 P6：全车只有一个 cab 时所有牌都必须是那个 cab）。★ 这条 `anchor` 是**必需**的：groupMap 里没有 `mmtr_` 的话，`mmtr_pid_*` 不会被认成锚点（不是报错，是静默变成可见部件/丢数据）。",
+      "_pidLayoutNote": "水牌版式（notes/358）：与 A 端控制车**逐字相同**（同一份 `pid` 段 ⇒ 全列车水牌排版一致；拖车的牌尺寸与车头车侧面那 4 块一致）。改一处即可全车生效的口径见 A 端的 `_pidLayoutNote`。",
+      "pid": {
+        "background": "#FF101418",
+        "textColor": "#FFF2F4F6",
+        "rows": [
+          {
+            "field": "service",
+            "x": 0.03,
+            "y": 0.5,
+            "size": 0.46,
+            "align": "left",
+            "color": "#FF9FB3C8"
+          },
+          {
+            "field": "terminus",
+            "x": 0.97,
+            "y": 0.5,
+            "size": 0.62,
+            "align": "right",
+            "prefix": "开往 "
+          }
+        ]
+      },
+      "_equipNote": "2026-09-30：拖车补了车顶空调（`roof_ac`，与车头同一台：2.0×6.0、居中、底面贴顶拱）与车底设备箱（`underbox`，5 箱、间隙 0.30 m、避开转向架 ±[3.89,7.11]）。两者都是**不可动件** ⇒ 归 `body`。★ 它们都在车体包围盒的 z/x 范围内（空调把最高点抬到 y=4.10，与车头一致），所以 `recenter: true` 的平移量仍然是 0。",
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "_doorSlideNote": "两叶门逐叶符号，口径同 A 端控制车（拖车也是 rotationDegY=180 ⇒ 顶点被镜像 ⇒ 用同一套数值）。证据与判据：notes/354 §2 / verify_doors.js。",
+      "doorSlideByGroup": {
+        "door_l_1": -14,
+        "door_l_2": 14,
+        "door_l_3": -14,
+        "door_l_4": 14,
+        "door_l_5": -14,
+        "door_l_6": 14,
+        "door_r_1": -14,
+        "door_r_2": 14,
+        "door_r_3": -14,
+        "door_r_4": 14,
+        "door_r_5": -14,
+        "door_r_6": 14
+      },
+      "faces": {
+        "pid_1_2": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_3": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_4": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pid_1_5": {
+          "background": "#FF101418",
+          "textColor": "#FFF2F4F6",
+          "side": "normal",
+          "require": {
+            "!!": [
+              {
+                "var": "pid.service"
+              }
+            ]
+          },
+          "elements": [
+            {
+              "type": "rect",
+              "x": 0,
+              "y": 0.94,
+              "w": 1,
+              "h": 0.06,
+              "color": "#FFFFB300"
+            },
+            {
+              "type": "text",
+              "text": "{pid.service}",
+              "x": 0.04,
+              "y": 0.7,
+              "size": 0.3,
+              "align": "left",
+              "color": "#FF9FB3C8"
+            },
+            {
+              "type": "text",
+              "text": "开往 {pid.terminus}",
+              "x": 0.04,
+              "y": 0.3,
+              "size": 0.52,
+              "align": "left",
+              "when": {
+                "!!": [
+                  {
+                    "var": "pid.terminus"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
