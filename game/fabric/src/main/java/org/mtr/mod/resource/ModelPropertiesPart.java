@@ -13,6 +13,7 @@ import org.mtr.mod.MutableBox;
 import org.mtr.mod.client.CustomResourceLoader;
 import org.mtr.mod.client.DynamicTextureCache;
 import org.mtr.mod.client.IDrawing;
+import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.ScrollingText;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
@@ -192,15 +193,36 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 			}
 		});
 
-		optimizedModelDoor = () -> isDoor() ? OptimizedModelWrapper.fromObjModels(objModels) : null;
+		// A mechanism part (wiper_/wiperarm_/wiperrod_) is moved per part by its own kinematics, so it needs
+		// its own drawable wrapper exactly like a door does: on the OBJ path `modelParts` is ALWAYS empty and
+		// the geometry otherwise goes into the main optimized batch, which is drawn elsewhere and therefore
+		// cannot be rotated per part.
+		//
+		// It has to stay out of BOTH batches, not just the main one. The doors-closed list is not "doors
+		// only": a vehicle draws its body from the doors-closed optimised model whenever the doors are shut
+		// - i.e. normally - so a mechanism left in there is a SECOND, static copy that never moves. Parked,
+		// the two copies sit on top of each other and look like one; the moment the wipers run, the moving
+		// copy separates from the frozen one and the car appears to grow a second wiper. A door can live
+		// with that because its frozen copy IS the closed door; a wiper has no such state.
+		//
+		// It still has to REGISTER its position, though - just not in a batch. An OBJ wrapper materialises
+		// geometry only from the transformations recorded on the ObjModel (`addObjModelPosition` does both),
+		// so skipping the call entirely builds an EMPTY wrapper and the wiper disappears altogether. A
+		// scratch map is thrown away instead of being turned into a vehicle-level model.
+		final boolean mechanism = isMechanism();
+		optimizedModelDoor = () -> isDoor() || mechanism ? OptimizedModelWrapper.fromObjModels(objModels) : null;
 
 		positionDefinitions.forEach(positionDefinitionName -> positionDefinitionsObject.getPositionDefinition(positionDefinitionName, (positions, positionsFlipped) -> {
 			if (type == PartType.NORMAL) {
 				iteratePositions(positions, positionsFlipped, (x, y, z, flipped) -> {
-					if (!isDoor()) {
-						addObjModelPosition(objModels, objModelsForPartConditionAndRenderStage, x, y, z, flipped, modelYOffset);
+					if (mechanism) {
+						addObjModelPosition(objModels, new Object2ObjectOpenHashMap<>(), x, y, z, flipped, modelYOffset);
+					} else {
+						if (!isDoor()) {
+							addObjModelPosition(objModels, objModelsForPartConditionAndRenderStage, x, y, z, flipped, modelYOffset);
+						}
+						addObjModelPosition(objModels, objModelsForPartConditionAndRenderStageDoorsClosed, x, y, z, flipped, modelYOffset);
 					}
-					addObjModelPosition(objModels, objModelsForPartConditionAndRenderStageDoorsClosed, x, y, z, flipped, modelYOffset);
 					partDetailsList.add(new PartDetails(new ObjectArrayList<>(), optimizedModelDoor.get(), addBox(mutableBox.get(), x, y, z, flipped), x, y, z, flipped));
 				});
 			}
@@ -314,6 +336,20 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		return doorXMultiplier != 0 || doorZMultiplier != 0;
 	}
 
+	/**
+	 * @return whether this part is a wiper mechanism piece (wiper_/wiperarm_/wiperrod_). Such a part is
+	 *         moved by rotating the PART, not by the door animation, so on the OBJ path it needs its own
+	 *         drawable wrapper the same way a door does - see the OBJ writeCache.
+	 */
+	private boolean isMechanism() {
+		for (final String name : names) {
+			if (name != null && name.startsWith("wiper")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** The model's RESOURCE id for one car of a consist - what the anchors and wiper states are keyed by. */
 	private static String vehicleIdFor(VehicleExtension vehicle, int carNumber) {
 		final var cars = vehicle.getVehicleCarsAndPositions();
@@ -364,7 +400,20 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				z = shouldRender ? (float) (partDetails.z + (canOpen ? vehicle.persistentVehicleData.getInterpolatedDoorValue(doorAnimationType, doorZMultiplier, partDetails.flipped, doorOverrideValue, opening) : 0)) : Integer.MAX_VALUE;
 			}
 
-			if (OptimizedRenderer.hasOptimizedRendering()) {
+			// The mechanism parts (wiper_ / wiperarm_ / wiperrod_) are moved per part by their own kinematics,
+			// so they must NOT be taken by the optimized branch: that branch only re-draws an
+			// `optimizedModelDoor` and therefore draws NOTHING for a non-door part. The whole W4 rotation
+			// lived in the else below, so with the optimized renderer on (the default) it never ran - which
+			// is exactly "the wiper does not move no matter what the stalk says".
+			boolean isWiperPart = false;
+			for (final String candidate : names) {
+				if (candidate != null && candidate.startsWith("wiper")) {
+					isWiperPart = true;
+					break;
+				}
+			}
+
+			if (OptimizedRenderer.hasOptimizedRendering() && !isWiperPart) {
 				// If doors are open, only render the optimized door parts
 				// Otherwise, the main model already includes closed doors
 				if (!openDoorways.isEmpty() && partDetails.optimizedModelDoor != null) {
@@ -383,8 +432,22 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				// getId() is the NUMERIC vehicle id; the anchors and the wiper states are keyed by the
 				// model's RESOURCE id, which is what the consist reports for this car.
 				final String vehicleResourceId = vehicle == null ? null : vehicleIdFor(vehicle, carNumber);
-				final boolean wiperMoved = vehicleResourceId != null && MmtrWindshield.pushPartTransform(graphicsHolder, names, vehicleResourceId, carNumber);
+				final int modelCar = vehicle == null ? carNumber : MmtrVehicleAnchors.modelCarIndex(vehicle, carNumber);
+				final boolean wiperMoved = vehicleResourceId != null && MmtrWindshield.pushPartTransform(graphicsHolder, names, vehicleResourceId, carNumber, modelCar);
 				partDetails.modelParts.forEach(modelPart -> modelPart.render(graphicsHolder, x, y, z, partDetails.flipped ? (float) Math.PI : 0, renderProperties.rightInt(), OverlayTexture.getDefaultUvMapped()));
+				// On the OBJ path `modelParts` is always empty and the geometry lives in the part's own
+				// wrapper (the same one doors use). Without this the draw above is a no-op, which is why the
+				// wiper rotated into nothing. The wrapper is queued INSIDE the rotation push/pop from
+				// pushPartTransform above, so the blade actually turns.
+				if (partDetails.modelParts.isEmpty() && partDetails.optimizedModelDoor != null) {
+					graphicsHolder.push();
+					graphicsHolder.translate(x / 16, y / 16, z / 16);
+					if (partDetails.flipped) {
+						graphicsHolder.rotateYDegrees(180);
+					}
+					CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(partDetails.optimizedModelDoor, graphicsHolder, light);
+					graphicsHolder.pop();
+				}
 				if (wiperMoved) {
 					graphicsHolder.pop();
 				}

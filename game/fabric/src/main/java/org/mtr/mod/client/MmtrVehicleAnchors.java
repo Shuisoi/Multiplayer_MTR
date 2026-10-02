@@ -11,6 +11,7 @@ import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.mapper.ResourceManagerHelper;
 import org.mtr.mod.Init;
+import org.mtr.mod.data.VehicleExtension;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
@@ -32,6 +33,9 @@ import java.nio.charset.StandardCharsets;
  *     <li>{@code mmtr_cabdoor_<cab>_<n>} — a door into cab {@code <cab>}（<b>模型自己的编号</b>，
  *         见 {@link #engineEndOfSeat}：它<b>不</b>必然等于引擎的 A/B 端）。</li>
  *     <li>{@code mmtr_seat_<cab>} — optional explicit seat point; takes priority over the HUD offset.</li>
+ *     <li>{@code mmtr_light_<cab>_<n>} — a lamp (lens centre + throw direction + lens size).</li>
+ *     <li>{@code mmtr_pid_<cab>[_<n>]} / {@code mmtr_next_<cab>[_<n>]} — 水牌（班次号 + 本趟终点）与
+ *         下一站牌（notes/357）；法线朝车外，文字由客户端画（见 {@code MmtrPidBoard}）。</li>
  * </ul>
  */
 public final class MmtrVehicleAnchors {
@@ -87,6 +91,82 @@ public final class MmtrVehicleAnchors {
 	private static final Object2ObjectOpenHashMap<String, ObjectArrayList<Anchor>> CACHE = new Object2ObjectOpenHashMap<>();
 
 	/**
+	 * MMTR：模型自带的玻璃几何，来自锚点文件的 {@code glass} 段（notes/345 §7.17）。
+	 *
+	 * <p>为什么玻璃要单独带一份几何：MTR 的 OBJ 优化渲染路径实际只做 cutout（贴图 α&gt;0.1 ⇒ 实心、
+	 * α&lt;0.1 ⇒ 丢弃），模型自己的玻璃材质拿不到 alpha 混合。这里把 {@code glass} 组导出的四边形
+	 * 交给客户端，用一条真混合、无背面剔除的层画出来 ⇒ 玻璃观感 = 作者在 Blender 里画的贴图 ✓。</p>
+	 */
+	private static final Object2ObjectOpenHashMap<String, GlassModel> GLASS_MODELS = new Object2ObjectOpenHashMap<>();
+
+	/** 一个模型的玻璃：一张贴图 + 若干四边形（每块自己的 UV 矩形 [u0,v0,u1,v1]）。 */
+	public static final class GlassModel {
+
+		public final Identifier texture;
+		public final double[][] positions;
+		public final float[][] uvs;
+
+		private GlassModel(Identifier texture, double[][] positions, float[][] uvs) {
+			this.texture = texture;
+			this.positions = positions;
+			this.uvs = uvs;
+		}
+	}
+
+	/**
+	 * @param vehicleId the vehicle model ID
+	 * @return that model's own glass geometry (from the OBJ's {@code glass} group), or {@code null}
+	 */
+	public static GlassModel getGlass(String vehicleId) {
+		get(vehicleId);
+		return GLASS_MODELS.get(vehicleId);
+	}
+
+	private static GlassModel parseGlass(JsonObject glass) {
+		try {
+			final JsonElement textureElement = glass.get("texture");
+			final JsonArray quads = glass.getAsJsonArray("quads");
+			if (textureElement == null || textureElement.isJsonNull() || quads == null || quads.size() == 0) {
+				return null;
+			}
+			final String textureName = textureElement.getAsString();
+			final int colon = textureName.indexOf(':');
+			final Identifier texture = colon < 0 ? new Identifier(NAMESPACE, textureName) : new Identifier(textureName.substring(0, colon), textureName.substring(colon + 1));
+			final ObjectArrayList<double[]> points = new ObjectArrayList<>();
+			final ObjectArrayList<float[]> uvRects = new ObjectArrayList<>();
+			for (final JsonElement element : quads) {
+				if (!element.isJsonObject()) {
+					continue;
+				}
+				final JsonObject quad = element.getAsJsonObject();
+				final JsonArray corners = quad.getAsJsonArray("positions");
+				final JsonArray uv = quad.getAsJsonArray("uv");
+				if (corners == null || uv == null || corners.size() < 3 || uv.size() < 4) {
+					continue;
+				}
+				final double[] p = new double[12];
+				for (int i = 0; i < 4; i++) {
+					final JsonArray corner = corners.get(Math.min(i, corners.size() - 1)).getAsJsonArray();
+					// 文件空间 -> 骑乘空间：(x,y,z) -> (-x, y, -z)。锚点走的是同一条换算
+					// （见 toRidingSpace），玻璃几何必须跟着转，否则会画到镜像/另一端去。
+					p[i * 3] = -corner.get(0).getAsDouble();
+					p[i * 3 + 1] = corner.get(1).getAsDouble();
+					p[i * 3 + 2] = -corner.get(2).getAsDouble();
+				}
+				points.add(p);
+				uvRects.add(new float[]{uv.get(0).getAsFloat(), uv.get(1).getAsFloat(), uv.get(2).getAsFloat(), uv.get(3).getAsFloat()});
+			}
+			if (points.isEmpty()) {
+				return null;
+			}
+			return new GlassModel(texture, points.toArray(new double[0][]), uvRects.toArray(new float[0][]));
+		} catch (Exception exception) {
+			Init.LOGGER.error("[MMTR-GLASS] 解析 glass 段失败", exception);
+			return null;
+		}
+	}
+
+	/**
 	 * Per model: the car-local height a rider's feet end up at (the anchor file's {@code rider.feetY}).
 	 *
 	 * <p>MTR builds no floor boxes for OBJ models and substitutes a synthetic slab at
@@ -104,6 +184,36 @@ public final class MmtrVehicleAnchors {
 		SEAT,
 		/** MMTR: the rain/wiper plane (a bare windscreen face with no dashboard texture on it). */
 		WINDSHIELD,
+		/**
+		 * MMTR: a lamp of a cab — {@code mmtr_light_<cab>_<n>}, PURE DATA (the face is stripped from the
+		 * render geometry). Position = the lens centre, normal = the direction the lamp throws,
+		 * size = the lens. The client turns it into a per-fragment light (see
+		 * {@code org.mtr.mod.render.light.MmtrHeadlights}); the index is only the ORDINAL of the lamp on
+		 * that end, and how strong it is comes from the lens AREA — measured, not assumed: SAF420's front
+		 * carries two identical 0.26 m square lamps, so "1 = main, 2+ = dim marker" would have made one
+		 * headlight bright and the other dim (notes/345 §2.1).
+		 */
+		LIGHT,
+		/**
+		 * MMTR notes/357：**水牌 / PID**（{@code mmtr_pid_<cab>[_<n>]}）—— 车体上的目的地牌，
+		 * 纯数据（面被剥掉、不进几何）。位置 = 牌面中心，法线朝**车外**（站台上要看得见），
+		 * {@code up} = 文字的上方向，{@code widthM/heightM} = 牌面大小。
+		 *
+		 * <p>同一端可以有多块（两侧各一块）：它们的内容**相同**（都由这一端决定），客户端逐块画。</p>
+		 */
+		PID,
+		/** MMTR notes/357：**下一站牌**（{@code mmtr_next_<cab>[_<n>]}）—— 车内显示屏，写"下一站 X"。约定同 {@link #PID}。 */
+		NEXT,
+		/**
+		 * MMTR notes/359：**动态面**（{@code mmtr_face_<cab>[_<n>]}）—— 画什么由锚点 JSON 的
+		 * {@code faces} 段里**同名**的那份文档说了算（水牌 / 下一站牌是它的两个内置特例）。
+		 *
+		 * <p>★ 客户端**不靠这个 kind 决定画什么**：面系统的运行时是"凡是有文档的锚点就画"
+		 * （见 {@code MmtrFaceRegistry}）—— 所以任何锚点（含水牌、仪表、以后的门内屏）都能挂文档。
+		 * 这个 kind 的用处是可读与可校验：打包日志里一眼看得出这是动态面，
+		 * {@code tools/anchor-check/verify_face.js} 也按它核对"该有文档的锚点有没有文档"。</p>
+		 */
+		FACE,
 		OTHER
 	}
 
@@ -173,6 +283,13 @@ public final class MmtrVehicleAnchors {
 		public final Kind kind;
 		public final int cab;
 		/**
+		 * WHICH one of this kind this anchor is, from the naming convention
+		 * {@code <kind>[_<cab>][_<index>]}: the third number of {@code mmtr_light_1_2} is 2. Only the
+		 * lamp family uses it so far, as an ORDINAL among that end's lamps (brightness comes from the
+		 * lens area, not from this number — notes/345 §2.1); a pack that does not write it reads as 1.
+		 */
+		public final int index;
+		/**
 		 * Which glass pane of the cab this is: 1 = the main screen, higher = side windows and the rest
 		 * (docs §1.4①). Only the windscreen family has one; it is 1 when the anchor file omits it.
 		 */
@@ -229,10 +346,15 @@ public final class MmtrVehicleAnchors {
 		public static final int SAG_NX = 17;
 		public static final int SAG_NY = 17;
 
-		private Anchor(String name, Kind kind, int cab, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM, double[] sagGridM, double sagUMinM, double sagUMaxM, double sagVMinM, double sagVMaxM, int pane) {
+		/**
+		 * 包内可见（刻意不是 {@code private}）：{@code MmtrVehicleAnchorsTests} 要造几个锚点来钉
+		 * "一个模型挂多节"的查找规则（notes/365）。锚点是不可变值对象，包外依旧构造不出来。
+		 */
+		Anchor(String name, Kind kind, int cab, int index, int car, Vector position, Vector normal, Vector up, Vector right, double widthM, double heightM, boolean panelFlipU, int panelPxPerMetre, boolean panelTwoSided, ObjectArrayList<Facet> facets, double canvasWidthM, double canvasHeightM, double[] sagGridM, double sagUMinM, double sagUMaxM, double sagVMinM, double sagVMaxM, int pane) {
 			this.name = name;
 			this.kind = kind;
 			this.cab = cab;
+			this.index = index <= 0 ? 1 : index;
 			this.pane = pane <= 0 ? 1 : pane;
 			this.car = car;
 			this.filePosition = position;
@@ -305,6 +427,7 @@ public final class MmtrVehicleAnchors {
 	/** Drops the cache so a reloaded resource pack is picked up. */
 	public static void clearCache() {
 		CACHE.clear();
+		GLASS_MODELS.clear();
 		RIDER_FEET_Y.clear();
 	}
 
@@ -344,6 +467,7 @@ public final class MmtrVehicleAnchors {
 	 */
 	@Nullable
 	public static Anchor findHud(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+		final int car = effectiveCar(anchors, modelCar);
 		final int wantedCab = cab <= 0 ? 1 : cab;
 		Anchor carOnly = null;
 		Anchor cabOnly = null;
@@ -352,10 +476,10 @@ public final class MmtrVehicleAnchors {
 				continue;
 			}
 			final int anchorCab = anchor.cab <= 0 ? 1 : anchor.cab;
-			if (anchor.car == modelCar && anchorCab == wantedCab) {
+			if (anchor.car == car && anchorCab == wantedCab) {
 				return anchor;
 			}
-			if (anchor.car == modelCar && carOnly == null) {
+			if (anchor.car == car && carOnly == null) {
 				carOnly = anchor;
 			}
 			if (anchorCab == wantedCab && cabOnly == null) {
@@ -372,9 +496,124 @@ public final class MmtrVehicleAnchors {
 	 * single one. A single-cab model returns its one anchor.
 	 */
 	public static ObjectArrayList<Anchor> findHuds(ObjectArrayList<Anchor> anchors, int modelCar) {
+		final int car = effectiveCar(anchors, modelCar);
 		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
 		for (final Anchor anchor : anchors) {
-			if (anchor.kind == Kind.HUD && anchor.car == modelCar) {
+			if (anchor.kind == Kind.HUD && anchor.car == car) {
+				result.add(anchor);
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * MMTR: EVERY lamp anchor of {@code modelCar}, in file order. A cab carries one per physical lamp
+	 * (SAF420: two, left and right), and each one becomes its own shader light, so the caller iterates
+	 * them instead of picking a single one.
+	 *
+	 * <p>The lamp's POSITION is the lens centre, its NORMAL the direction the lamp throws (which
+	 * {@code verify_lights.js} checks points AWAY from the car — the hud and windshield anchors point at
+	 * the driver, so their winding must not be copied here), and {@code index} is its ordinal on that
+	 * end. Strength follows the lens AREA (notes/345 §2.1).</p>
+	 */
+	public static ObjectArrayList<Anchor> findLights(ObjectArrayList<Anchor> anchors, int modelCar) {
+		final int car = effectiveCar(anchors, modelCar);
+		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == Kind.LIGHT && anchor.car == car) {
+				result.add(anchor);
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * 请求的"模型内车节序号" → **真正该用哪一份锚点**（notes/365）。
+	 *
+	 * <p>为什么要这一道：锚点 JSON 是**按模型 id** 一份，而 {@code Anchor.car} 是"这个模型里的第几节车"。
+	 * 现实里**所有包都只声明了 {@code car: 0}**（SAF420 三份、HST、BR101、saf101 实测全是 {@code car=[0]}），
+	 * 而一条编组里同一个模型往往被挂很多次 —— SAF420 的 6M4T 就是 {@code saf420car} 挂了 **8 次**，
+	 * 于是第 2..8 节算出来的序号是 1..7，一个锚点都匹配不到：水牌、动态面、仪表、车灯全部消失
+	 * （客户端日志只会说"车型 saf420car 没有任何 mmtr_pid_* 锚点"，看起来像车型的问题，其实是序号的问题）。</p>
+	 *
+	 * <p>规则一句话：**精确声明了就按精确的来，没声明就回退到第 0 节那份**（"这个模型只声明了一套锚点
+	 * ⇒ 它的每一节都用这一套"）。这样"一个模型挂 N 次"的编组每一节都能拿到自己的牌；而将来真有包给
+	 * 某节车单独声明锚点（{@code car: 1}…），精确匹配优先，回退不会抢。</p>
+	 */
+	private static int effectiveCar(ObjectArrayList<Anchor> anchors, int modelCar) {
+		if (modelCar == 0) {
+			return 0;
+		}
+		for (final Anchor anchor : anchors) {
+			if (anchor.car == modelCar) {
+				return modelCar;
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * Index of a consist car inside its OWN model (a model can be used several times in one consist).
+	 *
+	 * <p>One rule, one place: the cab panel picks the right {@code mmtr_hud_*} set with it and the
+	 * headlight collector picks the right {@code mmtr_light_*} set with it. Two copies would drift the
+	 * day a pack starts declaring {@code carIndex}.</p>
+	 *
+	 * <p>注意：查锚点时**不要**直接拿它去比 {@code anchor.car}，要走 {@link #effectiveCar} —— 只声明了
+	 * 一套锚点的模型，它的每一节都该用那一套（notes/365）。</p>
+	 */
+	public static int modelCarIndex(VehicleExtension vehicle, int carNumber) {
+		final var cars = vehicle.getVehicleCarsAndPositions();
+		if (carNumber < 0 || carNumber >= cars.size()) {
+			return 0;
+		}
+		final String vehicleId = cars.get(carNumber).left().getVehicleId();
+		int index = 0;
+		for (int i = 0; i < carNumber; i++) {
+			if (cars.get(i).left().getVehicleId().equals(vehicleId)) {
+				index++;
+			}
+		}
+		return index;
+	}
+
+	/**
+	 * MMTR notes/357：**水牌（目的地牌）** —— 这节车的每一块 {@code mmtr_pid_<cab>[_<n>]}，按文件顺序。
+	 *
+	 * <p>为什么一次返回一整组而不是"按端挑一块"：一个驾驶室常常两侧各挂一块（{@code _1}/{@code _2}），
+	 * 内容一样、位置不同，画的时候要逐块画（与 {@link #findHuds}/{@link #findLights} 同一个道理）。</p>
+	 */
+	public static ObjectArrayList<Anchor> findPidBoards(ObjectArrayList<Anchor> anchors, int modelCar) {
+		return findOfKind(anchors, modelCar, Kind.PID);
+	}
+
+	/** MMTR notes/357：**下一站牌** —— 这节车的每一块 {@code mmtr_next_<cab>[_<n>]}，按文件顺序。 */
+	public static ObjectArrayList<Anchor> findNextBoards(ObjectArrayList<Anchor> anchors, int modelCar) {
+		return findOfKind(anchors, modelCar, Kind.NEXT);
+	}
+
+	/**
+	 * MMTR notes/359：这节车的**所有**锚点，按文件顺序。
+	 *
+	 * <p>面文档的运行时用它的理由：**"哪块面归谁画"由数据说了算**（有 {@code faces} 条目的锚点归面系统），
+	 * 所以这里刻意**不**按种类过滤 —— 将来任何新锚点族都能直接挂一份面文档，不用改这里。</p>
+	 */
+	public static ObjectArrayList<Anchor> ofCar(ObjectArrayList<Anchor> anchors, int modelCar) {
+		final int car = effectiveCar(anchors, modelCar);
+		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
+		for (final Anchor anchor : anchors) {
+			if (anchor.car == car) {
+				result.add(anchor);
+			}
+		}
+		return result;
+	}
+
+	private static ObjectArrayList<Anchor> findOfKind(ObjectArrayList<Anchor> anchors, int modelCar, Kind kind) {
+		final int car = effectiveCar(anchors, modelCar);
+		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
+		for (final Anchor anchor : anchors) {
+			if (anchor.kind == kind && anchor.car == car) {
 				result.add(anchor);
 			}
 		}
@@ -388,9 +627,10 @@ public final class MmtrVehicleAnchors {
 	 * individually. {@code cab} follows the same meaning as everywhere else: 1 = A end, 2 = B end.
 	 */
 	public static ObjectArrayList<Anchor> findWindshields(ObjectArrayList<Anchor> anchors, int modelCar) {
+		final int car = effectiveCar(anchors, modelCar);
 		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
 		for (final Anchor anchor : anchors) {
-			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar) {
+			if (anchor.kind == Kind.WINDSHIELD && anchor.car == car) {
 				result.add(anchor);
 			}
 		}
@@ -431,10 +671,11 @@ public final class MmtrVehicleAnchors {
 	 * @param cab 1 = A-end cab, 2 = B-end cab; {@code <= 0} means "unspecified" (single-cab model)
 	 */
 	public static ObjectArrayList<Anchor> findWindshields(ObjectArrayList<Anchor> anchors, int modelCar, int cab) {
+		final int car = effectiveCar(anchors, modelCar);
 		final ObjectArrayList<Anchor> result = new ObjectArrayList<>();
 		final int wantedCab = cab <= 0 ? 1 : cab;
 		for (final Anchor anchor : anchors) {
-			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar && (anchor.cab <= 0 ? 1 : anchor.cab) == wantedCab) {
+			if (anchor.kind == Kind.WINDSHIELD && anchor.car == car && (anchor.cab <= 0 ? 1 : anchor.cab) == wantedCab) {
 				result.add(anchor);
 			}
 		}
@@ -453,10 +694,11 @@ public final class MmtrVehicleAnchors {
 	 */
 	@Nullable
 	public static Anchor findWindshield(ObjectArrayList<Anchor> anchors, int modelCar, int cab, int pane) {
+		final int car = effectiveCar(anchors, modelCar);
 		final int wantedCab = cab <= 0 ? 1 : cab;
 		final int wantedPane = pane <= 0 ? 1 : pane;
 		for (final Anchor anchor : anchors) {
-			if (anchor.kind == Kind.WINDSHIELD && anchor.car == modelCar
+			if (anchor.kind == Kind.WINDSHIELD && anchor.car == car
 					&& (anchor.cab <= 0 ? 1 : anchor.cab) == wantedCab
 					&& anchor.pane == wantedPane) {
 				return anchor;
@@ -591,6 +833,15 @@ public final class MmtrVehicleAnchors {
 			if (rider != null && rider.isJsonObject() && rider.getAsJsonObject().has("feetY")) {
 				RIDER_FEET_Y.put(vehicleId, rider.getAsJsonObject().get("feetY").getAsDouble());
 			}
+			// MMTR 玻璃（notes/345 §7.17）：模型自带的玻璃几何 —— 打包器从 OBJ 的 `glass` 组导出
+			// （文件空间的四边形 + 该组材质的贴图 + UV 矩形）。完全由 Blender 决定，客户端只负责混合绘制。
+			final JsonElement glassElement = root.getAsJsonObject().get("glass");
+			if (glassElement != null && glassElement.isJsonObject()) {
+				final GlassModel glassModel = parseGlass(glassElement.getAsJsonObject());
+				if (glassModel != null) {
+					GLASS_MODELS.put(vehicleId, glassModel);
+				}
+			}
 			final JsonArray array = root.getAsJsonObject().getAsJsonArray("anchors");
 			if (array == null) {
 				return anchors;
@@ -604,6 +855,7 @@ public final class MmtrVehicleAnchors {
 						getString(object, "name", ""),
 						parseKind(getString(object, "kind", "")),
 						getInt(object, "cab", 0),
+						getInt(object, "index", 1),
 						getInt(object, "car", 0),
 						getVector(object, "x", "y", "z"),
 						getVector(object, "normal"),
@@ -658,6 +910,14 @@ public final class MmtrVehicleAnchors {
 				return Kind.SEAT;
 			case "windshield":
 				return Kind.WINDSHIELD;
+			case "light":
+				return Kind.LIGHT;
+			case "pid":
+				return Kind.PID;
+			case "next":
+				return Kind.NEXT;
+			case "face":
+				return Kind.FACE;
 			default:
 				return Kind.OTHER;
 		}

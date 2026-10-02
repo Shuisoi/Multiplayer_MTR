@@ -1,5 +1,6 @@
 package org.mtr.mod.render.panel;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -33,6 +34,7 @@ import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.QueuedRenderLayer;
+import org.mtr.mod.render.glass.MmtrGlass;
 import org.mtr.mod.render.StoredMatrixTransformations;
 
 import javax.annotation.Nullable;
@@ -161,10 +163,11 @@ public final class MmtrWindshield {
 	}
 
 	/**
-	 * How far ahead of the blade the wipe fades in (degrees). Wide enough that the clear band appears to
-	 * travel with the arm rather than snap, narrow enough that the blade has visibly done the work.
+	 * Shortest modelled blade that still counts as a blade: below this the band between two blade
+	 * positions is degenerate and the sector fallback is the better answer (see
+	 * {@code WiperConfig.usesBandWipe}).
 	 */
-	private static final double WIPE_FADE_DEG = 14;
+	private static final double MIN_BLADE_LENGTH_M = 0.05;
 
 	/**
 	 * The speed at which the airflow term exactly cancels the fall of the water, in m/s. Above it beads
@@ -191,11 +194,80 @@ public final class MmtrWindshield {
 	 * windscreen angle - measured on BR101 (projection 0.646) it fell from 18.9 to 15.2 km/h.</p>
 	 */
 	private static final double AIRFLOW_COEFFICIENT = REFERENCE_GRAVITY_MPS2 / (BALANCE_SPEED_MPS * BALANCE_SPEED_MPS);
-	/** How far in FRONT of the blade the film starts thinning, in metres (the band path's equivalent of
-	 * {@link #WIPE_FADE_DEG}, which is an angle and only means anything for a blade through the pivot). */
-	private static final double WIPE_FADE_M = 0.03;
-	/** How far outside the swept quad still counts as swept, in metres (see insideConvexQuad). */
-	private static final double BAND_INFLATE_M = 0.003;
+	/**
+	 * How far clear of the blade the put-back line is laid, in metres, ON TOP of the capture distance that
+	 * took the water off the glass ({@code bladeWidthM / 2 + bead radius}).
+	 *
+	 * <p>The offset is what keeps the two rules from fighting: the put-back line is on the glass where the
+	 * blade is, so without a margin the very next repaint would cut it again and the water would flicker
+	 * out of existence instead of running down the glass. It also keeps the line off the wiper, which is
+	 * the whole point of laying the water down rather than carrying it.</p>
+	 */
+	private static final double RIDGE_CLEARANCE_M = 0.010;
+	/**
+	 * How far the put-back water is thrown OUTWARD from the blade on top of its clearance, in metres, and the
+	 * speed it keeps going at afterwards - the water's own MOMENTUM at the moment the blade lets it go.
+	 *
+	 * <p>Reported as "it is still swallowing it", and the clearance alone is not enough to stop that: a bead
+	 * laid down at exactly {@code capture + RIDGE_CLEARANCE_M} has no room for error, and the field around it
+	 * moves (beads drift, merge and grow, and the blade itself keeps turning). A real blade does not place the
+	 * water it has scraped - it <b>throws</b> it: whatever the rubber was pushing keeps travelling the way it
+	 * was going and only friction on the glass stops it. So the release gives each bead an outward step along
+	 * the direction the blade was travelling plus a decaying speed in that direction (see
+	 * {@link Drop#flingX}), which puts it 40-90 mm clear of the line instead of 10 and lets it keep moving
+	 * away while the blade is still standing there.</p>
+	 */
+	private static final double RELEASE_FLING_M = 0.025;
+	/**
+	 * The fallback speed for the release, in metres per second, used only by a wiper that has never moved (so
+	 * there is no measured blade speed yet). The real release speed is the BLADE'S OWN - {@code omega * r} for
+	 * a rotating blade, its translation speed for a parallelogram - see {@code releaseSpeedFor}: the water
+	 * leaves the rubber at the speed the rubber was moving, which is what makes the release a whip.
+	 */
+	private static final double RELEASE_FLING_SPEED = 0.9;
+	/**
+	 * How far the release's flick CARRIES a bead, in metres - the same distance for every bead, whatever speed
+	 * it left the blade at.
+	 *
+	 * <p>This is the quantity that has to be constant, not the speed and not the decay time. With the speed
+	 * taken from the blade (0.9 m/s off the inner end of SAF420's blade, 5.4 m/s off the outer end in FAST)
+	 * and a fixed decay TIME, the distance travelled varies by the same 6x - so some of the water stopped just
+	 * outside the blade and some of it shot across the glass and off the far edge. Reported as "sometimes it
+	 * stays on the glass, sometimes it flies straight off it". Fitting the decay to a fixed DISTANCE instead
+	 * makes every bead pop out the same visible amount, and it is also the physical statement: a drop crossing
+	 * the film on the glass loses its momentum over a distance set by the film, not by how fast it arrived.</p>
+	 *
+	 * <p>Each bead gets 0.6x-1.4x of it ({@code RELEASE_SCATTER}), and it is capped by the room the bead
+	 * actually has: a bead released beside a blade near the frame edge is carried to a fixed margin short of
+	 * that edge rather than into it, because a bead whose centre reaches the edge is culled by
+	 * {@code drawBeads} and leaving the frame is not a flick, it is a deletion.</p>
+	 */
+	private static final double RELEASE_FLICK_M = 0.040;
+	/** How far short of the frame edge the flick is stopped, in metres, on top of the bead's own radius. */
+	private static final double RELEASE_EDGE_MARGIN_M = 0.008;
+	/**
+	 * The fallback decay time for a bead whose flick was fitted to a distance, in seconds - see
+	 * {@code Drop.flingDecayS}. Only used when a bead has no flick of its own.
+	 */
+	private static final double RELEASE_FLING_DECAY_S = 0.06;
+	/**
+	 * How much of the release's distance and speed is left to chance, as a fraction of the values above: a
+	 * bead is thrown between {@code 0.3x} and {@code 1.7x} of {@code RELEASE_FLING_M} and of
+	 * {@code RELEASE_FLING_SPEED}, and lands anywhere inside its own share of the blade rather than at an
+	 * even spacing.
+	 *
+	 * <p>Reported as "the released drops form a straight line, which is unnatural", and it was: an evenly
+	 * spaced row thrown at one speed moves as a rigid row, which is the one thing a splash of water never
+	 * does. Everything here is drawn from the Random a bead ALREADY owns ({@code Drop.random}, the field's
+	 * own jitter generator) - four {@code nextDouble()} calls per RELEASED bead, twice per stroke, nothing
+	 * allocated and no new state, so the cost is nil next to the per-frame work on the same field.</p>
+	 */
+	private static final double RELEASE_SCATTER = 1.4;
+	/**
+	 * Sideways spread of the release, in metres per second along the blade: each bead gets a random push of
+	 * up to this either way, so the row fans out instead of travelling as one.
+	 */
+	private static final double RELEASE_SIDE_MPS = 0.12;
 	/** Ceiling on the acceleration used to throw beads sideways, so a physics glitch cannot smear them. */
 	private static final double MAX_LATERAL_ACCELERATION = 1.2;
 	/** Ceiling on the lateral bead speed (m/s), for the same reason. */
@@ -231,18 +303,16 @@ public final class MmtrWindshield {
 	 */
 	private static final double RUNOFF_MARGINAL_FACTOR = 0.4;
 	/**
-	 * How far ahead of the blade a bead the blade has NOT reached yet is thrown, as a fraction of the
-	 * blade's own advance this frame. Strictly less than 1 on purpose, and that inequality is the whole
-	 * reason the wiper's water gathers instead of merely sliding along:
+	 * The speed a bead slides downhill at when NOTHING around it is crowded, as a fraction of
+	 * {@code runoffMps}.
 	 *
-	 * <p>If everything the blade touches moved by the SAME distance, the field would be rigidly translated
-	 * and its spacing - hence its density - could not change (measured: +3%, i.e. no windrow). Because the
-	 * bow wave is half the blade's advance while the water already crossed is carried by the full advance,
-	 * the blade catches up with whatever is in front of it and compacts it against its own leading edge.
-	 * Half is a taste value: 1.0 would never converge, and much less than half would let the blade
-	 * overrun the water so fast that the pile is left behind as a smear.</p>
+	 * <p>Crowding decides how FAST water runs, not whether it runs at all: below the density threshold a
+	 * bead used to be pinned outright ("NO motion at all"), which on a still glass in moderate rain is
+	 * every bead on the screen - the whole field hung there and nothing ever fell or left. Reported as
+	 * "the drops should fall and disappear naturally". Water on glass does creep; what the threshold
+	 * decides is when it lets go and RUNS.</p>
 	 */
-	private static final double BOW_WAVE_FRACTION = 0.5;
+	private static final double FALL_CREEP_FRACTION = 0.12;
 
 	/** One state per windshield, keyed by vehicle id + car + anchor name. */
 	private static final Object2ObjectOpenHashMap<String, State> STATES = new Object2ObjectOpenHashMap<>();
@@ -343,7 +413,60 @@ public final class MmtrWindshield {
 	 *
 	 * @param vehicleSpeedMetersPerMs mirrored vehicle speed; only scales how fast the water runs
 	 */
-	public static void render(String vehicleId, int carNumber, StoredMatrixTransformations carTransform, double vehicleSpeedMetersPerMs) {
+	/**
+	 * MMTR：真半透明玻璃（一块面板一个四边形）。
+	 *
+	 * <p><b>为什么玻璃必须由 mod 画</b>：MTR 的 OBJ 优化渲染路径实际只做 <b>cutout</b> —— 实测
+	 * （notes/345 §7.14）贴图 α=40/255 会画成<b>实心</b>、α=0 会被 discard。模型自己的材质在这条路径上
+	 * 拿不到 alpha 混合，所以玻璃改走一条**真正混合**的层：{@code QueuedRenderLayer.LIGHT_TRANSLUCENT}
+	 * 底层是 {@code RenderLayer.getBeaconBeam(texture, true)}（混合开、深度测试开、<b>不写深度</b>、双面）。</p>
+	 *
+	 * <p>位置/尺寸/朝向仍来自 <b>Blender 里建的锚点</b>（{@code mmtr_windshield_*}），所以分工是
+	 * "建模在 Blender、混合在 mod"。颜色/不透明度/偏移见 {@link MmtrGlass}（run/mmtr-lightfield.properties，
+	 * 2 秒热重载）。图层顺序：本层排在 {@code EXTERIOR_TRANSLUCENT_DOUBLE}（水膜/雨滴）之前 ⇒ 玻璃先画、
+	 * 水膜后叠 ✓。</p>
+	 */
+	private static void drawGlassTint(StoredMatrixTransformations carTransform, Anchor anchor, double waterSide) {
+		if (!MmtrGlass.isEnabled()) {
+			return;
+		}
+		final int colour = MmtrGlass.argb();
+		if ((colour >>> 24) == 0) {
+			return;
+		}
+		final Plane plane = Plane.of(anchor, waterSide);
+		if (plane == null) {
+			return;
+		}
+		final double liftM = MmtrGlass.offsetM();
+		final double halfWidthM = anchor.widthM / 2;
+		final double halfHeightM = anchor.heightM / 2;
+		final Vector bl = plane.pointAt(-halfWidthM, -halfHeightM, liftM);
+		final Vector br = plane.pointAt(halfWidthM, -halfHeightM, liftM);
+		final Vector tr = plane.pointAt(halfWidthM, halfHeightM, liftM);
+		final Vector tl = plane.pointAt(-halfWidthM, halfHeightM, liftM);
+		// 图层：EXTERIOR_TRANSLUCENT_DOUBLE = MoreRenderLayers.getExteriorTranslucentDoubleSided
+		// = RenderLayer.getEntityTranslucent（半透明 + **无背面剔除**）⇒ 同一个四边形两面都看得见 ✓
+		// （第一版用了 LIGHT_TRANSLUCENT = getBeaconBeam(tex, true)，它有背面剔除 ⇒ 只有车内能看到
+		//  玻璃颜色、车外被剔除。实测踩过。）
+		// 与水膜同层，但本方法在 state.draw(...) 之前调用 ⇒ 同一层内先入队先画 ⇒ 玻璃在下、水膜在上 ✓
+		MainRenderer.scheduleRender(WHITE_TEXTURE, false, QueuedRenderLayer.EXTERIOR_TRANSLUCENT_DOUBLE, (graphicsHolder, offset) -> {
+			carTransform.transform(graphicsHolder, offset);
+			IDrawing.drawTexture(
+					graphicsHolder,
+					(float) bl.x(), (float) bl.y(), (float) bl.z(),
+					(float) br.x(), (float) br.y(), (float) br.z(),
+					(float) tr.x(), (float) tr.y(), (float) tr.z(),
+					(float) tl.x(), (float) tl.y(), (float) tl.z(),
+					new Vector3d(0, 0, 0),
+					0.0F, 1.0F, 0.0F, 1.0F,
+					Direction.UP, colour, GraphicsHolder.getDefaultLight()
+			);
+			graphicsHolder.pop();
+		});
+	}
+
+	public static void render(String vehicleId, int carNumber, int modelCar, StoredMatrixTransformations carTransform, double vehicleSpeedMetersPerMs) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		// getWorldMapped() is already the client flavour; it is a sibling of MTR's World, not a subtype.
 		final org.mtr.mapping.holder.ClientWorld world = minecraftClient.getWorldMapped();
@@ -365,11 +488,21 @@ public final class MmtrWindshield {
 		// SAME car: the real saf101 model does exactly that (windshield_1 at z = +7.79 m, windshield_2 at
 		// z = -7.78 m), so "which car am I in" cannot tell the two ends of one car apart and both blades
 		// would sweep together.
-		final ObjectArrayList<Anchor> panes = MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(vehicleId), carNumber);
+		// 查锚点用 **模型内车节序号**（modelCar），不用编组序号：一个模型挂 N 节时，锚点 JSON 只有一份
+		// （notes/365）。carNumber 仍然用于身份（缓存键、日志、"司机在哪节车"），两者不能混。
+		final ObjectArrayList<Anchor> panes = MmtrVehicleAnchors.findWindshields(MmtrVehicleAnchors.get(vehicleId), modelCar);
 		logGate(vehicleId, carNumber, panes);
+		// MMTR：模型自带的玻璃（由 Blender 的 OBJ + 贴图决定）—— 每节车画一次，与天气/雨刷无关。
+		// 必须在这里（天气状态机之前）：下面那段在"干燥且雨刷归位"时会 continue，挂进去天一晴玻璃就没了。
+		final boolean hasModelGlass = MmtrGlass.hasModelGlass(vehicleId);
+		MmtrGlass.draw(carTransform, vehicleId);
 		for (final Anchor anchor : panes) {
 			if (anchor.widthM <= 0 || anchor.heightM <= 0) {
 				continue;
+			}
+			if (!hasModelGlass) {
+				// 兜底：模型没带 glass 段时，才在挡风锚点上画一块纯色玻璃（颜色来自 run 属性）
+				drawGlassTint(carTransform, anchor, waterSideOf(vehicleId, carNumber, anchor));
 			}
 			final WiperMode mode = driverOnBoard(vehicleId, carNumber, anchor) ? wiperMode : WiperMode.OFF;
 
@@ -384,7 +517,7 @@ public final class MmtrWindshield {
 
 			// The state is forgotten only when the glass is BOTH dry and parked, so a stopped wiper
 			// cannot lose the drops it was in the middle of clearing.
-			final boolean wiping = mode != WiperMode.OFF && state.config.wiper;
+			final boolean wiping = mode != WiperMode.OFF && state.config.hasWiper();
 			if (precipitating) {
 				state.lastWetMillis = now;
 			} else if (!wiping && now - state.lastWetMillis > DRY_FORGET_MILLIS) {
@@ -415,10 +548,17 @@ public final class MmtrWindshield {
 	 * <p>Applied as matrix-stack operations around the part's draw - the same shape as MTR's own 180 degree
 	 * flip - so the optimized model's baked geometry is untouched and nothing has to be re-uploaded.</p>
 	 */
-	/** Matches the independently named mechanism parts: wiper_ / wiperarm_ / wiperrod_ <cab>_<pane>. */
-	private static final Pattern WIPER_PART = Pattern.compile("^wiper(arm|rod)?_(\\d+)_(\\d+)$", Pattern.CASE_INSENSITIVE);
+	/**
+	 * Matches the independently named mechanism parts:
+	 * {@code wiper_ / wiperarm_ / wiperrod_ <cab>_<pane>[_<wiper>]}.
+	 *
+	 * <p>The optional third index is WHICH wiper of that glass the part belongs to. A glass with one wiper
+	 * names its parts without it ({@code wiper_1_1}) and a glass with two names them {@code wiper_1_1} and
+	 * {@code wiper_1_1_2}, so this regex is the client's half of the naming contract in docs §1.4②.</p>
+	 */
+	private static final Pattern WIPER_PART = Pattern.compile("^wiper(arm|rod)?_(\\d+)_(\\d+)(?:_(\\d+))?$", Pattern.CASE_INSENSITIVE);
 
-	public static boolean pushPartTransform(GraphicsHolder graphicsHolder, Iterable<String> partNames, String vehicleId, int carNumber) {
+	public static boolean pushPartTransform(GraphicsHolder graphicsHolder, Iterable<String> partNames, String vehicleId, int carNumber, int modelCar) {
 		for (final String name : partNames) {
 			final Matcher matcher = WIPER_PART.matcher(name);
 			if (!matcher.matches()) {
@@ -426,12 +566,23 @@ public final class MmtrWindshield {
 			}
 			final int cab = Integer.parseInt(matcher.group(2));
 			final int pane = Integer.parseInt(matcher.group(3));
-			final Anchor anchor = MmtrVehicleAnchors.findWindshield(MmtrVehicleAnchors.get(vehicleId), carNumber, cab, pane);
+			final int wiperIndex = matcher.group(4) == null ? 1 : Integer.parseInt(matcher.group(4));
+			// 同上：锚点按模型内序号查（carNumber 只用于缓存键与日志）
+			final Anchor anchor = MmtrVehicleAnchors.findWindshield(MmtrVehicleAnchors.get(vehicleId), modelCar, cab, pane);
 			if (anchor == null) {
 				return false;
 			}
 			final WindshieldConfig config = WindshieldConfig.get(vehicleId, anchor.name);
-			if (!config.hasBlade) {
+			// The part says WHICH wiper it is, so it is driven by that wiper's own pivot, park direction and
+			// angle. A part with no matching config (a mistyped index, or a blade whose fan was dropped)
+			// stays at its modelled position - say so once, because the visible symptom is only "this blade
+			// does not move", which is indistinguishable from several other causes.
+			final WiperConfig wiper = config.wiperAt(wiperIndex);
+			if (wiper == null || !wiper.hasBlade) {
+				if (GATE_LOG.put("nopart:" + vehicleId + ":" + carNumber + ":" + name, 1) == null) {
+					LOGGER.info("[MMTR-WSHLD] modelled wiper part {} {} has no fitted wiper {}, so it cannot be moved "
+									+ "(the glass has {} configured wiper(s))", vehicleId, name, wiperIndex, config.wipers.length);
+				}
 				return false;
 			}
 			final Plane plane = Plane.of(anchor, waterSideOf(vehicleId, carNumber, anchor));
@@ -444,13 +595,15 @@ public final class MmtrWindshield {
 			// symptom - "the wiper does not move" and "the mode never changed" look identical in game. The
 			// only silent no-op left in here is `state == null` (the angle then falls back to the park
 			// angle, theta becomes 0 and the part is left alone), so say which one it is.
-			if (GATE_LOG.put("part:" + vehicleId + ":" + carNumber + ":" + anchor.name, 1) == null) {
-				LOGGER.info("[MMTR-WSHLD] wiper part {} {} part={} hasBlade={} state={} angle={} park={} sign={}",
-						vehicleId, anchor.name, matcher.group(0), config.hasBlade, state != null,
-						state == null ? -1 : state.wiperAngleDeg, config.parkAngleDeg, config.sweepSign);
+			final WiperState wiperState = state == null ? null : state.wiperState(wiper);
+			final double stateAngleDeg = wiperState == null ? wiper.parkAngleDeg : wiperState.angleDeg;
+			if (GATE_LOG.put("part:" + vehicleId + ":" + carNumber + ":" + anchor.name + ":" + wiperIndex, 1) == null) {
+				LOGGER.info("[MMTR-WSHLD] wiper part {} {} part={} wiper={} hasBlade={} state={} angle={} park={} sign={}",
+						vehicleId, anchor.name, matcher.group(0), wiperIndex, wiper.hasBlade, wiperState != null,
+						stateAngleDeg, wiper.parkAngleDeg, wiper.sweepSign);
 			}
-			final double angleDeg = state == null ? config.parkAngleDeg : state.wiperAngleDeg;
-			final double theta = (angleDeg - config.parkAngleDeg) * config.sweepSign;
+			final double angleDeg = stateAngleDeg;
+			final double theta = (angleDeg - wiper.parkAngleDeg) * wiper.sweepSign;
 			final double widthM = anchor.widthM;
 			final double heightM = anchor.heightM;
 			// The config stores every pin and pivot as a FRACTION from the glass's left/bottom, while
@@ -462,11 +615,11 @@ public final class MmtrWindshield {
 			// swings about a point that is not on it and the rods head for the sky.
 			final double halfWidthM = widthM / 2;
 			final double halfHeightM = heightM / 2;
-			final double pivotX = config.pivotU * widthM - halfWidthM;
-			final double pivotY = config.pivotV * heightM - halfHeightM;
-			final double[] m0 = {config.pinAU * widthM - halfWidthM, config.pinAV * heightM - halfHeightM};
-			final double[] br0 = {config.pinBU * widthM - halfWidthM, config.pinBV * heightM - halfHeightM};
-			final double[] p2 = {config.pivot2U * widthM - halfWidthM, config.pivot2V * heightM - halfHeightM};
+			final double pivotX = wiper.pivotU * widthM - halfWidthM;
+			final double pivotY = wiper.pivotV * heightM - halfHeightM;
+			final double[] m0 = {wiper.pinAU * widthM - halfWidthM, wiper.pinAV * heightM - halfHeightM};
+			final double[] br0 = {wiper.pinBU * widthM - halfWidthM, wiper.pinBV * heightM - halfHeightM};
+			final double[] p2 = {wiper.pivot2U * widthM - halfWidthM, wiper.pivot2V * heightM - halfHeightM};
 			final boolean coaxial = Math.abs(p2[0] - pivotX) < 1.0E-9 && Math.abs(p2[1] - pivotY) < 1.0E-9;
 			// The linkage is solved ONCE, because all three parts are driven by the same two points: the
 			// arm's pin m (the crank) and the rod's pin br (the follower, from the loop closure). Only one
@@ -488,8 +641,8 @@ public final class MmtrWindshield {
 				final double spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
 				final double followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
 				// The mode is read off the PARK configuration - its park crank pin is m0, not br0.
-				final int mode = config.assemblyMode(m0, p2, br0, spanM, followerM);
-				final double[] br = config.followerEndFor(m, p2, spanM, followerM, mode);
+				final int mode = wiper.assemblyMode(m0, p2, br0, spanM, followerM);
+				final double[] br = wiper.followerEndFor(m, p2, spanM, followerM, mode);
 				if (br != null) {
 					bladeTurnDeg = Math.toDegrees(Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]));
 					rodTurnDeg = Math.toDegrees(Math.atan2(br[1] - p2[1], br[0] - p2[0]) - Math.atan2(br0[1] - p2[1], br0[0] - p2[0]));
@@ -559,7 +712,7 @@ public final class MmtrWindshield {
 	}
 
 	private static boolean configAllowsWiper(State state) {
-		return state.config.wiper;
+		return state.config.hasWiper();
 	}
 
 	/**
@@ -753,6 +906,71 @@ public final class MmtrWindshield {
 		return dot > 0 ? 1 : -1;
 	}
 
+	/**
+	 * The moving part of ONE wiper's state. The water is NOT here: a glass has one bead field however many
+	 * wipers it carries, so {@link State} owns the drops and holds one of these per wiper.
+	 */
+	private static final class WiperState {
+
+		/** Where the blade is now. The blade's angle is also what the wipe test is measured against. */
+		private double angleDeg;
+		/**
+		 * The blade's angle at the PREVIOUS step - the near edge of the area it has just swept, which is
+		 * half of the blade's line test in {@code onBlade}. It must be captured before
+		 * {@link State#advanceWiper} moves the blade, once per advance.
+		 */
+		private double previousAngleDeg;
+		/** Position inside the current stroke: 0 = parked, 1 = fully out, 2 = parked again. */
+		private double phase;
+		/** Counts advance() calls, so the wipe diagnostic prints one line per ~10 frames. */
+		private int logCounter;
+		/**
+		 * Which way this wiper is sweeping: +1 outward, -1 on the return. Held across the animation's wrap
+		 * (see the wipe), which is what makes it usable as the turnaround test - the moment the water the
+		 * blade is holding goes back on the glass. It starts at +1 to match the +1 direction convention, so
+		 * a bead can never be put back for disagreeing with a direction that has not been established yet.
+		 */
+		private int travelDirection = 1;
+		/**
+		 * Whether this blade moved during THIS advance. The put-back and the wipe log both key off it - per
+		 * wiper, because with two blades on one glass one of them can be dwelling while the other is
+		 * mid-stroke.
+		 */
+		private boolean moving;
+		/**
+		 * THE RIDGE: the water this blade has taken off the glass and has not put back yet. One list per
+		 * wiper is the whole of the carry state - the beads in it are invisible, tagged with this wiper's
+		 * index ({@code Drop.heldByWiper}) and out of the rain's reach until {@code putBackRidge} lays them
+		 * down along the blade's own line.
+		 */
+		private final ObjectArrayList<Drop> ridge = new ObjectArrayList<>();
+		/**
+		 * The last direction this blade was actually travelling, as a unit vector in canvas metres. The
+		 * put-back needs it precisely when the blade is NOT travelling any more (it has just stopped, or
+		 * turned around), so it is remembered rather than recomputed. Defaults to straight down the glass.
+		 */
+		private double lastPushX;
+		private double lastPushY = -1;
+		/**
+		 * How fast the blade was moving the last time it moved, held for the release: {@code omegaRadPerS} is
+		 * the angular rate of a co-axial blade (its points move at {@code omega * radius}, so the water off a
+		 * TIP leaves three times as fast as the water off the inner end) and {@code bladeSpeedMps} is the one
+		 * speed of a translating blade. See {@code RELEASE_FLING_M}: these are what the water is thrown at.
+		 */
+		private double omegaRadPerS;
+		private double bladeSpeedMps;
+		/**
+		 * Whether the put-back has already been reported during the stop this blade is in. A dwell runs the
+		 * put-back on every frame (see applyWipe) and only the first one is worth a log line.
+		 */
+		private boolean putBackReported;
+
+		private WiperState(WiperConfig wiper) {
+			angleDeg = wiper.parkAngleDeg;
+			previousAngleDeg = wiper.parkAngleDeg;
+		}
+	}
+
 	private static final class State {
 
 		private final Anchor anchor;
@@ -763,18 +981,13 @@ public final class MmtrWindshield {
 		private final Random random;
 		private long lastAdvanceMillis;
 		private long lastWetMillis;
-		/** Where the arm is now. The blade's angle is also what the wipe test is measured against. */
-		private double wiperAngleDeg;
 		/**
-		 * The arm's angle at the PREVIOUS step - the near edge of the band the blade has just swept, and
-		 * the {@code from} argument of {@link #wipeFactorBand}. It must be captured before
-		 * {@link #advanceWiper} moves the arm, once per advance.
+		 * One entry per wiper on this glass, index-aligned with {@code config.wipers}. Each wiper has its
+		 * own angle, phase and travel direction, because two blades on one screen are two independent
+		 * mechanisms - they may park at opposite ends, run at different speeds or be switched on separately,
+		 * and they clear the same water.
 		 */
-		private double previousWiperAngleDeg;
-		/** Counts advance() calls, so the wipe diagnostic prints one line per ~10 frames. */
-		private int wiperLogCounter;
-		/** Position inside the current stroke: 0 = parked, 1 = fully out, 2 = parked again. */
-		private double wiperPhase;
+		private final WiperState[] wiperStates;
 		private float intensity;
 		private boolean snow;
 		/** For the motion diagnostic only: whether the glass is wet at all this frame. */
@@ -815,15 +1028,6 @@ public final class MmtrWindshield {
 		private double lateralAcceleration;
 		/** Fractional beads waiting to be spawned, so a low spawn rate does not round down to zero. */
 		private double spawnAccumulator;
-		/** Whether the blade moved during THIS advance; the film and the wipe both key off it. */
-		private boolean bladeMoving;
-		/**
-		 * Which way the wiper is sweeping: +1 outward, -1 on the return. Held across the animation's wrap
-		 * (see the wipe), which is what makes it usable as the turnaround test for the water the blade is
-		 * carrying. It starts at +1 to match {@code Drop.carriedDirection}, so a bead can never be released
-		 * for disagreeing with a direction that has simply not been established yet.
-		 */
-		private int wiperTravelDirection = 1;
 
 		private State(Anchor anchor, WindshieldConfig config, boolean snow, double waterSide) {
 			this.anchor = anchor;
@@ -840,8 +1044,25 @@ public final class MmtrWindshield {
 				previousX[i] = drops[i].x;
 				previousY[i] = drops[i].y;
 			}
-			this.wiperAngleDeg = config.parkAngleDeg;
-			this.previousWiperAngleDeg = config.parkAngleDeg;
+			this.wiperStates = new WiperState[config.wipers.length];
+			for (int i = 0; i < wiperStates.length; i++) {
+				wiperStates[i] = new WiperState(config.wipers[i]);
+			}
+		}
+
+		/**
+		 * The state of one wiper's blade, or null when this config object is not the one this state was
+		 * built from (a pack reload between the two). Null keeps the part parked rather than driving the
+		 * WRONG blade, which is the failure a positional lookup would produce.
+		 */
+		@Nullable
+		private WiperState wiperState(WiperConfig wiper) {
+			for (int index = 0; index < config.wipers.length; index++) {
+				if (config.wipers[index] == wiper) {
+					return wiperStates[index];
+				}
+			}
+			return null;
 		}
 
 		private void advance(long now, float rainGradient, double speedMetersPerMs, WiperMode mode) {
@@ -873,12 +1094,14 @@ public final class MmtrWindshield {
 			// windscreen makes those two different, and using the local axis gives rain that slides
 			// sideways across the screen. So project world down onto the glass plane.
 			final double[] down = panelDown();
-			// The blade's angle from the PREVIOUS step, captured before it moves: it is the near edge of
-			// the band the blade is about to sweep. (It used to be maintained only for the image rebuild,
+			// The blades' angles from the PREVIOUS step, captured before they move: each is the near edge of
+			// the band its blade is about to sweep. (It used to be maintained only for the image rebuild,
 			// which is gone, so after the cleanup it was never assigned at all and stayed at the park
 			// angle - a band starting at park every frame.)
-			previousWiperAngleDeg = wiperAngleDeg;
-			advanceWiper(elapsedSeconds, mode);
+			for (final WiperState wiperState : wiperStates) {
+				wiperState.previousAngleDeg = wiperState.angleDeg;
+			}
+			advanceWipers(elapsedSeconds, mode);
 			trackAcceleration(elapsedSeconds, speedMps);
 			advanceDrops(elapsedSeconds, speedMps, down);
 			// (There used to be a second mergeDrops() call here. advanceDrops already ends with one, and
@@ -886,16 +1109,20 @@ public final class MmtrWindshield {
 			// O(n) spatial-hash pass, and a second pass in the same frame lets a chain of merges run
 			// further than one step of the model should. The offline harness only ever had the one call,
 			// which is why the divergence was invisible.)
-			// THE WIPER'S WORK. This is what "the rain is wiped off" means: every bead the blade has crossed
+			// THE WIPERS' WORK. This is what "the rain is wiped off" means: every bead a blade has crossed
 			// is taken OFF the glass on this frame, and the population is refilled by new water at a rate
 			// that follows the rain.
 			//
 			// It lives here, immediately after the step and before the draw, for two reasons. The wipe used
-			// to be applied inside the image rebuild - which is gone, and with it the only caller of
-			// wipeFactor, so the blade had stopped touching the beads at all. And doing it after the step
+			// to be applied inside the image rebuild - which is gone, and with it the only caller of the
+			// wipe test, so the blade had stopped touching the beads at all. And doing it after the step
 			// rather than at draw time keeps the order the old code had: the field is advanced, then wiped,
 			// then looked at. drawBeads therefore only reads drop.visible and needs no wipe logic of its own.
-			applyWipe();
+			//
+			// EVERY wiper on the glass runs its own pass over the same field, in order: two blades clearing
+			// one screen is two mechanisms working the same water, and the second one sees what the first
+			// left behind.
+			applyWipe(elapsedSeconds);
 
 			// There is no image to rebuild any more: the beads are geometry, drawn every frame by
 			// drawBeads, so the only thing advance() still has to do after stepping the field is report it.
@@ -980,7 +1207,7 @@ public final class MmtrWindshield {
 			LOGGER.info("[MMTR-WSHLD] motion {} prev={} intensity={} snow={} speedMps={} down=({}, {}) "
 							+ "alive={} flowing={} density=(mean {}, max {}, threshold {}) meanSurfaceSpeed={} meanRadiusMm={} "
 							+ "windowMaxStep={} travelled={} movers={} frames={} "
-							+ "spread=({}, {}) offGlass={} pushed={} pushedOff={} mode={} angle={}",
+							+ "spread=({}, {}) offGlass={} cutByBlades={} leftGlass={} mode={} angle={}",
 					anchor.name, precipitatingFlag, round(intensity), snow, round(speedMps),
 					round(down[0]), round(down[1]), alive, flowing,
 					alive == 0 ? 0 : (int) Math.round(densitySum / alive), (int) Math.round(maxDensity),
@@ -990,12 +1217,28 @@ public final class MmtrWindshield {
 					round(windowMaxStep), round(windowTravelled),
 					windowMovers, windowFramesAdvancing,
 					alive == 0 ? 0 : round(maxX - minX), alive == 0 ? 0 : round(maxY - minY),
-					offGlass, pushedInWindow, pushedOffGlassInWindow, wiperMode, round(wiperAngleDeg));
+					offGlass, pushedInWindow, pushedOffGlassInWindow, wiperMode, round(wiperStates[0].angleDeg));
 			// The spawn rate is a BEHAVIOUR ("heavier rain lands water faster"), so it gets its own line
 			// rather than being something the driver has to feel out: rate/s is what this frame's weather
 			// asked for, spawnedWindow is how many beads actually appeared since the previous report.
-			LOGGER.info("[MMTR-WSHLD] spawn {} intensity={} rate/s={} alive={} cap={} spawnedWindow={}",
-					anchor.name, round(intensity), round(spawnRatePerSecond()), alive, spawnCap(), spawnedInWindow);
+			//
+			// holding/waiting are the POPULATION ACCOUNTING, and they are the two numbers that decide
+			// whether the spawner can do its job: holding is water in a blade's ridge (off the glass by the
+			// wiper's doing and not available to the rain), waiting is water that is merely invisible and
+			// free to be placed. A glass that looks too dry is either spawn-limited (waiting near 0) or
+			// blade-limited (holding large) - and those two need opposite fixes.
+			int holding = 0;
+			int waiting = 0;
+			for (final Drop drop : drops) {
+				if (drop.heldByWiper != 0) {
+					holding++;
+				} else if (!drop.visible) {
+					waiting++;
+				}
+			}
+			LOGGER.info("[MMTR-WSHLD] spawn {} intensity={} rate/s={} alive={} cap={} holding={} waiting={} spawnedWindow={}",
+					anchor.name, round(intensity), round(spawnRatePerSecond()), alive, spawnCap(), holding, waiting,
+					spawnedInWindow);
 			spawnedInWindow = 0;
 			pushedInWindow = 0;
 			pushedOffGlassInWindow = 0;
@@ -1006,26 +1249,40 @@ public final class MmtrWindshield {
 		}
 
 		/**
-		 * Moves the arm. The blade travels at a CONSTANT angular rate (a real linkage moves roughly
-		 * linearly, and the old cosine ease made the arm crawl at both ends and blur through the middle),
-		 * then rests at the park position for {@link WiperMode#dwellS}.
+		 * Moves every blade on this glass. Each travels at a CONSTANT angular rate (a real linkage moves
+		 * roughly linearly, and the old cosine ease made the arm crawl at both ends and blur through the
+		 * middle), then rests at its park position for {@link WiperMode#dwellS}.
 		 *
 		 * <p>The phase is a 0..2 triangle that STARTS at 0 - parked - so switching from 关 to 慢 begins
 		 * where the blade already is. Every mode change is a plain rate change with no repositioning:
 		 * that is what makes 慢 -> 快 -> 慢 feel like a stalk rather than a cut.</p>
+		 *
+		 * <p>The wipers are stepped in order and INDEPENDENTLY: a glass may carry two, and nothing requires
+		 * them to share a park angle, a stroke or even a phase. They do share the stalk, the weather and the
+		 * water.</p>
 		 */
-		private void advanceWiper(double elapsedSeconds, WiperMode mode) {
-			if (mode == WiperMode.OFF || !config.wiper) {
+		private void advanceWipers(double elapsedSeconds, WiperMode mode) {
+			for (int index = 0; index < config.wipers.length; index++) {
+				advanceWiper(config.wipers[index], wiperStates[index], elapsedSeconds, mode);
+			}
+		}
+
+		private void advanceWiper(WiperConfig wiper, WiperState state, double elapsedSeconds, WiperMode mode) {
+			if (mode == WiperMode.OFF || !wiper.wiper) {
 				// Off: the blade holds position and NOTHING is wiped. A blade left mid-screen is honest -
 				// it is what a driver sees when they switch a wiper off mid-stroke - but a parked wiper
 				// must not keep clearing glass, or the screen dries itself out with the stalk at 关.
-				bladeMoving = false;
+				state.moving = false;
 				return;
 			}
+			// The stroke speed is the STALK's (mode.periodS), exactly as before: every wiper on the train
+			// runs at the mode's rate. (A blade's own `periodS` in the config is deliberately NOT applied
+			// here - it never was, and switching it on now would change the speed of any pack that happens
+			// to set it.)
 			final double strokeRate = 2 / Math.max(0.05, mode.periodS);
 			final double strokeTime = 2 / strokeRate;
 			final double cycle = strokeTime + mode.dwellS;
-			double time = wiperPhase / strokeRate + elapsedSeconds;
+			double time = state.phase / strokeRate + elapsedSeconds;
 			if (time >= cycle) {
 				// Wrap, keeping the overshoot so a long frame does not slow the arm down.
 				time -= cycle;
@@ -1033,12 +1290,12 @@ public final class MmtrWindshield {
 			if (time >= strokeTime) {
 				// Dwell at park. The blade is already there, so this only holds the phase.
 				time = 0;
-				bladeMoving = false;
+				state.moving = false;
 			} else {
-				bladeMoving = true;
+				state.moving = true;
 			}
-			wiperPhase = time * strokeRate;
-			wiperAngleDeg = config.parkAngleDeg + sweepUnit(wiperPhase) * config.sweepDeg;
+			state.phase = time * strokeRate;
+			state.angleDeg = wiper.parkAngleDeg + sweepUnit(state.phase) * wiper.sweepDeg;
 			// The sector the arm covered since the last repaint is what gets the wet film drawn on it.
 		}
 
@@ -1142,18 +1399,9 @@ public final class MmtrWindshield {
 			measureDensity();
 			for (int index = 0; index < drops.length; index++) {
 				final Drop drop = drops[index];
-				if (drop.carriedByBlade) {
-					// THE BLADE IS HOLDING THIS ONE. Water the blade is ploughing is not free to run down
-					// the glass at the same time: the blade is what is moving it, and a film that both
-					// rides the blade and obeys gravity does neither. This is not a detail - it is what
-					// made the wave smear. Measured (DropletFlow, one outward stroke): a carried bead's
-					// offset from the blade's mid-point grew by 258 mm while it was being carried, on
-					// average ~0.3 mm a frame in the same direction, because every step the field pushed it
-					// down and the carry pushed it sideways. The blade ended up with a trail of drops
-					// scattered around the swept area, each drifting along with it, instead of a line of
-					// water on its leading edge - the in-game report "some of the small drops all over the
-					// screen follow the blade". Held water is held: it moves with the blade and nothing
-					// else, until the blade lets go of it (see the release in applyWipe).
+				if (!drop.visible) {
+					// Off the glass: either the rain has not put it there yet, or a blade is holding it in its
+					// ridge. Neither is water on the windscreen, so neither grows, falls or sheds.
 					continue;
 				}
 				advanceDrop(drop, densityPerM2[index], elapsedSeconds, liftSpeed, lateralAccel, down);
@@ -1177,20 +1425,44 @@ public final class MmtrWindshield {
 			drop.radiusM = Math.min(config.maxBeadRadiusM, drop.radiusM + config.growthMps * elapsedSeconds * (0.4 + intensity));
 			// NO ink grow-in any more: a bead that is visible is fully visible. See Drop.visible.
 
-			// THE PINNING LATCH. Surface tension holds the water to the glass until something gives it a
-			// reason to move, and there are exactly two such reasons:
+			// THE FLING RUNS OUT FIRST, before any of the latch below can return early: water a blade has just
+			// thrown keeps going whatever the crowding says, and friction on the glass is all that stops it.
+			// It is in METRES per second and converted here, so its speed does not change with the shape of the
+			// glass the way the fraction-space runoff speeds do.
+			if (drop.flingX != 0 || drop.flingY != 0) {
+				drop.x += drop.flingX * elapsedSeconds / anchor.widthM;
+				drop.y += drop.flingY * elapsedSeconds / anchor.heightM;
+				final double keep = drop.flingDecayS > 1.0E-4
+						? Math.max(0, 1 - elapsedSeconds / drop.flingDecayS)
+						: 0;
+				drop.flingX *= keep;
+				drop.flingY *= keep;
+				if (Math.abs(drop.flingX) < 1.0E-4 && Math.abs(drop.flingY) < 1.0E-4) {
+					drop.flingX = 0;
+					drop.flingY = 0;
+				}
+			}
+
+			// THE PINNING LATCH, AND THE FLOOR BENEATH IT. Motion down the glass has three sources now:
 			//
 			//   1. the patch is CROWDED - more beads per square metre than densityThresholdPerM2, so
 			//      pressure > 0. The surplus over the threshold is how far past "it lets go" the patch is,
 			//      and it becomes the runoff speed. This is the rule that reads "the water only starts to
-			//      run once there is enough of it", and it is also what makes a wiper's shove visible: a
-			//      pile of beads in front of the blade is a crowded patch, so it runs.
+			//      RUN once there is enough of it", and it is what makes the line a wiper puts back run off
+			//      the glass: that line is crowded by construction.
 			//   2. the AIRFLOW is strong enough to beat the slope (liftSpeed > 0), the only thing that can
-			//      move a bead with no neighbours at all. That regime is unchanged.
+			//      move a bead UPHILL, and the only thing that can move a bead with no neighbours at all.
+			//   3. the FLOOR: a bead that is neither crowded nor lifted still slides down at
+			//      FALL_CREEP_FRACTION of the runoff speed. See the constant: without it a still glass in
+			//      moderate rain is a frozen picture, which is what "the drops should fall and disappear"
+			//      was reported against.
 			//
-			// Size is deliberately NOT a reason any more. It used to be (radiusM > staticThresholdM) and
-			// the two terms fought: growth is scaled by intensity, so in light rain nothing ever crossed
-			// the threshold and a sparse glass was indistinguishable from a frozen one.
+			// Size is deliberately NOT a gate. It used to be (radiusM > staticThresholdM) and the two terms
+			// fought: growth is scaled by intensity, so in light rain nothing ever crossed the threshold and
+			// a sparse glass was indistinguishable from a frozen one. Size only scales the SPEED.
+			//
+			// What crowding decides is therefore how FAST, not whether - and that is the whole difference
+			// between "the water only lets go once there is enough of it" and "nothing ever moves".
 			final double pressure = Math.max(0, densityPerM2 / Math.max(1.0E-6, config.densityThresholdPerM2) - 1);
 			// Heavier beads run a little faster than fine ones. A second-order taste detail now, not the
 			// gate it used to be: it only scales a speed the density has already allowed.
@@ -1200,8 +1472,14 @@ public final class MmtrWindshield {
 			// guard the mobility term is a positive constant and the latch disappears entirely.
 			final double mobility = pressure <= 0 ? 0 : Math.min(1, RUNOFF_MARGINAL_FACTOR + pressure);
 			final double runoffSpeed = config.runoffMps * mobility * sizeScale;
-			if (liftSpeed <= 0 && runoffSpeed <= 0) {
-				// Pinned: NO motion at all. The bead still beads up as it grows, and it still dries.
+			// THE FLOOR UNDER THE FALL (2026-09-24). Below the crowding threshold a bead is no longer pinned
+			// outright - it creeps downhill at FALL_CREEP_FRACTION of the runoff speed, so a screen in
+			// moderate rain at a standstill drains and refills instead of holding a still picture for ever.
+			// Crowding still decides how FAST: a patch past the threshold runs at the full runoff speed, which
+			// is what makes the line a blade puts back visibly run off the glass.
+			final double fallSpeed = Math.max(runoffSpeed, FALL_CREEP_FRACTION * config.runoffMps);
+			if (liftSpeed <= 0 && fallSpeed <= 0) {
+				// Only reachable with runoffMps = 0, i.e. a pack that asks for a frozen glass.
 				drop.surfaceSpeedMps = 0;
 				drop.trail = Math.max(0, drop.trail - elapsedSeconds * TRAIL_DRY_MPS);
 				return;
@@ -1210,7 +1488,7 @@ public final class MmtrWindshield {
 			// A running bead moves at the surface speed, faster for a heavier one. Positive = running UP
 			// the glass (the airflow has won), negative = sliding down it; down[] points downhill, so "up"
 			// is the opposite and the sign is carried through the step below.
-			final double climbSpeed = (liftSpeed > 0 ? liftSpeed : -runoffSpeed) * sizeScale;
+			final double climbSpeed = (liftSpeed > 0 ? liftSpeed : -fallSpeed) * sizeScale;
 			// The acceleration term uses a nominal 0.35 s of exposure, NOT the frame time: a frame is
 			// 16 ms, and 1.2 m/s^2 for 16 ms is 2 cm/s - invisible. 0.35 s is "how long the driver holds
 			// the brake on before the beads have visibly moved", which is the effect wanted.
@@ -1239,6 +1517,12 @@ public final class MmtrWindshield {
 
 			// Pinch off: drop a smaller bead roughly every PINCH_OFF_DISTANCE_M of travel. This is what
 			// puts the speckled wake behind a rivulet, and it refills the pinned population for free.
+			//
+			// THE CHILD'S WATER IS THE PARENT'S (2026-09-24). This used to hand the child 0.55 of the
+			// parent's radius and leave the parent untouched - i.e. it CREATED 30% of the parent's area at
+			// every shed, and a runner's wake grew water out of nothing. AREA is conserved here exactly as
+			// it is in mergePair, and the consequence is the behaviour that was asked for: a drop that runs
+			// and sheds gets smaller as it goes, and a drop that has given everything it had is GONE.
 			if (!snow) {
 				drop.pinchAccumulatorM += speed * elapsedSeconds;
 				if (drop.pinchAccumulatorM >= PINCH_OFF_DISTANCE_M && drop.radiusM > config.staticThresholdM * 1.4) {
@@ -1247,10 +1531,16 @@ public final class MmtrWindshield {
 				}
 			}
 
-			// Off the glass: respawn somewhere else. -0.05..1.05 rather than 0..1 so beads enter and
-			// leave past the frame instead of popping into existence at the edge.
-			if (drop.x < -0.05 || drop.x > 1.05 || drop.y < -0.10 || drop.y > 1.10) {
-				respawn(drop);
+			// OFF THE GLASS IS GONE (2026-09-24). This used to respawn the bead on the spot - a fresh random
+			// position and a fresh size - which is invisible either way, but it also let a bead run 10% of
+			// the glass BELOW the frame before it counted as gone, and it blurred "ran off the bottom" into
+			// "was moved somewhere else". A drop that reaches the frame simply leaves; new water arrives with
+			// the rain, at the rate the weather deserves (see spawnForWeather). The sides still overrun,
+			// because a bead entering and leaving PAST the frame is what stops the edges looking like a wall.
+			if (drop.x < -0.05 || drop.x > 1.05 || drop.y < 0 || drop.y > 1.10) {
+				drop.visible = false;
+				drop.heldByWiper = 0;
+				pushedOffGlassInWindow++;
 			}
 		}
 
@@ -1334,7 +1624,7 @@ public final class MmtrWindshield {
 		private void pinchOff(Drop parent) {
 			Drop child = null;
 			for (final Drop candidate : drops) {
-				if (candidate != parent && !candidate.visible) {
+				if (candidate != parent && !candidate.visible && candidate.heldByWiper == 0) {
 					child = candidate;
 					break;
 				}
@@ -1345,9 +1635,22 @@ public final class MmtrWindshield {
 			child.x = parent.x - parent.directionX * 0.004;
 			child.y = parent.y - parent.directionY * 0.004;
 			child.radiusM = parent.radiusM * 0.55;
+			// The parent pays for it - see the note at the caller. A parent left below the smallest drawable
+			// bead is spent, and this is one of the two ways water actually leaves the windscreen.
+			final double remainingAreaM2 = parent.radiusM * parent.radiusM - child.radiusM * child.radiusM;
+			if (remainingAreaM2 <= config.minBeadRadiusM * config.minBeadRadiusM) {
+				parent.visible = false;
+				parent.heldByWiper = 0;
+			} else {
+				parent.radiusM = Math.sqrt(remainingAreaM2);
+			}
 			child.visible = true;
 			child.trail = 0;
 			child.lateralVelocity = 0;
+			// A shed speck is PINNED by surface tension - it does not inherit the parent's fling, which would
+			// send the whole wake skating after the runner.
+			child.flingX = 0;
+			child.flingY = 0;
 			child.pinchAccumulatorM = 0;
 			child.directionX = parent.directionX;
 			child.directionY = parent.directionY;
@@ -1371,14 +1674,14 @@ public final class MmtrWindshield {
 			// A bead that re-enters the glass is OFF until the spawner puts it back on, so a bead leaving
 			// the frame and a bead being wiped look the same to the renderer: not there.
 			drop.visible = false;
+			drop.heldByWiper = 0;
+			drop.flingX = 0;
+			drop.flingY = 0;
 			drop.directionX = 0;
 			drop.directionY = -1;
 			drop.surfaceSpeedMps = 0;
 			drop.pinchAccumulatorM = 0;
-			drop.carriedByBlade = false;
-			// The strip it was parked in is not part of the sky: a bead that leaves the glass and comes
-			// back is new rain, and new rain is not collector water.
-			drop.inCollectZone = false;
+			drop.heldByWiper = 0;
 		}
 
 		/**
@@ -1425,7 +1728,9 @@ public final class MmtrWindshield {
 				// which only meant anything while a bead had a fade-in value.)
 				Drop weakest = null;
 				for (final Drop drop : drops) {
-					if (!drop.visible) {
+					// NOT a bead a blade is holding: those are off the glass by the wiper's doing and they go
+					// back where the blade leaves them, not wherever the rain would have put them.
+					if (!drop.visible && drop.heldByWiper == 0) {
 						weakest = drop;
 						break;
 					}
@@ -1531,17 +1836,10 @@ public final class MmtrWindshield {
 			if (a == b || !a.visible || !b.visible) {
 				return;
 			}
-			// COALESCENCE IS FOR FREE RAIN, not for the water the wiper has gathered. A bead the blade is
-			// holding is part of a body of water being pushed along, and water parked in a collection zone
-			// is a sheet at the side of the screen; neither is a drop sweeping up its neighbours. Letting
-			// them merge retires one of them to a random spot on the glass, which is a density SINK in
-			// exactly the place the rest of this file is trying to build density. Measured with coalescence
-			// switched on for everything (DropletFlow): the windrow fell from 215 to 153 per m2 and its 1 s
-			// run from 270 mm to 69 mm, and "the water gathers on the side the blade went" stopped being
-			// true. The exemption restores all of it.
-			if (a.carriedByBlade || b.carriedByBlade || a.inCollectZone || b.inCollectZone) {
-				return;
-			}
+			// There is no exemption for the water a blade is working any more, because there is no water a
+			// blade is working ON the glass: the blade takes what it touches off it (applyWipe), so the only
+			// beads that can merge are free rain and the ridge the blade has just put back - and that line
+			// coalescing as it runs is exactly what the driver should see.
 			final double deltaX = (a.x - b.x) * anchor.widthM;
 			final double deltaY = (a.y - b.y) * anchor.heightM;
 			// THEY TOUCH. Two discs are in contact when the distance between their centres is their two
@@ -1570,336 +1868,423 @@ public final class MmtrWindshield {
 		}
 
 		/**
-		 * The blade's actual work on the water: it <b>carries</b> what it has crossed on its leading edge
-		 * and throws what it has not reached yet ahead of itself, and the line of water it gathers is what
-		 * runs. This is the reason the blade is not just an animation.
+		 * Runs EVERY wiper on this glass over the bead field, in order.
 		 *
-		 * <p>The model is deliberately three causal steps, in this order, because each one is visible on
-		 * the glass and a shortcut through any of them produces the wrong picture:</p>
+		 * <p>There is one field per glass however many blades it carries, so the passes are sequential and
+		 * the second wiper sees what the first left: two wipers on one screen clear the same rain. Water one
+		 * blade has taken off the glass is held by THAT blade and off the field entirely
+		 * ({@code Drop.heldByWiper}), so the second pass cannot see it at all, let alone fight the first one
+		 * for it.</p>
+		 */
+		private void applyWipe(double elapsedSeconds) {
+			for (int index = 0; index < config.wipers.length; index++) {
+				// The wiper's OWN index, not its array position: a glass whose only fan is wiper 2 has one
+				// entry with index 2, and the water it picks up must be tagged with 2 - otherwise the two
+				// ownership tests would disagree about which blade owns a bead.
+				final WiperConfig wiper = config.wipers[index];
+				applyWipe(wiper, wiperStates[index], wiper.index, elapsedSeconds);
+			}
+		}
+
+		/**
+		 * THE BLADE IS A LINE, AND WHAT IT TOUCHES COMES OFF THE GLASS (2026-09-24).
+		 *
+		 * <p>Three rules, and no state on the beads at all:</p>
 		 *
 		 * <ol>
-		 *   <li>the blade <b>gathers</b> the beads it touches into a line on its leading edge (this
-		 *       method) - it does not tint them and it does not delete them;</li>
-		 *   <li>gathering them makes that line <b>locally denser</b> than the glass around it - measured
-		 *       next frame, for free, by {@link #measureDensity()};</li>
-		 *   <li>a patch past {@code densityThresholdPerM2} <b>runs</b> (see {@code advanceDrop}), so the
-		 *       line flows down the glass behind the blade.</li>
+		 *   <li><b>CUT.</b> A bead the blade's line is on - see {@link #onBlade} - is HIDDEN on the spot.
+		 *       It is not shoved, not carried and not tinted: the glass behind the blade is clean, and the
+		 *       blade itself never has a string of drops sitting on it.</li>
+		 *   <li><b>HOLD.</b> What the blade has taken off the glass is kept as ONE RIDGE
+		 *       ({@code WiperState.ridge}), and that is the whole of the carry state. No per-bead
+		 *       ownership, no band membership, no bow wave and no release test are left to get wrong.</li>
+		 *   <li><b>PUT BACK.</b> When the blade stops (the park dwell, or the stalk at OFF) or reaches the
+		 *       end of a stroke and TURNS AROUND, the ridge is let go - each bead back where it was taken
+		 *       from, thrown a little further along the way the blade was travelling. The water lands on the
+		 *       glass where the blade has just been, and then behaves like any other water: it creeps, runs
+		 *       where it is crowded, and leaves by the frame edge.</li>
 		 * </ol>
 		 *
-		 * <p>Positions are the canvas METRES {@code wipeFactor} works in - the same space the beads are
-		 * simulated in, which is why the two cannot disagree about which side of the blade a bead is on.</p>
+		 * <p>What this replaced, and why it had to go: the old model kept a per-bead carry plus a bow wave,
+		 * a shove clamp, a handover of ownership between two blades and a band-membership test, and it left
+		 * the water it gathered ON the blade's leading line - which is 30 mm on the DRIVER's side of the
+		 * modelled blade ({@code WATER_OFFSET_M}), so every sweep drew a string of drops across the wiper.
+		 * Reported as "there is still residue on the wiper". Hide-and-put-back cannot produce that picture:
+		 * a bead is either on the glass or in the ridge, and nothing in the ridge is drawn.</p>
 		 */
-		private void applyWipe() {
-			if (!config.wiper) {
+		private void applyWipe(WiperConfig wiper, WiperState state, int wiperIndex, double elapsedSeconds) {
+			if (!wiper.wiper) {
 				return;
 			}
-			// ---------------------------------------------------------------------------------------
-			// WHICH TEST. A parallel linkage (BR101: the blade translates 1.043 m and never turns) does
-			// NOT pass through a pivot, so no sector describes the glass it clears. The region it clears
-			// is the BAND between where the blade was and where it is now, which is what index W4 was
-			// built for.
-			//
-			// This is where "it only wipes half the glass" came from: this method called wipeFactor - the
-			// SECTOR test - unconditionally, and wipeFactorBand had no caller anywhere in the file. The
-			// sector's pivot is the modelled spindle, which sits far below the glass, so the angular test
-			// clears a half-plane rather than the strip the blade actually crossed.
-			// ---------------------------------------------------------------------------------------
-			final boolean bandWipe = config.usesBandWipe();
-			final double[][] bladeFrom = bandWipe ? config.bladeSegmentM(previousWiperAngleDeg, anchor) : null;
-			final double[][] bladeTo = bandWipe ? config.bladeSegmentM(wiperAngleDeg, anchor) : null;
+			final boolean bandWipe = wiper.usesBandWipe(anchor);
+			final double[][] bladeFrom = bandWipe ? wiper.bladeSegmentM(state.previousAngleDeg, anchor) : null;
+			final double[][] bladeTo = bandWipe ? wiper.bladeSegmentM(state.angleDeg, anchor) : null;
 			if (bandWipe && (bladeFrom == null || bladeTo == null)) {
 				return;
 			}
-			final double pivotX = config.pivotU * anchor.widthM;
-			final double pivotY = config.pivotV * anchor.heightM;
-			// ---------------------------------------------------------------------------------------
-			// THE BLADE PUSHES THE WATER; IT DOES NOT DELETE IT.
-			//
-			// Two earlier versions were wrong in opposite ways, and both are worth keeping in mind:
-			//
-			//   * "press the bead down to a fraction of its ink" (RE_WET_INK + (1 - RE_WET_INK)*(1-wipe))
-			//     bottomed out at 0.30, which is exactly the alpha floor of a drawn bead - so the glass
-			//     merely went pale where the blade had been. Reported in game as "when it wipes, the drops
-			//     should disappear completely".
-			//   * "move every bead the blade crossed by pushM along the direction of travel" IS a real
-			//     displacement, and it still produced no windrow: a rigid translation preserves spacing
-			//     EXACTLY, so the local density moved by 3% (measured in the offline harness). The third
-			//     link of the chain cannot come out of a rigid translation, at any value of pushM.
-			//
-			// What a real blade does is CARRY, and that is what this does:
-			//
-			//   already crossed (behind the leading line) : carried by the blade's OWN advance for this
-			//                                               frame, capped so the bead lands ON the line and
-			//                                               never in front of it - so it keeps pace and stays
-			//                                               under the blade instead of being left behind
-			//   not reached yet (within the fade ahead)   : pushed away by pushM x wipe, which is strictly
-			//                                               LESS than the blade's advance (see
-			//                                               BOW_WAVE_FRACTION), so the blade closes on it
-			//
-			// Both halves move water the same way, and together they collapse everything the blade touches
-			// onto one line. That collapse IS the windrow: the same beads, in the same water, packed into a
-			// line instead of spread over a swath - which is the only thing that can raise a local density.
-			// Positions are FRACTIONS of the glass while the shoves are in METRES, which is the only reason
-			// for the two divisions below.
-			// ---------------------------------------------------------------------------------------
-			final double[] push = pushDirectionM(bandWipe, bladeFrom, bladeTo, pivotX, pivotY);
-			final double fromMidX = bladeFrom == null ? 0 : (bladeFrom[0][0] + bladeFrom[1][0]) / 2;
-			final double fromMidY = bladeFrom == null ? 0 : (bladeFrom[0][1] + bladeFrom[1][1]) / 2;
-			final double toMidX = bladeTo == null ? 0 : (bladeTo[0][0] + bladeTo[1][0]) / 2;
-			final double toMidY = bladeTo == null ? 0 : (bladeTo[0][1] + bladeTo[1][1]) / 2;
-			// How far the blade's own working edge advanced this frame. A band wipe reads it off the blade
-			// itself; a one-pivot wiper has no blade geometry to read, so the edge is a point on the arm and
-			// its advance is the ARC that point swept - radius times angle, which is the same quantity.
-			// (Leaving this at 0 for the sector path - the first version of this did - makes every shove
-			// `min(0, ...)` = 0, i.e. a sector wiper would silently do NOTHING to the water at all.)
-			final double bladeAdvanceM = bandWipe
-					? Math.hypot(toMidX - fromMidX, toMidY - fromMidY)
-					: Math.abs(Math.toRadians(wiperAngleDeg - previousWiperAngleDeg)) * config.armM(anchor);
-			final double bowWaveM = Math.min(config.pushM, BOW_WAVE_FRACTION * bladeAdvanceM);
-			// The sector's own "has the blade reached this bearing yet" boundary, restated from wipeFactor:
-			// park-to-blade in the arm's own direction of travel, so the fade zone and this agree exactly.
-			final double sweptDeg = normaliseSigned(wiperAngleDeg - config.parkAngleDeg) * config.sweepSign;
-
-			// ---------------------------------------------------------------------------------------
-			// THE WAVE. Water the blade has picked up is not shoved once and forgotten - it is CARRIED.
-			// This is the difference the one-shot version could never produce, and it is worth being exact
-			// about why, because "one push of pushM" looks like a small version of the right thing:
-			//
-			//   a shove moves a bead along the direction of travel, and it moves EVERY bead the blade is
-			//   over by the SAME amount. A rigid translation of a set of points preserves their spacing
-			//   exactly, so the local density does not change (measured: +3%), the pile never forms, and
-			//   the water never runs. Worse, a shove larger than the blade's per-frame advance overtakes
-			//   the blade: the bead lands in glass the blade has already cleared, stops being "ahead of
-			//   the blade", and is never touched again. That is the "it only pushes the water a little
-			//   bit to one side" report, and it is structural, not a matter of pushM being too small.
-			//
-			// Carrying is:
-			//   * PICK UP - a bead the leading edge is over joins the wave. It is recorded as carried and
-			//     dropped exactly ON the leading line (not in front of it, and not left behind it).
-			//   * CARRY  - a bead already in the wave rides the blade's OWN advance for the rest of the
-			//     stroke. Because the blade advances by different amounts frame to frame but the wave keeps
-			//     pace, the wave cannot spread: beads the blade runs over later are stacked onto the same
-			//     line as the ones it collected first, and the water travels with the blade all the way to
-			//     the end of the stroke instead of being nudged a few millimetres and abandoned.
-			//
-			// The wave is re-formed every stroke, not dragged through the turnaround: see the release
-			// pass below. Water the outward stroke piled up stays piled where it was put.
-			// ---------------------------------------------------------------------------------------
-			// THE REVERSAL is the sign of the wiper's own step, and it is held through a wrap. The
-			// animation can jump the blade's angle (the linkage geometry is periodic), and the sign of a
-			// jump is not travel; holding the last non-zero sign keeps "which way is it going" honest until
-			// the blade genuinely starts moving the other way.
-			final double angleStep = normaliseSigned(wiperAngleDeg - previousWiperAngleDeg) * config.sweepSign;
-			if (Math.abs(angleStep) > 1.0E-9) {
-				wiperTravelDirection = angleStep > 0 ? 1 : -1;
+			final double pivotX = wiper.pivotU * anchor.widthM;
+			final double pivotY = wiper.pivotV * anchor.heightM;
+			final double[] push = pushDirectionM(wiper, state, bandWipe, bladeFrom, bladeTo, pivotX, pivotY);
+			// THE WAY THE BLADE WAS TRAVELLING *BEFORE* THIS FRAME, which is the direction the release line is
+			// thrown in. Captured here, before the running value is updated, and this is not a detail:
+			// on the frame the blade TURNS AROUND, pushDirectionM already reports the NEW direction - the first
+			// step of the return stroke - so a release thrown along the running value is thrown into exactly
+			// the glass the returning blade is about to sweep, and is taken straight back. Reported as "the
+			// offset is reversed, the return stroke can sweep it". Thrown the other way (the way the finished
+			// stroke was going) it lands BEHIND the returning blade, which then sweeps away from it.
+			final double releasePushX = state.lastPushX;
+			final double releasePushY = state.lastPushY;
+			if (push[0] * push[0] + push[1] * push[1] > 1.0E-12) {
+				// Kept, because the put-back needs "the way the blade was travelling" at a moment when the
+				// blade is by definition NOT travelling any more.
+				state.lastPushX = push[0];
+				state.lastPushY = push[1];
 			}
+			final double bladeAdvanceM = bandWipe
+					? Math.hypot((bladeTo[0][0] + bladeTo[1][0] - bladeFrom[0][0] - bladeFrom[1][0]) / 2,
+							(bladeTo[0][1] + bladeTo[1][1] - bladeFrom[0][1] - bladeFrom[1][1]) / 2)
+					: Math.toRadians(Math.abs(state.angleDeg - state.previousAngleDeg)) * wiper.armM(anchor);
 			final boolean bladeTravelling = (push[0] * push[0] + push[1] * push[1] > 1.0E-12)
 					&& bladeAdvanceM > 1.0E-9;
-			// (There is deliberately no "progress along the stroke" quantity here any more. A carried bead
-			// used to be moved by min(bladeAdvanceM, progress - progressAtPickup), a projection of the
-			// blade's mid-point onto the direction of travel. That direction ROTATES through this linkage's
-			// sweep, so the projection is not frame-independent: it can shrink mid-stroke, the clamp then
-			// moves a carried bead by less than the blade moved, nothing ever pushes it forward again, and
-			// the shortfall accumulates. Measured (DropletFlow, one outward stroke): the carried water
-			// strayed up to 73 mm in front of the blade where the pickup offset allows only 42 mm, on 52
-			// distinct beads a stroke - water being dragged around the glass rather than sitting on the
-			// blade. The blade's own advance is the right quantity and needs no clamp: the blade's mid-point
-			// moves by exactly bladeAdvanceM along push every step, so a bead put on the leading line and
-			// moved by that same amount tracks the line exactly, at whatever offset it was picked up with.)
-
-			int inBand = 0;
-			int pushed = 0;
-			int pushedOff = 0;
-			int considered = 0;
-			int carried = 0;
-			int waveReleased = 0;
-			for (final Drop drop : drops) {
-				if (!drop.visible) {
-					continue;
-				}
-				considered++;
-				if (drop.carriedByBlade) {
-					// The wave is put down for exactly two reasons, and "the blade did not move this
-					// step" is deliberately NOT one of them. A step with no travel is either the wiper
-					// switched off or dwelling (both of which set bladeMoving false, and then the water
-					// must stay where the blade stopped) or a duplicate pass over the same millisecond,
-					// which means nothing happened at all. Reading the second case as a stop is what
-					// broke the plough: the wave was dumped on the glass several times per stroke and
-					// could never accumulate. A real turnaround is a step that MOVED, in the other
-					// direction - that is what this tests, and it is one step later than before, not
-					// one step wrong.
-					final boolean reversed = bladeTravelling && wiperTravelDirection != drop.carriedDirection;
-					if (!bladeMoving || reversed) {
-						if (reversed) {
-							// THE COLLECTION ZONE. The blade has reached the end of its stroke and is
-							// about to go back, so this is the moment the water it ploughed is put down -
-							// into the zone at the end it has just reached, spread across the zone's depth
-							// instead of left as a line on the blade. From here on it is the wiper's
-							// finished business: the return stroke sweeps straight over it (see the pickup
-							// test below) and leaves it where it is. That is what stops the same water
-							// being carried out and back for ever, which is what made the whole screen's
-							// rain look like it slid sideways with every sweep.
-							parkInCollectZone(drop, push, anchor);
-						}
-						drop.carriedByBlade = false;
-						waveReleased++;
+			// HOW FAST THE BLADE IS MOVING, which is how fast the water leaves it (see RELEASE_FLING_M).
+			// Held on the state because the release happens on a frame where the blade is NOT moving: the
+			// speed wanted there is the one the stroke had a moment ago. Two quantities because the two
+			// linkage families need different ones - a co-axial blade rotates, so every point of it moves at
+			// omega * its own radius, while a parallelogram blade translates at one speed for all of it.
+			if (bladeTravelling && elapsedSeconds > 1.0E-4) {
+				state.omegaRadPerS = Math.toRadians(Math.abs(state.angleDeg - state.previousAngleDeg)) / elapsedSeconds;
+				state.bladeSpeedMps = bladeAdvanceM / elapsedSeconds;
+			}
+			// THE REVERSAL is the sign of the wiper's own step, held across the animation's wrap: the sign
+			// of a jump is not travel, so the last non-zero sign is what "which way is it going" means until
+			// the blade genuinely starts moving the other way. This frame disagreeing with it is the far end
+			// of the stroke - one of the two moments the ridge goes back on the glass.
+			final double angleStep = normaliseSigned(state.angleDeg - state.previousAngleDeg) * wiper.sweepSign;
+			final int stepSign = Math.abs(angleStep) > 1.0E-9 ? (angleStep > 0 ? 1 : -1) : 0;
+			final boolean turnedAround = stepSign != 0 && stepSign != state.travelDirection;
+			if (stepSign != 0) {
+				state.travelDirection = stepSign;
+			}
+			// --- 1. CUT -----------------------------------------------------------------------------
+			// ONLY WHILE THE BLADE IS MOVING. This is the rule advanceWiper already states - "a parked wiper
+			// must not keep clearing glass, or the screen dries itself out with the stalk at 关" - and the
+			// rewrite had broken it: a stopped blade went on eating every bead that reached its line and
+			// laying it down again just past itself, so water running down the glass vanished AT the wiper and
+			// reappeared below it. Reported as "the water comes out and is sucked straight back in". A parked
+			// blade is not wiping, so it takes nothing. The trade is that a bead may be drawn sitting on a
+			// parked blade's line, which is what a real parked wiper with water on it looks like.
+			int cut = 0;
+			if (bladeTravelling) {
+				// THE LINE, SAMPLED WHERE IT WAS, WHERE IT IS, AND ONCE IN BETWEEN. Three line tests, no
+				// polygon: "is this bead on the blade's line" asked at three angles is what stops the blade
+				// from stepping over a bead between two repaints. The gap between neighbouring samples is half
+				// the frame's advance, so a swept bead is at worst a quarter of the advance from the nearest
+				// of them - 13.5 mm on the fastest SAF420 stroke at the blade's outer end, against a 23.5 mm
+				// capture for a 6 mm bead. Measuring the bead against the AREA the line swept instead (what
+				// this replaced) says the same thing with a quad, an inflation and a fade, and it is the region
+				// the model no longer has any use for: the blade does not push water out of a swath, it
+				// ADSORBS what its own line touches.
+				final double[][] bladeBetween = bandWipe
+						? wiper.bladeSegmentM((state.previousAngleDeg + state.angleDeg) / 2, anchor)
+						: null;
+				for (final Drop drop : drops) {
+					if (!drop.visible) {
 						continue;
 					}
-					// Ride the blade's advance for this frame, exactly. A carried bead is never left behind
-					// it and never gets in front of it either: the blade's mid-point moves by precisely this
-					// much along push every step, so a bead on the leading line stays on the leading line.
-					final double carriedM = bladeAdvanceM;
-					drop.x += push[0] * carriedM / anchor.widthM;
-					drop.y += push[1] * carriedM / anchor.heightM;
-					carried++;
-				} else {
-					if (drop.inCollectZone) {
-						// ZONE WATER: the wiper has already put this bead down at the end of a previous
-						// stroke. It is not picked up again - that is the entire point of a collection
-						// zone - so the blade sweeps over it and leaves it alone. It still runs down and
-						// off the glass on its own, and when it does it respawns as fresh rain.
+					if (!onBlade(wiper, state, bandWipe, bladeFrom, bladeBetween, bladeTo, pivotX, pivotY,
+							drop.x * anchor.widthM, drop.y * anchor.heightM, drop.radiusM)) {
 						continue;
 					}
-					final double pointX = drop.x * anchor.widthM;
-					final double pointY = drop.y * anchor.heightM;
-					final double wipe = bandWipe
-							? wipeFactorBand(pointX, pointY, bladeFrom, bladeTo)
-							: wipeFactor(pointX, pointY, pivotX, pivotY);
-					if (wipe <= 0) {
-						continue;
-					}
-					inBand++;
-					// How far the blade's working edge has to move this bead, along the direction of
-					// travel. The BAND path measures it in metres from the modelled leading line. The
-					// SECTOR path has no such line and its wipe test spans park-to-blade rather than one
-					// frame's strip, so its "under the blade" neighbourhood has to be reconstructed from
-					// the BEARINGS: the arc the arm swept this frame, plus the same fade band the wipe test
-					// uses ahead of it. A bead the arm crossed half a stroke ago is behind all of that, is
-					// already where the blade put it, and must not be dragged along again.
-					final double shoveM;
-					if (bandWipe) {
-						final double aheadM = (pointX - toMidX) * push[0] + (pointY - toMidY) * push[1];
-						shoveM = aheadM >= 0 ? bowWaveM * wipe : Math.min(bladeAdvanceM, -aheadM);
-					} else {
-						final double fromParkDeg = normaliseSigned(Math.toDegrees(Math.atan2(pointY - pivotY, pointX - pivotX))
-								- config.parkAngleDeg) * config.sweepSign;
-						final double behindDeg = sweptDeg - fromParkDeg;
-						final double arcDeg = Math.abs(wiperAngleDeg - previousWiperAngleDeg);
-						if (behindDeg > WIPE_FADE_DEG || behindDeg < -(arcDeg + WIPE_FADE_DEG)) {
-							continue;
-						}
-						shoveM = behindDeg >= 0
-								? Math.min(bladeAdvanceM, Math.toRadians(behindDeg) * config.armM(anchor))
-								: bowWaveM * wipe;
-					}
-					if (shoveM <= 0) {
-						// A blade that is not travelling - a dwell, or the turnaround where its two
-						// positions coincide - carries nothing. pushDirectionM returns {0,0} for exactly
-						// that case.
-						continue;
-					}
-					drop.x += push[0] * shoveM / anchor.widthM;
-					drop.y += push[1] * shoveM / anchor.heightM;
-					// Pick-up eligibility, measured where the bead NOW sits relative to the blade's
-					// leading line: on it or ahead of it means the blade is working this bead, so it joins
-					// the wave. A bead displaced to just behind the line is water the blade has already
-					// passed and has left where it lies.
-					final double aheadAfterM = (drop.x * anchor.widthM - toMidX) * push[0]
-							+ (drop.y * anchor.heightM - toMidY) * push[1];
-					if (aheadAfterM >= -config.mergeDistanceM) {
-						drop.carriedByBlade = true;
-						drop.carriedDirection = wiperTravelDirection;
-					}
-				}
-				if (drop.x < -0.05 || drop.x > 1.05 || drop.y < -0.10 || drop.y > 1.10) {
-					// Carried clean off the glass at the end of a stroke. Same treatment as a bead that ran
-					// off the bottom edge: it leaves, and the spawner brings a new one in behind the blade.
-					respawn(drop);
-					pushedOff++;
-				} else {
-					pushed++;
+					drop.visible = false;
+					drop.heldByWiper = wiperIndex;
+					state.ridge.add(drop);
+					cut++;
 				}
 			}
-			pushedInWindow += pushed;
-			pushedOffGlassInWindow += pushedOff;
-			// One line per ~10 frames, and only while the blade is actually moving. The numbers to read
-			// are span (how much angle this step covered - it must be a few degrees, not 0 and not the
-			// whole stroke), beadsInBand/total (whether the band test finds anything at all),
-			// pushed/pushedOff (whether the shove reached them and whether it carried them off the glass),
-			// and above all wave/carried - the beads the blade is PLOUGHING. A wave that stays at 0 is the
-			// one-shot shove back again; a wave that builds through the stroke is the blade carrying the
-			// water; `released` counts the beads it PUT DOWN, which is what happens at the turnaround and is
-			// what keeps the pile it built from being dragged back across the glass it just cleared.
-			if (bladeMoving && wiperLogCounter++ % 10 == 0) {
-				LOGGER.info("[MMTR-WSHLD] wipe {} angle={} from={} span={}deg bandWipe={} beadsInBand={}/{} pushed={} pushedOff={} carried={} released={} advance={} dir={}",
-						anchor.name, round(wiperAngleDeg), round(previousWiperAngleDeg),
-						round(Math.abs(wiperAngleDeg - previousWiperAngleDeg)),
-						bandWipe, inBand, considered, pushed, pushedOff, carried, waveReleased, round(bladeAdvanceM),
-						wiperTravelDirection);
+			pushedInWindow += cut;
+			// --- 3. PUT BACK ------------------------------------------------------------------------
+			final boolean bladeStopped = !state.moving || !bladeTravelling;
+			if (bladeStopped || turnedAround) {
+				final int put = putBackRidge(wiper, state, wiperIndex, bandWipe, bladeTo, pivotX, pivotY,
+						releasePushX, releasePushY);
+				// Reported once per stop, not once per frame: a dwell lasts 1-2 s and this runs on EVERY frame
+				// of it. It has to run that often - water that creeps onto the parked blade is caught and laid
+				// down again, which is what lets the runoff pass a parked wiper instead of piling against it -
+				// but only the first of those frames is news.
+				if (put > 0 && (turnedAround || (bladeStopped && !state.putBackReported))) {
+					LOGGER.info("[MMTR-WSHLD] wipe {} wiper={} PUT BACK {} bead(s) along the blade's line - {}",
+							anchor.name, wiperIndex, put,
+							turnedAround ? "turnaround" : state.moving ? "blade stopped" : "wiper off or parked");
+				}
+			}
+			state.putBackReported = bladeStopped;
+			// One line per ~10 frames, while the blade is moving. Read cut/held against alive in the motion
+			// line: cut is how much water the blade is taking off the glass, held is how much it owes it.
+			if (state.moving && state.logCounter++ % 10 == 0) {
+				LOGGER.info("[MMTR-WSHLD] wipe {} wiper={} angle={} span={}deg band={} cut={} held={} advance={} dir={}",
+						anchor.name, wiperIndex, round(state.angleDeg),
+						round(Math.abs(state.angleDeg - state.previousAngleDeg)), bandWipe, cut,
+						state.ridge.size(), round(bladeAdvanceM), state.travelDirection);
 			}
 		}
 
 		/**
-		 * Puts a bead down in the collection zone at the end of the stroke the blade has just reached.
+		 * Whether the blade's LINE is on this point - the whole wipe test, in one place, and the whole of what
+		 * the blade does to the water: it ADSORBS what its own line touches.
 		 *
-		 * <p>The zone is the strip BEYOND the blade's leading line, {@code collectZoneM} deep, measured
-		 * along the direction the blade was travelling - i.e. the last piece of glass the blade swept, hard
-		 * against the edge of its reach. At the moment this runs the blade has already turned round, so the
-		 * direction it was travelling is {@code -push}; the water therefore goes at
-		 * {@code position - push * depth}.</p>
+		 * <p>One statement, asked of the line where the blade was, where it is, and once in between (the
+		 * caller passes those three angles): <b>the bead's disc and the blade's segment overlap</b>, i.e. the
+		 * distance from the bead's centre to that segment is at most half the blade's width plus the bead's
+		 * own radius. That is a physical statement rather than a tuned one - a 9 mm bead goes when the line is
+		 * within 27 mm of its centre, because that is where the two shapes actually touch.</p>
 		 *
-		 * <p>Each bead gets its own random depth rather than the same one, and that is not decoration: a
-		 * wave released on the leading line is a one-bead-thick LINE, and a line of water is not what a
-		 * collector looks like. Spread over the zone's depth the same beads form a sheet, which is also
-		 * what makes the density gate open up and the collected water start to run down.</p>
+		 * <p>There is deliberately no AREA in this test any more. It used to also ask whether the bead was
+		 * inside the quad between the blade's previous and current positions, which is the region the segment
+		 * swept; sampling the line instead covers the same ground (see the caller for the arithmetic) without
+		 * a polygon, an inflation distance or a fade width to keep in agreement with each other.</p>
 		 *
-		 * <p>The depth is capped at however much room this bead has before it would leave the glass. A zone
-		 * that overhangs the edge would put its water straight into {@code respawn} - the water would
-		 * vanish at the exact moment the driver is looking at it.</p>
+		 * <p>A pack with no modelled blade (the fan-only fallback) asks the same thing in bearings, because
+		 * there the blade IS the ray at the wiper's own angle - and that ray's sweep is an angular interval,
+		 * which is the one case where the swept set really is worth naming.</p>
 		 */
-		private void parkInCollectZone(Drop drop, double[] push, Anchor anchor) {
-			if (config.collectZoneM <= 0) {
-				drop.inCollectZone = true;
-				return;
+		private boolean onBlade(WiperConfig wiper, WiperState state, boolean bandWipe, double[][] bladeFrom,
+				double[][] bladeBetween, double[][] bladeTo, double pivotX, double pivotY, double pointX, double pointY,
+				double radiusM) {
+			final double captureM = 0.5 * wiper.bladeWidthM + radiusM;
+			if (!bandWipe) {
+				final double radialX = pointX - pivotX;
+				final double radialY = pointY - pivotY;
+				final double radius = Math.hypot(radialX, radialY);
+				if (radius < 1.0E-6 || radius > wiper.armM(anchor) + radiusM) {
+					return false;
+				}
+				final double bearingDeg = Math.toDegrees(Math.atan2(radialY, radialX));
+				// The blade's width expressed at THIS radius: the same overlap statement as above.
+				if (Math.abs(normaliseSigned(bearingDeg - state.angleDeg)) <= Math.toDegrees(captureM / radius)) {
+					return true;
+				}
+				final double stepDeg = normaliseSigned(state.angleDeg - state.previousAngleDeg);
+				final double fromPreviousDeg = normaliseSigned(bearingDeg - state.previousAngleDeg);
+				return stepDeg >= 0 ? fromPreviousDeg >= 0 && fromPreviousDeg <= stepDeg
+						: fromPreviousDeg <= 0 && fromPreviousDeg >= stepDeg;
 			}
-			double roomM = config.collectZoneM;
-			// pos - push * depth must stay inside [0.01, 0.99] on both axes; solve for depth.
-			if (push[0] < -1.0E-6) {
-				roomM = Math.min(roomM, (0.99 - drop.x) * anchor.widthM / -push[0]);
-			} else if (push[0] > 1.0E-6) {
-				roomM = Math.min(roomM, (drop.x - 0.01) * anchor.widthM / push[0]);
+			if (distanceToSegmentM(pointX, pointY, bladeTo[0], bladeTo[1]) <= captureM) {
+				return true;
 			}
-			if (push[1] < -1.0E-6) {
-				roomM = Math.min(roomM, (0.99 - drop.y) * anchor.heightM / -push[1]);
-			} else if (push[1] > 1.0E-6) {
-				roomM = Math.min(roomM, (drop.y - 0.01) * anchor.heightM / push[1]);
+			if (distanceToSegmentM(pointX, pointY, bladeFrom[0], bladeFrom[1]) <= captureM) {
+				return true;
 			}
-			final double depthM = Math.max(0, roomM) * (0.15 + 0.7 * random.nextDouble());
-			drop.x -= push[0] * depthM / anchor.widthM;
-			drop.y -= push[1] * depthM / anchor.heightM;
-			drop.inCollectZone = true;
+			return bladeBetween != null
+					&& distanceToSegmentM(pointX, pointY, bladeBetween[0], bladeBetween[1]) <= captureM;
 		}
 
 		/**
-		 * Which way the blade is travelling right now, as a unit vector in canvas metres - the direction it
-		 * shoves water.
+		 * Lets the ridge go: <b>one line, along the blade, thrown clear of it in the direction the blade was
+		 * travelling</b> - the release "pops out" beside the blade at the moment it turns around, and empties
+		 * the ridge.
 		 *
-		 * <p>Two wiper families, two sources, one meaning:</p>
+		 * <p>The line is the blade's own segment: the water the blade has scraped is lying along its leading
+		 * edge, and that is where it goes back on the glass, spread evenly over the blade's length. What makes
+		 * it stick is the OFFSET, and the offset is along the ROTATION - the way the blade was moving when it
+		 * let go - not perpendicular to the blade:</p>
 		 *
 		 * <ul>
-		 *   <li><b>Band wipe (a parallel linkage).</b> Read straight off the blade: the mid-point moved
-		 *       from {@code from} to {@code to}, and that displacement IS the shove. Nothing is inferred,
-		 *       which is why this branch is exact even for a linkage whose blade also turns a little.</li>
-		 *   <li><b>Sector wipe (one pivot).</b> The blade has no modelled geometry, so its motion is
-		 *       derived from what the sector test already believes it is: a point on the arm at angle
-		 *       theta, whose velocity is d/dtheta (cos, sin) - i.e. perpendicular to the arm, with the sign
-		 *       of travel folded in. The same {@code (angle - park) * sweepSign} bearing the rest of this
-		 *       file uses, so the push cannot disagree with the wipe about which way the arm is going.</li>
+		 *   <li><b>It is the water's own momentum.</b> The blade was pushing this water ahead of itself, so
+		 *       that is the direction it keeps going in.</li>
+		 *   <li><b>It is what survives the turnaround.</b> At the end of a stroke the blade reverses, so water
+		 *       thrown AHEAD of the old direction of travel is behind the new one and the returning blade
+		 *       sweeps away from it. Offset sideways instead and the returning stroke runs straight over it
+		 *       again.</li>
+		 *   <li><b>The blade lies across its own travel anyway</b>, so an offset along the rotation is 93-95%
+		 *       perpendicular to the blade's line on SAF420 (measured at park and at the turnaround), which is
+		 *       what buys the clearance in the first place.</li>
 		 * </ul>
 		 *
-		 * @return a unit vector, or {@code {0, 0}} when the blade did not move this step
+		 * <p>The offset starts at the capture distance that took the water off the glass plus
+		 * {@code RIDGE_CLEARANCE_M}, and is then pushed out in the same direction until the bead is clear of
+		 * EVERY blade on the glass - not just this one: SAF420's two blades park 31.6 mm apart with their lines
+		 * overlapping over 142 mm, so a line laid clear of one lands inside the other's capture and is gone
+		 * before it is ever drawn.</p>
+		 *
+		 * <p>Each bead also keeps a decaying outward speed ({@code RELEASE_FLING_SPEED}), so the line does not
+		 * merely appear beside the blade - it carries on the way the blade was throwing it.</p>
+		 *
+		 * @return how many beads were put back
 		 */
-		private double[] pushDirectionM(boolean bandWipe, double[][] bladeFrom, double[][] bladeTo, double pivotX, double pivotY) {
+		private int putBackRidge(WiperConfig wiper, WiperState state, int wiperIndex, boolean bandWipe,
+				double[][] bladeTo, double pivotX, double pivotY, double releasePushX, double releasePushY) {
+			final int count = state.ridge.size();
+			if (count == 0) {
+				return 0;
+			}
+			// The blade's own segment, or the ray at its angle for a fan-only pack (the line is then an arc).
+			// Its direction is taken once, here: the per-bead work below is four Random draws, two multiply-adds
+			// and (when a blade is not clear) one distance test - nothing that allocates and nothing per frame.
+			final double spanX = bandWipe && bladeTo != null ? bladeTo[1][0] - bladeTo[0][0] : 0;
+			final double spanY = bandWipe && bladeTo != null ? bladeTo[1][1] - bladeTo[0][1] : 0;
+			final double spanM = Math.hypot(spanX, spanY);
+			final boolean alongBlade = spanM > 1.0E-9;
+			final double rayRadians = Math.toRadians(state.angleDeg);
+			final double bladeDirX = alongBlade ? spanX / spanM : Math.cos(rayRadians);
+			final double bladeDirY = alongBlade ? spanY / spanM : Math.sin(rayRadians);
+			// What the sideways part of the throw is measured along: the blade itself, or - for a fan - the
+			// direction across the ray, which is the same statement in bearings.
+			final double sideDirX = alongBlade ? bladeDirX : -bladeDirY;
+			final double sideDirY = alongBlade ? bladeDirY : bladeDirX;
+			final double stepM = 0.5 * wiper.bladeWidthM + RIDGE_CLEARANCE_M;
+			for (int index = 0; index < count; index++) {
+				final Drop drop = state.ridge.get(index);
+				// FOUR DRAWS FROM THE BEAD'S OWN RANDOM (see RELEASE_SCATTER): where along the blade it lands,
+				// how far out it is thrown, how fast, and how much sideways - so the release is a splash
+				// rather than a row stamped onto the glass.
+				final double along = (index + drop.random.nextDouble()) / count;
+				final double throwScale = 0.3 + RELEASE_SCATTER * drop.random.nextDouble();
+				final double baseX;
+				final double baseY;
+				if (alongBlade) {
+					baseX = bladeTo[0][0] + spanX * along;
+					baseY = bladeTo[0][1] + spanY * along;
+				} else {
+					final double radius = wiper.armM(anchor) * (0.15 + 0.85 * along);
+					baseX = pivotX + bladeDirX * radius;
+					baseY = pivotY + bladeDirY * radius;
+				}
+				// OUT ALONG THE ROTATION - the way the stroke that has just ENDED was going (see the caller:
+				// on the turnaround frame the running direction is already the new one) - far enough to clear
+				// every blade on the glass.
+				double offsetM = stepM + drop.radiusM + RELEASE_FLING_M * throwScale;
+				double x = baseX + releasePushX * offsetM;
+				double y = baseY + releasePushY * offsetM;
+				for (int attempt = 0; attempt < 8 && !clearOfOtherBlades(x, y, drop.radiusM, wiperIndex); attempt++) {
+					offsetM += stepM;
+					x = baseX + releasePushX * offsetM;
+					y = baseY + releasePushY * offsetM;
+				}
+				// Never past the frame: a bead whose centre is within its own radius of the edge is clipped by
+				// drawBeads, so "thrown past the edge" is the same as "deleted".
+				final double marginX = Math.min(0.5 * anchor.widthM, drop.radiusM);
+				final double marginY = Math.min(0.5 * anchor.heightM, drop.radiusM);
+				drop.x = Math.max(marginX, Math.min(anchor.widthM - marginX, x)) / anchor.widthM;
+				drop.y = Math.max(marginY, Math.min(anchor.heightM - marginY, y)) / anchor.heightM;
+				final double speed = releaseSpeedFor(wiper, state, baseX - pivotX, baseY - pivotY)
+						* (0.85 + 0.3 * drop.random.nextDouble());
+				final double side = (drop.random.nextDouble() - 0.5) * RELEASE_SIDE_MPS;
+				drop.flingX = releasePushX * speed + sideDirX * side;
+				drop.flingY = releasePushY * speed + sideDirY * side;
+				// THE SAME FLICK FOR EVERYONE: the decay is fitted so this bead travels RELEASE_FLICK_M
+				// (0.6x-1.4x of it) whatever speed the blade handed it, capped by the room it has to the frame
+				// edge. See RELEASE_FLICK_M for why the distance and not the speed is the constant.
+				final double roomM = roomToEdgeM(x, y, releasePushX, releasePushY)
+						- drop.radiusM - RELEASE_EDGE_MARGIN_M;
+				final double flickM = Math.max(0, Math.min(RELEASE_FLICK_M * (0.6 + 0.8 * drop.random.nextDouble()),
+						roomM));
+				drop.flingDecayS = speed > 1.0E-4 && flickM > 1.0E-4 ? 2 * flickM / speed : 0;
+				if (drop.flingDecayS <= 0) {
+					drop.flingX = 0;
+					drop.flingY = 0;
+				}
+				drop.visible = true;
+				drop.heldByWiper = 0;
+				drop.lateralVelocity = 0;
+				drop.surfaceSpeedMps = 0;
+			}
+			state.ridge.clear();
+			return count;
+		}
+
+		/**
+		 * The speed the blade was moving at a point {@code (offsetX, offsetY)} metres from the spindle - the
+		 * speed the water there leaves at.
+		 *
+		 * <p>A rotating blade (one pivot) moves its points at {@code omega * r}, so the water off the outer end
+		 * of SAF420's blade leaves at 2.7 m/s while the water off the inner end leaves at 0.9 m/s in SLOW: the
+		 * release is a WHIP, not a row moving as one, and that difference is the whole reason the two ends of
+		 * the line do not look stamped. A parallelogram blade (two pivots) translates, so every point of it
+		 * moves at the same speed and that one speed is used.</p>
+		 */
+		private double releaseSpeedFor(WiperConfig wiper, WiperState state, double offsetX, double offsetY) {
+			final boolean coaxial = Math.abs(wiper.pivot2U - wiper.pivotU) < 1.0E-9
+					&& Math.abs(wiper.pivot2V - wiper.pivotV) < 1.0E-9;
+			if (!coaxial) {
+				return state.bladeSpeedMps > 1.0E-3 ? state.bladeSpeedMps : RELEASE_FLING_SPEED;
+			}
+			final double speed = state.omegaRadPerS * Math.hypot(offsetX, offsetY);
+			// A wiper that has never moved has no measured rate yet; fall back to the taste value rather than
+			// releasing the water dead still.
+			return speed > 1.0E-3 ? speed : RELEASE_FLING_SPEED;
+		}
+
+		/** How far a point can travel along a unit direction before it reaches the frame edge, in metres. */
+		private double roomToEdgeM(double pointX, double pointY, double dirX, double dirY) {
+			double room = Double.MAX_VALUE;
+			if (dirX > 1.0E-9) {
+				room = Math.min(room, (anchor.widthM - pointX) / dirX);
+			} else if (dirX < -1.0E-9) {
+				room = Math.min(room, -pointX / dirX);
+			}
+			if (dirY > 1.0E-9) {
+				room = Math.min(room, (anchor.heightM - pointY) / dirY);
+			} else if (dirY < -1.0E-9) {
+				room = Math.min(room, -pointY / dirY);
+			}
+			return room == Double.MAX_VALUE ? Math.max(anchor.widthM, anchor.heightM) : Math.max(0, room);
+		}
+
+		/**
+		 * Whether a point is clear of every OTHER blade on this glass - close enough to a blade that the next
+		 * pass would take the water straight back off the glass is not clear.
+		 *
+		 * <p>Two blades on one screen are two mechanisms over one water field, and at rest they can lie almost
+		 * on top of each other: SAF420's park 31.6 mm apart, overlapping over 142 mm of their length, and a
+		 * bead put back by one is then inside the other's capture on the same frame. This is the test that
+		 * stops the put-back from feeding the neighbouring ridge instead of the glass.</p>
+		 */
+		private boolean clearOfOtherBlades(double pointX, double pointY, double radiusM, int ownWiperIndex) {
+			for (int index = 0; index < config.wipers.length; index++) {
+				final WiperConfig other = config.wipers[index];
+				if (other.index == ownWiperIndex || !other.wiper) {
+					continue;
+				}
+				final double[][] segment = other.bladeSegmentM(wiperStates[index].angleDeg, anchor);
+				if (segment == null) {
+					continue;
+				}
+				if (distanceToSegmentM(pointX, pointY, segment[0], segment[1])
+						<= 0.5 * other.bladeWidthM + radiusM + RIDGE_CLEARANCE_M) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+
+
+
+		/**
+		 * How far the blade's <b>leading end</b> sits ahead of its <b>middle</b>, in degrees, in the frame
+		 * of this frame's travel - the angular offset {@code applyWipe} measures a bead's position against.
+		 *
+		 * <p>The leading end is the end the blade is turning TOWARDS: of the two ends, the one whose
+		 * bearing has moved farthest along {@code rotationSign} relative to the blade's middle. It is
+		 * positive by construction (the middle is between the ends), and it is 0 whenever there is no
+		 * modelled blade or the blade passes through its own pivot - both ends then lie on the ray the
+		 * middle is on, so the offset vanishes and the caller's formula is unchanged.</p>
+		 *
+		 * <p>Why it matters is on {@code leadOffsetDeg} in {@code applyWipe}: on a blade modelled as a
+		 * chord offset from the spindle, the strip between the leading edge and the pin is otherwise read
+		 * as "not reached yet" and is never picked up by the blade that is cutting it.</p>
+		 */
+		private static double leadingEndOffsetDeg(@Nullable double[][] bladeTo, double pivotX, double pivotY, double midBearingRadians, double rotationSign) {
+			if (bladeTo == null) {
+				return 0;
+			}
+			final double midDeg = Math.toDegrees(midBearingRadians);
+			final double first = normaliseSigned(Math.toDegrees(Math.atan2(bladeTo[0][1] - pivotY, bladeTo[0][0] - pivotX)) - midDeg) * rotationSign;
+			final double second = normaliseSigned(Math.toDegrees(Math.atan2(bladeTo[1][1] - pivotY, bladeTo[1][0] - pivotX)) - midDeg) * rotationSign;
+			return Math.max(first, second);
+		}
+
+		private double[] pushDirectionM(WiperConfig wiper, WiperState state, boolean bandWipe, double[][] bladeFrom, double[][] bladeTo, double pivotX, double pivotY) {
 			if (bandWipe) {
 				if (bladeFrom == null || bladeTo == null) {
 					return new double[]{0, 0};
@@ -1907,13 +2292,28 @@ public final class MmtrWindshield {
 				return unitOrZero((bladeTo[0][0] + bladeTo[1][0] - bladeFrom[0][0] - bladeFrom[1][0]) / 2,
 						(bladeTo[0][1] + bladeTo[1][1] - bladeFrom[0][1] - bladeFrom[1][1]) / 2);
 			}
-			final double deltaDeg = (wiperAngleDeg - previousWiperAngleDeg) * config.sweepSign;
+			final double deltaDeg = (state.angleDeg - state.previousAngleDeg) * wiper.sweepSign;
 			if (Math.abs(deltaDeg) < 1.0E-9) {
 				return new double[]{0, 0};
 			}
-			final double theta = Math.toRadians((wiperAngleDeg - config.parkAngleDeg) * config.sweepSign);
+			// The push is the velocity direction of the point the ARM is bolted to - a real train arm is
+			// pinned to the MIDDLE of the blade, so that point is the blade's own middle, and for a rigid
+			// rotation about the spindle its velocity is exactly the tangent at its CURRENT bearing.
+			//
+			// This used to be a bearing formula, `(-sin(theta), cos(theta)) * sign`, with theta the turn
+			// AWAY from park - i.e. it treated a rotation offset as an absolute bearing. That is only right
+			// when parkAngleDeg is 0 (a hand-drawn blade whose face right edge already points along the park
+			// direction, per the drawBlade contract) and is wrong by `park` degrees otherwise: SAF420's
+			// fitted park is 180 deg, so every bead was shoved exactly BACKWARDS, under the blade and
+			// towards the spindle - measured in game as "the drops move, but nowhere near the wiper".
+			// A 1 deg finite difference of the blade's own middle agrees with this tangent to 0.0 deg on
+			// both of SAF420's wipers (see _push_dir.py) and is unchanged for a park = 0 fixture.
+			final double[] pin = {wiper.pinAU * anchor.widthM, wiper.pinAV * anchor.heightM};
+			final double thetaRadians = Math.toRadians((state.angleDeg - wiper.parkAngleDeg) * wiper.sweepSign);
+			final double[] rotatedPin = WindshieldConfig.rotateAbout(pivotX, pivotY, pin[0], pin[1],
+					Math.cos(thetaRadians), Math.sin(thetaRadians));
 			final double sign = deltaDeg > 0 ? 1 : -1;
-			return unitOrZero(-Math.sin(theta) * sign, Math.cos(theta) * sign);
+			return unitOrZero(-(rotatedPin[1] - pivotY) * sign, (rotatedPin[0] - pivotX) * sign);
 		}
 
 		/** Normalises a direction, treating "too short to have one" as no push rather than as noise. */
@@ -1923,118 +2323,11 @@ public final class MmtrWindshield {
 		}
 
 		/**
-		 * How hard the blade is clearing a point: 1 = fully wiped, 0 = untouched, and -1 = the point is
-		 * outside the arm's reach entirely (so the caller can skip it).
-		 *
-		 * <p>The wiped region is simply <b>from the park angle to the blade</b>, expressed in the arm's
-		 * own direction of travel. That formulation is worth spelling out, because two earlier versions
-		 * got it wrong in opposite directions:</p>
-		 *
-		 * <ul>
-		 *   <li>"between the previous angle and the current angle" (what the sector test first was) is only
-		 *       the lost ground of ONE repaint - at 90 ms that is 12 deg, so the glass re-wetted itself
-		 *       behind the blade and nothing ever looked cleared.</li>
-		 *   <li>"within N degrees either side of the blade" wipes half a stroke's worth of glass the
-		 *       instant the arm leaves park, because the leading and trailing sides are indistinguishable
-		 *       from the angular offset alone.</li>
-		 * </ul>
-		 *
-		 * <p>Park-to-blade has neither problem: it is unambiguous without any sign test, it is exactly the
-		 * region the blade has crossed, and it stays correct through the turnaround, where the swept extent
-		 * is momentarily the whole arc in both directions anyway.</p>
+		 * Distance from a point to a LINE SEGMENT, in metres - the whole of the wipe test's geometry (see
+		 * onBlade). There is no polygon test next to it any more: the swept area the old band model measured
+		 * beads against is not something this model has, because a blade that ADSORBS what its line touches
+		 * never needs to know the shape of the ground it covered.
 		 */
-		private double wipeFactor(double pointX, double pointY, double pivotX, double pivotY) {
-			final double deltaX = pointX - pivotX;
-			final double deltaY = pointY - pivotY;
-			final double reach = config.armM(anchor);
-			if (deltaX * deltaX + deltaY * deltaY > reach * reach) {
-				// NOT -1. The caller reads a negative factor as "do not draw this bead at all", so returning
-				// -1 here made every bead BEYOND the arm's reach vanish the moment the wiper was switched
-				// on - beads the blade cannot even touch. A bead out of reach is simply not wiped, and is
-				// still drawn; see the contract on wipeFactorBand, which never returns a negative for the
-				// same reason.
-				return 0;
-			}
-			// The angle is taken directly in the panel's own frame, which is Y-UP: the canvas
-			// documents its angles as counter clockwise from +X in that space, panelDown() returns {0,-1}
-			// ("down is negative up"), drop.y grows upward, and parkAngleDeg/sweepDeg come from the
-			// packager in that same y-up frame.
-			//
-			// This used to negate the vertical component ("sheet v grows downward"), which mirrored the
-			// whole wipe test about the pivot's horizontal line so the blade cleared the WRONG half of the
-			// glass. Nothing caught it because the sector path had never run in game: the drawn blade was
-			// gated on a driverOnBoard() that always returned false (notes/189). Note the two film paths and
-			// wipeFactorBand never negate, so the sector test was also disagreeing with its own film.
-			final double angleDeg = Math.toDegrees(Math.atan2(deltaY, deltaX));
-			// How far this point is along the arm's travel, measured from park.
-			final double fromParkDeg = normaliseSigned(angleDeg - config.parkAngleDeg) * config.sweepSign;
-			final double sweptDeg = normaliseSigned(wiperAngleDeg - config.parkAngleDeg) * config.sweepSign;
-			if (fromParkDeg < 0 || fromParkDeg > Math.max(0, sweptDeg) + WIPE_FADE_DEG) {
-				return 0;
-			}
-			if (fromParkDeg <= sweptDeg) {
-				// The blade has crossed it: fully wiped.
-				return 1;
-			}
-			// The leading edge: not touched at the far side of the fade, fully wiped at the blade.
-			return 1 - (fromParkDeg - sweptDeg) / WIPE_FADE_DEG;
-		}
-
-		/**
-		 * The same question as {@link #wipeFactor}, asked of a MODELLED blade instead of an angular
-		 * sector: is this point inside the band the blade swept since the last repaint?
-		 *
-		 * <p>This is what makes a parallel linkage work. A sector test is only valid when the blade
-		 * passes through the pivot (a single-axis wiper); a pantograph blade does not, it translates
-		 * across the glass, and the region it clears is the quadrilateral between where it was and where
-		 * it is now.</p>
-		 *
-		 * <p>Returns 1 well inside the band, 1..0 across the leading edge, and 0 elsewhere. It never
-		 * returns -1: that value means "skip this bead entirely" to the caller, and a bead the blade has
-		 * not touched must still be DRAWN.</p>
-		 *
-		 * @param from the blade at the previous repaint's angle, {@code {{ax, ay}, {bx, by}}}
-		 * @param to   the blade now
-		 */
-		private static double wipeFactorBand(double pointX, double pointY, double[][] from, double[][] to) {
-			// THE FOUR CORNERS, in their real cyclic order: A0 -> B0 -> B1 -> A1 (along the blade at the
-			// previous step, across to the blade now, and back). These arrays used to be
-			//   {from[0][0], from[0][1], to[0][0], to[0][1]}
-			// i.e. A0.x, A0.y, A1.x, A1.y as the X coordinates - x and y of DIFFERENT corners mixed
-			// together, which is not a quadrilateral. What it built was a thin sliver lying diagonally
-			// across the glass. One instant of it contains nearly nothing, so it looks harmless frame by
-			// frame; but it is rebuilt from the blade's ends at every step, so across a stroke its union is
-			// a broad corridor - measured (DropletFlow, 80x80 grid over a whole stroke) 0.181 m2 of the
-			// 1.2207 m2 glass, 15%, claimed as "under the blade" with the blade up to 1103 mm away. Every
-			// bead in that corridor was shoved, PICKED UP and carried to the end of the stroke, which is
-			// the in-game report "the whole windscreen's rain slides sideways when the wiper sweeps".
-			final double[] ax = {from[0][0], from[1][0], to[1][0], to[0][0]};
-			final double[] ay = {from[0][1], from[1][1], to[1][1], to[0][1]};
-			if (insideConvexQuad(pointX, pointY, ax, ay)) {
-				return 1;
-			}
-			// The leading edge: the blade is on its way here, so thin the film and knock the bead back
-			// gradually instead of snapping at a hard line.
-			final double distance = distanceToSegmentM(pointX, pointY, to[0], to[1]);
-			return distance >= WIPE_FADE_M ? 0 : 1 - distance / WIPE_FADE_M;
-		}
-
-		private static boolean insideConvexQuad(double px, double py, double[] xs, double[] ys) {
-			boolean positive = false, negative = false;
-			for (int i = 0; i < 4; i++) {
-				final int j = (i + 1) % 4;
-				final double cross = (xs[j] - xs[i]) * (py - ys[i]) - (ys[j] - ys[i]) * (px - xs[i]);
-				// The quad is a CHORD approximation of a band whose real edges are arcs (the blade's ends
-				// travel along them), so a bead can sit a fraction of a millimetre outside the polygon and
-				// still be under the blade. Compare the cross product against the edge length times the
-				// inflation - i.e. "at most BAND_INFLATE_M outside this edge" - instead of against zero.
-				final double margin = Math.hypot(xs[j] - xs[i], ys[j] - ys[i]) * BAND_INFLATE_M;
-				if (cross > margin) positive = true;
-				if (cross < -margin) negative = true;
-			}
-			return !(positive && negative);
-		}
-
 		private static double distanceToSegmentM(double px, double py, double[] a, double[] b) {
 			final double dx = b[0] - a[0];
 			final double dy = b[1] - a[1];
@@ -2143,15 +2436,21 @@ public final class MmtrWindshield {
 			// The BEADS as geometry, not as pixels. See drawBeads: they used to be painted into the
 			// uploaded image, and that image provably reached the screen exactly once.
 			drawBeads(carTransform, plane);
-			// ONE wiper per anchor. A pair of wipers is two mmtr_windshield_<cab>_<pane> quads, each with
-			// its own pivot and its own park direction - no mirroring rule to get wrong.
+			// ONE quad-family per wiper: a glass with two wipers draws two blades, each with its OWN pivot,
+			// park direction and angle. A pair sharing one anchor is two mmtr_wipersweep_<cab>_<pane> /
+			// _<pane>_2 fans, each with its own wiper_ part set - no mirroring rule to get wrong.
 			//
-			// config.wiper is the ANIMATION (does this glass get wiped at all); config.drawBlade is the
-			// mod's OWN blade geometry. A model that carries a solid wiper_<cab>_<pane> part sets
-			// drawBlade=false so the two blades do not sit on top of each other, while the glass still
-			// gets wiped and the (modelled) arm is what the animation is meant to move.
-			if (config.wiper && config.drawBlade) {
-				drawWiper(carTransform, plane);
+			// config.<wiper>.wiper is the ANIMATION (does this glass get wiped at all);
+			// config.<wiper>.drawBlade is the mod's OWN blade geometry. A model that carries a solid
+			// wiper_<cab>_<pane>[_<n>] part sets drawBlade=false for THAT wiper so the two blades do not sit
+			// on top of each other, while the glass still gets wiped and the (modelled) arm is what the
+			// animation is meant to move.
+			for (int index = 0; index < config.wipers.length; index++) {
+				final WiperConfig wiper = config.wipers[index];
+				if (!wiper.wiper || !wiper.drawBlade) {
+					continue;
+				}
+				drawWiper(carTransform, plane, wiper, wiperStates[index]);
 			}
 		}
 
@@ -2185,35 +2484,35 @@ public final class MmtrWindshield {
 		 * the two are deliberately different points and {@code pivotV} can lift the pivot if a model wants
 		 * it higher.</p>
 		 */
-		private void drawWiper(StoredMatrixTransformations carTransform, Plane plane) {
-			final double armM = config.armM(anchor);
+		private void drawWiper(StoredMatrixTransformations carTransform, Plane plane, WiperConfig wiper, WiperState wiperState) {
+			final double armM = wiper.armM(anchor);
 			// Distance from the face CENTRE down to the pivot, in metres: half the face height minus the
 			// configured inset. Negative only if pivotV > 0.5, which is the author's business.
-			final double pivotAlongRight = config.pivotU * anchor.widthM - anchor.widthM / 2;
-			final double pivotAlongUp = config.pivotV * anchor.heightM - anchor.heightM / 2;
-			drawOneWiper(carTransform, plane, false, armM, pivotAlongRight, pivotAlongUp);
-			if (config.dualWiper) {
+			final double pivotAlongRight = wiper.pivotU * anchor.widthM - anchor.widthM / 2;
+			final double pivotAlongUp = wiper.pivotV * anchor.heightM - anchor.heightM / 2;
+			drawOneWiper(carTransform, plane, wiper, wiperState, false, armM, pivotAlongRight, pivotAlongUp);
+			if (wiper.dualWiper) {
 				// Two blades on one anchor (a pair of wipers sharing the scuttle): the second mirrors the
 				// first about the face's vertical centre line and sweeps the other way. A pair that needs
-				// its own pivots wants one anchor each (mmtr_windshield_1 / _2) instead.
-				drawOneWiper(carTransform, plane, true, armM, -pivotAlongRight, pivotAlongUp);
+				// its own pivots wants one wiper each (mmtr_wipersweep_1_1 / _1_1_2) instead.
+				drawOneWiper(carTransform, plane, wiper, wiperState, true, armM, -pivotAlongRight, pivotAlongUp);
 			}
 		}
 
-		private void drawOneWiper(StoredMatrixTransformations carTransform, Plane plane, boolean mirrored, double armM, double pivotAlongRight, double pivotAlongUp) {
-			final double radians = Math.toRadians(wiperAngleDeg);
+		private void drawOneWiper(StoredMatrixTransformations carTransform, Plane plane, WiperConfig wiper, WiperState wiperState, boolean mirrored, double armM, double pivotAlongRight, double pivotAlongUp) {
+			final double radians = Math.toRadians(wiperState.angleDeg);
 			// Angle 0 = the face's right edge; +angle rotates UP (right -> up is counterclockwise seen
 			// from +normal, because right = up x normal). sweepSign flips it if the model faces the
 			// other way; flipping the anchor's normal is the other way to reverse it.
-			final double sign = mirrored ? -config.sweepSign : config.sweepSign;
+			final double sign = mirrored ? -wiper.sweepSign : wiper.sweepSign;
 			final double alongRight = Math.cos(radians) * sign;
 			final double alongUp = Math.sin(radians) * sign;
 
 			drawWiperBar(carTransform, plane, pivotAlongRight, pivotAlongUp, alongRight, alongUp,
-					armM, config.bladeWidthM, config.colour, WIPER_OFFSET_M, WHITE_TEXTURE);
+					armM, wiper.bladeWidthM, wiper.colour, WIPER_OFFSET_M, WHITE_TEXTURE);
 			// The arm stalk: shorter, thinner, a shade lighter, sitting just under the blade.
 			drawWiperBar(carTransform, plane, pivotAlongRight, pivotAlongUp, alongRight, alongUp,
-					armM * 0.98, config.bladeWidthM * 0.55, config.armColour, WIPER_OFFSET_M - 0.002F, WHITE_TEXTURE);
+					armM * 0.98, wiper.bladeWidthM * 0.55, wiper.armColour, WIPER_OFFSET_M - 0.002F, WHITE_TEXTURE);
 		}
 
 		/**
@@ -2642,42 +2941,33 @@ public final class MmtrWindshield {
 		 */
 		private boolean visible;
 		/**
-		 * Whether the wiper blade is currently PLOUGHING this bead - water the blade has collected and is
-		 * carrying along in front of its leading edge, all the way to the end of the stroke.
+		 * WHICH wiper is HOLDING this bead (0 = nobody): the bead has been taken off the glass by that
+		 * blade's line and is in that wiper's ridge.
 		 *
-		 * <p>This is state and not a position test, and that is the whole point. Whether a bead is in
-		 * front of the blade is a property of the BEAD (it was picked up and is riding the wave), not of
-		 * where it happens to sit this frame - so the same flag decides both halves of the motion: a bead
-		 * the wave already holds is dragged forward by the blade's own advance, and a bead that is merely
-		 * sitting in the blade's path this frame is picked up and given that same advance. A positional
-		 * test cannot tell those two apart, and that is exactly how the one-shot 2 cm shove happened: a
-		 * shove of anything over the blade's per-frame advance simply outruns the blade, so the bead lands
-		 * in glass the blade has already cleared, stops being "in front of the blade", and is never
-		 * touched again.</p>
+		 * <p>This is the entire carry state, one field, and it exists so that the rest of the field knows
+		 * the bead is spoken for: {@code spawnForWeather} and {@code pinchOff} both hand out beads that are
+		 * merely invisible, and without this they would take the wiper's water and drop it somewhere else on
+		 * the glass at a random size. A held bead is neither on the glass nor available to the rain.</p>
 		 *
-		 * <p>Cleared when the blade turns around (see {@code applyWipe}), so the water the outward stroke
-		 * ploughed up stays piled where it was put instead of being shaken in place.</p>
+		 * <p>Nothing else is per-bead about the carry any more: what the blade is holding is the wiper's
+		 * ridge (see {@code WiperState.ridge}), which is put back on the glass in one line when the blade
+		 * stops or turns around.</p>
 		 */
-		private boolean carriedByBlade;
+		private int heldByWiper;
 		/**
-		 * The wiper's direction of travel (+1 or -1) when this bead joined the wave. The motion code flips
-		 * {@code wiperTravelDirection} when the blade turns around, so the two disagreeing IS the
-		 * turnaround - and that is when the bead is released where it stands instead of being dragged back
-		 * through the water the blade just cleared.
+		 * The water's own momentum, in METRES per second, left over from being thrown off a blade - see
+		 * {@code RELEASE_FLING_M}. It decays to nothing over {@code RELEASE_FLING_DECAY_S}, and it is applied
+		 * on top of whatever the runoff is doing, so it is not a second motion model: it is the shove the
+		 * blade gave the water, still running out.
 		 */
-		private int carriedDirection = 1;
+		private double flingX;
+		private double flingY;
 		/**
-		 * Whether this bead is sitting in a COLLECTION ZONE - the strip at one end of the stroke where the
-		 * blade puts the water it ploughed up. Zone water is water the wiper has finished with: the next
-		 * stroke sweeps straight over it and leaves it alone (see {@code WindshieldConfig.collectZoneM}),
-		 * so the same water cannot be carried out and back for ever. It still runs down under its own
-		 * weight, which is what makes the collected water look like a sheet of water at the side of the
-		 * screen rather than a painted-on line.
-		 *
-		 * <p>Cleared when the bead leaves the glass and respawns as fresh rain, because the strip it was
-		 * parked in is not part of the sky.</p>
+		 * How long THIS bead's flick takes to die, in seconds - fitted at release so that the bead travels
+		 * {@code RELEASE_FLICK_M} whatever speed the blade gave it ({@code tau = 2 * distance / speed}), and so
+		 * that a bead released near the frame edge stops short of it. See {@code RELEASE_FLICK_M}.
 		 */
-		private boolean inCollectZone;
+		private double flingDecayS = RELEASE_FLING_DECAY_S;
 
 		private Drop(double x, double y, double variation, Random random) {
 			this.x = x;
@@ -2691,20 +2981,28 @@ public final class MmtrWindshield {
 	// Config: assets/mtr/mmtr_anchors_<id>.json -> "windshield": { "<anchorName>": { ... } }
 	// ---------------------------------------------------------------------------------------------
 
-	private static final class WindshieldConfig {
+	/**
+	 * ONE wiper on a glass: its blade, its pivot, its stroke, its speed and how it is driven.
+	 *
+	 * <p>A pack that gives a glass ONE wiper writes these fields FLAT in the glass's own block, and this
+	 * object is then built straight from that block - which is what every pack made before multi-wiper
+	 * existed contains, so those keep working field for field. A pack that gives a glass SEVERAL wipers
+	 * writes one of these per entry of {@code "wipers"}, each carrying its own {@code wiperIndex}. Both
+	 * paths produce the same object, so nothing downstream needs to know which one it came from.</p>
+	 *
+	 * <p>Everything here belongs to ONE blade. The weather and the water do NOT: there is one bead field
+	 * per glass, and every wiper on it clears that same rain (see {@link WindshieldConfig}).</p>
+	 */
+	private static final class WiperConfig {
 
-		private static final Object2ObjectOpenHashMap<String, Object2ObjectOpenHashMap<String, WindshieldConfig>> CACHE = new Object2ObjectOpenHashMap<>();
-		private static final WindshieldConfig DEFAULT = new WindshieldConfig(new JsonObject());
-
-		private final int raindrops;
-		private final double fallMps;
-		private final double maxStreakM;
-		/** Whether this anchor carries a wiper at all (false = rain only, e.g. a rear screen). */
+		/** Which wiper of the glass this is: its modelled parts are {@code wiper_<cab>_<pane>_<index>}. */
+		private final int index;
+		/** Whether this wiper runs at all (false = modelled, but never driven). */
 		private final boolean wiper;
 		/**
 		 * Whether the CLIENT draws its own blade. False when the model carries a solid wiper part
-		 * ({@code wiper_<cab>_<pane>}): the glass must still be wiped (that is {@link #wiper}), but the
-		 * drawn blade would sit on top of the modelled one. The packager sets this from the model, so a
+		 * ({@code wiper_<cab>_<pane>[_<n>]}): the glass must still be wiped (that is {@link #wiper}), but
+		 * the drawn blade would sit on top of the modelled one. The packager sets this from the model, so a
 		 * model without a solid wiper keeps the drawn blade exactly as before.
 		 */
 		private final boolean drawBlade;
@@ -2717,6 +3015,231 @@ public final class MmtrWindshield {
 		private final double bladeWidthM;
 		private final int colour;
 		private final int armColour;
+		/** A second blade mirroring the first about the plane's centre (a single anchor covering a pair). */
+		private final boolean dualWiper;
+		/**
+		 * Where the wiper is mounted on the modelled face, as fractions of its width/height (0..1, origin
+		 * bottom-left, same convention as the panel layout). Defaults put the pivot at the middle of the
+		 * BOTTOM edge, because a wiper sits on the scuttle and not in the centre of the screen. The swept
+		 * sector's reference point is still the face centre, so these two are independent.
+		 */
+		private final double pivotU;
+		private final double pivotV;
+		/**
+		 * The SECOND pivot of a parallel-linkage wiper, and the blade's two ends in its parked position.
+		 * All in the same fractions-from-the-left/bottom convention as {@link #pivotU}/{@link #pivotV}.
+		 *
+		 * <p>Absent for a wiper the models does not carry geometry for, in which case the client keeps
+		 * drawing and sweeping its own synthetic blade along the arm - exactly as it always did.</p>
+		 */
+		private final boolean hasBlade;
+		private final double pivot2U;
+		private final double pivot2V;
+		private final double bladeAU;
+		private final double bladeAV;
+		private final double bladeBU;
+		private final double bladeBV;
+		/**
+		 * Where the links are bolted to the BLADE. A real wiper pins its arm to the blade's MIDDLE and its
+		 * rod near an end, so these are generally NOT the blade's ends - and using an end instead scales the
+		 * blade's translation by |end-P1|/|pin-P1|. They default to the blade's ends, which is what a pack
+		 * written before the pins existed contains and is exactly right for a single-axis or end-pinned
+		 * mechanism.
+		 */
+		private final double pinAU;
+		private final double pinAV;
+		private final double pinBU;
+		private final double pinBV;
+
+		/**
+		 * @param fallbackIndex the wiper's index when the block does not state one - the array position for
+		 *                      a {@code "wipers"} entry, 1 for the flat single-wiper block
+		 */
+		private WiperConfig(JsonObject json, int fallbackIndex) {
+			index = Math.max(1, (int) WindshieldConfig.getDouble(json, "wiperIndex", fallbackIndex));
+			wiper = WindshieldConfig.getBoolean(json, "wiper", true);
+			drawBlade = WindshieldConfig.getBoolean(json, "drawBlade", true);
+			armMConfigured = WindshieldConfig.getDouble(json, "armM", 0);
+			// The park direction is modelled, so 0 is the correct default: the blade lies along the
+			// face's own "right" edge. These two only nudge it off that line.
+			parkAngleDeg = WindshieldConfig.getDouble(json, "parkAngleDeg", 0);
+			sweepDeg = Math.max(5, WindshieldConfig.getDouble(json, "sweepDeg", 88));
+			sweepSign = WindshieldConfig.getDouble(json, "sweepSign", 1) < 0 ? -1 : 1;
+			periodS = Math.max(0.2, WindshieldConfig.getDouble(json, "periodS", 1.6));
+			bladeWidthM = Math.max(0.005, WindshieldConfig.getDouble(json, "bladeWidthM", 0.035));
+			colour = WindshieldConfig.parseColor(WindshieldConfig.getString(json, "colour", "#FF14181C"), 0xFF14181C);
+			armColour = WindshieldConfig.parseColor(WindshieldConfig.getString(json, "armColour", "#FF3A4148"), 0xFF3A4148);
+			dualWiper = WindshieldConfig.getBoolean(json, "dualWiper", false);
+			pivotU = WindshieldConfig.getDouble(json, "pivotU", 0.5);
+			pivotV = WindshieldConfig.getDouble(json, "pivotV", 0.0);
+			hasBlade = json.has("bladeAU") && json.has("bladeBU");
+			bladeAU = WindshieldConfig.getDouble(json, "bladeAU", 0);
+			bladeAV = WindshieldConfig.getDouble(json, "bladeAV", 0);
+			bladeBU = WindshieldConfig.getDouble(json, "bladeBU", 0);
+			bladeBV = WindshieldConfig.getDouble(json, "bladeBV", 0);
+			// No second pivot means the two ends rotate about the SAME point, which is exactly a
+			// single-axis wiper - so a missing pivot2 is not a special case anywhere in the maths.
+			pivot2U = WindshieldConfig.getDouble(json, "pivot2U", pivotU);
+			pivot2V = WindshieldConfig.getDouble(json, "pivot2V", pivotV);
+			pinAU = WindshieldConfig.getDouble(json, "pinAU", bladeAU);
+			pinAV = WindshieldConfig.getDouble(json, "pinAV", bladeAV);
+			pinBU = WindshieldConfig.getDouble(json, "pinBU", bladeBU);
+			pinBV = WindshieldConfig.getDouble(json, "pinBV", bladeBV);
+		}
+
+		/**
+		 * The wiper's reach. Defaults to half the modelled quad's SHORTER side, which is exactly the
+		 * largest arm that still fits inside the plane the author drew - so a correctly sized wiper face
+		 * needs no {@code armM} at all.
+		 */
+		private double armM(Anchor anchor) {
+			return armMConfigured > 0 ? armMConfigured : Math.max(0.05, Math.min(anchor.widthM, anchor.heightM) / 2);
+		}
+
+		/** The follower's pin at a given crank pin, for the part transform. See bladeSegmentM for the maths. */
+		@Nullable
+		double[] followerEndFor(double[] crankPin, double[] pivot, double spanM, double followerM, int mode) {
+			return WindshieldConfig.followerEnd(crankPin, pivot, spanM, followerM, mode);
+		}
+
+		/** The assembly mode, read off the PARK configuration (its crank pin is m0, not br0). */
+		int assemblyMode(double[] parkCrankPin, double[] pivot, double[] parkFollowerPin, double spanM, double followerM) {
+			return WindshieldConfig.followMode(null, pivot, parkCrankPin, parkFollowerPin, spanM, followerM);
+		}
+
+		/**
+		 * Whether this wiper has a modelled BLADE to test against, as opposed to only a fan (the region the
+		 * arm sweeps): a blade gives a line segment, a fan-only pack gives a ray at the wiper's own angle.
+		 * See {@code onBlade}, which asks the same two questions - is the line on this bead, and did it
+		 * cross it since the last repaint - of whichever of the two the pack provides.
+		 *
+		 * <p>The split is by GEOMETRY, not by whether the model carries blade art, because the two tests
+		 * are exact for different motions:</p>
+		 * <ul>
+		 *   <li>ONE pivot: the blade passes through the pivot, so the region it clears is exactly the
+		 *       angular sector between park and the blade - the original test, kept unchanged.</li>
+		 *   <li>TWO pivots: the blade never passes through a pivot, so no sector describes it. The quad
+		 *       between two blade positions covers a pure translation exactly (a parallelogram), and for
+		 *       a partially-rotating linkage it is exact to within the arc bulge over one repaint.</li>
+		 * </ul>
+		 */
+		private boolean usesBandWipe(Anchor anchor) {
+			// GENERAL RULE (2026-09-24). The BAND test is the one that assumes nothing about the linkage: it
+			// is the area between the blade's previous and current position - exact for a translating blade,
+			// chord-exact over one repaint for a rotating one - and it is the path the windrow/carry
+			// behaviour was built and measured on (notes 204-209), i.e. what puts a water line on the blade.
+			// It covers a blade that runs THROUGH the pivot (a radial bus blade) as well: the two blade
+			// positions share the pivot, so the quad between them IS the angular wedge.
+			//
+			// The SECTOR test is therefore only the fallback for a pack that ships a fan but no blade
+			// geometry - nothing to measure a band from. The old rule here ("band only with two pivots, i.e.
+			// a parallelogram") sent every car-style single-pivot wiper down that wedge path, which had
+			// never run in game until SAF420 and turned out to carry three separate latent bugs (negative
+			// swept extent, bearing side, and a push direction that assumed parkAngleDeg = 0). Measured
+			// symptom on the wedge path: "no water line on the blade, and the whole region's water moves
+			// along with it".
+			return hasBlade && bladeLengthM(anchor) >= MIN_BLADE_LENGTH_M;
+		}
+
+		/** The modelled blade's length in metres - 0 when the pack carries no usable blade segment. */
+		private double bladeLengthM(Anchor anchor) {
+			return Math.hypot((bladeBU - bladeAU) * anchor.widthM, (bladeBV - bladeAV) * anchor.heightM);
+		}
+
+		/**
+		 * The blade's two ends at a given stroke angle, in canvas METRES with y UP and the origin at the
+		 * bottom-left - the same space the beads are simulated in, so the wiped region can never end up
+		 * mirrored against the beads it is supposed to be clearing.
+		 *
+		 * <p>Both wiper families are these two expressions, and NOTHING else differs between them:</p>
+		 * <pre>
+		 *   A(theta) = P1 + R(theta) * (A0 - P1)
+		 *   B(theta) = P2 + R(theta) * (B0 - P2)
+		 * </pre>
+		 * <p>With one pivot ({@code P1 = P2}) the blade rotates rigidly - a single-axis car wiper. With
+		 * equal link vectors (the parallelogram a train uses) the difference {@code B - A} is constant, so
+		 * the blade keeps its direction and only translates. Both fall out of the geometry; there is no
+		 * branch on "which kind of wiper is this".</p>
+		 *
+		 * @return {@code {{ax, ay}, {bx, by}}}, or null when the model carries no blade geometry
+		 */
+		@Nullable
+		private double[][] bladeSegmentM(double absoluteAngleDeg, Anchor anchor) {
+			if (!hasBlade) {
+				return null;
+			}
+			// parkAngleDeg is the direction the blade is MODELLED at, so it is the ORIGIN of the rotation:
+			// the linkage is driven by "how far from park", not by an absolute bearing. Without this the
+			// blade would be rotated by the phase angle plus the park bearing - i.e. 110 degrees out.
+			final double theta = (absoluteAngleDeg - parkAngleDeg) * sweepSign;
+			final double widthM = anchor.widthM;
+			final double heightM = anchor.heightM;
+			final double[] p1 = {pivotU * widthM, pivotV * heightM};
+			final double[] p2 = {pivot2U * widthM, pivot2V * heightM};
+			// The PINS are where the links are bolted to the BLADE - a real arm is pinned to the blade's
+			// middle, so these are not the blade's ends. A pack without them falls back to the ends, which
+			// is what every fixture models and what the parallelogram case needs anyway.
+			final double[] m0 = {pinAU * widthM, pinAV * heightM};
+			final double[] br0 = {pinBU * widthM, pinBV * heightM};
+			final double[] a0 = {bladeAU * widthM, bladeAV * heightM};
+			final double[] b0 = {bladeBU * widthM, bladeBV * heightM};
+			final double radians = Math.toRadians(theta);
+			final double cos = Math.cos(radians);
+			final double sin = Math.sin(radians);
+			final boolean coaxial = Math.abs(p2[0] - p1[0]) < 1.0E-9 && Math.abs(p2[1] - p1[1]) < 1.0E-9;
+			final double[] m = WindshieldConfig.rotateAbout(p1[0], p1[1], m0[0], m0[1], cos, sin);
+			// ONE pivot: the blade rides the arm, so a rigid rotation about the spindle is exact - and the
+			// loop closure degenerates to exactly this, because a pin pair turning about a common centre
+			// turns by the crank angle.
+			if (coaxial) {
+				return new double[][]{WindshieldConfig.rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin), WindshieldConfig.rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
+			}
+			// TWO pivots: the FOUR-BAR LOOP CLOSURE. The blade is RIGID, so the distance between its two pins
+			// cannot change - that is what fixes the follower's angle:
+			//   M(theta)  = P1 + R(theta)(M0 - P1)                                the crank (driven)
+			//   Br(theta) = circle(P2, |Br0-P2|) n circle(M(theta), |Br0-M0|)      the follower (SOLVED)
+			// "Both pins turn by theta" - what an ideal parallelogram does - contradicts the rigidity as soon
+			// as the two link vectors differ (measured: 4.5 mm on the fixture). NOTE the argument order of
+			// followerEnd: its first radius is the one about its first point.
+			final double spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
+			final double followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
+			final double[] br = WindshieldConfig.followerEnd(m, p2, spanM, followerM, WindshieldConfig.followMode(p1, p2, m0, br0, spanM, followerM));
+			if (br == null) {
+				// The linkage cannot reach that angle: keep the blade drawn and moving rather than making it
+				// vanish. The offline verifier is what reports the real problem.
+				return new double[][]{WindshieldConfig.rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin), WindshieldConfig.rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
+			}
+			// The blade is the rigid body through its two pins, so its ends follow from the rigid motion that
+			// takes the park pin pair onto the current one. The two distances agree BY CONSTRUCTION now.
+			final double turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
+			final double turnCos = Math.cos(turn);
+			final double turnSin = Math.sin(turn);
+			return new double[][]{
+					WindshieldConfig.carried(m, m0, a0, turnCos, turnSin),
+					WindshieldConfig.carried(m, m0, b0, turnCos, turnSin)
+			};
+		}
+	}
+
+	private static final class WindshieldConfig {
+
+		private static final Object2ObjectOpenHashMap<String, Object2ObjectOpenHashMap<String, WindshieldConfig>> CACHE = new Object2ObjectOpenHashMap<>();
+		private static final WindshieldConfig DEFAULT = new WindshieldConfig(new JsonObject());
+
+		private final int raindrops;
+		private final double fallMps;
+		private final double maxStreakM;
+		/**
+		 * <b>The wipers on this glass, in ascending wiper order</b> (index i = the wiper whose modelled
+		 * parts are named {@code wiper_<cab>_<pane>_<i+1>}).
+		 *
+		 * <p>A glass may carry MORE THAN ONE: there is exactly one bead field per glass - one rain, one
+		 * puddle - and each wiper on it has its own pivot, park direction, stroke, speed and mechanism, all
+		 * clearing that same water. Almost every model has one, and then this holds a single entry built
+		 * from the flat fields a pack has always written, so a single-wiper model behaves exactly as it did
+		 * before. See docs §1.4②/④.</p>
+		 */
+		private final WiperConfig[] wipers;
 		private final boolean snow;
 		/**
 		 * How far off the modelled face the precipitation layer sits, in metres along the glass normal
@@ -2770,53 +3293,6 @@ public final class MmtrWindshield {
 		 * second and reads as "the rain still does not move".</p>
 		 */
 		private final double runoffMps;
-		/**
-		 * Ceiling on the BOW WAVE, in metres per frame: how far the blade may throw the water it has not
-		 * reached yet. The binding value is normally {@code BOW_WAVE_FRACTION} of the blade's advance
-		 * (about 11 mm at the slow speed); this only caps it when the blade is moving fast, where the wave
-		 * would otherwise be thrown a hand's width per frame and the water would read as airborne.
-		 *
-		 * <p>0.02 m is about half the blade's own contact width (0.035 m), which is the physical scale of
-		 * the wave a real blade pushes ahead of itself. It does NOT control how far the water ends up being
-		 * carried: that is the blade's own motion, and a real wiper carries water all the way to the end of
-		 * its stroke.</p>
-		 */
-		private final double pushM;
-		/** A second blade mirroring the first about the plane's centre (a single anchor covering a pair). */
-		private final boolean dualWiper;
-		/**
-		 * Where the wiper is mounted on the modelled face, as fractions of its width/height (0..1, origin
-		 * bottom-left, same convention as the panel layout). Defaults put the pivot at the middle of the
-		 * BOTTOM edge, because a wiper sits on the scuttle and not in the centre of the screen. The swept
-		 * sector's reference point is still the face centre, so these two are independent.
-		 */
-		private final double pivotU;
-		private final double pivotV;
-		/**
-		 * The SECOND pivot of a parallel-linkage wiper, and the blade's two ends in its parked position.
-		 * All in the same fractions-from-the-left/bottom convention as {@link #pivotU}/{@link #pivotV}.
-		 *
-		 * <p>Absent for a wiper the models does not carry geometry for, in which case the client keeps
-		 * drawing and sweeping its own synthetic blade along the arm - exactly as it always did.</p>
-		 */
-		private final boolean hasBlade;
-		private final double pivot2U;
-		private final double pivot2V;
-		private final double bladeAU;
-		private final double bladeAV;
-		private final double bladeBU;
-		private final double bladeBV;
-		/**
-		 * Where the links are bolted to the BLADE. A real wiper pins its arm to the blade's MIDDLE and its
-		 * rod near an end, so these are generally NOT the blade's ends - and using an end instead scales the
-		 * blade's translation by |end-P1|/|pin-P1|. They default to the blade's ends, which is what a pack
-		 * written before the pins existed contains and is exactly right for a single-axis or end-pinned
-		 * mechanism.
-		 */
-		private final double pinAU;
-		private final double pinAV;
-		private final double pinBU;
-		private final double pinBV;
 
 		// --- droplet physics (all optional; the defaults are tuned for a raked main windscreen) -------
 		/** Ceiling on the upward creep the airflow produces at line speed (m/s). */
@@ -2832,6 +3308,14 @@ public final class MmtrWindshield {
 		 * fraction rather than a bead count so it means the same thing on any model - see
 		 * {@code spawnRatePerSecond} for why the old absolute count was both too slow and, above 4/s,
 		 * silently ignored.
+		 *
+		 * <p>BACK TO 0.25 (2026-09-24). It was raised to 0.6 earlier the same day, to out-supply a wiper that
+		 * had turned into a PUMP: that model pushed the water it took to the bottom edge, where it ran off, so
+		 * the glass settled at 66-92 visible beads out of a cap of 220 and the rain looked broken. The wiper
+		 * no longer does that - it holds what it takes and gives ALL of it back (measured over a full cycle:
+		 * 967 beads taken, 967 released, nothing lost) - so the extra supply has nothing left to compensate
+		 * for, and leaving it in just makes the glass re-wet twice as fast as the pack asks for. Reported as
+		 * "the rain looks much heavier than it should".</p>
 		 */
 		private final double spawnPopulationPerSecond;
 		/**
@@ -2848,35 +3332,27 @@ public final class MmtrWindshield {
 		private final double staticThresholdM;
 		/** Bead separation below which two beads merge (metres); also the spatial hash's cell size. */
 		private final double mergeDistanceM;
-		/**
-		 * THE COLLECTION ZONE, in metres, measured back along the direction of travel from the blade's
-		 * leading line. One exists at each end of the stroke, because the stroke has two ends.
-		 *
-		 * <p>Water the blade ploughed is released into the zone at the end it has just reached, and water
-		 * that is IN a zone is not picked up again by a later stroke. That is what stops the same water
-		 * being dragged back and forth across the glass: it is put down at the side, and the next stroke
-		 * sweeps over it and leaves it there. Without this the pile at the far end is picked straight back
-		 * up on the return and carried home, so a full cycle nets out to nothing and the whole screen's
-		 * rain visibly slides sideways with every sweep.</p>
-		 */
-		private final double collectZoneM;
 
 		private WindshieldConfig(JsonObject json) {
 			raindrops = clampInt(getDouble(json, "raindrops", 90), 0, 400);
 			fallMps = Math.max(0.01, getDouble(json, "fallMps", 0.55));
 			maxStreakM = Math.max(0, getDouble(json, "maxStreakM", 0.10));
-			wiper = getBoolean(json, "wiper", true);
-			drawBlade = getBoolean(json, "drawBlade", true);
-			armMConfigured = getDouble(json, "armM", 0);
-			// The park direction is modelled, so 0 is the correct default: the blade lies along the
-			// face's own "right" edge. These two only nudge it off that line.
-			parkAngleDeg = getDouble(json, "parkAngleDeg", 0);
-			sweepDeg = Math.max(5, getDouble(json, "sweepDeg", 88));
-			sweepSign = getDouble(json, "sweepSign", 1) < 0 ? -1 : 1;
-			periodS = Math.max(0.2, getDouble(json, "periodS", 1.6));
-			bladeWidthM = Math.max(0.005, getDouble(json, "bladeWidthM", 0.035));
-			colour = parseColor(getString(json, "colour", "#FF14181C"), 0xFF14181C);
-			armColour = parseColor(getString(json, "armColour", "#FF3A4148"), 0xFF3A4148);
+			// THE WIPERS. "wipers" is written by the packager ONLY when a glass carries two or more; without
+			// it the flat fields ARE the single wiper, which is what every pack made before multi-wiper
+			// contains - so an old pack parses to the same one-entry array it always behaved as, field for
+			// field. Each array entry states its own wiperIndex, so which entry drives which
+			// wiper_<cab>_<pane>_<n> part never depends on array position alone.
+			final JsonArray wiperArray = json.has("wipers") && json.get("wipers").isJsonArray() ? json.getAsJsonArray("wipers") : null;
+			if (wiperArray != null && wiperArray.size() > 0) {
+				final WiperConfig[] parsed = new WiperConfig[wiperArray.size()];
+				for (int index = 0; index < parsed.length; index++) {
+					final JsonElement element = wiperArray.get(index);
+					parsed[index] = new WiperConfig(element != null && element.isJsonObject() ? element.getAsJsonObject() : new JsonObject(), index + 1);
+				}
+				wipers = parsed;
+			} else {
+				wipers = new WiperConfig[]{new WiperConfig(json, 1)};
+			}
 			snow = getBoolean(json, "snow", false);
 			// A NEGATIVE value puts the water on the driver's side of the glass, which is what makes it
 			// visible from the cab (see WATER_OFFSET_M: the modelled pane is rasterised first and writes
@@ -2885,23 +3361,6 @@ public final class MmtrWindshield {
 			waterOffsetM = Math.max(-0.5, Math.min(0.5, getDouble(json, "waterOffsetM", WATER_OFFSET_M)));
 			minVisibleRadiusM = Math.max(0.0005, getDouble(json, "minVisibleRadiusM", 0.004));
 			maxVisibleRadiusM = Math.max(minVisibleRadiusM, getDouble(json, "maxVisibleRadiusM", 0.009));
-			dualWiper = getBoolean(json, "dualWiper", false);
-			pivotU = getDouble(json, "pivotU", 0.5);
-			pivotV = getDouble(json, "pivotV", 0.0);
-			final boolean bladeGiven = json.has("bladeAU") && json.has("bladeBU");
-			hasBlade = bladeGiven;
-			bladeAU = getDouble(json, "bladeAU", 0);
-			bladeAV = getDouble(json, "bladeAV", 0);
-			bladeBU = getDouble(json, "bladeBU", 0);
-			bladeBV = getDouble(json, "bladeBV", 0);
-			// No second pivot means the two ends rotate about the SAME point, which is exactly a
-			// single-axis wiper - so a missing pivot2 is not a special case anywhere in the maths.
-			pivot2U = getDouble(json, "pivot2U", pivotU);
-			pivot2V = getDouble(json, "pivot2V", pivotV);
-			pinAU = getDouble(json, "pinAU", bladeAU);
-			pinAV = getDouble(json, "pinAV", bladeAV);
-			pinBU = getDouble(json, "pinBU", bladeBU);
-			pinBV = getDouble(json, "pinBV", bladeBV);
 			creepMps = Math.max(0, getDouble(json, "creepMps", 0.09));
 			jitterMps = Math.max(0, getDouble(json, "jitterMps", 0.008));
 			minBeadRadiusM = Math.max(0.0005, getDouble(json, "minBeadRadiusM", 0.0035));
@@ -2917,123 +3376,37 @@ public final class MmtrWindshield {
 			spawnPopulationPerSecond = Math.max(0, getDouble(json, "spawnPopulationPerSecond", 0.25));
 			staticThresholdM = Math.max(0.0005, getDouble(json, "staticThresholdM", 0.0045));
 			mergeDistanceM = Math.max(0.001, getDouble(json, "mergeDistanceM", 0.012));
-			collectZoneM = Math.max(0, Math.min(0.5, getDouble(json, "collectZoneM", 0.15)));
 			densityCellM = Math.max(0.005, getDouble(json, "densityCellM", 0.05));
 			densityThresholdPerM2 = Math.max(1, getDouble(json, "densityThresholdPerM2", 130));
 			runoffMps = Math.max(0, getDouble(json, "runoffMps", 0.45));
-			pushM = Math.max(0, getDouble(json, "pushM", 0.02));
+		}
+
+		/** Whether ANY wiper on this glass is switched on. False = rain only (e.g. a rear screen). */
+		private boolean hasWiper() {
+			for (final WiperConfig wiper : wipers) {
+				if (wiper.wiper) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		/**
-		 * The wiper's reach. Defaults to half the modelled quad's SHORTER side, which is exactly the
-		 * largest arm that still fits inside the plane the author drew - so a correctly sized wiper face
-		 * needs no {@code armM} at all.
-		 */
-		/** The follower's pin at a given crank pin, for the part transform. See bladeSegmentM for the maths. */
-		@Nullable
-		double[] followerEndFor(double[] crankPin, double[] pivot, double spanM, double followerM, int mode) {
-			return followerEnd(crankPin, pivot, spanM, followerM, mode);
-		}
-
-		/** The assembly mode, read off the PARK configuration (its crank pin is m0, not br0). */
-		int assemblyMode(double[] parkCrankPin, double[] pivot, double[] parkFollowerPin, double spanM, double followerM) {
-			return followMode(null, pivot, parkCrankPin, parkFollowerPin, spanM, followerM);
-		}
-
-		private double armM(Anchor anchor) {
-			return armMConfigured > 0 ? armMConfigured : Math.max(0.05, Math.min(anchor.widthM, anchor.heightM) / 2);
-		}
-
-		/**
-		 * Whether this wiper's blade sweeps a BAND rather than a sector - i.e. whether it has a second
-		 * pivot, which is what a parallel linkage (a train's pantograph wiper) adds.
+		 * The wiper whose modelled parts are named {@code wiper_<cab>_<pane>_<index>}, or null when this
+		 * glass has no such wiper.
 		 *
-		 * <p>The split is by GEOMETRY, not by whether the model carries blade art, because the two tests
-		 * are exact for different motions:</p>
-		 * <ul>
-		 *   <li>ONE pivot: the blade passes through the pivot, so the region it clears is exactly the
-		 *       angular sector between park and the blade - the original test, kept unchanged.</li>
-		 *   <li>TWO pivots: the blade never passes through a pivot, so no sector describes it. The quad
-		 *       between two blade positions covers a pure translation exactly (a parallelogram), and for
-		 *       a partially-rotating linkage it is exact to within the arc bulge over one repaint.</li>
-		 * </ul>
-		 */
-		private boolean usesBandWipe() {
-			return hasBlade && (Math.abs(pivot2U - pivotU) > 1.0E-9 || Math.abs(pivot2V - pivotV) > 1.0E-9);
-		}
-
-		/**
-		 * The blade's two ends at a given stroke angle, in canvas METRES with y UP and the origin at the
-		 * bottom-left - the same space the beads are simulated in, so the wiped region can never end up
-		 * mirrored against the beads it is supposed to be clearing.
-		 *
-		 * <p>Both wiper families are these two expressions, and NOTHING else differs between them:</p>
-		 * <pre>
-		 *   A(theta) = P1 + R(theta) * (A0 - P1)
-		 *   B(theta) = P2 + R(theta) * (B0 - P2)
-		 * </pre>
-		 * <p>With one pivot ({@code P1 = P2}) the blade rotates rigidly - a single-axis car wiper. With
-		 * equal link vectors (the parallelogram a train uses) the difference {@code B - A} is constant, so
-		 * the blade keeps its direction and only translates. Both fall out of the geometry; there is no
-		 * branch on "which kind of wiper is this".</p>
-		 *
-		 * @return {@code {{ax, ay}, {bx, by}}}, or null when the model carries no blade geometry
+		 * <p>Matched on the wiper's OWN declared index rather than on its position in the array, so a model
+		 * that numbers its wipers 1 and 3 (or ships a config with only the second one) still drives the
+		 * right blade - a silent off-by-one here would rotate the wrong part.</p>
 		 */
 		@Nullable
-		private double[][] bladeSegmentM(double absoluteAngleDeg, Anchor anchor) {
-			if (!hasBlade) {
-				return null;
+		private WiperConfig wiperAt(int index) {
+			for (final WiperConfig wiper : wipers) {
+				if (wiper.index == index) {
+					return wiper;
+				}
 			}
-			// parkAngleDeg is the direction the blade is MODELLED at, so it is the ORIGIN of the rotation:
-			// the linkage is driven by "how far from park", not by an absolute bearing. Without this the
-			// blade would be rotated by the phase angle plus the park bearing - i.e. 110 degrees out.
-			final double theta = (absoluteAngleDeg - parkAngleDeg) * sweepSign;
-			final double widthM = anchor.widthM;
-			final double heightM = anchor.heightM;
-			final double[] p1 = {pivotU * widthM, pivotV * heightM};
-			final double[] p2 = {pivot2U * widthM, pivot2V * heightM};
-			// The PINS are where the links are bolted to the BLADE - a real arm is pinned to the blade's
-			// middle, so these are not the blade's ends. A pack without them falls back to the ends, which
-			// is what every fixture models and what the parallelogram case needs anyway.
-			final double[] m0 = {pinAU * widthM, pinAV * heightM};
-			final double[] br0 = {pinBU * widthM, pinBV * heightM};
-			final double[] a0 = {bladeAU * widthM, bladeAV * heightM};
-			final double[] b0 = {bladeBU * widthM, bladeBV * heightM};
-			final double radians = Math.toRadians(theta);
-			final double cos = Math.cos(radians);
-			final double sin = Math.sin(radians);
-			final boolean coaxial = Math.abs(p2[0] - p1[0]) < 1.0E-9 && Math.abs(p2[1] - p1[1]) < 1.0E-9;
-			final double[] m = rotateAbout(p1[0], p1[1], m0[0], m0[1], cos, sin);
-			// ONE pivot: the blade rides the arm, so a rigid rotation about the spindle is exact - and the
-			// loop closure degenerates to exactly this, because a pin pair turning about a common centre
-			// turns by the crank angle.
-			if (coaxial) {
-				return new double[][]{rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin), rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
-			}
-			// TWO pivots: the FOUR-BAR LOOP CLOSURE. The blade is RIGID, so the distance between its two pins
-			// cannot change - that is what fixes the follower's angle:
-			//   M(theta)  = P1 + R(theta)(M0 - P1)                                the crank (driven)
-			//   Br(theta) = circle(P2, |Br0-P2|) n circle(M(theta), |Br0-M0|)      the follower (SOLVED)
-			// "Both pins turn by theta" - what an ideal parallelogram does - contradicts the rigidity as soon
-			// as the two link vectors differ (measured: 4.5 mm on the fixture). NOTE the argument order of
-			// followerEnd: its first radius is the one about its first point.
-			final double spanM = Math.hypot(br0[0] - m0[0], br0[1] - m0[1]);
-			final double followerM = Math.hypot(br0[0] - p2[0], br0[1] - p2[1]);
-			final double[] br = followerEnd(m, p2, spanM, followerM, followMode(p1, p2, m0, br0, spanM, followerM));
-			if (br == null) {
-				// The linkage cannot reach that angle: keep the blade drawn and moving rather than making it
-				// vanish. The offline verifier is what reports the real problem.
-				return new double[][]{rotateAbout(p1[0], p1[1], a0[0], a0[1], cos, sin), rotateAbout(p2[0], p2[1], b0[0], b0[1], cos, sin)};
-			}
-			// The blade is the rigid body through its two pins, so its ends follow from the rigid motion that
-			// takes the park pin pair onto the current one. The two distances agree BY CONSTRUCTION now.
-			final double turn = Math.atan2(br[1] - m[1], br[0] - m[0]) - Math.atan2(br0[1] - m0[1], br0[0] - m0[0]);
-			final double turnCos = Math.cos(turn);
-			final double turnSin = Math.sin(turn);
-			return new double[][]{
-					carried(m, m0, a0, turnCos, turnSin),
-					carried(m, m0, b0, turnCos, turnSin)
-			};
+			return null;
 		}
 
 		/** A point of the blade under the rigid motion that puts the park pin M0 onto the current pin M. */

@@ -18,7 +18,11 @@ import org.mtr.mod.Init;
 import org.mtr.mod.client.*;
 import org.mtr.mod.config.Config;
 import org.mtr.mod.data.IGui;
+import org.mtr.mod.render.light.MmtrHeadlights;
+import org.mtr.mod.render.light.MmtrLightField;
 import org.mtr.mod.render.panel.MmtrCabDashboard;
+import org.mtr.mod.render.panel.MmtrFaceRuntime;
+import org.mtr.mod.render.panel.MmtrPidBoard;
 import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.resource.Interpolation;
 import org.mtr.mod.resource.VehicleResource;
@@ -125,6 +129,21 @@ public class RenderVehicles implements IGui {
 						// Riding offset
 						final PositionAndRotation absoluteVehicleCarPositionAndRotation = vehicleCarDetails.right().right();
 						final PositionAndRotation vehicleCarRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteVehicleCarPositionAndRotation, cameraShakeOffset);
+
+						// MMTR 光场：登记本车可能占用的 section（只有会被画的车才登记）。
+						// 着色器按世界坐标取光时，取的就是这些 section 的数据。
+						MmtrLightField.getInstance().requestCar(
+								absoluteVehicleCarPositionAndRotation.position.x(),
+								absoluteVehicleCarPositionAndRotation.position.y(),
+								absoluteVehicleCarPositionAndRotation.position.z(),
+								absoluteVehicleCarPositionAndRotation.yaw,
+								vehicleCarDetails.left().getLength() / 2,
+								vehicleCarDetails.left().getWidth() / 2
+						);
+
+						// MMTR 车灯：把本车的 mmtr_light_<cab>_<n> 锚点登记成逐片元光源（notes/345）。
+						// 与上面光场的 requestCar 同一个分支 ⇒ 只有"这一帧真的会被画"的车才点灯。
+						MmtrHeadlights.getInstance().requestCar(vehicle, carNumber, absoluteVehicleCarPositionAndRotation);
 
 						// Render each bogie of the car
 						iterateWithIndex(vehicleCarDetails.right().left(), (bogieIndex, absoluteBogiePositionAndRotation) -> {
@@ -266,10 +285,20 @@ public class RenderVehicles implements IGui {
 						// MMTR B7.6e: 2D cab panel on the model's mmtr_hud face (one texture, one quad)
 						MmtrCabDashboard.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations, absoluteVehicleCarPositionAndRotation.position);
 
+						// MMTR notes/357: 水牌（班次号 + 本趟终点）与下一站牌，画在模型的 mmtr_pid_* /
+						// mmtr_next_* 锚点上。挂在"画这节车"的位置，锚点坐标就天然是这节车的模型空间；
+						// 内容来自引擎镜像的三项（mmtrPidService/Terminus/Next），客户端不自己推。
+						MmtrPidBoard.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations, absoluteVehicleCarPositionAndRotation.position);
+
+						// MMTR notes/359: **动态面** —— 凡是在锚点 JSON 的 faces 段里写了文档的锚点，由面系统画
+						// （有文档的锚点不会再被上面那些老渲染器画：MmtrPidBoard 就会跳过它，见 MmtrFaceRegistry）。
+						// 于是"把某块牌换成动态面"是纯资源包动作，客户端一行都不用改。
+						MmtrFaceRuntime.render(vehicle, carNumber, vehicleCarDetails.left().getVehicleId(), storedMatrixTransformations, absoluteVehicleCarPositionAndRotation.position);
+
 						// MMTR: windshield - the precipitation layer plus its wiper, on mmtr_windshield[_<n>].
 						// Cosmetic and client-only; it reads the local weather and the mirrored speed and
 						// changes nothing about how the train runs.
-						MmtrWindshield.render(vehicleCarDetails.left().getVehicleId(), carNumber, storedMatrixTransformations, vehicle.getSpeed());
+						MmtrWindshield.render(vehicleCarDetails.left().getVehicleId(), carNumber, MmtrVehicleAnchors.modelCarIndex(vehicle, carNumber), storedMatrixTransformations, vehicle.getSpeed());
 
 						vehicleResource.iterateModels(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), (modelIndex, model) -> {
 							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, openDoorways, fromResourcePackCreator);
