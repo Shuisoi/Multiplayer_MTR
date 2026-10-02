@@ -87,7 +87,7 @@ public final class MmtrMotionFrameTests {
 		assertEquals(1, legRecords.size());
 		final MmtrMotionFrame.Legs legs = (MmtrMotionFrame.Legs) legRecords.get(0);
 		assertEquals(4, legs.slot(), "槽位");
-		assertEquals(2, legs.droppedFromTail(), "从尾巴丢两根");
+		assertEquals(2, legs.droppedFromTrainTail(), "从尾巴丢两根");
 		assertEquals(List.of(hexA, hexB), legs.newLegs(), "车头新增的两根腿按顺序");
 	}
 

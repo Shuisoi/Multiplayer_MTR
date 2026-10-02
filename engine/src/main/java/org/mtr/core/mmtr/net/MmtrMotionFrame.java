@@ -46,7 +46,7 @@ import java.util.List;
  * kind 0x06 PING          serverMillis(u32)                                              5 B
  * kind 0x07 SLOT          slot(u16) vehicleId(i64) flags(u16) runStopTarget(f32)
  *                         runTotalDistance(f32) blockStopM(f32)                         25 B
- * kind 0x08 LEGS          slot(u16) droppedFromTail(u16) count(u8)
+ * kind 0x08 LEGS          slot(u16) droppedFromTrainTail(u16) count(u8)
  *                         [hexLength(u8) hexBytes]×count                          6 + 101n B
  * </pre>
  *
@@ -199,17 +199,19 @@ public final class MmtrMotionFrame {
 	 * **腿阴影增量**（notes/369 §4.4）：走行器新踏上一根轨时告诉客户端"车头那几根轨是什么"，
 	 * 并让它把尾巴上多余的几根丢掉。
 	 *
-	 * <p>{@code newLegs} 是**按顺序**加在车头那一端的新腿（每项 = 那根轨的 hex id，
-	 * 客户端本地 `railIdMap` 就是按这个字符串索引的）；{@code droppedFromTail} =
-	 * 客户端应当从自己那份列表尾部丢掉的条数。于是客户端只做两件事：丢尾巴、接头，然后
+	 * <p>{@code newLegs} 是**按顺序**加在车头那一端的新腿（每项 = 那根轨的 hex id，**101 字符**：
+	 * {@code x-y-z-x-y-z} 各 16 位十六进制；客户端本地 `railIdMap` 就是按这个字符串索引的）；
+	 * {@code droppedFromTrainTail} = 客户端应当丢掉的条数，而且是从**它那份列表的开头**丢 ——
+	 * 列表顺序与引擎一致：**车尾 → 车头**（车头那根在末尾，新腿只追加在末尾）。
+	 * 于是客户端只做两件事：丢开头几根、末尾接上新的，然后
 	 * **按 `MOTION.railProgress` 重新锚定**累加里程（车头正好落在它上面 —— 这是
 	 * {@code refreshMmtrMotionLegs} 的定义）。</p>
 	 *
-	 * <p>一条腿的 hex 是 {@code x-y-z-x-y-z} 各 16 位十六进制 ⇒ 约 101 字符 ⇒ 一条新腿 107 字节，
-	 * 而新腿是每 25–100 m（60 km/h 下 1.5–6 秒）才出现一次 ⇒ **18–71 B/s**；
-	 * 相比之下把它留在 ② 里是"每长一条腿一份 7.4 KB 整份"。</p>
+	 * <p>一条腿 = 1 字节长度前缀 + 101 字节 ⇒ **108 字节/条新腿**，而新腿是每 25–100 m
+	 * （60 km/h 下 1.5–6 秒）才出现一次 ⇒ **18–72 B/s**；相比之下把它留在 ② 里是
+	 * "每长一条腿一份 7.4 KB 整份"。</p>
 	 */
-	public record Legs(int slot, int droppedFromTail, List<String> newLegs) implements Record {
+	public record Legs(int slot, int droppedFromTrainTail, List<String> newLegs) implements Record {
 
 		@Override
 		public int kind() {
@@ -370,11 +372,11 @@ public final class MmtrMotionFrame {
 		 * 腿阴影增量。{@code newLegs} 每项是那根轨的 hex id（ASCII）；超过 255 字符或超过 255 条时
 		 * **截断**而不是抛异常（丢一根腿最多让一节车摆错一帧，抛异常会作废整帧的所有车）。
 		 */
-		public Writer legs(int slot, int droppedFromTail, List<String> newLegs) {
+		public Writer legs(int slot, int droppedFromTrainTail, List<String> newLegs) {
 			final int count = Math.min(newLegs.size(), 0xFF);
 			start(KIND_LEGS, 3 + count * (1 + 255));
 			u16(slot);
-			u16(droppedFromTail);
+			u16(droppedFromTrainTail);
 			u8(count);
 			for (int i = 0; i < count; i++) {
 				ascii(newLegs.get(i));
@@ -589,9 +591,9 @@ public final class MmtrMotionFrame {
 				}
 				case KIND_LEGS: {
 					final Integer slot = readU16();
-					final Integer droppedFromTail = readU16();
+					final Integer droppedFromTrainTail = readU16();
 					final Integer count = readU8();
-					if (slot == null || droppedFromTail == null || count == null) {
+					if (slot == null || droppedFromTrainTail == null || count == null) {
 						return null;
 					}
 					final List<String> newLegs = new ArrayList<>(count);
@@ -602,7 +604,7 @@ public final class MmtrMotionFrame {
 						}
 						newLegs.add(hex);
 					}
-					return new Legs(slot, droppedFromTail, List.copyOf(newLegs));
+					return new Legs(slot, droppedFromTrainTail, List.copyOf(newLegs));
 				}
 				default:
 					malformed = true;
