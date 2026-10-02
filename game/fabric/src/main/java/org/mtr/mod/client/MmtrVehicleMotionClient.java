@@ -52,6 +52,9 @@ public final class MmtrVehicleMotionClient {
 	/** 本窗口内"位置硬对齐"的次数与最大误差（米）—— 判断"本地积分到底有没有在跑"就靠这两个数。 */
 	private static int hardAligns;
 	private static double maxAbsErrorM;
+	/** 渲染时走出腿阴影末端的次数与最大越界量（米）——"该接 LEGS 了"的证据。 */
+	private static int shadowOverrunCount;
+	private static double maxShadowOverrunM;
 	/** 服务端时钟 - 本地时钟（{@code PING} 记录）；{@code Long.MIN_VALUE} = 还没收到过。 */
 	private static long serverMillisOffset = Long.MIN_VALUE;
 
@@ -72,6 +75,18 @@ public final class MmtrVehicleMotionClient {
 	/** 这辆车是不是已经归运动流（①）管 —— ② 的补丁据此让出位置/手柄那几个字段。 */
 	public static boolean isMotionManaged(long vehicleId) {
 		return VEHICLE_TO_SLOT.containsKey(vehicleId);
+	}
+
+	/**
+	 * 渲染时"车头走出了腿阴影末端"的越界量（米）——由 {@code VehicleExtension} 在摆车时上报。
+	 *
+	 * <p>这个数就是"该把 {@code LEGS} 通道接上"的直接证据：越界 &gt; 0 说明车头已经跑到
+	 * 阴影（= 上一次刷新时的车头）之外，而摆车只能把它夹回去 —— 夹回去的表现是"车不再重叠、
+	 * 但会停在阴影末端"，直到下一次 ② 整份带来新阴影（每长一条腿一次，1.5–6 秒）。</p>
+	 */
+	public static void noteShadowOverrun(double metres) {
+		shadowOverrunCount++;
+		maxShadowOverrunM = Math.max(maxShadowOverrunM, metres);
 	}
 
 	public static void receive(char[] frame) {
@@ -171,9 +186,10 @@ public final class MmtrVehicleMotionClient {
 		if (elapsed < 1000) {
 			return;
 		}
-		Init.LOGGER.info("[MMTR-MOTION] 运动流：帧/s={} 记录/s={} 字节/s={} 槽位={} 未知槽位={} 坏帧={} 腿记录={} 最大误差={}m 硬对齐={} 时钟差={}ms",
+		Init.LOGGER.info("[MMTR-MOTION] 运动流：帧/s={} 记录/s={} 字节/s={} 槽位={} 未知槽位={} 坏帧={} 腿记录={} 最大误差={}m 硬对齐={} 阴影越界={}次/{}m 时钟差={}ms",
 			frames, records, bytes, SLOT_TO_VEHICLE.size(), unknownSlots, malformedFrames, legRecords,
 			Math.round(maxAbsErrorM * 1000.0) / 1000.0, hardAligns,
+			shadowOverrunCount, Math.round(maxShadowOverrunM * 1000.0) / 1000.0,
 			serverMillisOffset == Long.MIN_VALUE ? "-" : Long.toString(serverMillisOffset));
 		windowStartMillis = now;
 		frames = 0;
@@ -184,5 +200,7 @@ public final class MmtrVehicleMotionClient {
 		legRecords = 0;
 		hardAligns = 0;
 		maxAbsErrorM = 0;
+		shadowOverrunCount = 0;
+		maxShadowOverrunM = 0;
 	}
 }

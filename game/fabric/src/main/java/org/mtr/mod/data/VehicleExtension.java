@@ -363,24 +363,47 @@ public class VehicleExtension extends Vehicle implements Utilities {
 
 	public ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> getSmoothedVehicleCarsAndPositions(long millisElapsed) {
 		/*
-		 * ★ **①（运动流）管到的车不再吃这套旧平滑**（notes/369 §6）。
+		 * ★ **①（运动流）管到的车：位置已连续，但要用"腿阴影"兜住**（notes/369 §4.4 / §6）。
 		 *
-		 * <p>旧平滑是为"② 每秒才发一次位置"设计的：它把 ② 那一下的差值记成 adjustment，再按
-		 * `millisElapsed * speed/10` 慢慢吃掉 —— 于是**渲染位置总是落后于真位置**，低速时落后得尤其久。
-		 * ① 一来（10 Hz + 误差阈值），位置本身已经连续，再叠一层"落后"的平滑就是纯滞后：
-		 * 2026-10-03 实机里"很卡"就有这一份 —— 车头的位置每 100 ms 被 ① 更新一次，
-		 * 而画面读的是那条慢半拍的 smoothed 值。</p>
+		 * <p>为什么不是直接不平滑就完事：摆车用的 `immutablePath` 是**腿阴影**，而它只在
+		 * "走行器新踏上一根轨"时重建成"车尾→车头、车头正好落在当时那个 railProgress"——
+		 * 也就是**阴影末端 == 上一次刷新时的车头**，之后不会自己延长（`LEGS` 通道默认是关的）。
+		 * 于是车头一旦走出阴影末端，`getVehicleCarsAndPositions()` 里按里程找轨的那一步就找不到，
+		 * 每节车被摆到同一个点上、朝向也乱 —— 实机症状就是用户 2026-10-03 报的
+		 * **「车开起来直接重叠且横过来」**。</p>
 		 *
-		 * <p>误差缓冲（真的要"抹平"时用它）是 S5 的活：那时它替换的就是这一段，而不是叠在上面。</p>
+		 * <p>旧的那层"慢半拍平滑"之所以没暴露它：它让**渲染用的** railProgress 一直落后于真值，
+		 * 于是车永远走在阴影里 —— 那份滞后是**承重**的。这一版换成显式且局部的做法：
+		 * **只夹渲染用的位置**（镜像自己的积分不动，误差阈值那套照旧），并把它走了多远记进诊断，
+		 * 那个数就是"该把 `LEGS` 接上了"的直接证据。</p>
 		 */
 		if (MmtrVehicleMotionClient.isMotionManaged(getId())) {
-			return getVehicleCarsAndPositions();
+			final double oldRailProgress = railProgress;
+			final double shadowEnd = mmtrShadowEndM();
+			if (railProgress > shadowEnd) {
+				MmtrVehicleMotionClient.noteShadowOverrun(railProgress - shadowEnd);
+				railProgress = shadowEnd;
+			}
+			final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> positions = getVehicleCarsAndPositions();
+			railProgress = oldRailProgress;
+			return positions;
 		}
 		final double oldRailProgress = railProgress;
 		railProgress = persistentVehicleData.getSmoothedRailProgress(railProgress, persistentVehicleData.getDoorValue() > 0 ? 0 : millisElapsed * (speed == 0 ? Integer.MAX_VALUE : speed / 10));
 		final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> vehicleCarsAndPositions = getVehicleCarsAndPositions();
 		railProgress = oldRailProgress;
 		return vehicleCarsAndPositions;
+	}
+
+	/**
+	 * 腿阴影覆盖到哪（米，与 {@code railProgress} 同一坐标空间）= 最后一条腿的 {@code endDistance}。
+	 *
+	 * <p>阴影是"车尾 → 车头、车头落在 railProgress 上"建的，所以这个数就是**上一次刷新时车头的位置**；
+	 * 空路径时给 {@code Double.MAX_VALUE}（没有约束，别把车钉在原地）。</p>
+	 */
+	private double mmtrShadowEndM() {
+		final int size = vehicleExtraData.immutablePath.size();
+		return size == 0 ? Double.MAX_VALUE : vehicleExtraData.immutablePath.get(size - 1).getEndDistance();
 	}
 
 	public void playMotorSound(VehicleResource vehicleResource, int carNumber, Vector bogiePosition) {
