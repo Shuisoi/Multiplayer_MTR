@@ -11,6 +11,7 @@ import java.nio.file.Paths;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -202,5 +203,34 @@ public final class ClientVehicleSyncTests {
 		freshClient.update(other, true, 0, new JsonObject());
 		final ObjectArrayList<DynamicDataResponse> fresh = flush(freshClient, simulator);
 		assertEquals(1, updates(fresh.getFirst()), "新客户端 + 空补丁 ⇒ 整份（这条不能被上面的修法吃掉）");
+	}
+
+	/**
+	 * ★ {@code tracksVehicle} 就是运动流（①）的可见集（notes/369 §7）：**只推给 ② 已经发过镜像的客户端**。
+	 *
+	 * <p>它必须与 ② 那条"不在消息里就删车"的规则同源 —— 否则会出现"① 有包、客户端没镜像"
+	 * （客户端只能把帧丢掉、还在计数里留一条未知槽位）或"有镜像、① 永远不动它"（镜像冻住，
+	 * 正是 notes/368 那个病灶换个位置长出来）。</p>
+	 */
+	@Test
+	public void tracksVehicleFollowsWhatTheLastMessageActuallyContained() {
+		final Simulator simulator = newSimulator();
+		final Client client = newClient(simulator);
+		final Vehicle vehicle = newVehicle(simulator);
+
+		assertFalse(client.tracksVehicle(vehicle.getId()), "还没发过任何东西 ⇒ 不持有");
+
+		client.update(vehicle, true, 0, null);
+		flush(client, simulator);
+		assertTrue(client.tracksVehicle(vehicle.getId()), "发了整份 ⇒ 持有（运动流从这一拍起可以推它）");
+
+		client.update(vehicle, false, 0, null);
+		final ObjectArrayList<DynamicDataResponse> second = flush(client, simulator);
+		assertTrue(second.isEmpty(), "没变化就不发消息（保活随下一条消息走）");
+		assertTrue(client.tracksVehicle(vehicle.getId()), "没发消息 ≠ 失去它：保活把它留在集合里");
+
+		// 出视野：这一拍它不在任何一张表里 ⇒ 不再持有
+		flush(client, simulator);
+		assertFalse(client.tracksVehicle(vehicle.getId()), "这一拍没出现在三张表里 ⇒ 不再持有（运动流据此停推并发 DROP）");
 	}
 }

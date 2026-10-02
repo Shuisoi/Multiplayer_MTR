@@ -95,6 +95,8 @@ public final class Init implements Utilities {
 		REGISTRY.registerPacket(PacketMmtrCabOp.class, PacketMmtrCabOp::new);
 		REGISTRY.registerPacket(PacketMmtrCoupleOp.class, PacketMmtrCoupleOp::new);
 		REGISTRY.registerPacket(PacketMmtrRoutes.class, PacketMmtrRoutes::new);
+		// 服务端 → 客户端：**列车运动流**（notes/369 ①）——每 2 tick 一帧的定长原语运动包
+		REGISTRY.registerPacket(PacketMmtrVehicleMotion.class, PacketMmtrVehicleMotion::new);
 		// 服务端 → 客户端：「把这位玩家放进那辆车的驾驶室」（/mtr mmtrboard、引擎指令栏的 train board）
 		REGISTRY.registerPacket(PacketMmtrBoardPlayer.class, PacketMmtrBoardPlayer::new);
 		REGISTRY.registerPacket(PacketFetchArrivals.class, PacketFetchArrivals::new);

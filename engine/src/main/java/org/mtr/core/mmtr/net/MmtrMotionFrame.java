@@ -688,4 +688,37 @@ public final class MmtrMotionFrame {
 		}
 		return records;
 	}
+
+	/**
+	 * 腿阴影的增量（{@code LEGS} 记录的载荷）：把"上一拍发给这个客户端的列表"与"现在这一拍"比出
+	 * **从车尾端丢了几根**与**车头端新加了哪几根**。
+	 *
+	 * <p>列表顺序是**车尾 → 车头**（引擎 {@code refreshMmtrMotionLegs} 的定义），于是"保留的那一段"
+	 * = 旧表的**后缀** == 新表的**前缀**。取最长的那个 k：丢掉 {@code previous.size() - k} 根、
+	 * 追加 {@code current.subList(k, size)}。腿数只有个位数（一节车长覆盖几根轨），所以这个朴素匹配
+	 * 比"记游标"更不容易错 —— 而它错了的表现是"某一节车摆到别的轨上"，很贵。</p>
+	 *
+	 * @return 没有变化时返回 {@code null}（调用方据此不发 {@code LEGS}）
+	 */
+	public static @Nullable LegDelta legDelta(List<String> previous, List<String> current) {
+		if (previous.equals(current)) {
+			return null;
+		}
+		final int maxOverlap = Math.min(previous.size(), current.size());
+		for (int keep = maxOverlap; keep >= 0; keep--) {
+			if (previous.subList(previous.size() - keep, previous.size()).equals(current.subList(0, keep))) {
+				return new LegDelta(previous.size() - keep, List.copyOf(current.subList(keep, current.size())));
+			}
+		}
+		// 理论上到不了（keep=0 永远成立），留一条明确的退路而不是返回 null 让调用方困惑。
+		return new LegDelta(previous.size(), List.copyOf(current));
+	}
+
+	/** 见 {@link #legDelta}：{@code droppedFromTrainTail} 是客户端要从自己列表**开头**丢掉的条数。 */
+	public record LegDelta(int droppedFromTrainTail, List<String> appended) {
+
+		public boolean isEmpty() {
+			return droppedFromTrainTail == 0 && appended.isEmpty();
+		}
+	}
 }

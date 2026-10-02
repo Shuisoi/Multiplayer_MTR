@@ -82,6 +82,20 @@ public class Client extends ClientSchema {
 	}
 
 	/**
+	 * 这个客户端**当前持有**这辆车吗 —— 也就是 ② 通道的那份 existing 集合（notes/369 §7）。
+	 *
+	 * <p>运动流（①）用它当可见集：**只推给"② 已经发过镜像"的客户端**，于是两边天然同源，
+	 * 不会出现"① 有包、客户端没镜像"或"有镜像、① 永远不动它"这种两端各说各话的现场
+	 * （这正是 notes/368 那个病灶的同构体，只是换到了新通道上）。</p>
+	 *
+	 * <p>"持有"由上一次 {@link #processVehicles} 决定：整份快照 / 补丁 / 保活三条路都算持有，
+	 * 三者都没出现的那一拍它才被移出集合 —— 与客户端那条"不在消息里就删车"的规则同源。</p>
+	 */
+	public boolean tracksVehicle(long vehicleId) {
+		return existingVehicleIds.contains(vehicleId);
+	}
+
+	/**
 	 * Update the client's tracked position and area-of-interest radius. Entities within this
 	 * radius will be pushed to the client on the next {@link #sendUpdates} cycle.
 	 */

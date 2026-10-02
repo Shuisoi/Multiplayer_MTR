@@ -284,4 +284,51 @@ public final class MmtrMotionFrameTests {
 		}
 		assertTrue(worst < 0.01, "6 万米处量化误差 " + worst + " m 必须 < 1 cm");
 	}
+
+	/*
+	 * 腿阴影的增量（notes/369 §4.4）。列表顺序是**车尾 → 车头**：新腿追加在末尾，尾巴从开头丢。
+	 * 这一段错了不会崩，只会"某一节车摆到别的轨上"——所以四种情形都钉一遍。
+	 */
+
+	@Test
+	public void anUnchangedLegShadowProducesNoLegRecord() {
+		assertNull(MmtrMotionFrame.legDelta(List.of("a", "b"), List.of("a", "b")), "没变 ⇒ 不发 LEGS");
+	}
+
+	@Test
+	public void aNewHeadLegIsAppendedAtTheEnd() {
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of("a", "b"), List.of("a", "b", "c"));
+		assertNotNull(delta);
+		assertEquals(0, delta.droppedFromTrainTail(), "没丢");
+		assertEquals(List.of("c"), delta.appended(), "新车头腿追加在末尾");
+	}
+
+	@Test
+	public void aSlidingShadowDropsTheTailAndAppendsTheHead() {
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of("a", "b", "c"), List.of("b", "c", "d"));
+		assertNotNull(delta);
+		assertEquals(1, delta.droppedFromTrainTail(), "车尾那根 a 出列表了");
+		assertEquals(List.of("d"), delta.appended(), "车头接上 d");
+	}
+
+	@Test
+	public void aCompletelyDifferentShadowResetsTheList() {
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of("a", "b"), List.of("c", "d"));
+		assertNotNull(delta);
+		assertEquals(2, delta.droppedFromTrainTail(), "一根都不重叠 ⇒ 旧的全丢");
+		assertEquals(List.of("c", "d"), delta.appended());
+	}
+
+	@Test
+	public void emptyAndDisappearingShadowsAreHandled() {
+		final MmtrMotionFrame.LegDelta fromEmpty = MmtrMotionFrame.legDelta(List.of(), List.of("a", "b"));
+		assertNotNull(fromEmpty);
+		assertEquals(0, fromEmpty.droppedFromTrainTail());
+		assertEquals(List.of("a", "b"), fromEmpty.appended(), "第一次给腿 ⇒ 全发");
+
+		final MmtrMotionFrame.LegDelta toEmpty = MmtrMotionFrame.legDelta(List.of("a", "b"), List.of());
+		assertNotNull(toEmpty);
+		assertEquals(2, toEmpty.droppedFromTrainTail(), "腿全没了 ⇒ 让客户端清空");
+		assertTrue(toEmpty.appended().isEmpty());
+	}
 }
