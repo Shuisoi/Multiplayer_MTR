@@ -1,0 +1,4101 @@
+{
+  "note": "面文档 v2 的共享向量：Java（MmtrFaceDocumentVectorTests）与工作室（selftest.mjs）都跑这一份。把 face 包成 {\"faces\":{\"f\":<face>}} 再解析，断言口径见每条用例的 name。（注：drawables 的摘要里没有 marquee 的横向偏移，所以\"方向\"这一类向量钉的是动画段怎么读、kind 是不是 marquee；偏移量的口径由 MmtrFaceGeometry.marqueeLeft 与 anim.mjs 的 offsetFraction 各自承担。） expect 里 fps（整数）与 drumAngle（数组，每项 {face,page,clockFraction,angle}）是**可选**字段：写了就断言，没写就跳过。 drumAngle 按\"翻转窗口在周期末尾\"的语义（前 1-turnFraction 停住、最后 turnFraction 翻过去；pageExpr 指定页时 pageClockFraction = 0）。 expect.background（ARGB 有符号 int）也是可选字段：写 0 = 不铺底、写 -16777216 = 0xFF000000 不透明黑。",
+  "version": 1,
+  "cases": [
+    {
+      "name": "v1 文档逐字不变：只有 elements 时它就是第 0 页，模板/Drawable 与 F0 完全一样",
+      "face": {
+        "textColor": "#FFF2F4F6",
+        "elements": [
+          {
+            "type": "text",
+            "text": "{pid.service}",
+            "x": 0.03,
+            "size": 0.46,
+            "align": "left"
+          },
+          {
+            "type": "text",
+            "text": "{pid.terminus}",
+            "x": 0.97,
+            "align": "right",
+            "when": {
+              "!=": [
+                {
+                  "var": "pid.terminus"
+                },
+                ""
+              ]
+            }
+          }
+        ]
+      },
+      "data": {
+        "pid": {
+          "service": "00101",
+          "terminus": "海山"
+        }
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "00101",
+          "海山"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.03,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.46,
+            "text": "{pid.service}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.97,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.terminus}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "v1 + when：条件是假的元素照样出现在计划的摘要里（plan 只负责选页与展开，不筛 when）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "不画",
+            "when": {
+              "==": [
+                1,
+                2
+              ]
+            }
+          },
+          {
+            "type": "text",
+            "text": "画",
+            "when": {
+              "==": [
+                1,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "画"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "不画",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "画",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "文档级 require 求值为假：visible = false；**plan 仍然照常给计划**（require 是\"挂不挂牌\"，由调用方先问）",
+      "face": {
+        "require": {
+          "!!": [
+            {
+              "var": "pid.service"
+            }
+          ]
+        },
+        "elements": [
+          {
+            "type": "text",
+            "text": "{pid.service}"
+          }
+        ]
+      },
+      "data": {
+        "pid": {
+          "service": ""
+        }
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": false,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.service}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "require 取不到的字段 ⇒ null ⇒ 假：缺失不是空串，也不等于\"有值\"（plan 照样给计划）",
+      "face": {
+        "require": {
+          "!!": [
+            {
+              "var": "pid.service"
+            }
+          ]
+        },
+        "elements": [
+          {
+            "type": "text",
+            "text": "{pid.service}"
+          }
+        ]
+      },
+      "data": {
+        "pid": {}
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": false,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.service}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 用数：-1 回绕到最后一页（不是第 0 页）",
+      "face": {
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "去程上行"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回程上行"
+              }
+            ]
+          }
+        ],
+        "pageExpr": {
+          "var": "handle.reverser"
+        }
+      },
+      "data": {
+        "handle": {
+          "reverser": -1
+        }
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "回程上行"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "回程上行",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 用数：写大了按页数回绕（3 页时 4 ⇒ 1）",
+      "face": {
+        "pages": [
+          {
+            "name": "a",
+            "elements": [
+              {
+                "type": "text",
+                "text": "A"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "elements": [
+              {
+                "type": "text",
+                "text": "B"
+              }
+            ]
+          },
+          {
+            "name": "c",
+            "elements": [
+              {
+                "type": "text",
+                "text": "C"
+              }
+            ]
+          }
+        ],
+        "pageExpr": 4
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "B"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "B",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 用页名：字先找页名（\"回程\" ⇒ 第 1 页）",
+      "face": {
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "去程上行"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回程上行"
+              }
+            ]
+          }
+        ],
+        "pageExpr": "回程"
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "回程上行"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "回程上行",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 用页名：找不到的名字 ⇒ 回落到第 0 页（不报错）",
+      "face": {
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "去程上行"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回程上行"
+              }
+            ]
+          }
+        ],
+        "pageExpr": "不存在"
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "去程上行"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "去程上行",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 用页名：名字不是页名、但是个数字串 ⇒ 再当数字解析一次（\"-1\" ⇒ 第 1 页）",
+      "face": {
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "去程上行"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回程上行"
+              }
+            ]
+          }
+        ],
+        "pageExpr": "-1"
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "回程上行"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "回程上行",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 求值失败（不认识的算子）⇒ 回落到第 0 页（不抛异常）",
+      "face": {
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "去程上行"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回程上行"
+              }
+            ]
+          }
+        ],
+        "pageExpr": {
+          "nosuch": [
+            1
+          ]
+        }
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "去程上行"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "去程上行",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 求值成 null / 布尔 / 空串 ⇒ 第 0 页（只有数与字有含义）",
+      "face": {
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "去程上行"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回程上行"
+              }
+            ]
+          }
+        ],
+        "pageExpr": {
+          "var": "nothing"
+        }
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "去程上行"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "去程上行",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageSeconds 自动轮转：t=0",
+      "face": {
+        "pages": [
+          {
+            "name": "p0",
+            "elements": [
+              {
+                "type": "text",
+                "text": "zero"
+              }
+            ]
+          },
+          {
+            "name": "p1",
+            "elements": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 6
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "zero"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "zero",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageSeconds 自动轮转：t=5999（周期前一刻）",
+      "face": {
+        "pages": [
+          {
+            "name": "p0",
+            "elements": [
+              {
+                "type": "text",
+                "text": "zero"
+              }
+            ]
+          },
+          {
+            "name": "p1",
+            "elements": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 6
+      },
+      "data": {},
+      "timeMs": 5999,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "zero"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "zero",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageSeconds 自动轮转：t=6000（正好翻页）",
+      "face": {
+        "pages": [
+          {
+            "name": "p0",
+            "elements": [
+              {
+                "type": "text",
+                "text": "zero"
+              }
+            ]
+          },
+          {
+            "name": "p1",
+            "elements": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 6
+      },
+      "data": {},
+      "timeMs": 6000,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "one"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "one",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageSeconds 自动轮转：t=11999（第二页末尾）",
+      "face": {
+        "pages": [
+          {
+            "name": "p0",
+            "elements": [
+              {
+                "type": "text",
+                "text": "zero"
+              }
+            ]
+          },
+          {
+            "name": "p1",
+            "elements": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 6
+      },
+      "data": {},
+      "timeMs": 11999,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "one"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "one",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageSeconds 自动轮转：t=12000（转回第一页）",
+      "face": {
+        "pages": [
+          {
+            "name": "p0",
+            "elements": [
+              {
+                "type": "text",
+                "text": "zero"
+              }
+            ]
+          },
+          {
+            "name": "p1",
+            "elements": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 6
+      },
+      "data": {},
+      "timeMs": 12000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "zero"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "zero",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageSeconds 小数（0.5 秒一页）：floor(秒/0.5) 不取整两次也能选对页",
+      "face": {
+        "pages": [
+          {
+            "name": "p0",
+            "elements": [
+              {
+                "type": "text",
+                "text": "zero"
+              }
+            ]
+          },
+          {
+            "name": "p1",
+            "elements": [
+              {
+                "type": "text",
+                "text": "one"
+              }
+            ]
+          },
+          {
+            "name": "p2",
+            "elements": [
+              {
+                "type": "text",
+                "text": "two"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 0.5
+      },
+      "data": {},
+      "timeMs": 1250,
+      "expect": {
+        "page": 2,
+        "visible": true,
+        "texts": [
+          "two"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "two",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "页自己的 require 不成立 ⇒ 0 条（不自动跳到下一页——跳到哪一页是作者的语义）",
+      "face": {
+        "pages": [
+          {
+            "name": "local",
+            "elements": [
+              {
+                "type": "text",
+                "text": "停站"
+              }
+            ]
+          },
+          {
+            "name": "far",
+            "require": false,
+            "elements": [
+              {
+                "type": "text",
+                "text": "不该画"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 1
+      },
+      "data": {},
+      "timeMs": 1500,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [],
+        "drawables": []
+      }
+    },
+    {
+      "name": "forEach 正常展开：as/index 自定义名，嵌套元素里的 {i}/{s} 都能用",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "stations",
+            "as": "s",
+            "index": "i",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{i}:{s}",
+                "x": 0,
+                "y": 0.25,
+                "size": 0.3,
+                "align": "left"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "stations": [
+          "海山",
+          "鸥湾"
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "0:海山",
+          "1:鸥湾"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0,
+            "y": 0.25,
+            "w": 0,
+            "h": 0,
+            "size": 0.3,
+            "text": "{i}:{s}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0,
+            "y": 0.25,
+            "w": 0,
+            "h": 0,
+            "size": 0.3,
+            "text": "{i}:{s}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 展开对象数组：每一项绑进数据后 {item.name} 取得到（点号路径）",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "stations",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{item.name}"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "stations": [
+          {
+            "name": "海山"
+          },
+          {
+            "name": "鸥湾"
+          }
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "海山",
+          "鸥湾"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item.name}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item.name}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 用 var 取一个不存在的字段（不是列表）⇒ 画 0 项（缺数据不画一项空的）",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "nope",
+            "elements": [
+              {
+                "type": "text",
+                "text": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": []
+      }
+    },
+    {
+      "name": "forEach 的 var 指到标量（\"abc\" 不是列表）⇒ 画 0 项",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "scalar",
+            "elements": [
+              {
+                "type": "text",
+                "text": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "scalar": "abc"
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": []
+      }
+    },
+    {
+      "name": "forEach 用 of 表达式：of 优先于 var，表达式结果当列表",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "ignored",
+            "of": {
+              "map": [
+                {
+                  "var": "list"
+                },
+                {
+                  "*": [
+                    {
+                      "var": ""
+                    },
+                    10
+                  ]
+                }
+              ]
+            },
+            "elements": [
+              {
+                "type": "text",
+                "text": "{item}"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "list": [
+          1,
+          2
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "10",
+          "20"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 的 limit=0 ⇒ 一项都不画（作者用它临时关掉一块）",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "list",
+            "limit": 0,
+            "elements": [
+              {
+                "type": "text",
+                "text": "{item}"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "list": [
+          1,
+          2,
+          3
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": []
+      }
+    },
+    {
+      "name": "forEach 的 limit 截断（limit=2 时 3 项只画 2 项）",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "list",
+            "limit": 2,
+            "elements": [
+              {
+                "type": "text",
+                "text": "{item}"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "list": [
+          1,
+          2,
+          3
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "1",
+          "2"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 嵌套一层：外层 2 项 × 内层 2 项 = 4 条，内层的列表来自每一项自己",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "calls",
+            "as": "call",
+            "elements": [
+              {
+                "type": "foreach",
+                "var": "call.stops",
+                "as": "stop",
+                "index": "n",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "{call.name}-{stop}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "calls": [
+          {
+            "name": "A",
+            "stops": [
+              "x",
+              "y"
+            ]
+          },
+          {
+            "name": "B",
+            "stops": [
+              "z",
+              "w"
+            ]
+          }
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "A-x",
+          "A-y",
+          "B-z",
+          "B-w"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{call.name}-{stop}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{call.name}-{stop}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{call.name}-{stop}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{call.name}-{stop}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 展开 300 项：缺省 limit = 32（键表里的那个数），所以只画 32 条 —— 一页的上限 512 是另一道闸",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "list",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{item}"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "list": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111,
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147,
+          148,
+          149,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157,
+          158,
+          159,
+          160,
+          161,
+          162,
+          163,
+          164,
+          165,
+          166,
+          167,
+          168,
+          169,
+          170,
+          171,
+          172,
+          173,
+          174,
+          175,
+          176,
+          177,
+          178,
+          179,
+          180,
+          181,
+          182,
+          183,
+          184,
+          185,
+          186,
+          187,
+          188,
+          189,
+          190,
+          191,
+          192,
+          193,
+          194,
+          195,
+          196,
+          197,
+          198,
+          199,
+          200,
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          207,
+          208,
+          209,
+          210,
+          211,
+          212,
+          213,
+          214,
+          215,
+          216,
+          217,
+          218,
+          219,
+          220,
+          221,
+          222,
+          223,
+          224,
+          225,
+          226,
+          227,
+          228,
+          229,
+          230,
+          231,
+          232,
+          233,
+          234,
+          235,
+          236,
+          237,
+          238,
+          239,
+          240,
+          241,
+          242,
+          243,
+          244,
+          245,
+          246,
+          247,
+          248,
+          249,
+          250,
+          251,
+          252,
+          253,
+          254,
+          255,
+          256,
+          257,
+          258,
+          259,
+          260,
+          261,
+          262,
+          263,
+          264,
+          265,
+          266,
+          267,
+          268,
+          269,
+          270,
+          271,
+          272,
+          273,
+          274,
+          275,
+          276,
+          277,
+          278,
+          279,
+          280,
+          281,
+          282,
+          283,
+          284,
+          285,
+          286,
+          287,
+          288,
+          289,
+          290,
+          291,
+          292,
+          293,
+          294,
+          295,
+          296,
+          297,
+          298,
+          299
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16",
+          "17",
+          "18",
+          "19",
+          "20",
+          "21",
+          "22",
+          "23",
+          "24",
+          "25",
+          "26",
+          "27",
+          "28",
+          "29",
+          "30",
+          "31"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{item}",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 深度上限 4：第 5 层的 forEach 本身当成一条 drawable（画法不认识它 ⇒ 页面会报一次）",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "list",
+            "elements": [
+              {
+                "type": "foreach",
+                "var": "list",
+                "elements": [
+                  {
+                    "type": "foreach",
+                    "var": "list",
+                    "elements": [
+                      {
+                        "type": "foreach",
+                        "var": "list",
+                        "elements": [
+                          {
+                            "type": "foreach",
+                            "var": "list",
+                            "elements": [
+                              {
+                                "type": "text",
+                                "text": "leaf"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "list": [
+          1,
+          2
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "foreach",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "forEach 深度上限内（4 层，列表各 2 项）⇒ 展开到最里面的 text：2^4 = 16 条 leaf",
+      "face": {
+        "elements": [
+          {
+            "type": "foreach",
+            "var": "list",
+            "elements": [
+              {
+                "type": "foreach",
+                "var": "list",
+                "elements": [
+                  {
+                    "type": "foreach",
+                    "var": "list",
+                    "elements": [
+                      {
+                        "type": "foreach",
+                        "var": "list",
+                        "elements": [
+                          {
+                            "type": "text",
+                            "text": "leaf"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "data": {
+        "list": [
+          1,
+          2
+        ]
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf",
+          "leaf"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "leaf",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "blink 亮着（t=0 在 onMs 里）⇒ texts 里有它，drawable 的 anim 是 blink",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "亮",
+            "anim": {
+              "kind": "blink",
+              "onMs": 600,
+              "offMs": 600
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "亮"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "亮",
+            "anim": "blink"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blink 灭着（t=1000 落在 offMs 里）⇒ plan 里还在（要占位、要记问题），texts 里没有",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "亮",
+            "anim": {
+              "kind": "blink",
+              "onMs": 600,
+              "offMs": 600
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "亮",
+            "anim": "blink"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blink 的 onMs/offMs 都写 0 ⇒ 当静态显示（比\"永远不画\"更接近作者本意）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "亮",
+            "anim": {
+              "kind": "blink",
+              "onMs": 0,
+              "offMs": 0
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "亮"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "亮",
+            "anim": "blink"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marquee：视口 = 元素自己的 w，phase 从右往左；计划的摘要里 x 仍是原始值",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "走马灯",
+            "x": 0,
+            "w": 0.5,
+            "anim": {
+              "kind": "marquee",
+              "spanMs": 4000
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "走马灯"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0,
+            "y": 0.5,
+            "w": 0.5,
+            "h": 0,
+            "size": 0.4,
+            "text": "走马灯",
+            "anim": "marquee"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marquee 的 direction 拼错（\"rihgt\"）⇒ 与缺省同向（只有明确写 right 才反过来；typo 不该意外反向）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "拼错方向",
+            "anim": {
+              "kind": "marquee",
+              "spanMs": 4000,
+              "direction": "rihgt"
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "拼错方向"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "拼错方向",
+            "anim": "marquee"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marquee 的 direction 写成 \" RIGHT \"（带空白/大写）⇒ 向右（大小写与首尾空白不敏感）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "大写方向",
+            "anim": {
+              "kind": "marquee",
+              "spanMs": 4000,
+              "direction": " RIGHT "
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "大写方向"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "大写方向",
+            "anim": "marquee"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marquee 的 direction 是没见过的值（\"up\"）⇒ 按缺省 left 走（不抛、也不乱反向）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "怪方向",
+            "anim": {
+              "kind": "marquee",
+              "spanMs": 4000,
+              "direction": "up"
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "怪方向"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "怪方向",
+            "anim": "marquee"
+          }
+        ]
+      }
+    },
+    {
+      "name": "marquee 的 direction=right：phase 反过来（t=0 时在 1 那一端）—— 选页与摘要与方向无关",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "回走",
+            "anim": {
+              "kind": "marquee",
+              "spanMs": 4000,
+              "direction": "right"
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 3000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "回走"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "回走",
+            "anim": "marquee"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fade 的三角波：t=750（周期中点）最亮、t=0/1500 最暗（min=0.25）；texts 与摘要在任何时刻都不变（fade 只改透明度）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "淡入",
+            "anim": {
+              "kind": "fade",
+              "spanMs": 1500,
+              "min": 0.25
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 750,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "淡入"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "淡入",
+            "anim": "fade"
+          }
+        ]
+      }
+    },
+    {
+      "name": "spin：t=（3/4）周期时转到 270°；摘要与角度无关，anim 名是 spin",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "转",
+            "anim": {
+              "kind": "spin",
+              "spanMs": 2000
+            },
+            "rotate": 30
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1500,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "转"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "转",
+            "anim": "spin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "不认识的 anim.kind ⇒ 当没有动画（anim = null），牌照常静态显示、不抛异常",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "拼错的",
+            "anim": {
+              "kind": "blnik",
+              "onMs": 100,
+              "offMs": 100
+            }
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "拼错的"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "拼错的",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "anim 不是一个对象（写成一个字符串）⇒ 当没有动画，不抛异常",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "怪 anim",
+            "anim": "blink"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "怪 anim"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "怪 anim",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "缺省值：只写 {\"type\":\"gauge\"} 时 radius/start/end/max 都来自键表（0.44/225/-45/160）",
+      "face": {
+        "elements": [
+          {
+            "type": "gauge"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "gauge",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "缺省值：元素不写 x/y/size/align/text 时用键表的 0.5/0.5/0.4/center/\"\"",
+      "face": {
+        "elements": [
+          {
+            "type": "text"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "几何钳位：x/y/w/h 钳到 0..1、size 钳到 0.02..1.5（与 Java 的 clamp01 / clamp 逐字相同）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "钳",
+            "x": 1.5,
+            "y": -0.2,
+            "w": 3,
+            "h": -1,
+            "size": 9
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "钳"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 1,
+            "y": 0,
+            "w": 1,
+            "h": 0,
+            "size": 1.5,
+            "text": "钳",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "type 是空的元素被丢掉；type 大小写/空白照样认得（\" Text \" ⇒ text）",
+      "face": {
+        "elements": [
+          {
+            "type": ""
+          },
+          {
+            "type": " Text ",
+            "text": "大写"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "大写"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "大写",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "同时写 pages 与 elements ⇒ 忽略 elements（但 ignoredTopLevelElements 会说一句）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "我不要这个"
+          }
+        ],
+        "pages": [
+          {
+            "name": "only",
+            "elements": [
+              {
+                "type": "text",
+                "text": "我要这个"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "我要这个"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "我要这个",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pages: [] ⇒ 与\"没写 pages\"一样（Java 存成 null）：回头画 elements 那一页",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "还是我"
+          }
+        ],
+        "pages": []
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "还是我"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "还是我",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "v1 的 vars 照样生效：foreach 之外，{\"var\":\"arriving\"} 在 when 里也能用（augment 先并数据）",
+      "face": {
+        "vars": {
+          "arriving": {
+            "and": [
+              {
+                ">": [
+                  {
+                    "var": "lzb.targetM"
+                  },
+                  0
+                ]
+              },
+              {
+                "<": [
+                  {
+                    "var": "lzb.targetM"
+                  },
+                  200
+                ]
+              }
+            ]
+          }
+        },
+        "elements": [
+          {
+            "type": "text",
+            "text": "进站",
+            "when": {
+              "var": "arriving"
+            }
+          }
+        ]
+      },
+      "data": {
+        "lzb": {
+          "targetM": 120
+        }
+      },
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "进站"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "进站",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "require: null ⇒ 当\"没有门\"（visible: true、照样画）—— 显式 null 一律等于键不在",
+      "face": {
+        "require": null,
+        "elements": [
+          {
+            "type": "text",
+            "text": "有门还是没门"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "有门还是没门"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "有门还是没门",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "when: null ⇒ 当\"没有条件\"（总是画）；同一份文档里 when: false 仍然是不画（null 与 false 是两件事）",
+      "face": {
+        "elements": [
+          {
+            "type": "text",
+            "text": "照画",
+            "when": null
+          },
+          {
+            "type": "text",
+            "text": "不画",
+            "when": false
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "照画"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "照画",
+            "anim": null
+          },
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "不画",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr: null ⇒ 当\"没指定页\"（pageSeconds 照常自动轮转：t=1999 第 0 页，t=2000 翻到第 1 页）",
+      "face": {
+        "pageExpr": null,
+        "pageSeconds": 2,
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "A"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "B"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 2000,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "B"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "B",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr: null + pageSeconds：周期前一刻（t=1999）仍在第 0 页 —— 与上一条合起来钉住\"null = 没指定页\"",
+      "face": {
+        "pageExpr": null,
+        "pageSeconds": 2,
+        "pages": [
+          {
+            "name": "去程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "A"
+              }
+            ]
+          },
+          {
+            "name": "回程",
+            "elements": [
+              {
+                "type": "text",
+                "text": "B"
+              }
+            ]
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 1999,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "A"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "A",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "fps 越界（1e10）⇒ 回落缺省 8（Java 的 (int) 窄化是**饱和**到 Integer.MAX_VALUE，不是回绕）",
+      "face": {
+        "fps": 10000000000,
+        "elements": [
+          {
+            "type": "text",
+            "text": "节拍"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "fps": 8,
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "节拍"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "节拍",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "fps 在 1..30 内（fps: 12）⇒ 原样用（不被缺省覆盖）",
+      "face": {
+        "fps": 12,
+        "elements": [
+          {
+            "type": "text",
+            "text": "节拍"
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "fps": 12,
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "节拍"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "节拍",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(3 面)：周期开头（clockFraction = 0）三面角度 = 0/120/240 —— 正面就是 pageIndex 那一面（停住段）",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{pid.terminus}"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下行"
+              }
+            ]
+          },
+          {
+            "name": "回库",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回库"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 3,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.terminus}",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0,
+            "angle": 0
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0,
+            "angle": 120
+          },
+          {
+            "face": 2,
+            "page": 0,
+            "clockFraction": 0,
+            "angle": 240
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(3 面)：窗口起点（clockFraction = 0.75）角度与周期开头**完全相同** —— 前 75% 停住、最后 25% 才翻",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{pid.terminus}"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下行"
+              }
+            ]
+          },
+          {
+            "name": "回库",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回库"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 3,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 3000,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.terminus}",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0.75,
+            "angle": 0
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0.75,
+            "angle": 120
+          },
+          {
+            "face": 2,
+            "page": 0,
+            "clockFraction": 0.75,
+            "angle": 240
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(3 面)：翻到一半（clockFraction = 0.875，缓入缓出中点是 0.5）⇒ face0 = -60°、face1 = 60°",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{pid.terminus}"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下行"
+              }
+            ]
+          },
+          {
+            "name": "回库",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回库"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 3,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 3500,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.terminus}",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0.875,
+            "angle": -60
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0.875,
+            "angle": 60
+          },
+          {
+            "face": 2,
+            "page": 0,
+            "clockFraction": 0.875,
+            "angle": 180
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(3 面)：窗口末尾（t=3999，clockFraction ≈ 0.9998 —— 再往后一毫秒就翻页了）⇒ face0 = -120°（正好是下一页的位置，下一个周期从这里接上）",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{pid.terminus}"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下行"
+              }
+            ]
+          },
+          {
+            "name": "回库",
+            "elements": [
+              {
+                "type": "text",
+                "text": "回库"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 3,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 3999,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "{pid.terminus}",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0.9998,
+            "angle": -119.9996
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0.9998,
+            "angle": 0.0004
+          },
+          {
+            "face": 2,
+            "page": 0,
+            "clockFraction": 0.9998,
+            "angle": 120.0004
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(2 面)：停住段（clockFraction = 0 与 0.75）face0 = 0°、face1 = 180°（每面 180°）",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "上"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 2,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "上"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "上",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0,
+            "angle": 0
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0,
+            "angle": 180
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(2 面)：翻到一半（clockFraction = 0.875）⇒ face0 = -90°、face1 = 90°",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "上"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 2,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 3500,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "上"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "上",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0.875,
+            "angle": -90
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0.875,
+            "angle": 90
+          }
+        ]
+      }
+    },
+    {
+      "name": "drumAngle(2 面)：窗口末尾（t=3999，clockFraction ≈ 0.9998）⇒ face0 = -180°（≡ face1 转到正面）",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "上"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下"
+              }
+            ]
+          }
+        ],
+        "pageSeconds": 4,
+        "drum": {
+          "count": 2,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 3999,
+      "expect": {
+        "page": 0,
+        "visible": true,
+        "texts": [
+          "上"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "上",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 0,
+            "clockFraction": 0.9998,
+            "angle": -179.9995
+          },
+          {
+            "face": 1,
+            "page": 0,
+            "clockFraction": 0.9998,
+            "angle": 0.0005
+          }
+        ]
+      }
+    },
+    {
+      "name": "pageExpr 指定页 + drum：pageClockFraction = 0（不自动转 ⇒ 停在周期开头、不翻滚）、指定的第 1 面就是正面 —— 这是\"指定页永远显示下一页\"那个 off-by-one 的判据",
+      "face": {
+        "pages": [
+          {
+            "name": "上行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "上"
+              }
+            ]
+          },
+          {
+            "name": "下行",
+            "elements": [
+              {
+                "type": "text",
+                "text": "下"
+              }
+            ]
+          }
+        ],
+        "pageExpr": 1,
+        "pageSeconds": 4,
+        "drum": {
+          "count": 2,
+          "turnFraction": 0.25
+        }
+      },
+      "data": {},
+      "timeMs": 3000,
+      "expect": {
+        "page": 1,
+        "visible": true,
+        "texts": [
+          "下"
+        ],
+        "drawables": [
+          {
+            "type": "text",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0,
+            "h": 0,
+            "size": 0.4,
+            "text": "下",
+            "anim": null
+          }
+        ],
+        "drumAngle": [
+          {
+            "face": 0,
+            "page": 1,
+            "clockFraction": 0,
+            "angle": -180
+          },
+          {
+            "face": 1,
+            "page": 1,
+            "clockFraction": 0,
+            "angle": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "background: 0（数字 0）⇒ **不铺底**（ARGB = 0）；同一条向量顺带钉住元素的 color:\"#0\" 也是透明（哨兵不只在 background 上生效）",
+      "face": {
+        "background": 0,
+        "elements": [
+          {
+            "type": "rect",
+            "color": "#FFFFB300",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          },
+          {
+            "type": "rect",
+            "color": "#0",
+            "x": 0,
+            "y": 0.5,
+            "w": 0.5,
+            "h": 0.5
+          },
+          {
+            "type": "rect",
+            "color": "0x0",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0.5,
+            "h": 0.5
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "background": 0,
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "rect",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "rect",
+            "x": 0,
+            "y": 0.5,
+            "w": 0.5,
+            "h": 0.5,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          },
+          {
+            "type": "rect",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0.5,
+            "h": 0.5,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "background: \"#FF000000\" ⇒ 不透明黑（-16777216）—— 要一块黑板就得写带 alpha 的八位色",
+      "face": {
+        "background": "#FF000000",
+        "elements": [
+          {
+            "type": "rect",
+            "color": "#FFFFB300",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "background": -16777216,
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "rect",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "background: \"000000\"（六位全零）⇒ 仍然是**不透明黑**（-16777216）—— 这条正是\"0 与 000000 不是一回事\"的判据",
+      "face": {
+        "background": "000000",
+        "elements": [
+          {
+            "type": "rect",
+            "color": "#FFFFB300",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          }
+        ]
+      },
+      "data": {},
+      "timeMs": 0,
+      "expect": {
+        "background": -16777216,
+        "page": 0,
+        "visible": true,
+        "texts": [],
+        "drawables": [
+          {
+            "type": "rect",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1,
+            "size": 0.4,
+            "text": "",
+            "anim": null
+          }
+        ]
+      }
+    }
+  ]
+}

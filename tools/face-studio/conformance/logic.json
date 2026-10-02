@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "note": "MMTR 车辆动态面 · 逻辑层（JSONLogic 子集）的共享测试向量。Java 端 MmtrFaceLogicTests 与 web 工作室的自检页跑的是同一份文件 —— 两个实现谁漂了，这里立刻红。口径说明见 MmtrFaceLogic 类注释与 notes/359。",
+  "data": {
+    "speedKmh": 0,
+    "limitKmh": 100,
+    "pid": {
+      "service": "00101",
+      "terminus": "海山",
+      "next": "鸥湾"
+    },
+    "hold": "",
+    "pinned": false,
+    "cab": {
+      "end": "A",
+      "carIndex": 0
+    },
+    "lzb": {
+      "targetKmh": 80,
+      "targetM": 320.5
+    },
+    "list": [1, 2, 3],
+    "stations": [
+      {"name": "海山", "stop": true},
+      {"name": "鸥湾", "stop": false}
+    ],
+    "text": {
+      "zero": "0",
+      "false": "false"
+    }
+  },
+  "cases": [
+    {"name": "var：点号路径取值", "expr": {"var": "pid.terminus"}, "expect": "海山"},
+    {"name": "var：取不到就是 null（不报错）", "expr": {"var": "pid.nope"}, "expect": null},
+    {"name": "var：缺省值在取不到时生效", "expr": {"var": ["pid.nope", 0]}, "expect": 0},
+    {"name": "var：有值时不走缺省值", "expr": {"var": ["pid.terminus", "兜底"]}, "expect": "海山"},
+    {"name": "var：数组下标", "expr": {"var": "list.1"}, "expect": 2},
+    {"name": "var：下标越界 = null", "expr": {"var": "list.9"}, "expect": null},
+    {"name": "var：非数字下标 = null（不是异常）", "expr": {"var": "pid.next.wrong"}, "expect": null},
+
+    {"name": "if：第一个条件为真", "expr": {"if": [true, "A", "B"]}, "expect": "A"},
+    {"name": "if：条件为假走兜底", "expr": {"if": [false, "A", "B"]}, "expect": "B"},
+    {"name": "if：多分支", "expr": {"if": [false, "A", true, "B", "C"]}, "expect": "B"},
+    {"name": "if：没有兜底且全假 = null", "expr": {"if": [false, "A"]}, "expect": null},
+    {"name": "if：用真值判（空串为假）", "expr": {"if": [{"var": "hold"}, "扣车", "正常"]}, "expect": "正常"},
+
+    {"name": "and：返回假值本身（不是 false）", "expr": {"and": [1, 0, 2]}, "expect": 0},
+    {"name": "and：全真返回最后一个", "expr": {"and": [1, 2, 3]}, "expect": 3},
+    {"name": "or：返回第一个真值", "expr": {"or": [0, "", "X", "Y"]}, "expect": "X"},
+    {"name": "or：全假返回最后一个", "expr": {"or": [0, ""]}, "expect": ""},
+    {"name": "!: 空串为假 ⇒ 取反为真", "expr": {"!": [{"var": "hold"}]}, "expect": true},
+    {"name": "!!: 字符串 0 是真（口径钉在这里）", "expr": {"!!": [{"var": "text.zero"}]}, "expect": true},
+    {"name": "!!: 字符串 false 也是真", "expr": {"!!": [{"var": "text.false"}]}, "expect": true},
+    {"name": "!!: 数字 0 是假", "expr": {"!!": [0]}, "expect": false},
+    {"name": "!!: 空数组是假", "expr": {"!!": [[]]}, "expect": false},
+    {"name": "!!: 非空数组是真", "expr": {"!!": [{"var": "list"}]}, "expect": true},
+
+    {"name": "==：数字与数字字符串相等", "expr": {"==": [1, "1"]}, "expect": true},
+    {"name": "==：null 与空串不相等（不把两者混为一谈）", "expr": {"==": [null, ""]}, "expect": false},
+    {"name": "==：两边都 null 才相等", "expr": {"==": [null, null]}, "expect": true},
+    {"name": "!=：宽松不等的反面", "expr": {"!=": ["a", "b"]}, "expect": true},
+    {"name": "===：类型不同就不等", "expr": {"===": [1, "1"]}, "expect": false},
+    {"name": "===：同类型相等", "expr": {"===": ["海山", "海山"]}, "expect": true},
+    {"name": "!==：严格不等", "expr": {"!==": [1, "1"]}, "expect": true},
+
+    {"name": "<：可连写", "expr": {"<": [1, 2, 3]}, "expect": true},
+    {"name": "<：连写里有一处不成立就假", "expr": {"<": [1, 3, 2]}, "expect": false},
+    {"name": "<=：相等也算", "expr": {"<=": [1, 1]}, "expect": true},
+    {"name": ">：", "expr": {">": [{"var": "lzb.targetM"}, 320]}, "expect": true},
+    {"name": ">=：", "expr": {">=": [100, {"var": "limitKmh"}]}, "expect": true},
+    {"name": "< 遇 null 一律为假（不把缺数据当 0）", "expr": {"<": [{"var": "pid.nope"}, 1]}, "expect": false},
+    {"name": "<：纯字符串按键序比", "expr": {"<": ["A", "B"]}, "expect": true},
+    {"name": "<：数字字符串按数字比（不是字符序）", "expr": {"<": ["9", "10"]}, "expect": true},
+
+    {"name": "+：求和", "expr": {"+": [1, 2, 3.5]}, "expect": 6.5},
+    {"name": "+：空参数 = 0", "expr": {"+": []}, "expect": 0},
+    {"name": "+：有非数值 ⇒ null（不静默当 0）", "expr": {"+": [1, "海山"]}, "expect": null},
+    {"name": "-：单参数取负", "expr": {"-": [5]}, "expect": -5},
+    {"name": "-：两参数相减", "expr": {"-": [5, 2]}, "expect": 3},
+    {"name": "*：连乘", "expr": {"*": [2, 3, 4]}, "expect": 24},
+    {"name": "/：", "expr": {"/": [7, 2]}, "expect": 3.5},
+    {"name": "/：除零 ⇒ null", "expr": {"/": [1, 0]}, "expect": null},
+    {"name": "%：", "expr": {"%": [7, 3]}, "expect": 1},
+    {"name": "%：模零 ⇒ null", "expr": {"%": [7, 0]}, "expect": null},
+    {"name": "min：忽略 null", "expr": {"min": [3, null, 1, 2]}, "expect": 1},
+    {"name": "max：全是 null ⇒ null", "expr": {"max": [null, null]}, "expect": null},
+
+    {"name": "cat：拼接含数字（1.0 写成 1）", "expr": {"cat": ["第", 1, "站"]}, "expect": "第1站"},
+    {"name": "cat：null 当空串", "expr": {"cat": ["A", null, "B"]}, "expect": "AB"},
+    {"name": "substr：起止", "expr": {"substr": ["00101", 0, 2]}, "expect": "00"},
+    {"name": "substr：负起点从尾部数", "expr": {"substr": ["00101", -2]}, "expect": "01"},
+    {"name": "in：数组成员（宽松相等）", "expr": {"in": [{"var": "cab.end"}, ["A", "B"]]}, "expect": true},
+    {"name": "in：数组里没有", "expr": {"in": ["Z", ["A", "B"]]}, "expect": false},
+    {"name": "in：子串", "expr": {"in": ["开往", "本次列车开往海山"]}, "expect": true},
+
+    {"name": "missing：空串也算缺", "expr": {"missing": ["pid.terminus", "nope", "hold"]}, "expect": ["nope", "hold"]},
+    {"name": "missing_some：缺的够用 ⇒ 空数组", "expr": {"missing_some": [1, ["pid.terminus", "nope"]]}, "expect": []},
+    {"name": "missing_some：不够 ⇒ 列出缺的", "expr": {"missing_some": [2, ["pid.terminus", "nope"]]}, "expect": ["nope"]},
+
+    {"name": "?: 三元", "expr": {"?:": [{"var": "pinned"}, "停放", "运用"]}, "expect": "运用"},
+    {"name": "some：有一个满足", "expr": {"some": [{"var": "stations"}, {"var": "stop"}]}, "expect": true},
+    {"name": "all：有一个不满足", "expr": {"all": [{"var": "stations"}, {"var": "stop"}]}, "expect": false},
+    {"name": "none：有没有满足的", "expr": {"none": [{"var": "stations"}, {"var": "stop"}]}, "expect": false},
+    {"name": "filter：挑出满足的", "expr": {"filter": [{"var": "stations"}, {"var": "stop"}]}, "expect": [{"name": "海山", "stop": true}]},
+    {"name": "map：逐项变换", "expr": {"map": [{"var": "list"}, {"*": [{"var": ""}, 2]}]}, "expect": [2, 4, 6]},
+    {"name": "some：不是数组 ⇒ 假", "expr": {"some": [{"var": "pid.terminus"}, true]}, "expect": false},
+
+    {"name": "多键对象 = and（遇假即停）", "expr": {"!!": [{"var": "pinned"}], ">": [{"var": "speedKmh"}, 1]}, "expect": false},
+    {"name": "组合：到站前 200 m 且没停稳", "expr": {"and": [{">": [{"var": "lzb.targetM"}, 0]}, {"<": [{"var": "lzb.targetM"}, 200]}, {">": [{"var": "speedKmh"}, 0.5]}]}, "expect": false}
+  ]
+}

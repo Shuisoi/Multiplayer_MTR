@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<!--
+  index.html —— MMTR 车辆动态面工作室（notes/359 · F2）。
+  零依赖、零构建：页面上没有 CDN、没有打包器，全部是 ES module 直接加载。
+
+  用法：
+    pwsh -File mmtr\tools\face-studio\face-studio.ps1 -Action open
+    pwsh -File mmtr\tools\face-studio\face-studio.ps1 -Action open -Anchors sandbox\face-preview\anchors_saf420cab_a_v36.json
+  第二条会把页面开成 ...?anchors=/data/sandbox/... —— 服务器（FaceServe）用同源路径把工作区里的
+  锚点 JSON 只读地喂进来，作者不用每次手选文件；保存时再把 /data/ 前缀去掉，落回同一个工作区相对路径。
+
+  这个页面干三件事：
+    ① 看：选一份锚点 JSON（或车辆配置）→ 点一块面 → 改右边的数据 → 看牌；
+    ② 画：在牌面上拖元素、拉把手、吸附、方向键微调；图层面板增删改；多页（pages）页签；
+    ③ 存：POST /save 写回磁盘（服务器白名单目录，先备份 .bak-studio）。
+
+  直接双击这个文件（file://）**不work**：Chrome 不给 file:// 页面加载 ES module（按 CORS 拒掉），
+  页面上只会出现一句"请用服务器打开"。所以请走 face-studio.ps1 —— 页面与数据都从 127.0.0.1 的同源
+  路径来，字段表（fields.json）、键表（schema.json）、自检向量（conformance/logic.json）、?anchors= 才读得到。
+-->
+<html lang="zh-CN">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>MMTR 车辆动态面工作室</title>
+	<style>
+		:root {
+			--line: #3a3f46;
+			--bg: #1b1e22;
+			--panel: #24282d;
+			--text: #e6e9ee;
+			--muted: #9aa4b0;
+			--accent: #ffb300;
+			--bad: #ff6b6b;
+			--good: #6bcf7f;
+			--warn: #ffd166;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--text);
+			font: 13px/1.6 "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+		}
+
+		header {
+			padding: 10px 14px;
+			border-bottom: 1px solid var(--line);
+			background: var(--panel);
+		}
+
+		h1 { margin: 0 0 4px; font-size: 16px; }
+		h2 { margin: 12px 0 6px; font-size: 13px; color: var(--accent); }
+		h3 { margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
+		p { margin: 4px 0; }
+		code { color: var(--accent); }
+		a { color: #7fb3ff; }
+
+		.hint, .muted { color: var(--muted); }
+
+		main {
+			display: flex;
+			gap: 12px;
+			padding: 12px;
+			align-items: flex-start;
+			flex-wrap: wrap;
+		}
+
+		section {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			padding: 8px 10px;
+		}
+
+		#col-faces { flex: 1 1 240px; min-width: 220px; max-width: 330px; }
+		#col-canvas { flex: 3 1 420px; min-width: 340px; }
+		#col-props { flex: 2 1 360px; min-width: 330px; max-width: 520px; }
+		#col-data { flex: 2 1 320px; min-width: 300px; max-width: 440px; }
+
+		#banner {
+			margin: 12px 12px 0;
+			padding: 8px 10px;
+			border: 1px solid var(--bad);
+			border-radius: 4px;
+			background: #3a1f1f;
+			white-space: pre-wrap;
+		}
+
+		#banner.good { border-color: var(--good); background: #1e3324; }
+		#banner.warn { border-color: var(--warn); background: #3a3320; }
+
+		.faceItem, .anchorItem, .layerItem, .pageTab {
+			display: block;
+			width: 100%;
+			text-align: left;
+			margin: 2px 0;
+			padding: 4px 6px;
+			background: #2c3138;
+			color: var(--text);
+			border: 1px solid transparent;
+			border-radius: 3px;
+			cursor: pointer;
+			font: inherit;
+		}
+
+		.faceItem:hover, .anchorItem:hover { border-color: var(--accent); }
+		.faceItem.selected { border-color: var(--accent); background: #3a3527; }
+		.anchorItem.selected { border-color: var(--accent); }
+
+		.pageTab { display: inline-block; width: auto; margin: 2px 4px 2px 0; padding: 3px 9px; }
+		.pageTab.selected { border-color: var(--accent); background: #3a3527; }
+
+		button.mini, button.preset, #selftest, #btnUndo, #btnRedo, #btnAddElement {
+			background: #2c3138;
+			color: var(--text);
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			padding: 3px 9px;
+			margin: 2px 4px 2px 0;
+			cursor: pointer;
+			font: inherit;
+		}
+
+		button.mini { padding: 1px 6px; font-size: 12px; }
+		button.mini:hover, button.preset:hover, #selftest:hover, #btnUndo:hover, #btnRedo:hover, #btnAddElement:hover { border-color: var(--accent); }
+		button.preset.on, button.mini.on { border-color: var(--accent); background: #3a3527; }
+		button:disabled { opacity: .45; cursor: default; }
+
+		#toolbar { margin-bottom: 6px; }
+		#status { color: var(--muted); font: 12px Consolas, monospace; min-height: 18px; }
+
+		#canvasWrap {
+			position: relative;
+			display: inline-block;
+			max-width: 100%;
+			background: #101214 repeating-linear-gradient(45deg, #191c20 0 8px, #101214 8px 16px);
+			border: 1px solid var(--line);
+			padding: 6px;
+			overflow: auto;
+			touch-action: none;
+		}
+
+		#canvas { display: block; max-width: 100%; height: auto; }
+
+		/*
+		 * 覆盖层与牌面**像素对齐**：wrapper 有 6px padding + 1px 边框，绝对定位的百分比
+		 * 是按 padding box 算的，所以 left/top 回退 6px、宽高各减 12px（= 内容盒）。
+		 */
+		#overlay {
+			position: absolute;
+			left: 6px;
+			top: 6px;
+			width: calc(100% - 12px);
+			height: calc(100% - 12px);
+			cursor: crosshair;
+		}
+
+		#faceInfo div { margin: 2px 0; }
+		.tag { color: var(--muted); }
+		.bad { color: var(--bad); }
+		.good { color: var(--good); }
+		.warn { color: var(--warn); }
+
+		#problems { margin-top: 6px; }
+		#problems div { color: var(--bad); white-space: pre-wrap; }
+
+		.fieldRow, .propRow {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			margin: 1px 0;
+		}
+
+		.fieldRow label, .propRow label {
+			flex: 0 0 128px;
+			color: var(--muted);
+			font-family: Consolas, monospace;
+			font-size: 12px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.propRow label { flex-basis: 118px; }
+		.fieldRow.hasValue label, .propRow.hasValue label { color: var(--text); }
+		.fieldRow input, .fieldRow select, .propRow input, .propRow select, .propRow textarea {
+			flex: 1 1 auto;
+			min-width: 0;
+			background: #15181c;
+			color: var(--text);
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			padding: 2px 4px;
+			font: 12px Consolas, monospace;
+		}
+
+		.propRow .default {
+			flex: 0 0 auto;
+			color: var(--muted);
+			font: 11px Consolas, monospace;
+			max-width: 140px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		#describe {
+			max-height: 74px;
+			overflow: auto;
+			background: #15181c;
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			padding: 4px 6px;
+			font: 12px Consolas, monospace;
+			white-space: pre-wrap;
+			word-break: break-word;
+		}
+
+		#fields { max-height: 380px; overflow: auto; }
+		#layers { max-height: 300px; overflow: auto; }
+		.layerItem { font: 12px Consolas, monospace; }
+		.layerItem.selected { border-color: var(--accent); background: #3a3527; }
+
+		#props { max-height: 720px; overflow: auto; }
+
+		.propBlock { border: 1px solid var(--line); border-radius: 3px; padding: 6px; margin: 6px 0; }
+		.propBlock > h3 { margin-top: 0; }
+		.unknownKeys { border-color: var(--warn); }
+		.unknownKeys .propRow label { color: var(--warn); }
+
+		.logicBox { border: 1px dashed var(--line); border-radius: 3px; padding: 4px; margin: 2px 0; }
+		.logicGroup { border-left: 2px solid var(--accent); padding-left: 6px; margin: 4px 0; }
+		.logicRow { display: flex; gap: 4px; align-items: center; margin: 2px 0; flex-wrap: wrap; }
+		.logicRow select, .logicRow input {
+			background: #15181c; color: var(--text); border: 1px solid var(--line);
+			border-radius: 3px; padding: 1px 4px; font: 12px Consolas, monospace;
+		}
+		.logicRow select.fieldPick { flex: 1 1 130px; min-width: 90px; }
+		.logicRow select.opPick { flex: 0 0 140px; }
+		.logicRow input.valueInput { flex: 1 1 90px; min-width: 60px; }
+		.logicRaw { color: var(--warn); font: 12px Consolas, monospace; }
+		textarea.sourceBox {
+			width: 100%; min-height: 120px; background: #15181c; color: var(--text);
+			border: 1px solid var(--line); border-radius: 3px; font: 12px Consolas, monospace;
+		}
+
+		#selftestOut { max-height: 300px; overflow: auto; font: 12px Consolas, monospace; }
+		#selftestOut div { white-space: pre-wrap; }
+
+		/* 导出 Java 骨架（F4）：与"另存为"同一排按钮下面那一块 */
+		#exportRow input { background: #15181c; color: var(--text); border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; font: 12px Consolas, monospace; }
+		#exportPanel { border: 1px solid var(--line); border-radius: 3px; padding: 8px 10px; margin-top: 6px; }
+		#exportPanel.warn { border-color: var(--warn); }
+		#exportSummary { white-space: pre-wrap; font: 12px Consolas, monospace; color: var(--muted); margin: 4px 0; }
+		#exportJava {
+			width: 100%;
+			min-height: 260px;
+			background: #15181c;
+			color: var(--text);
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			padding: 6px;
+			font: 12px Consolas, monospace;
+			white-space: pre;
+			overflow: auto;
+		}
+		#exportService { white-space: pre-wrap; font: 12px Consolas, monospace; color: var(--text); background: #15181c; border: 1px dashed var(--line); border-radius: 3px; padding: 4px 6px; margin: 4px 0; }
+		.exportWhy { color: var(--muted); font-size: 12px; }
+		.exportWhy code { color: var(--accent); }
+
+		.toolbarGroup { display: inline-block; margin-right: 10px; }
+	</style>
+</head>
+
+<body>
+	<header>
+		<h1>MMTR 车辆动态面工作室</h1>
+		<p class="hint">
+			选一份锚点 JSON（或车辆配置）→ 点一块面 → 改右边的数据 → 看牌 → 在牌面上拖/拉/微调元素 → <strong>保存</strong>。
+			数据口径与 <code>MmtrFaceData</code> 一致：<strong>空 = 这个字段不存在</strong>（不是空串）；
+			几何一律是<strong>比例</strong>（<code>x/w</code> 乘牌宽、<code>y/h/size</code> 乘牌高，<code>y</code> 从<strong>下</strong>往上）。
+		</p>
+		<p>
+			<label>打开锚点 JSON <input type="file" id="file" accept=".json,application/json"></label>
+			<span id="source" class="muted">（还没打开文件）</span>
+			&nbsp;|&nbsp;
+			<button class="mini" id="btnSave">保存</button>
+			<button class="mini" id="btnSaveAs">另存为…</button>
+			<button class="mini" id="btnExportJava" title="按当前正在编辑的这块面，生成一份能直接编译的 MmtrFaceExtension 骨架（元素/算子/过滤器/字段四类各留一个 TODO 桩）">导出 Java 骨架</button>
+			<span id="savePath" class="muted">（没有可写路径）</span>
+			&nbsp;|&nbsp;
+			<a href="http://127.0.0.1:8900/" target="_blank" rel="noopener">仿真台 → http://127.0.0.1:8900/</a>
+		</p>
+		<p id="saveAsRow" hidden>
+			<label>另存为（工作区相对路径，只允许 .json、且必须落在 sandbox\ / mmtr\tools\ / run\resourcepacks\ 里）
+				<input type="text" id="saveAsPath" size="70" spellcheck="false"></label>
+			<button class="mini" id="btnSaveAsGo">确定写盘</button>
+			<button class="mini" id="btnSaveAsCancel">取消</button>
+		</p>
+
+		<!-- 导出 Java 骨架（F4 代码面）：这一块的每一句都在回答"作者下一步该干什么" -->
+		<div id="exportPanel" hidden>
+			<h2 style="margin-top:0">导出 Java 骨架（F4 代码面）</h2>
+			<p class="exportWhy">
+				把<strong>当前正在编辑的这块面</strong>里用到的扩展点捞出来，写成一份<strong>能直接编译</strong>的
+				<code>MmtrFaceExtension</code> 实现：四类各留一个带 TODO 的桩 ——
+				① 非内置元素类型（不在 <code>schema.json.elementTypes</code> 里的那些）、
+				② 非内置算子（不在 32 个里的）、③ 非内置过滤器（不在 8 个里的）、
+				④ 不在 <code>fields.json</code> 里的字段名。
+			</p>
+			<p id="exportRow">
+				<label>类名 <input type="text" id="exportClass" size="26" spellcheck="false"></label>
+				<label>包名 <input type="text" id="exportPackage" size="18" spellcheck="false"></label>
+				<button class="mini" id="btnExportGo">重新生成</button>
+				<label><input type="checkbox" id="exportWholeFace"> 扫整块面（所有页 + 文档级 vars/require/pageExpr）</label>
+				<button class="mini" id="btnExportDownload">下载 .java</button>
+				<button class="mini" id="btnExportSave">保存到工作区</button>
+				<button class="mini" id="btnExportHide">收起</button>
+			</p>
+			<div id="exportSummary"></div>
+			<label class="exportWhy">Java（可全选复制；改完类名/包名点「重新生成」）
+				<textarea id="exportJava" spellcheck="false" wrap="off"></textarea>
+			</label>
+			<h3>ServiceLoader 声明（SPI 就是靠它找到你的类，不是反射）</h3>
+			<div id="exportService"></div>
+			<p class="exportWhy">
+				装扩展的客户端才认得那些 <code>type</code>：没装那个模组时，游戏里表现是"这块面少画一样/整块不出现"，
+				而<strong>离线自检会把它们报成 P4「不认识的元素类型」、P3「字段不在字段表里」、P7「不认识的过滤器」</strong>。
+				这三条都是"假警告"（自检看不到装了没装那个模组），所以自检有对应的放宽开关：
+				<code>--allow-type 厂家:名字</code> / <code>--extra-fields &lt;扩展字段.json&gt;</code> /
+				<code>--allow-filter 厂家:名字</code>。骨架开头那一段注释里已经把该敲的命令写好了。
+				放宽了什么，自检报告结尾会<strong>逐条列出来</strong>（不许悄悄放行）。
+			</p>
+		</div>
+	</header>
+
+	<div id="banner" hidden></div>
+
+	<main>
+		<section id="col-faces">
+			<h2>面（faces）</h2>
+			<div id="faces" class="muted">（还没打开文件）</div>
+			<p id="facesNote" class="muted"></p>
+			<h2>页（pages）</h2>
+			<div id="pages" class="muted">（没打开 / 这份文档没写 pages）</div>
+			<div id="pageActions"></div>
+			<h2>图层（当前页，数组顺序 = 从下往上画）</h2>
+			<div id="layers" class="muted">（还没打开文件）</div>
+			<div id="layerActions"></div>
+			<h2>锚点</h2>
+			<div id="anchors" class="muted">（还没打开文件）</div>
+		</section>
+
+		<section id="col-canvas">
+			<h2>牌面（绘制器）</h2>
+			<div id="toolbar">
+				<span class="toolbarGroup">
+					<button id="btnUndo" title="Ctrl+Z">撤销</button>
+					<button id="btnRedo" title="Ctrl+Shift+Z">重做</button>
+				</span>
+				<span class="toolbarGroup">
+					<label><input type="checkbox" id="chkGrid" checked> 网格</label>
+					<label><input type="checkbox" id="chkRuler" checked> 标尺</label>
+				</span>
+				<span class="toolbarGroup">
+					<select id="newType"></select>
+					<button id="btnAddElement">加一个元素</button>
+				</span>
+			</div>
+			<div id="status"></div>
+			<div id="canvasWrap"><canvas id="canvas" width="8" height="8"></canvas><canvas id="overlay" width="8" height="8"></canvas></div>
+			<p class="hint">
+				拖 = 移动（<code>Shift</code> 只改一个轴，<code>Ctrl</code> 临时关吸附，<code>Alt</code>+拖 = 复制）；
+				方向键微调 0.005、<code>Shift</code>+方向键 0.001；8 个把手缩放
+				（<code>rect/roundrect/image</code> 改 <code>x/y/w/h</code>，<code>text</code> 改 <code>size</code>，<code>circle/arc/gauge</code> 改 <code>radius</code>，<code>line</code> 改两端）。
+			</p>
+			<div id="faceInfo" class="muted">（还没打开文件）</div>
+			<div id="problems"></div>
+		</section>
+
+		<section id="col-props">
+			<h2>属性（按 schema.json 生成）</h2>
+			<div id="props" class="muted">（还没打开文件）</div>
+		</section>
+
+		<section id="col-data">
+			<h2>数据预设</h2>
+			<div id="presets"></div>
+			<div id="describe" class="muted">（还没打开文件）</div>
+
+			<h2>字段（fields.json）</h2>
+			<div id="fields" class="muted">（正在读 fields.json…）</div>
+
+			<h2>自检</h2>
+			<button id="selftest">跑自检（conformance/logic.json）</button>
+			<div id="selftestOut" class="muted">（没跑过）</div>
+		</section>
+	</main>
+
+	<script type="module" src="app.mjs"></script>
+	<script>
+		/*
+		 * app.mjs 是 ES module。Chrome **不给 file:// 页面加载 module 脚本**（按 CORS 拒掉），所以双击
+		 * 这个文件会得到一片死页：控制台里有错，页面上什么都没有。这一小段是经典脚本（不受那条限制），
+		 * 只在 app.mjs 没跑起来时把原因写出来 —— 失败要看得见，别让作者对着空页面猜。
+		 *
+		 * 两种可能都要说：① 用了 file://；② 某个模块里有语法错误/某个 fetch 读不到（改完刷新即见，
+		 * 所以"另一个人在改另一个文件"也会让这一页起不来 —— 那时候控制台第一条红字就是答案）。
+		 */
+		setTimeout(function () {
+			if (!window.__mmtrStudioBooted) {
+				var box = document.getElementById('banner');
+				box.hidden = false;
+				box.textContent = '页面脚本没跑起来。两种可能：\n'
+					+ '① 你是双击（file://）打开的：Chrome 不给 file:// 页面加载 ES module 脚本 —— '
+					+ '请用服务器打开：pwsh -File mmtr\\tools\\face-studio\\face-studio.ps1 -Action open'
+					+ '（它会开 http://127.0.0.1:8910/ ，并把工作区里的锚点 JSON 挂在 /data/ 下）。\n'
+					+ '② 你用的是服务器，但某个模块里有语法错误 / 某个请求 404 —— 按 F12 打开控制台，第一条红字就是原因'
+					+ '（工作室的文件是改完刷新即见的，所以"别人正在改另一个文件"也会让这一页暂时起不来）。';
+			}
+		}, 1500);
+	</script>
+</body>
+
+</html>

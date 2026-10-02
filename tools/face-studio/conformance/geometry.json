@@ -1,0 +1,132 @@
+{
+  "note": "面文档的纯几何共享向量：Java(MmtrFaceGeometryTests) 与工作室(selftest.mjs) 都跑这一份。fn 只能是 fitRect / marqueeLeft；args 是位置参数数组（顺序 = 两边函数签名）；expect 是 fitRect 的 [x,y,w,h] 或 marqueeLeft 的一个数；数值容差 1e-4。",
+  "version": 1,
+  "cases": [
+    {
+      "name": "fitRect: stretch 直接拉满整个框（会变形）",
+      "fn": "fitRect",
+      "args": ["stretch", 0, 0, 2, 1, 1],
+      "expect": [0, 0, 2, 1]
+    },
+    {
+      "name": "fitRect: contain 宽受限期（宽高比 4 装进 1.0x0.4 ⇒ 按宽装 + 居中）",
+      "fn": "fitRect",
+      "args": ["contain", 0, 0, 1.0, 0.4, 4],
+      "expect": [0, 0.075, 1.0, 0.25]
+    },
+    {
+      "name": "fitRect: contain 高受限期（宽高比 1 装进 2x1 ⇒ 按高装 + 居中留白）",
+      "fn": "fitRect",
+      "args": ["contain", 0, 0, 2, 1, 1],
+      "expect": [0.5, 0, 1, 1]
+    },
+    {
+      "name": "fitRect: cover 溢出（宽高比 1 装进 2x1 ⇒ 盖满后纵向溢出，由调用方裁掉）",
+      "fn": "fitRect",
+      "args": ["cover", 0, 0, 2, 1, 1],
+      "expect": [0, -0.5, 2, 2]
+    },
+    {
+      "name": "fitRect: cover 另一受限方向（宽高比 4 装进 2x1 ⇒ 按高放大到 4x1，横向不溢出）",
+      "fn": "fitRect",
+      "args": ["cover", 0, 0, 2, 1, 4],
+      "expect": [-1, 0, 4, 1]
+    },
+    {
+      "name": "fitRect: cover 的另一种溢出（宽高比 0.5 装进 2x1 ⇒ 按宽放大到 2x4，纵向溢出）",
+      "fn": "fitRect",
+      "args": ["cover", 0, 0, 2, 1, 0.5],
+      "expect": [0, -1.5, 2, 4]
+    },
+    {
+      "name": "fitRect: 没见过的 fit 当 contain（缩到装得下比溢出安全）",
+      "fn": "fitRect",
+      "args": ["squish", 0, 0, 2, 1, 1],
+      "expect": [0.5, 0, 1, 1]
+    },
+    {
+      "name": "fitRect: fit 是空串当 stretch（与没写 fit 的缺省一致）",
+      "fn": "fitRect",
+      "args": ["", 0, 0, 2, 1, 1],
+      "expect": [0, 0, 2, 1]
+    },
+    {
+      "name": "fitRect: aspect=0 当 stretch（图还没量出宽高，不许除出 NaN）",
+      "fn": "fitRect",
+      "args": ["contain", 0, 0, 2, 1, 0],
+      "expect": [0, 0, 2, 1]
+    },
+    {
+      "name": "fitRect: aspect 为负也当 stretch（同上，NaN/负宽都会让整块牌变空白）",
+      "fn": "fitRect",
+      "args": ["cover", 0, 0, 2, 1, -3],
+      "expect": [0, 0, 2, 1]
+    },
+    {
+      "name": "fitRect: 零高的框返回框本身、宽高钳到 ≥0（不除零、不返回 NaN）",
+      "fn": "fitRect",
+      "args": ["contain", 0.25, 0.5, 2, 0, 1],
+      "expect": [0.25, 0.5, 2, 0]
+    },
+    {
+      "name": "fitRect: 零宽的框同上",
+      "fn": "fitRect",
+      "args": ["cover", 0.25, 0.5, 0, 1, 1],
+      "expect": [0.25, 0.5, 0, 1]
+    },
+    {
+      "name": "fitRect: 负尺寸的框钳成 0（不许返回负矩形，那会让 clip/drawImage 画出鬼影）",
+      "fn": "fitRect",
+      "args": ["contain", 1, 1, -2, -3, 1],
+      "expect": [1, 1, 0, 0]
+    },
+    {
+      "name": "fitRect: 框有偏移（boxX/boxY 不是 0）时 contain 的居中要相对框算，不是相对原点",
+      "fn": "fitRect",
+      "args": ["contain", 0.3, 0.2, 0.4, 0.4, 2],
+      "expect": [0.3, 0.3, 0.4, 0.2]
+    },
+    {
+      "name": "marqueeLeft: phase=0 时文本**左边缘**贴在视口右缘（不是中心）",
+      "fn": "marqueeLeft",
+      "args": [0.1, 0.5, 0.3, 0.06, 0],
+      "expect": 0.6
+    },
+    {
+      "name": "marqueeLeft: phase=0.5 走到一半（行程 = 视口宽 + 文本宽 + 接缝）",
+      "fn": "marqueeLeft",
+      "args": [0.2, 0.4, 0.3, 0.1, 0.5],
+      "expect": 0.2
+    },
+    {
+      "name": "marqueeLeft: phase=1 时整段已走出视口左边（左边缘 = left - 文本宽 - 接缝）",
+      "fn": "marqueeLeft",
+      "args": [0.2, 0.4, 0.3, 0.1, 1],
+      "expect": -0.2
+    },
+    {
+      "name": "marqueeLeft: 负相位被钳到 0（不许把文本推到视口右边之外）",
+      "fn": "marqueeLeft",
+      "args": [0.2, 0.4, 0.3, 0.1, -1],
+      "expect": 0.6
+    },
+    {
+      "name": "marqueeLeft: 相位 >1 被钳到 1（走过头也不许无限往左）",
+      "fn": "marqueeLeft",
+      "args": [0.2, 0.4, 0.3, 0.1, 5],
+      "expect": -0.2
+    },
+    {
+      "name": "marqueeLeft: 文本宽 0（取不到内容的行走马灯）时行程 = 视口宽 + 接缝，不返回 NaN",
+      "fn": "marqueeLeft",
+      "args": [0.1, 0.5, 0, 0.06, 0.5],
+      "expect": 0.32
+    },
+    {
+      "name": "marqueeLeft: 视口宽 0 时行程 = 文本宽 + 接缝（w=0 的视口在引擎里另有口径，这里只管算术）",
+      "fn": "marqueeLeft",
+      "args": [0.1, 0, 0.3, 0.06, 0.5],
+      "expect": -0.08
+    }
+  ]
+}
