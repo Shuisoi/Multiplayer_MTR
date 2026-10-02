@@ -51,6 +51,15 @@ public final class VehicleSyncPatch {
 		// 停车与功率（engine 侧 checkForUpdate 认的就是这一组）
 		"stoppingPoint", "speedTarget", "powerLevel", "doorTarget",
 		"isCurrentlyManual", "mmtrDoorLeft", "mmtrDoorRight", "mmtrDoorManual",
+		/*
+		 * notes/368 §2(2)：**镜像自己要用、又随速度每 tick 在变**的两个物理读数。
+		 *
+		 * <p>{@code Vehicle#updateMmtrSyncFields()} 每 tick 把本车当前的牵引加速度能力与常用制动减速度
+		 * 写进这两个字段（客户端拿它们做信号预留足迹与电机音调），而速度一变它们就变 ——
+		 * 它们**不在**这张表里时，每一个"脏拍"都会被判成"静态字段变了" ⇒ 发整份 7.4 KB。
+		 * 实测证据：notes/368 §1（1191/1711 个包是整份，平均 7313 B）。</p>
+		 */
+		"acceleration", "deceleration",
 		// 驾驶室 / 钥匙 / 任务身份
 		"mmtrActive", "mmtrMode", "mmtrDriver", "mmtrActiveCab", "mmtrCabKeyHolder", "mmtrCabCrew",
 		"mmtrCabCarIndex", "mmtrCabEnd", "mmtrCabArcM",
@@ -59,9 +68,28 @@ public final class VehicleSyncPatch {
 		// 司机控制与保护（三手柄：油门手柄位置、定速巡航设定值、手柄规格字符串）
 		"mmtrThrottleNotch", "mmtrBrakeNotch", "mmtrReverser", "mmtrThrottleAxis", "mmtrBrakeAxis",
 		"mmtrDriveHandle", "mmtrCruiseKmh", "mmtrHandleSpec", "mmtrHoldReason",
+		/*
+		 * notes/352 灯光：两端各一份开关 + "本车有没有关闭档"。
+		 *
+		 * <p>灯是**世界里的东西**：开关一变，所有客户端的画面上那盏灯都得跟着变（不只是开车的那位）。
+		 * 进白名单 ⇒ 跟着稀疏补丁每 tick 出去；写镜像时也标脏（切一下开关不值一次整份快照，
+		 * 但"到位"比"省"重要 —— 见 Vehicle.setMmtrLightSwitch）。</p>
+		 */
+		"mmtrLightA", "mmtrLightB", "mmtrLightLoco",
+		// notes/276 片 6：**钉住**（停放 = 钉住）—— 无司机 + 无任务 + 整列拉不动。它随"人上车/下车、任务起止"
+		// 在 tick 里翻转，不进白名单就只能在"整份快照"那一刻到客户端。
+		"mmtrPinned",
 		"mmtrEmergency", "mmtrProtection",
 		// 空气制动读数
 		"mmtrPipePressure", "mmtrBrakeCylinderPressure", "mmtrAirState",
+		// notes/257：**电机出力**（右上角 HUD 的"电机做功"读数）—— 它每 tick 都在变，
+		// 但**不在**这张白名单里时会被稀疏补丁丢掉 ⇒ 客户端只在"整份快照"那一刻才更新，
+		// 现场表现就是用户说的"屏幕 UI 显示的牵引力和能量不实时更新"（整份快照在车跑着的时候很少发：
+		// `speedTarget` 的单位是 m/ms，每 tick 的变化远小于 `checkForUpdate()` 的 0.01 门限）。
+		"mmtrMotorForceN",
+		// notes/269：**整列气制动力**（HUD 的「制动力（气 · 电）」那一行）—— 与电机出力同一个道理：
+		// 每 tick 都在变，不进白名单就只能在"整份快照"那一刻更新。
+		"mmtrPneumaticBrakeForceN",
 		// 任务/许可读数
 		"mmtrMotionMirror", "mmtrRunTotalDistance", "mmtrRunStopTarget",
 		"mmtrAwsWarningPending", "mmtrAwsWarningAcknowledged", "mmtrBlockHeld", "mmtrSpeedLimitKmh",
@@ -71,7 +99,14 @@ public final class VehicleSyncPatch {
 		"mmtrJobId", "mmtrTaskNote", "mmtrTaskStep", "mmtrTaskSteps", "mmtrMissionState", "mmtrMissionExecutor",
 		// 站台作业子任务（到站停稳 / 开门 / 停够 / 关门）：清单 + "现在该做什么" + 版本号与确认数。
 		// 同样靠"变了就标脏"推 —— 这些字变化的时刻（车稳稳停着、门开着）恰恰是读数全都不变的时候。
-		"mmtrSubTasks", "mmtrSubTaskHint", "mmtrSubTaskRevision", "mmtrSubTaskAcks"
+		"mmtrSubTasks", "mmtrSubTaskHint", "mmtrSubTaskRevision", "mmtrSubTaskAcks",
+		/*
+		 * notes/354 水牌（PID）：班次号 / 本趟终点 / 下一站。
+		 *
+		 * <p>过一站就变一次（"下一站"每站都翻），十列车就是每分钟十来次 —— 不进这张表的话每次都要发
+		 * **整份快照**（单节 3.5 KB × 全列），而这本来就是"补丁只带三个字符串"的活。</p>
+		 */
+		"mmtrPidService", "mmtrPidTerminus", "mmtrPidNext"
 		/*
 		 * 刻意**不**在白名单里的：`ridingEntities`。
 		 *

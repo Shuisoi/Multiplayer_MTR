@@ -191,6 +191,37 @@ public final class VehicleSyncPatchTests {
 		}
 	}
 
+	/**
+	 * ★ **车一开动就变的那两个物理读数**（notes/368 §2(2)）：`acceleration` / `deceleration`
+	 * 由服务端每 tick 按当前速度写进镜像（客户端拿它们做信号预留足迹与电机音调）。
+	 *
+	 * <p>它们**不在**白名单里时，`diffSection` 会判成"静态字段变了" ⇒ 返回 {@code null} ⇒ **整份快照**；
+	 * 而这两项每 tick 都在变 ⇒ 车一动就退化成"每秒一份 7.4 KB"。现场实测正是如此
+	 * （notes/368 §1：1191/1711 个包是整份、平均 7313 B）。</p>
+	 */
+	@Test
+	public void aSpeedDependentPhysicsChangeProducesAPatchNotAFullSnapshot() {
+		final JsonObject lastSent = snapshot(vehicle("0.0", "100.0"), dataWithPhysics("1.05", "0.35"));
+		final JsonObject now = snapshot(vehicle("0.005", "100.4"), dataWithPhysics("1.12", "0.36"));
+
+		final JsonObject patch = VehicleSyncPatch.patchOf(lastSent, now);
+		assertNotNull(patch, "★ 速度一变必须是补丁：这两项不在白名单里时这里会返回 null（= 整份 7.4 KB）");
+		final JsonObject dataPatch = patch.getAsJsonObject("data");
+		assertEquals(2, dataPatch.size(), "只带这两个物理读数（速度与位置在 vehicle 段）");
+		assertEquals(1.12, dataPatch.get("acceleration").getAsDouble(), "牵引加速度能力");
+		assertEquals(0.36, dataPatch.get("deceleration").getAsDouble(), "常用制动减速度");
+	}
+
+	private static JsonObject dataWithPhysics(String acceleration, String deceleration) {
+		final JsonObject jsonObject = new JsonObject();
+		jsonObject.addProperty("stoppingPoint", 400.0);
+		jsonObject.addProperty("speedTarget", 12.5);
+		jsonObject.addProperty("totalVehicleLength", 132.0);
+		jsonObject.addProperty("acceleration", Double.parseDouble(acceleration));
+		jsonObject.addProperty("deceleration", Double.parseDouble(deceleration));
+		return jsonObject;
+	}
+
 	/** 把补丁按段合并进目标（与客户端两步 updateData 同语义：只覆盖出现的字段）。 */
 	private static void merge(JsonObject target, JsonObject patch) {
 		for (final String section : new String[]{"vehicle", "data"}) {

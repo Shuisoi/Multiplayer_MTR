@@ -159,4 +159,48 @@ public final class ClientVehicleSyncTests {
 		assertEquals(1, updates(reentry.getFirst()),
 			"★ 重新进视野必须发整份：客户端可能已经把它删了，发补丁会静默丢更新");
 	}
+
+	/**
+	 * ★ **"标脏了、但一份都不差"不许退回整份**（notes/368 §2(2) 的第二条通路）。
+	 *
+	 * <h2>为什么这条是真会发生的</h2>
+	 * <p>{@code checkForUpdate()} 里有一个 {@code hasRidingEntityUpdate} 项，它是"标脏"标志本身；
+	 * 而 {@code VehicleSyncPatch.patchOf} 在"逐字段比对下来一处都没变"时返回的是**空对象**
+	 * （{@code patchOf} 里那句 early return）。原来的 {@code Client.update} 用
+	 * {@code patch.size() > 0} 当"这是补丁"的判据 ⇒ **空对象直接掉进 else 分支 = 发一整份 7.4 KB**
+	 * —— 现场就是"车停着不动，服务器却每秒往外扔一份整份快照"（notes/368 §1 实测 1191 次）。</p>
+	 *
+	 * <p>正确的语义只有两种：客户端没有这辆车 ⇒ 整份；客户端有且真的差东西 ⇒ 补丁；
+	 * **有、但一份都不差 ⇒ 与"没脏"同路（保活）**。</p>
+	 */
+	@Test
+	public void aDirtyButUnchangedVehicleIsKeptInsteadOfResentWhole() {
+		final Simulator simulator = newSimulator();
+		final Client client = newClient(simulator);
+		final Vehicle vehicle = newVehicle(simulator);
+
+		// 第一拍：建立镜像（整份）
+		client.update(vehicle, true, 0, null);
+		flush(client, simulator);
+
+		// 第二拍：脏了，但比下来一处都没变 ⇒ patchOf 给的是空对象
+		client.update(vehicle, true, 0, new JsonObject());
+		final ObjectArrayList<DynamicDataResponse> second = flush(client, simulator);
+		assertTrue(second.isEmpty(),
+			"★ 脏了但一处都没变 ⇒ 什么都不用发（这条路上旧代码会发一整份 7.4 KB）；"
+				+ "保活笔记在册，随下一条真消息一起走（与「没脏」同一条路）");
+
+		// 第三拍：真的变了 ⇒ 补丁；而且**必须同时保活**（客户端只看保活决定删不删）
+		client.update(vehicle, true, 0, patchOf("123.5"));
+		final ObjectArrayList<DynamicDataResponse> third = flush(client, simulator);
+		assertEquals(1, patches(third.getFirst()), "真变了就是补丁");
+		assertEquals(1, keeps(third.getFirst()), "补丁车必须同时保活");
+
+		// 第四拍：来了个客户端还没有的车 + 空补丁 ⇒ 仍然必须是整份（否则它永远建不起镜像）
+		final Vehicle other = newVehicle(simulator);
+		final Client freshClient = newClient(simulator);
+		freshClient.update(other, true, 0, new JsonObject());
+		final ObjectArrayList<DynamicDataResponse> fresh = flush(freshClient, simulator);
+		assertEquals(1, updates(fresh.getFirst()), "新客户端 + 空补丁 ⇒ 整份（这条不能被上面的修法吃掉）");
+	}
 }

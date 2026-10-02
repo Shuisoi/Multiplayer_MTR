@@ -161,7 +161,7 @@ public class Client extends ClientSchema {
 	 * @param needsUpdate     whether the vehicle's state has changed since the last sync
 	 * @param pathUpdateIndex index into the vehicle's path data for partial updates
 	 * @param patch           {@link org.mtr.core.operation.VehicleSyncPatch} 产出的稀疏补丁；
-	 *                        {@code null} = 发整份快照（静态变了或第一次），空对象 = 其实没有变化
+	 *                        {@code null} = 发整份快照（静态变了或第一次），**空对象 = 一处都没变**
 	 */
 	public void update(Vehicle vehicle, boolean needsUpdate, int pathUpdateIndex, @Nullable JsonObject patch) {
 		final long vehicleId = vehicle.getId();
@@ -171,12 +171,29 @@ public class Client extends ClientSchema {
 				// 客户端已经持有这辆车、而这一拍只有动态字段变了 ⇒ 发补丁（原地合并）
 				vehiclePatches.put(vehicleId, patch);
 				vehicleUpdates.remove(vehicleId);
-			} else {
-				// 第一次看到，或静态字段变了（客户端要重建镜像）：整份快照
+				keepVehicleIds.remove(vehicleId);
+			} else if (!clientAlreadyHasIt) {
+				// 第一次看到（或重新进视野）：客户端要重建镜像 ⇒ 整份快照。
+				// 这一支**必须**排在"空补丁"之前：新客户端 + 空补丁仍然要给整份，
+				// 否则它永远建不起镜像（那里的"空"说的是"与我上次发的一样"，不是"不用发"）。
 				vehicleUpdates.put(vehicleId, new VehicleUpdate(vehicle, vehicle.vehicleExtraData.copy(pathUpdateIndex)));
 				vehiclePatches.remove(vehicleId);
+				keepVehicleIds.remove(vehicleId);
+			} else {
+				/*
+				 * ★ **标脏了、但一份都不差 ⇒ 与"没脏"同路（保活）**（notes/368 §2(2)）。
+				 *
+				 * <p>{@code checkForUpdate()} 里有一项是"标脏标志本身"（{@code hasRidingEntityUpdate}），
+				 * 而 {@code VehicleSyncPatch.patchOf} 在逐字段比对下来一处都没变时返回的是**空对象**
+				 * （它自己那句 early return）。原来这里只看 {@code patch.size() > 0}，空对象于是掉进
+				 * "整份"那一支 —— 现场就是"车停着不动，服务器每秒往外扔一份 7.4 KB 整份快照"。</p>
+				 *
+				 * <p>"空补丁"的正确语义 = **这一拍没有东西要发**，不是"发整份"。</p>
+				 */
+				if (!vehicleUpdates.containsKey(vehicleId) && !vehiclePatches.containsKey(vehicleId)) {
+					keepVehicleIds.add(vehicleId);
+				}
 			}
-			keepVehicleIds.remove(vehicleId);
 		} else if (!vehicleUpdates.containsKey(vehicleId) && !vehiclePatches.containsKey(vehicleId)) {
 			keepVehicleIds.add(vehicleId);
 		}
