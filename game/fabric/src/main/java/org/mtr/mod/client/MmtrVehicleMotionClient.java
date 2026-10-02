@@ -24,7 +24,7 @@ import java.util.Map;
  *       随 {@code SLOT} 记录一次性告知 —— 于是 ① 完全不必依赖 ② 的脏拍（那种依赖正是 notes/368 的病根）。</li>
  *   <li><b>落镜像</b>：位置/速度、手柄三元组、运动旗标与三个夹紧量写进对应那辆车的镜像
  *       （引擎侧 {@code Vehicle.mmtrApplySync*}，所有权见那里）。</li>
- *   <li><b>记账</b>：每秒一行 {@code [MMTR-NET]}，把"这套东西到底花了多少字节"变成可核对的数
+ *   <li><b>记账</b>：每秒一行 {@code [MMTR-MOTION]}，把"这套东西到底花了多少字节"变成可核对的数
  *       —— "低网络开销"是这个重构的首要指标，没有这一行就只能靠感觉。</li>
  * </ol>
  *
@@ -49,8 +49,22 @@ public final class MmtrVehicleMotionClient {
 	private static int unknownSlots;
 	private static int malformedFrames;
 	private static int legRecords;
+	/** 本窗口内"位置硬对齐"的次数与最大误差（米）—— 判断"本地积分到底有没有在跑"就靠这两个数。 */
+	private static int hardAligns;
+	private static double maxAbsErrorM;
 	/** 服务端时钟 - 本地时钟（{@code PING} 记录）；{@code Long.MIN_VALUE} = 还没收到过。 */
 	private static long serverMillisOffset = Long.MIN_VALUE;
+
+	/**
+	 * 位置校正的阈值（米）。**本地积分够准就不要硬对齐** —— 硬对齐每 100 ms 来一次，
+	 * 在画面上就是"每秒十级的台阶"（用户 2026-10-03 实机报"新的通信逻辑很卡"）。
+	 *
+	 * <p>所以：误差在阈值内 ⇒ **位置交给本地积分**，只把速度软拉向服务端（消除长期漂移）；
+	 * 超过阈值（首次对齐 / 连挂手术 / 本地积分根本没跑）才真的写位置。
+	 * {@link #hardAligns} 这个计数就是这条判据的可见性：它若接近帧数，说明本地积分没在跑
+	 * （那才是病根 —— 不是把阈值调大能解决的）。</p>
+	 */
+	private static final double SNAP_THRESHOLD_M = 0.5;
 
 	private MmtrVehicleMotionClient() {
 	}
@@ -82,7 +96,7 @@ public final class MmtrVehicleMotionClient {
 			// SLOT 的载荷就是"首帧的 STATE"：直接落一遍，客户端在收到第一条 MOTION 之前就已经对齐。
 			withMirror(slot.vehicleId(), mirror -> mirror.mmtrApplySyncState(slot.flags(), slot.runStopTarget(), slot.runTotalDistance(), slot.blockStopM()));
 		} else if (record instanceof Motion motion) {
-			withMirror(slotVehicle(motion.slot()), mirror -> mirror.mmtrApplySyncMotion(motion.railProgress(), motion.speed()));
+			withMirror(slotVehicle(motion.slot()), mirror -> applyMotion(mirror, motion));
 		} else if (record instanceof Control control) {
 			withMirror(slotVehicle(control.slot()), mirror -> mirror.mmtrApplySyncControl(control.packed()));
 		} else if (record instanceof State state) {
@@ -97,7 +111,31 @@ public final class MmtrVehicleMotionClient {
 				VEHICLE_TO_SLOT.remove(vehicleId);
 			}
 		} else if (record instanceof Ping ping) {
-			serverMillisOffset = System.currentTimeMillis() - ping.serverMillis();
+			/*
+			 * 服务端时钟只发**低 32 位**（`u32 serverMillis`，49.7 天回绕一次够用），所以本地这一侧也要
+			 * 同样截断再相减 —— 否则差值里混进整个 epoch（实测 2026-10-03：时钟差印出 1786706395147ms，
+			 * 一眼就知道是把 1.79e12 和截断后的值相减了）。差值仍然正确（模 2³²）。
+			 */
+			serverMillisOffset = (System.currentTimeMillis() & 0xFFFFFFFFL) - ping.serverMillis();
+		}
+	}
+
+	/**
+	 * 落一条 {@code MOTION}：**误差小的时候不写位置**（见 {@link #SNAP_THRESHOLD_M}）。
+	 *
+	 * <p>这一支是"很卡"的正面修正：原先每条 MOTION 都无条件写 {@code railProgress}，
+	 * 于是位置变成"服务端 10 Hz 采样"的阶梯 —— 本地每帧那点积分被每 100 ms 抹掉一次，
+	 * 画面上就是跳。现在只有"本地积分明显跟不上"（首次对齐、连挂、或者本地根本没在积分）才写位置。</p>
+	 */
+	private static void applyMotion(VehicleExtension mirror, Motion motion) {
+		final double error = motion.railProgress() - mirror.getRailProgress();
+		maxAbsErrorM = Math.max(maxAbsErrorM, Math.abs(error));
+		if (Math.abs(error) > SNAP_THRESHOLD_M) {
+			hardAligns++;
+			mirror.mmtrApplySyncMotion(motion.railProgress(), motion.speed());
+		} else if (motion.speed() != null) {
+			// 位置交给本地积分（传回它自己的 railProgress = 不改位置），只把速度软拉向服务端。
+			mirror.mmtrApplySyncMotion(mirror.getRailProgress(), motion.speed());
 		}
 	}
 
@@ -133,8 +171,9 @@ public final class MmtrVehicleMotionClient {
 		if (elapsed < 1000) {
 			return;
 		}
-		Init.LOGGER.info("[MMTR-NET] 运动流：帧/s={} 记录/s={} 字节/s={} 槽位={} 未知槽位={} 坏帧={} 腿记录={} 时钟差={}ms",
+		Init.LOGGER.info("[MMTR-MOTION] 运动流：帧/s={} 记录/s={} 字节/s={} 槽位={} 未知槽位={} 坏帧={} 腿记录={} 最大误差={}m 硬对齐={} 时钟差={}ms",
 			frames, records, bytes, SLOT_TO_VEHICLE.size(), unknownSlots, malformedFrames, legRecords,
+			Math.round(maxAbsErrorM * 1000.0) / 1000.0, hardAligns,
 			serverMillisOffset == Long.MIN_VALUE ? "-" : Long.toString(serverMillisOffset));
 		windowStartMillis = now;
 		frames = 0;
@@ -143,5 +182,7 @@ public final class MmtrVehicleMotionClient {
 		unknownSlots = 0;
 		malformedFrames = 0;
 		legRecords = 0;
+		hardAligns = 0;
+		maxAbsErrorM = 0;
 	}
 }

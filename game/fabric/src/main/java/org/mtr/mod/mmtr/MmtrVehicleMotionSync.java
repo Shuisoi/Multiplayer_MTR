@@ -152,8 +152,16 @@ public final class MmtrVehicleMotionSync {
 		if (elapsed < 5000) {
 			return;
 		}
-		Init.LOGGER.info("[MMTR-NET] 运动流(服务端)：{} 帧/s 起 {} 记录/s {} 字节/s {} 客户端={} 帧率={}Hz",
-			sentFrames * 1000L / elapsed, sentRecords * 1000L / elapsed, sentBytes * 1000L / elapsed, CLIENTS.size(), HZ);
+		/*
+		 * **必须走 System.out**：模组的 log4j logger 在**专用服务端**的日志里看不见
+		 * （2026-10-03 实测：`logs/latest.log` 最后 3000 行里 2999 行是 `[STDOUT]`，
+		 * 带 `(MinecraftTransitRailway)` 的只有 1 行），而这一行恰恰是要在服务端日志里核对的读数。
+		 * 与 `[MMTR-SUB]` / `[MMTR-DRV]` 那些状态类消息同一个口径。
+		 */
+		System.out.println("[MMTR-MOTION] 运动流(服务端)："
+			+ (sentFrames * 1000L / elapsed) + " 帧/s "
+			+ (sentRecords * 1000L / elapsed) + " 记录/s "
+			+ (sentBytes * 1000L / elapsed) + " 字节/s 客户端=" + CLIENTS.size() + " 帧率=" + HZ + "Hz");
 		windowStartMillis = now;
 		sentFrames = 0;
 		sentBytes = 0;
@@ -186,7 +194,13 @@ public final class MmtrVehicleMotionSync {
 			}
 		}
 
-		if (withPing) {
+		/*
+		 * `PING` 只在**这一帧真的有内容**时搭车发：它服务的是"误差缓冲按时间收敛"，
+		 * 而视距内一辆车都没有时没有东西要收敛 —— 那时每秒 10 字节 × 每个客户端纯属白扔
+		 * （64 个客户端 = 640 B/s 的噪声，而这一路的目标就是把稳态开销压到近零；
+		 * 2026-10-03 空场实测：`槽位=0` 却仍有 `帧/s=1 字节/s=10`）。
+		 */
+		if (withPing && !writer.isEmpty()) {
 			writer.ping(simulator.getCurrentMillis());
 		}
 		return writer.isEmpty() ? null : writer.toCharArray();

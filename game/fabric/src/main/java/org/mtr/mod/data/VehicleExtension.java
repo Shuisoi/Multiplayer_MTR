@@ -23,6 +23,7 @@ import org.mtr.mod.block.BlockTrainSensorBase;
 import org.mtr.mod.block.IBlock;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.MmtrVehicleMotionClient;
 import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
@@ -63,6 +64,41 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	}
 
 	/**
+	 * **① 接管之后，② 让出的字段**（notes/369 §6 的所有权）。
+	 *
+	 * <p>运动流（①）每 100 ms 就把位置/速度/手柄/运动旗标与三个夹紧量写到客户端镜像上，
+	 * 而 ② 是"脏拍才发"（车跑起来时约每秒一次）。两边都写同一格会出现**旧值覆盖新值**：
+	 * ② 的补丁是按"上一拍的服务端状态"算出来的，落到镜像上就把 ① 刚对齐好的位置拉回去 ——
+	 * 现场就是"每秒钟仍然跳一下"，正是这个重构要消掉的那个东西。</p>
+	 *
+	 * <p>所以规则写成一句：**这辆车一旦有了 ① 槽位，② 的补丁就不再碰这些字段**。
+	 * 整份快照（换编组/换交路/第一次看见）**不受这条限制** —— 那条路的语义是"重建镜像"，
+	 * 硬对齐正是它该做的事；而 ① 的下一帧（≤100 ms）会把运动量重新对齐。</p>
+	 */
+	private static final java.util.Set<String> MOTION_OWNED_KEYS = java.util.Set.of(
+		"speed", "railProgress", "reversed",
+		"mmtrThrottleNotch", "mmtrBrakeNotch", "mmtrDriveHandle", "mmtrCruiseKmh", "mmtrReverser", "mmtrEmergency",
+		"mmtrActive", "mmtrMotionMirror", "mmtrPinned", "mmtrProtection", "mmtrBlockHeld", "mmtrAuthorityTripped",
+		"mmtrRunStopTarget", "mmtrRunTotalDistance");
+
+	/**
+	 * 把一段里 ① 拥有的字段摘掉（见 {@link #MOTION_OWNED_KEYS}）。全摘空时返回空对象，
+	 * 合并它是空操作 —— 这正是"这一拍对客户端没有任何新信息"的正确表达。
+	 */
+	private static JsonObject withoutMotionOwnedKeys(@Nullable JsonObject section) {
+		if (section == null) {
+			return null;
+		}
+		final JsonObject filtered = new JsonObject();
+		section.entrySet().forEach(entry -> {
+			if (!MOTION_OWNED_KEYS.contains(entry.getKey())) {
+				filtered.add(entry.getKey(), entry.getValue());
+			}
+		});
+		return filtered;
+	}
+
+	/**
 	 * 把一段**稀疏补丁**合并进这份镜像（notes/174）。
 	 *
 	 * <p><b>两段都允许缺席</b>：`getAsJsonObject(...)` 在键不存在时返回 {@code null}，
@@ -72,12 +108,14 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	 */
 	public void updateData(@Nullable JsonObject jsonObject) {
 		if (jsonObject != null) {
-			final JsonObject vehicleJson = jsonObject.getAsJsonObject("vehicle");
+			// ①（运动流）管到这辆车了 ⇒ 位置/手柄/运动旗标由它说话（见 MOTION_OWNED_KEYS）。
+			final boolean motionManaged = MmtrVehicleMotionClient.isMotionManaged(getId());
+			final JsonObject vehicleJson = motionManaged ? withoutMotionOwnedKeys(jsonObject.getAsJsonObject("vehicle")) : jsonObject.getAsJsonObject("vehicle");
 			if (vehicleJson != null) {
 				updateData(new JsonReader(vehicleJson));
 				serverSpeedKilometersPerHour = getSpeed() * 3600;
 			}
-			final JsonObject dataJson = jsonObject.getAsJsonObject("data");
+			final JsonObject dataJson = motionManaged ? withoutMotionOwnedKeys(jsonObject.getAsJsonObject("data")) : jsonObject.getAsJsonObject("data");
 			if (dataJson != null) {
 				vehicleExtraData.updateData(new JsonReader(dataJson));
 			}
@@ -324,6 +362,20 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	}
 
 	public ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> getSmoothedVehicleCarsAndPositions(long millisElapsed) {
+		/*
+		 * ★ **①（运动流）管到的车不再吃这套旧平滑**（notes/369 §6）。
+		 *
+		 * <p>旧平滑是为"② 每秒才发一次位置"设计的：它把 ② 那一下的差值记成 adjustment，再按
+		 * `millisElapsed * speed/10` 慢慢吃掉 —— 于是**渲染位置总是落后于真位置**，低速时落后得尤其久。
+		 * ① 一来（10 Hz + 误差阈值），位置本身已经连续，再叠一层"落后"的平滑就是纯滞后：
+		 * 2026-10-03 实机里"很卡"就有这一份 —— 车头的位置每 100 ms 被 ① 更新一次，
+		 * 而画面读的是那条慢半拍的 smoothed 值。</p>
+		 *
+		 * <p>误差缓冲（真的要"抹平"时用它）是 S5 的活：那时它替换的就是这一段，而不是叠在上面。</p>
+		 */
+		if (MmtrVehicleMotionClient.isMotionManaged(getId())) {
+			return getVehicleCarsAndPositions();
+		}
 		final double oldRailProgress = railProgress;
 		railProgress = persistentVehicleData.getSmoothedRailProgress(railProgress, persistentVehicleData.getDoorValue() > 0 ? 0 : millisElapsed * (speed == 0 ? Integer.MAX_VALUE : speed / 10));
 		final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> vehicleCarsAndPositions = getVehicleCarsAndPositions();
@@ -399,5 +451,47 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	 */
 	public void dispose() {
 		persistentVehicleData.dispose();
+	}
+
+	/**
+	 * 这列车底的**牵引档数**（{@code mmtrPowerNotches}）—— 客户端镜像。
+	 *
+	 * <p>单手柄车底（{@code NOTCHED} / {@code STEPLESS} / {@code AIR_BRAKE}）要在客户端就知道自己这根杆
+	 * 有几档，否则杆位要么够不到最后一位、要么越过后被引擎悄悄钳掉。三手柄车底不吃这两个数（它有
+	 * {@code mmtrHandleSpec} 那张位置表），读它们也不会有副作用。</p>
+	 *
+	 * <p>它们是**静态**镜像字段（{@code VehicleSchema} 里 protected，随整份快照下发，故意不在
+	 * {@code VehicleSyncPatch} 的增量白名单里 —— 见 {@code VehicleSyncPatchTests.staticFieldsAreNotInTheWhitelist}），
+	 * 所以客户端任何一拍读到的都是当前值，不需要额外的同步通道。</p>
+	 */
+	public int getMmtrPowerNotchesFromSync() { return (int) mmtrPowerNotches; }
+
+	/** 这列车底的**制动档数**（{@code mmtrBrakeNotches}，含"运行/缓解"位）。 */
+	public int getMmtrBrakeNotchesFromSync() { return (int) mmtrBrakeNotches; }
+
+	/**
+	 * **到目标点（停点）的剩余距离**（米）；{@code < 0} = 现在没有武装的目标点（停放 / 没有任务 / 已到点）。
+	 *
+	 * <h3>数据从哪来：两个引擎数，一次减法</h3>
+	 *
+	 * <p>{@code mmtrRunStopTarget}（引擎武装的停点，沿"这次运行的距离坐标"量）与 {@code railProgress}
+	 * （本车在该坐标上的位置）**都是引擎发下来的**（{@code VehicleSchema} 里 protected 的镜像字段；
+	 * 前者在 {@code VehicleSyncPatch} 的增量白名单里，所以停点一变就推过来）。这里只做一次减法，
+	 * 没有任何判定 —— 而"两个数在客户端同一套坐标里"这件事**不是我假定的**：引擎自己就是用这一对数
+	 * 判"到点就停"的（{@code Vehicle#simulate} 里 {@code railProgress >= mmtrRunStopTarget} 那一句），
+	 * 而那一句正是在**客户端镜像**这条路上跑的（{@code mmtrMotionMirror} 分支）。</p>
+	 *
+	 * <h3>它有多准（为什么这是"读数"不是"保证量"）</h3>
+	 *
+	 * <p>客户端镜像的 {@code railProgress} 是**本机积分 + 服务器包纠正 + 平滑**（{@code PersistentVehicleData}），
+	 * 与服务器上的真值有差；站在站台/岔口等待时最多约 1 s 的视觉误差（notes/26）。所以它够用来"看还有多远"，
+	 * 但**不能当成制动到点位的保证**。若要一个精确到米的权威值，得由引擎算好单独发下来（改 schema +
+	 * 同步引擎）—— 那是另一件事，别在这里偷偷加权平均去"凑准"。</p>
+	 *
+	 * <p>减出负数（镜像跑过停点、或平滑把位置推过了）时**夹到 0**：卡片上一句"到目标点 -3 m"是没有意义的，
+	 * 而引擎自己也是用 {@code >=} 夹住的。</p>
+	 */
+	public double getMmtrDistanceToStopTargetM() {
+		return mmtrRunStopTarget < 0 ? -1 : Math.max(0, mmtrRunStopTarget - railProgress);
 	}
 }

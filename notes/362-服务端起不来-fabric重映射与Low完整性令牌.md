@@ -94,3 +94,22 @@ IDEA 自己就是 Low ⇒ 它 fork 的 gradle 守护进程
 （`GRADLE_USER_HOME`、`TEMP/TMP`、`java.io.tmpdir`）**仍然需要**：Low 令牌写不了 `%USERPROFILE%`
 下的 Medium 对象（`%TEMP%` 写不进、`.gradle` 写不进 ⇒ gradle wrapper `zip.lck` 访问被拒）。
 那条"显式给一个工作区内的 tmpdir"的改动只是**症状级**修补，不是根因；根因见 §2。
+
+## 5. 2026-10-03：启动器自己的两个笔误（症状都不指向启动器）
+
+用 `scripts\dev-server.ps1` 起服务端，连吃 4 轮 `gradle 退出码=1`，两次都不是游戏侧的问题：
+
+| 症状（日志里的原话） | 真因 | 修法 |
+|---|---|---|
+| `JVM temp dir:` 是空的 ⇒ gradle `java.io.tmpdir is set to a directory that doesn't exist:` | **`dev-server.ps1:88` 用的是 `$mcRoot`，而那里只有 `$MC_ROOT`** —— 这两个在 PowerShell 里是**两个变量**（"不区分大小写"只对字母，**下划线照样是名字的一部分**：`mc_root` ≠ `mcroot`）。本仓其它脚本（`check-paths.ps1` / `run-fabric-tests-offline.ps1` …）都自己定义 `$mcRoot`，只有这个文件直接用、没定义 | 改成 `$MC_ROOT` |
+| `Dependency requires at least JVM runtime version 21. This build uses a Java 17 JVM.` | §2 的绕行会去 `~\.gradle\jdks` 里挑"**第一个**非 Low 的 JDK"，而 **17 的目录名排在 21 前面** ⇒ 挑到 17；engine 与 game 的 buildSrc 都要求 21 | 读 JDK 自带的 `release` 文件里的 `JAVA_VERSION`，**只要 ≥ 21** |
+
+修完实测：`改用工作区外的 JDK: …eclipse_adoptium-21-amd64-windows.2` → **30 秒后 25565 在听**。
+
+> 这两条与 §2 的 Low 令牌是**独立**的两件事：§2 讲"为什么必须换到工作区外的 JDK"，本节讲
+> "换的时候挑错了版本"和"tmpdir 根本没设上"。它们叠在一起时，启动器打出来的话是
+> "常见原因是 Forge 插件解析的网络抖动"，离真因非常远。
+>
+> **客户端那份启动器 `dev-client.ps1` 没有做 Low 令牌绕行**（它只跑 `gradlew :fabric:runClient`）。
+> 在 `MC` 还带着 Low 标签时，从命令行起客户端要自己把 `JAVA_HOME` 指向工作区外的 21 并设好
+> `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir="<MC>\sandbox\tmp"`（2026-10-03 本次实机就是这么起的，40 秒到主菜单）。
