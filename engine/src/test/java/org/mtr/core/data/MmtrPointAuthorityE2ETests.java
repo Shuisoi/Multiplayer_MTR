@@ -35,7 +35,7 @@ public final class MmtrPointAuthorityE2ETests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {

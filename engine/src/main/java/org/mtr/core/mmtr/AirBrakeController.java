@@ -38,7 +38,7 @@ public final class AirBrakeController implements DriveController, AirBrakeStatef
 			}
 		}
 
-		final double decel = type.getServiceBrakeDecelerationMps2() * brakeCylinderPressure;
+		final double decel = type.getPhysics().serviceBrakeDecelerationMps2(brakeCylinderPressure, speedMetersPerSecond);
 		final boolean lamp = brakeCylinderPressure > 0.01;
 		return new DriveOutput(-decel, lamp, control.isEmergency(), pipePressure, brakeCylinderPressure);
 	}

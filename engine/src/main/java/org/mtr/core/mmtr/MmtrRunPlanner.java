@@ -73,6 +73,11 @@ public final class MmtrRunPlanner {
 		 * this to authorise its WHOLE route, so S1 does not stop it on a rail another train occupies.
 		 */
 		public final ObjectArrayList<String> routeRailHexes = new ObjectArrayList<>();
+		/**
+		 * 这份计划**真的穿过了**的经由点（作业单给的 {@code viaNodes} 解析后、去掉"已越过"的那些）。
+		 * 给日志与验收用：进路是否按作业单要求走了那条引入线，看这里，而不是靠推断。
+		 */
+		public final ObjectArrayList<Position> viaNodes = new ObjectArrayList<>();
 	}
 
 	private MmtrRunPlanner() {
@@ -175,6 +180,296 @@ public final class MmtrRunPlanner {
 		// attempts' reasons once: the forward search, the terminal flip and the setback search.
 		System.out.println("[MMTR-RUN] no plan for " + targetRailHex + ": forward=" + forward.reason + " | flip=" + viaFlip.reason + " | setback=" + viaSetback.reason);
 		return forward;
+	}
+
+	/**
+	 * **带经由点（路径点）的规划**：进路必须**依次穿过** {@code viaNodeKeys} 里的图节点，再到目标轨。
+	 *
+	 * <h3>为什么需要它（2026-09-27 用户现场口径）</h3>
+	 * <p>"在库与正线连接的那个立交上，列车不能在线上逆行，这可能也是导致列车卡死的原因，所以需要引入
+	 * 路径点逻辑：所有回库列车都需要经过 {@code 106,65,1600} 点。"</p>
+	 *
+	 * <p>{@link #planToRailForward} 是**按跳数最短**的前向 BFS，它对"这条引入线是上行还是下行"一无所知：
+	 * 咽喉处两条平行引入线都能到库房，BFS 就挑先够着的那条 —— 回库车于是顺着**出库方向**那条线逆向开进去
+	 * （逆行）。实测（2026-09-27，10 ms 节拍探针）不带经由点的回库进路是"沿 1 道向东 480 m 再拐进出库引入线"，
+	 * 而 1 道是**西行**方向、跑完最后一圈的车正沿它进站 ⇒ 同一根正线上的对头就是 22:37 起那 27 min
+	 * 全网站住的直接成因（notes/329 §3）。</p>
+	 *
+	 * <p>经由点把这条**线路知识**交回作业单：先到经由点、再从经由点去目标，一段一段地前向 BFS，
+	 * 拼成一条完整进路（岔位、停车点、里程都按同一条链算，见 {@link #planToRailForwardVia}）。</p>
+	 *
+	 * <p><b>已经越过的经由点不再要求</b>：车辆每 tick 都可能按当前位置重新自臂（{@code Vehicle#mmtrMotionSelfArmMission}），
+	 * 若经由点被当成"永远要在前方"，车一过它下一次规划就失败。所以判据是"它还是不是**前方**的事"：
+	 * 经由点若正好是车所在轨的一个端点（车正骑在这根轨上 —— 正接近它或刚越过它），即视为已达成。</p>
+	 *
+	 * <p>没有任何（剩余的）经由点时，**走的还是 {@link #planToRail(Simulator, Vehicle, String, double)}
+	 * 那条原路** —— 不带经由点的步骤行为与改动前逐位相同。</p>
+	 *
+	 * @param viaNodeKeys 经由点，写法 {@code "x,y,z"}（按书写顺序依次经过）；{@code null}/空 = 不带经由点
+	 */
+	public static Plan planToRail(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction, @Nullable ObjectArrayList<String> viaNodeKeys) {
+		if (viaNodeKeys == null || viaNodeKeys.isEmpty()) {
+			return planToRail(sim, vehicle, targetRailHex, stopFraction);
+		}
+		final MmtrMotionPosition viaWalker = vehicle.getMmtrMotionWalker();
+		final Position viaAhead = viaWalker == null ? null : travelAheadNode(viaWalker);
+		final Position viaEntry = viaWalker == null ? null : travelEntryNode(viaWalker);
+		final ObjectArrayList<Position> vias = new ObjectArrayList<>();
+		for (final String raw : viaNodeKeys) {
+			final Position node = parseViaNode(sim, raw);
+			if (node == null) {
+				final Plan bad = new Plan();
+				bad.targetRailHex = targetRailHex;
+				bad.reason = "via: 经由点 " + raw + " 不是图上能唯一定位的节点（写法 {\"x,y,z\"}）";
+				return bad;
+			}
+			if (node.equals(viaAhead) || node.equals(viaEntry)) {
+				continue; // 车正骑在这根轨上：这个经由点已经（或正在）达成
+			}
+			vias.add(node);
+		}
+		if (vias.isEmpty()) {
+			return planToRail(sim, vehicle, targetRailHex, stopFraction);
+		}
+		return planToRailForwardVia(sim, vehicle, targetRailHex, stopFraction, vias);
+	}
+
+	/**
+	 * 经由点写法 {@code "x,y,z"} → 图上的节点。容错一条：**y 写错一档也认** ——
+	 * 同一列上有 {@code y=-60} 与 {@code y=-59} 两条登记是本项目踩过的坑（{@code query node} 的注释里
+	 * 就是为它写的）。于是先精确匹配 {@code (x,y,z)}；匹配不上再看同一 {@code (x,z)} 上是不是**只有一个**
+	 * 节点：是就用它（并说明"按 x,z 解的"），有多个则**报错而不猜**（宁可这一步失败，也不要悄悄走错线）。
+	 *
+	 * @return 图上的节点；{@code null} = 写法不对或定位不到/有歧义
+	 */
+	@Nullable
+	private static Position parseViaNode(Simulator sim, @Nullable String raw) {
+		if (raw == null) {
+			return null;
+		}
+		final String[] parts = raw.trim().split(",");
+		if (parts.length != 3) {
+			return null;
+		}
+		final long[] xyz = new long[3];
+		for (int i = 0; i < 3; i++) {
+			try {
+				xyz[i] = Long.parseLong(parts[i].trim());
+			} catch (NumberFormatException e) {
+				return null;
+			}
+		}
+		final Position exact = new Position(xyz[0], xyz[1], xyz[2]);
+		if (sim.positionsToRail.containsKey(exact)) {
+			return exact;
+		}
+		Position found = null;
+		for (final Position candidate : sim.positionsToRail.keySet()) {
+			if (candidate.getX() == xyz[0] && candidate.getZ() == xyz[2]) {
+				if (found != null && !found.equals(candidate)) {
+					return null; // 同一 (x,z) 上不止一个节点：说不出是哪一个，就不猜
+				}
+				found = candidate;
+			}
+		}
+		return found;
+	}
+
+	/**
+	 * 经由点版的**前向**进路：起点 → 经由1 → 经由2 → … → 目标轨的一个端点，逐段 BFS 后拼成一条链。
+	 *
+	 * <p>与 {@link #planToRailForward} 同一口径的三件事：</p>
+	 * <ul>
+	 *   <li><b>不许折返</b>：每一段的根节点上，不能向来时那根轨回头（车不会倒着开出咽喉）；</li>
+	 *   <li><b>岔位</b>：链上每个度 ≥ 2 的节点都按有序腿表算一个操作号（与运行时
+	 *       {@code MmtrForkElection} 同一份排序），算不出来就整条计划不可行 —— 绝不"到时候再说"；</li>
+	 *   <li><b>里程</b>：从车当前位置的**剩余里程**起算，沿链把每根轨的长度累加，最后按停车比例扣掉目标轨的尾段。</li>
+	 * </ul>
+	 *
+	 * <p>经由点本身**不停车**：它是"穿过"，不是"到站"—— 停车点永远在目标轨上，这一点与 {@link #planToRailForward}
+	 * 完全一致（若在这里停下来，"回库"就变成两段调车，现场会多出一次停车）</p>
+	 */
+	private static Plan planToRailForwardVia(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction, ObjectArrayList<Position> vias) {
+		final Plan plan = new Plan();
+		plan.targetRailHex = targetRailHex;
+		final MmtrMotionPosition walker = vehicle.getMmtrMotionWalker();
+		if (walker == null) {
+			plan.reason = "via: vehicle is not in live Motion-Core mode";
+			return plan;
+		}
+		final Rail target = findRail(sim, targetRailHex);
+		if (target == null) {
+			plan.reason = "via: target rail " + targetRailHex + " not found";
+			return plan;
+		}
+		final Position startNode = travelAheadNode(walker);
+		final Rail currentRail = findRail(sim, walker.railHex());
+		if (startNode == null || currentRail == null) {
+			plan.reason = "via: walker has no current rail / ahead node";
+			return plan;
+		}
+		if (currentRail == target) {
+			plan.reason = "via: target rail is the rail the vehicle is already on";
+			return plan;
+		}
+		final Position[] targetEnds = railEndpoints(sim, target);
+		if (targetEnds[0] == null || targetEnds[1] == null) {
+			plan.reason = "via: target rail endpoints not in graph";
+			return plan;
+		}
+
+		// ---- 逐段 BFS，拼一条从起点到目标轨远端的完整节点链（chain）+ 每跳用的轨（chainRails）----
+		final ObjectArrayList<Position> chain = new ObjectArrayList<>();
+		final ObjectArrayList<Rail> chainRails = new ObjectArrayList<>();
+		chain.add(startNode);
+		Position root = startNode;
+		Rail rootArrival = currentRail;
+		for (int stage = 0; stage <= vias.size(); stage++) {
+			final boolean lastStage = stage == vias.size();
+			// 这一段的根与"进来时那根轨"：段内的 lambda 要捕获它们，所以取成本段的 final 副本
+			// （root/rootArrival 会随段推进而改，直接捕获是编译错误）。
+			final Position stageRoot = root;
+			final Rail stageArrival = rootArrival;
+			final Object2ObjectOpenHashMap<Position, NodeRec> prev = new Object2ObjectOpenHashMap<>();
+			final ObjectArrayList<Position> queue = new ObjectArrayList<>();
+			queue.add(stageRoot);
+			prev.put(stageRoot, new NodeRec(null, null));
+			Position goal = null;
+			while (!queue.isEmpty() && goal == null) {
+				final Position node = queue.remove(0);
+				if (lastStage ? node.equals(targetEnds[0]) || node.equals(targetEnds[1]) : node.equals(vias.get(stage))) {
+					goal = node;
+					break;
+				}
+				final Object2ObjectOpenHashMap<Position, Rail> neighbors = sim.positionsToRail.get(node);
+				if (neighbors == null) {
+					continue;
+				}
+				neighbors.forEach((other, rail) -> {
+					// 不许折返：段根上不能向来时那根轨回头（与整段一次性 BFS 的"起点不许向来向折返"同一口径）。
+					// 每一段单独清空的 prev 只保证"不重复访问节点"，回头这件事必须显式挡掉。
+					if (node.equals(stageRoot) && rail == stageArrival) {
+						return;
+					}
+					if (!prev.containsKey(other)) {
+						prev.put(other, new NodeRec(node, rail));
+						queue.add(other);
+					}
+				});
+			}
+			if (goal == null) {
+				plan.reason = lastStage
+					? "via: target rail " + targetRailHex + " is not reachable from " + nodeText(stageRoot)
+					: "via: 经由点 " + nodeText(vias.get(stage)) + " 从 " + nodeText(stageRoot) + " 前向不可达（不许折返）";
+				return plan;
+			}
+			// 重建这一段：goal → … → root（沿 prev 倒走），把除 root（已在链上）之外的节点按行车顺序接进链。
+			final ObjectArrayList<Position> reversed = new ObjectArrayList<>();
+			Position cursor = goal;
+			while (cursor != null) {
+				reversed.add(cursor);
+				final NodeRec rec = prev.get(cursor);
+				cursor = rec == null || rec.from == null ? null : rec.from;
+			}
+			for (int i = reversed.size() - 2; i >= 0; i--) {
+				final Position node = reversed.get(i);
+				final NodeRec rec = prev.get(node);
+				if (rec == null || rec.rail == null) {
+					plan.reason = "via: 进路重建失败（第 " + (stage + 1) + " 段）";
+					return plan;
+				}
+				chain.add(node);
+				chainRails.add(rec.rail);
+			}
+			if (lastStage) {
+				chain.add(goal.equals(targetEnds[0]) ? targetEnds[1] : targetEnds[0]);
+				chainRails.add(target);
+			} else {
+				plan.viaNodes.add(goal);
+				root = goal;
+				rootArrival = chainRails.get(chainRails.size() - 1);
+			}
+		}
+
+		/*
+		 * **同一根轨走了两次 ⇒ 这条"进路"是绕圈**（经由点已经在目标之后时，BFS 会这么干：从经由点找目标，
+		 * 找到的是被经由点甩在身后的那一端，于是绕一圈再回来）。前向进路不许折返，一趟车正常也不会在同一根
+		 * 轨上过两遍，所以直接判不可行 —— 宁可这一步失败并说清原因，也不要放一趟"绕圈"的车出去
+		 * （现场那 25 分钟的互堵，正是"看着能走、其实走不通"的进路放出去的结果）。
+		 */
+		for (int i = 0; i < chainRails.size(); i++) {
+			for (int j = i + 1; j < chainRails.size(); j++) {
+				if (chainRails.get(i) == chainRails.get(j)) {
+					plan.reason = "via: 进路绕圈（轨 " + chainRails.get(i).getHexId() + " 走了两次）—— 经由点很可能已在目标之后";
+					return plan;
+				}
+			}
+		}
+		for (final Position viaNode : plan.viaNodes) {
+			int occurrences = 0;
+			for (final Position chainNode : chain) {
+				if (chainNode.equals(viaNode)) {
+					occurrences++;
+				}
+			}
+			if (occurrences > 1) {
+				plan.reason = "via: 经由点 " + nodeText(viaNode) + " 在进路上出现了 " + occurrences + " 次（它已在目标之后 ⇒ 只能绕圈）";
+				return plan;
+			}
+		}
+
+		// ---- 停车点：剩余里程 + 链上每根轨的长度 -（1 - 停车比例）× 目标轨长（与 planToRailForward 同一算式）----
+		double fromCurrentToStartNode = remainingToAheadNodeM(walker);
+		if (fromCurrentToStartNode < 0) {
+			fromCurrentToStartNode = 0;
+		}
+		double plannedM = fromCurrentToStartNode;
+		for (int i = 0; i < chainRails.size(); i++) {
+			plannedM += chainRails.get(i).railMath.getLength();
+		}
+		final double viaClamp = Math.max(0.0, Math.min(1.0, stopFraction));
+		plan.stopCumulativeM = walker.distanceM() + plannedM - (1.0 - viaClamp) * target.railMath.getLength();
+		plan.stopRailHex = targetRailHex;
+		plan.stopFraction = viaClamp;
+		if (plan.stopCumulativeM <= walker.distanceM() + 1e-6) {
+			plan.reason = "via: stop would lie at or behind the vehicle position";
+			return plan;
+		}
+
+		// ---- 岔位：链上每个度 ≥ 2 的节点一个操作号（与 planToRailForward 同一口径）----
+		double cumulM = fromCurrentToStartNode;
+		for (int i = 0; i + 1 < chain.size(); i++) {
+			final Position node = chain.get(i);
+			final Position approach = i == 0 ? travelEntryNode(walker) : chain.get(i - 1);
+			if (approach == null && i == 0) {
+				plan.reason = "via: walker has no entry node for the first turnout";
+				return plan;
+			}
+			final Rail incoming = i == 0 ? currentRail : chainRails.get(i - 1);
+			final Rail desired = chainRails.get(i);
+			final ObjectArrayList<Rail> forwards = forwardRails(sim, node, incoming);
+			if (forwards.size() >= 2) {
+				final int op = branchOperator(sim, approach, node, incoming, forwards, desired);
+				if (op < 0) {
+					plan.reason = "via: turnout at node requires a branch outside the walker's branch0/1 choice";
+					return plan;
+				}
+				plan.forkOps.add(new String[]{String.valueOf(node.getX()), String.valueOf(node.getY()), String.valueOf(node.getZ()), incoming.getHexId(), String.valueOf(op)});
+				plan.forkMeters.add(walker.distanceM() + cumulM);
+			}
+			cumulM += desired.railMath.getLength();
+			plan.routeRailHexes.add(desired.getHexId());
+		}
+		plan.routeRailHexes.add(0, currentRail.getHexId());
+		plan.nodes.addAll(chain);
+		plan.feasible = true;
+		plan.reason = "ok";
+		return plan;
+	}
+
+	/** 节点的人话写法（日志用）。 */
+	private static String nodeText(@Nullable Position node) {
+		return node == null ? "（无）" : node.getX() + "," + node.getY() + "," + node.getZ();
 	}
 
 	/** How far short of the reversal node the train stops, so the walker does not cross onto the next rail. */

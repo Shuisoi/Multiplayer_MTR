@@ -162,6 +162,39 @@ public final class ClientVehicleSyncTests {
 	}
 
 	/**
+	 * ★ **静态字段变了（或到了 30 秒兜底）⇒ 客户端已持有也必须发整份**（notes/375 修的那条）。
+	 *
+	 * <h2>为什么这条是真会发生的</h2>
+	 * <p>{@code VehicleSyncPatch#patchOf} 的契约是：{@code null} = "这一份与上次差的不只是动态字段"
+	 * （换交路、改编组、**path 换了**）或"到了 30 秒强制兜底" —— 两种都要求客户端**重建镜像**。
+	 * 而 {@code Client.update} 原来只在"客户端还没有这辆车"时才走整份：{@code patch == null} +
+	 * 已持有 ⇒ 掉进"标脏了但一份都不差"那一支，**一个字节都不发**。</p>
+	 *
+	 * <p>现场（2026-10-03 实机）：换端之后服务端把腿表反序、并把 path 标成脏，可客户端那份镜像
+	 * （含腿阴影 = 摆车的几何）永远停在旧值 —— 位置走 ①、几何走 ②，几何这一侧的唯一修复路径
+	 * 被这一支吃掉了。表现就是**车不动几十秒、等它出了更新半径被删掉再进来才瞬移到位**。
+	 * 运动流（notes/375 的 {@code LEGS} 整表）是那条路的正面替代，但这一支同样是缺陷。</p>
+	 */
+	@Test
+	public void aStaticChangeResendsTheWholeSnapshotEvenWhenTheClientAlreadyHasTheVehicle() {
+		final Simulator simulator = newSimulator();
+		final Client client = newClient(simulator);
+		final Vehicle vehicle = newVehicle(simulator);
+
+		// 第一拍：建立镜像（整份）
+		client.update(vehicle, true, 0, null);
+		assertEquals(1, updates(flush(client, simulator).getFirst()), "第一拍 = 整份");
+		assertTrue(client.tracksVehicle(vehicle.getId()), "客户端现在持有这辆车");
+
+		// 第二拍：patchOf 判定"静态字段变了/兜底时刻到了" ⇒ null ⇒ 必须再发整份（重建镜像）
+		client.update(vehicle, true, 0, null);
+		final ObjectArrayList<DynamicDataResponse> second = flush(client, simulator);
+		assertEquals(1, second.size(), "★ 静态变了就必须发消息（旧代码这一拍什么都不发）");
+		assertEquals(1, updates(second.getFirst()), "★ 而且必须是整份快照：客户端要重建镜像（腿阴影就在里面）");
+		assertTrue(patches(second.getFirst()) == 0, "整份那一拍不该同时有补丁");
+	}
+
+	/**
 	 * ★ **"标脏了、但一份都不差"不许退回整份**（notes/368 §2(2) 的第二条通路）。
 	 *
 	 * <h2>为什么这条是真会发生的</h2>

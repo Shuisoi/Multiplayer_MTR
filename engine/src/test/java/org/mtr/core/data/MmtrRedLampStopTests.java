@@ -46,7 +46,7 @@ public final class MmtrRedLampStopTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 	/** 面朝东（= +x）：notes/104 锁死的灯角度语义 南0/西90/北180/东270。 */
 	private static final float FACING_EAST = 270;

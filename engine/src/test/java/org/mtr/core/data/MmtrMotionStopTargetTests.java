@@ -31,7 +31,7 @@ public final class MmtrMotionStopTargetTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
@@ -102,8 +102,13 @@ public final class MmtrMotionStopTargetTests {
 	public void motionVehicleStopsExactlyAtTargetOpensDoorsAndResumesOnFreshCommand() {
 		final Net n = new Net();
 		final Vehicle v = n.spawn();
+		/*
+		 * notes/233 司机优先：**停车点的精确停车是自动运行（ATO）的合同** ——
+		 * 手动司机不再被引擎的制动包线按在停车点上（"不能干预玩家停车"，用户口径 2026-09-21：
+		 * 玩家任务的停车完全归司机）。所以这里用自动车钉精度，手动司机只负责"再动一次手柄就发车"。
+		 */
+		v.setMmtrMotionAuto(true);
 		v.setMmtrMotionStopTarget(n.targetM, true);
-		boardDriver(n, v, 3);
 
 		// Run until the exact stop at the armed target.
 		boolean arrived = false;
@@ -125,17 +130,17 @@ public final class MmtrMotionStopTargetTests {
 		assertTrue(!snap.moving && snap.doorsOpen, "snapshot reports a stopped vehicle with open doors");
 		assertTrue(snap.segmentOffsetM > 0, "snapshot carries the mid-rail offset");
 
-		// Holding the SAME command does not depart the stop.
+		// No new stop target armed: the run holds at the stop (nothing departs on its own).
 		final double heldProgress = v.getRailProgress();
 		for (int i = 0; i < 20; i++) {
 			n.drive(null);
 		}
-		assertEquals(heldProgress, v.getRailProgress(), 1e-6, "vehicle holds at the stop target while the command is unchanged");
+		assertEquals(heldProgress, v.getRailProgress(), 1e-6, "vehicle holds at the stop target while no new target is armed");
 		assertTrue(v.isMmtrMotionStoppedAtTarget(), "still stopped at the target");
 		assertTrue(v.vehicleExtraData.getDoorMultiplier() > 0, "doors stay open while holding");
 
-		// A FRESH control application departs: doors close, the vehicle moves past the stop.
-		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1), null).apply(n.sim);
+		// A driver takes the cab and pushes the throttle: the fresh control departs (doors close).
+		boardDriver(n, v, 3);
 		double afterResume = v.getRailProgress();
 		boolean doorsClosedWhileMoving = false;
 		for (int i = 0; i < 3000 && afterResume < n.targetM + 20; i++) {
@@ -153,8 +158,9 @@ public final class MmtrMotionStopTargetTests {
 	@Test
 	public void secondStopTargetCanBeArmedWhileRunning() {		final Net n = new Net();
 		final Vehicle v = n.spawn();
+		// notes/233：自动运行的停车点精度是 ATO 的合同（见上一条用例的说明）。
+		v.setMmtrMotionAuto(true);
 		v.setMmtrMotionStopTarget(n.targetM, false);
-		boardDriver(n, v, 3);
 
 		boolean arrived = false;
 		for (int i = 0; i < 3000 && !arrived; i++) {
@@ -164,16 +170,15 @@ public final class MmtrMotionStopTargetTests {
 		assertTrue(arrived, "first target stop reached");
 		assertEquals(n.targetM, v.getRailProgress(), 0.05, "first stop exact");
 
-		// Resume and arm a SECOND stop target (25 m further, still mid platform rail) while running.
-		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1), null).apply(n.sim);
+		// Arm a SECOND stop target (25 m further, still mid platform rail): the auto step-run departs.
 		final double secondTarget = n.targetM + 25.0;
+		v.setMmtrMotionStopTarget(secondTarget, true);
 		boolean armedWhileRunning = false;
 		for (int i = 0; i < 60 && !armedWhileRunning; i++) {
 			n.drive(null);
 			armedWhileRunning = v.getRailProgress() > n.targetM + 2;
 		}
 		assertTrue(armedWhileRunning, "vehicle is running again past the first stop");
-		v.setMmtrMotionStopTarget(secondTarget, true);
 
 		boolean arrived2 = false;
 		for (int i = 0; i < 3000 && !arrived2; i++) {
@@ -204,8 +209,8 @@ public final class MmtrMotionStopTargetTests {
 		final double anchorOffsetM = 18.0;
 		final double anchorFraction = anchorOffsetM / n.platformRail.railMath.getLength();
 		// 估算值比锚点长 40 m：现场"重规划后停车点漂到站台外"就是这一种
+		v.setMmtrMotionAuto(true);
 		v.setMmtrMotionStopTarget(n.targetM + 40.0, n.platformRail.getHexId(), anchorFraction, true);
-		boardDriver(n, v, 3);
 
 		boolean arrived = false;
 		for (int i = 0; i < 3000 && !arrived; i++) {

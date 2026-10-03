@@ -56,6 +56,8 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	private boolean atTarget;
 	/** REV: the reverser is pulled — the train runs tail-first while the same cab stays manned. */
 	private boolean travelReversed;
+	/** 司机正在手动开车：岔口选不出腿时跟随道岔物理位置（见 {@code MmtrForkElection#elect}）。 */
+	private boolean manualDrive;
 	/**
 	 * The manned cab {@link #endOfLine}/{@link #atTarget} were computed for. Both flags describe the
 	 * DIRECTION of travel ("the front reached a dead end" / "the front boarded the target"), so they
@@ -117,7 +119,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 			bodyLengthM += carLengthM;
 		}
 		while (spineLengthM(spine) < aEndOffsetM + bodyLengthM - EPSILON_M) {
-			final SpineLeg next = electNextSpineLeg(data, store, targetRailHex, spine.get(spine.size() - 1), true, null, "");
+			final SpineLeg next = electNextSpineLeg(data, store, targetRailHex, spine.get(spine.size() - 1), true, null, "", false);
 			if (next == null) {
 				return null;
 			}
@@ -220,7 +222,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		if (index >= 0 && nextIndex >= 0 && nextIndex < body.legCount()) {
 			return data.railIdMap.get(body.leg(nextIndex).railHex());
 		}
-		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB, pointAuthority, pointOwner);
+		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB, pointAuthority, pointOwner, manualDrive);
 		return next == null ? null : data.railIdMap.get(next.railHex());
 	}
 
@@ -244,7 +246,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		if (far == null || !MmtrForkElection.hasContinuation(data, far, target)) {
 			return false;
 		}
-		return MmtrForkElection.elect(data, branches, pointAuthority, pointOwner.isEmpty() ? null : pointOwner, targetRailHex, far, entry, target) == null;
+		return MmtrForkElection.elect(data, branches, pointAuthority, pointOwner.isEmpty() ? null : pointOwner, targetRailHex, far, entry, target, manualDrive) == null;
 	}
 
 	/** The endpoint of {@code rail} other than {@code at}, or null when {@code at} is not an endpoint. */
@@ -309,6 +311,11 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	/** Engine placeholder key (yard spawn / auto run); refused while a key is already in the cab. */
 	public boolean insertSystemKey(MmtrCabState.Cab cab, boolean trainStopped) {
 		return cabs.insertSystemKey(cab, trainStopped);
+	}
+
+	@Override
+	public void setManualDrive(boolean manualDrive) {
+		this.manualDrive = manualDrive;
 	}
 
 	public boolean removeKey() {
@@ -578,6 +585,16 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 		return towardB() ? body.bEndArcM() : body.spineLengthM() - body.aEndArcM();
 	}
 
+	/**
+	 * {@link org.mtr.core.mmtr.segment.MmtrMotionPosition#mirrorPathAnchorM()} ——
+	 * {@link #buildMirrorLegs()} 生成累计里程时用的那个起点。① 的 {@code LEGS} 记录靠它让客户端
+	 * 在换端时重建出一张同坐标系的表。
+	 */
+	@Override
+	public double mirrorPathAnchorM() {
+		return distanceM() - mirrorHeadArcM();
+	}
+
 	/** Offset of the leading face within the last mirror leg (measured from that leg's start). */
 	public double mirrorHeadOffsetM() {
 		final SpineLeg leg = leadingLeg();
@@ -662,7 +679,7 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	 */
 	private boolean extendSpine(boolean towardB) {
 		final SpineLeg lead = towardB ? body.leg(body.legCount() - 1) : body.leg(0);
-		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB, pointAuthority, pointOwner);
+		final SpineLeg next = electNextSpineLeg(data, branches, targetRailHex, lead, towardB, pointAuthority, pointOwner, manualDrive);
 		final Position node = towardB ? lead.exitNode() : lead.entryNode();
 		if (next == null) {
 			final Rail viaRail = data.railIdMap.get(lead.railHex());
@@ -695,14 +712,14 @@ public final class MmtrConsistWalker implements org.mtr.core.mmtr.segment.MmtrMo
 	}
 
 	/** Elect the next spine leg beyond {@code lead} in the given direction; {@code null} = halt/end. */
-	private static @Nullable SpineLeg electNextSpineLeg(Data data, BranchStore branches, @Nullable String targetRailHex, SpineLeg lead, boolean towardB, @Nullable MmtrPointAuthority authority, String owner) {
+	private static @Nullable SpineLeg electNextSpineLeg(Data data, BranchStore branches, @Nullable String targetRailHex, SpineLeg lead, boolean towardB, @Nullable MmtrPointAuthority authority, String owner, boolean manualDrive) {
 		final Position node = towardB ? lead.exitNode() : lead.entryNode();
 		final Position cameFrom = towardB ? lead.entryNode() : lead.exitNode();
 		final Rail viaRail = data.railIdMap.get(lead.railHex());
 		if (viaRail == null) {
 			return null;
 		}
-		final Rail next = MmtrForkElection.elect(data, branches, authority, owner.isEmpty() ? null : owner, targetRailHex, node, cameFrom, viaRail);
+		final Rail next = MmtrForkElection.elect(data, branches, authority, owner.isEmpty() ? null : owner, targetRailHex, node, cameFrom, viaRail, manualDrive);
 		if (next == null) {
 			return null;
 		}

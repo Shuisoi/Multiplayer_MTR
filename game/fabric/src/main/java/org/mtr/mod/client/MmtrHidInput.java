@@ -75,11 +75,73 @@ public final class MmtrHidInput {
 		if (axes == null || axes.capacity() <= Math.max(axisX, Math.max(axisY, axisZ)) || axes.capacity() <= 0) {
 			return null;
 		}
-		return new State(
+		final State state = new State(
 			MmtrHidMapping.cruiseKmhFromAxis(axes.get(axisX), spec.getCruiseMaxKmh(), spec.getCruiseStepKmh(), deadzone, invertX),
 			MmtrHidMapping.driveHandleFromAxis(axes.get(axisY), ThreeHandleSpec.DRIVE_HANDLE_MAX, deadzone, invertY),
 			MmtrHidMapping.brakePositionFromAxis(axes.get(axisZ), spec.getBrakePositionCount(), deadzone, invertZ)
 		);
+		logAxesIfTracing(axes, state);
+		return state;
+	}
+
+	/**
+	 * **单手柄车底**：只取 Y 轴（归一化）—— 一根杆走完全程，不需要三手柄规格。
+	 *
+	 * <p>为什么不能复用 {@link #poll}：它按 {@link ThreeHandleSpec} 解释 {@code X/Z} 且**没有规格就返回 null**，
+	 * 而 NOTCHED 车底（SAF420 的 P5+B8+EB）在引擎里本来就没有规格 —— 于是"有手柄也读不出杆位"。
+	 * 这里把 Y 轴单独取出来（与 {@code poll} **同一套**轴号/反转/设备选定），换算交给
+	 * {@link MmtrHidMapping#singleHandleFromAxis}（纯函数、有真值表）。X/Z 在单手柄上无意义，故不读。</p>
+	 *
+	 * @return {@code null} = 没有可用手柄（没插 / 轴数不够）——调用方回退到键盘
+	 */
+	public static @Nullable SingleHandleAxis pollSingleHandleAxis() {
+		if (!ensureJoystick(null)) {
+			return null;
+		}
+		final FloatBuffer axes = GLFW.glfwGetJoystickAxes(joystickId);
+		if (axes == null || axes.capacity() <= axisY || axes.capacity() <= 0) {
+			return null;
+		}
+		final float raw = axes.get(axisY);
+		// 反转在这里归一（与三手柄那条路一致）：调用方拿到的永远是"正值 = 牵引侧"。
+		return new SingleHandleAxis(invertY ? -raw : raw, deadzone);
+	}
+
+	/** 单手柄输入：Y 轴原值（已按 {@code invert.y} 归一）+ 当时生效的死区。 */
+	public record SingleHandleAxis(double axis, double deadzone) {
+	}
+
+	/** 上一次打"原始轴值"的时间（1 s 节流）。 */
+	private static long lastAxisLogMillis;
+
+	/**
+	 * **原始轴值日志**（notes/254）：用户口径 2026-09-23「在油门设置在 50% 时也是 300kn / 现在有 20%」——
+	 * 到底是"我推到了 50% 而游戏只认 19%"（摇杆行程/校准问题）还是"游戏认对了但力不对"，
+	 * 光看手柄百分比分不出来。这一行把**轴的原值**与**换算出来的手柄位**并排打出来：
+	 *
+	 * <pre>[MMTR-HID] 轴原值：X=0.000 Y=0.190 Z=-1.000 → 定速=0 油门=18 制动=0（死区 0.05）</pre>
+	 *
+	 * 只在**真的动了杆**（任一轴出死区）且 `-Dmmtr.trace=true` 时打，1 s 一次。
+	 */
+	private static void logAxesIfTracing(FloatBuffer axes, State state) {
+		if (!org.mtr.core.mmtr.MmtrTrace.isEnabled()) {
+			return;
+		}
+		final float x = axes.get(axisX);
+		final float y = axes.get(axisY);
+		final float z = axes.get(axisZ);
+		if (Math.abs(x) <= deadzone && Math.abs(y) <= deadzone && Math.abs(z) <= deadzone) {
+			return;
+		}
+		final long now = System.currentTimeMillis();
+		if (now - lastAxisLogMillis < 1000) {
+			return;
+		}
+		lastAxisLogMillis = now;
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-HID] 轴原值：X=" + Math.round(x * 1000) / 1000.0
+			+ " Y=" + Math.round(y * 1000) / 1000.0 + " Z=" + Math.round(z * 1000) / 1000.0
+			+ " → 定速=" + state.cruiseKmh() + " 油门=" + state.driveHandle() + " 制动=" + state.brakePosition()
+			+ "（死区 " + deadzone + "）");
 	}
 
 	/** 有没有手柄接着（HUD/诊断用）。 */
@@ -92,7 +154,7 @@ public final class MmtrHidInput {
 	}
 
 	/** 找设备：属性指定优先，否则扫第一个连着的；掉线时清空并允许下次重新找。 */
-	private static boolean ensureJoystick(ThreeHandleSpec spec) {
+	private static boolean ensureJoystick(@Nullable ThreeHandleSpec spec) {
 		if (joystickId >= 0 && GLFW.glfwJoystickPresent(joystickId)) {
 			return true;
 		}
@@ -122,7 +184,7 @@ public final class MmtrHidInput {
 	}
 
 	/** 设备选定/变化时打一行"生效的映射"：否则"手柄没反应"又是一种只能靠猜的现场。 */
-	private static void logDevice(ThreeHandleSpec spec) {
+	private static void logDevice(@Nullable ThreeHandleSpec spec) {
 		final String name = GLFW.glfwGetJoystickName(joystickId);
 		final FloatBuffer axes = GLFW.glfwGetJoystickAxes(joystickId);
 		final String description = (name == null ? "未知手柄" : name) + " (GLFW id " + joystickId + ", 轴 "
@@ -131,6 +193,17 @@ public final class MmtrHidInput {
 			return;
 		}
 		loggedDevice = description;
+		if (spec == null) {
+			/*
+			 * 单手柄车底：只有 Y 轴有意义（X 定速 / Z 制动在这类车上不存在，不读）。
+			 * 日志必须说清"生效的是哪一种映射"——同一只手柄在三手柄车上读 X/Y/Z、在单手柄车上只读 Y，
+			 * 不写清楚的话，"推了 Z 轴没反应"看起来就像手柄坏了。
+			 */
+			Init.LOGGER.info("[MMTR-HID] 手柄 {}：**单手柄车底** —— Y({})→那唯一一根杆"
+					+ "（正=牵引 · 中位=关闭 · 负=制动 · 推到底=紧急）；死区 {}；反转 Y={}（X/Z 不读）",
+				description, axisY, deadzone, invertY);
+			return;
+		}
 		Init.LOGGER.info("[MMTR-HID] 手柄 {}：X({})→定速巡航 0..{} 步{} · Y({})→油门手柄 ±{}（{}） · Z({})→制动 运行..EB；"
 				+ "死区 {}；反转 X={} Y={} Z={}（用 -Dmmtr.hid.* 校准）",
 			description, axisX, spec.getCruiseMaxKmh(), spec.getCruiseStepKmh(), axisY, ThreeHandleSpec.DRIVE_HANDLE_MAX,

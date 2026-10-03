@@ -1,4 +1,4 @@
-param(
+﻿param(
   [ValidateSet('start','stop','status','restart')] [string]$Action = 'status',
   [string]$RconPassword = 'mmtr-dev-rcon'
 )

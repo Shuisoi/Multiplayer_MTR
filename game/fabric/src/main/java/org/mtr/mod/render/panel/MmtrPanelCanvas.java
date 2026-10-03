@@ -6,15 +6,21 @@ import org.mtr.mod.data.IGui;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.AlphaComposite;
 import java.awt.font.FontRenderContext;
 import java.awt.font.GlyphVector;
+import java.awt.geom.AffineTransform;
 import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * A 2D drawing surface for the in-world cab panels, measured in metres.
@@ -36,6 +42,10 @@ public final class MmtrPanelCanvas {
 	private final double heightM;
 	private double scaleX;
 	private double scaleY;
+	/** {@link #pushClip} 的栈（每个元素画完要还回去 —— 走马灯的视口就是靠它裁的）。 */
+	private final List<Shape> clipStack = new ArrayList<>();
+	/** {@link #pushRotate} 的栈。 */
+	private final List<AffineTransform> transformStack = new ArrayList<>();
 
 	/** Panels are small; anything bigger than this is a modelling mistake, so clamp instead of exploding. */
 	private static final int MAX_PIXELS = 512;
@@ -387,6 +397,73 @@ public final class MmtrPanelCanvas {
 		}
 		final Font font = baseFont.deriveFont(Font.PLAIN, (float) (100 * targetHeightPx / probeInk.getHeight()));
 		return font.createGlyphVector(fontRenderContext, text).getVisualBounds().getWidth() / scaleX;
+	}
+
+	// ---- 作用域：裁剪与旋转（notes/359 · F3） ---------------------------------------------------------
+
+	/**
+	 * 把之后的绘制**裁**在 {@code (x, y, w, h)} 里（{@code (x,y)} 是左下角，与 {@link #fill} 同一条口径）。
+	 *
+	 * <p>要成对调用 {@link #popClip()}。走马灯必须裁：文本比视口长，不裁就会跑到牌子外面去，
+	 * 而"跑出去"在贴图上表现为压在相邻元素上（不是看不见）。</p>
+	 */
+	public MmtrPanelCanvas pushClip(double x, double y, double width, double height) {
+		clipStack.add(graphics.getClip());
+		final double left = px(x);
+		final double right = px(x + width);
+		final double top = py(y + height);
+		final double bottom = py(y);
+		graphics.clip(new Rectangle2D.Double(Math.min(left, right), Math.min(top, bottom), Math.abs(right - left), Math.abs(bottom - top)));
+		return this;
+	}
+
+	/** 还原到上一次 {@link #pushClip} 之前的裁剪区。 */
+	public MmtrPanelCanvas popClip() {
+		graphics.setClip(clipStack.isEmpty() ? null : clipStack.remove(clipStack.size() - 1));
+		return this;
+	}
+
+	/**
+	 * 把之后的绘制绕**米制的点** {@code (cx, cy)} 转 {@code degrees} 度（**顺时针为正**，
+	 * 也就是读者看着牌面时的顺时针），要成对调用 {@link #popTransform()}。
+	 *
+	 * <p>为什么顺时针为正：AWT 的正角是从 +X 转向 +Y，而屏幕上的 +Y 朝下 ⇒ 视觉上就是顺时针。
+	 * 我们的米制空间 y 朝上、但 {@link #py} 已经把它翻过去了，所以直接把角度交给 AWT 即可 ——
+	 * 这条在注释里写清楚，是因为"作者的 rotate: 15 到底往哪边转"只能有一个答案。</p>
+	 */
+	public MmtrPanelCanvas pushRotate(double cx, double cy, double degrees) {
+		transformStack.add(graphics.getTransform());
+		graphics.rotate(Math.toRadians(degrees), px(cx), py(cy));
+		return this;
+	}
+
+	/** 还原到上一次 {@link #pushRotate} 之前的变换。 */
+	public MmtrPanelCanvas popTransform() {
+		if (!transformStack.isEmpty()) {
+			graphics.setTransform(transformStack.remove(transformStack.size() - 1));
+		}
+		return this;
+	}
+
+	/**
+	 * 画一张图（{@code (x, y)} 是左下角，{@code w × h} 是它占的矩形，与 {@link #fill} 同一条口径）。
+	 *
+	 * <p>色调（tint）不在这里做：它是对**像素**的乘法，做一次就该缓存起来（见 {@code MmtrFaceImages}），
+	 * 不该每帧对每个像素重算。这里只管"贴上去"和整图透明度。</p>
+	 */
+	public MmtrPanelCanvas drawImage(BufferedImage source, double x, double y, double width, double height, double alpha) {
+		if (source == null || width <= 0 || height <= 0 || alpha <= 0) {
+			return this;
+		}
+		final Composite previous = graphics.getComposite();
+		if (alpha < 1) {
+			graphics.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, (float) Math.max(0, Math.min(1, alpha))));
+		}
+		graphics.drawImage(source,
+			(int) Math.round(px(x)), (int) Math.round(py(y + height)),
+			(int) Math.round(px(x + width) - px(x)), (int) Math.round(py(y) - py(y + height)), null);
+		graphics.setComposite(previous);
+		return this;
 	}
 
 	// ---- output ----------------------------------------------------------------------------------

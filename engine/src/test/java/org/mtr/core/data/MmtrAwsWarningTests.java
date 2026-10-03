@@ -35,7 +35,7 @@ public final class MmtrAwsWarningTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 	private static final long OBSTACLE_VEHICLE_ID = 999_999_002L;
 
@@ -229,7 +229,8 @@ public final class MmtrAwsWarningTests {
 		boolean acked = false;
 		boolean stoppedAtBoundary = false;
 		boolean spad = false;
-		for (int i = 0; i < 500 && !stoppedAtBoundary; i++) {
+		boolean tripped = false;
+		for (int i = 0; i < 800 && !stoppedAtBoundary; i++) {
 			n.tickWithOccupiedB();
 			if (v.isMmtrAwsWarningPending()) {
 				/*
@@ -242,14 +243,21 @@ public final class MmtrAwsWarningTests {
 				new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1).setAcknowledge(true), driver).apply(n.sim);
 				acked = true;
 			}
-			if (v.isMmtrProtectionFromSync()) {
+			if (v.isMmtrProtectionFromSync() && !v.isMmtrAuthorityTripped()) {
 				spad = true;
 			}
-			// The occupancy-hold state (mirrored) marks the true boundary stand: the train rests at
-			// the A/B node only once the S1 waiting state engaged (rest may precede it by one tick).
-			stoppedAtBoundary = acked && v.isMmtrBlockHeldFromSync() && v.getSpeed() == 0 && n.aRail.getHexId().equals(v.getMmtrMotionWalker().railHex()) && v.getRailProgress() > 140.0;
+			tripped |= v.isMmtrAuthorityTripped();
+			// notes/233 司机优先：手动车不再被"钉"在界限上，而是**紧急制动**把它刹停在界限附近
+			// （紧急减速比服务减速强，所以停点比"贴着界限 ε"略靠前 —— 安全侧）。判据因此是
+			// "越界紧急制动已施加 + 车真的停住 + 还没越过节点"。
+			stoppedAtBoundary = tripped && v.getSpeed() == 0 && n.aRail.getHexId().equals(v.getMmtrMotionWalker().railHex()) && v.getRailProgress() > 140.0;
 		}
 		assertTrue(acked, "warning engaged and was acknowledged");
+		/*
+		 * notes/233 司机优先：手动车停在未授权界限上时施加的是**司机越界那一路的紧急制动**
+		 * （司机按响应键解除），它与"AWS 报警超时的 SPAD"共用通道但来源不同 ——
+		 * 所以这里只断言**没有 SPAD**（`isMmtrAuthorityTripped` 为假时的 protection）。
+		 */
 		assertFalse(spad, "acknowledged warning never SPADs");
 		assertTrue(v.isMmtrAwsWarningAcknowledged(), "indicator stays acknowledged");
 		assertTrue(v.isMmtrAwsWarningAcknowledgedFromSync(), "mirror acknowledged follows the internal state");
@@ -261,7 +269,7 @@ public final class MmtrAwsWarningTests {
 		for (int i = 0; i < 30; i++) {
 			n.tickWithOccupiedB();
 		}
-		assertFalse(v.isMmtrProtectionFromSync(), "no second SPAD while parked acknowledged at the boundary");
+		assertFalse(v.isMmtrProtectionFromSync() && !v.isMmtrAuthorityTripped(), "no second SPAD while parked acknowledged at the boundary");
 		assertTrue(v.isMmtrAwsWarningAcknowledged(), "indicator stays up while the restriction persists");
 	}
 
@@ -338,7 +346,8 @@ public final class MmtrAwsWarningTests {
 				new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1).setAcknowledge(true), driver).apply(n.sim);
 				acked = true;
 			}
-			assertFalse(v.isMmtrProtectionFromSync(), "acknowledged warning never SPADs");
+			// notes/233：司机越界那一路的紧急制动不算 SPAD（见 acknowledgedWarningStopsAtTheBoundaryWithoutSpad）。
+			assertFalse(v.isMmtrProtectionFromSync() && !v.isMmtrAuthorityTripped(), "acknowledged warning never SPADs");
 			// The train draws up to the occupied C: S1 holds it at the B/C node.
 			heldAtBoundary = acked && v.isMmtrBlockHeldFromSync() && v.getSpeed() == 0 && n.bRail.getHexId().equals(v.getMmtrMotionWalker().railHex());
 		}

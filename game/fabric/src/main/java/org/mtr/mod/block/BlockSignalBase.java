@@ -13,11 +13,13 @@ import org.mtr.mapping.mapper.DirectionHelper;
 import org.mtr.mapping.tool.HolderBase;
 import org.mtr.mod.Init;
 import org.mtr.mod.InitClient;
+import org.mtr.mod.mmtr.MmtrSignalSync;
 import org.mtr.mod.packet.PacketBlockRails;
 import org.mtr.mod.packet.PacketOpenBlockEntityScreen;
 import org.mtr.mod.packet.PacketTurnOnBlockEntity;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -51,6 +53,23 @@ public abstract class BlockSignalBase extends BlockExtension implements Directio
 	public BlockState getPlacementState2(ItemPlacementContext ctx) {
 		final int quadrant = Angle.getQuadrant(ctx.getPlayerYaw(), true);
 		return getDefaultState2().with(new Property<>(FACING.data), Direction.fromHorizontal(quadrant / 4).data).with(new Property<>(IS_45.data), EnumBooleanInverted.fromBoolean(quadrant % 4 >= 2)).with(new Property<>(IS_22_5.data), EnumBooleanInverted.fromBoolean(quadrant % 2 == 1));
+	}
+
+	/**
+	 * 灯被放下：**立刻**把它登记进引擎（notes/284）。
+	 *
+	 * <p>放灯原来没有事件钩子，只能等 {@code MmtrSignalSync} 的轮转扫到（一分钟一圈，实测 25–60 秒），
+	 * 而灯是区间的切点 —— 那几十秒里区间（以及拿信号灯时看的那层区间带）看不见刚放的灯。</p>
+	 *
+	 * <p>判定与服务端一致：只有服务端那一侧才写登记（客户端的放置预测也会走到这里，写进去就是两份世界）。
+	 * 与 {@code onBreak2} 里删登记那条路对称 —— 敲掉是立刻的，放上现在也是。</p>
+	 */
+	@Override
+	public void onPlaced2(World world, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack itemStack) {
+		super.onPlaced2(world, pos, state, placer, itemStack);
+		if (!world.isClient()) {
+			MmtrSignalSync.onSignalPlaced(ServerWorld.cast(world), pos);
+		}
 	}
 
 	@Override

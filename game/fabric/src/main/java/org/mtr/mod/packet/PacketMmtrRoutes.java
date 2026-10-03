@@ -25,6 +25,9 @@ import java.util.Map;
  */
 public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 
+	/** 区间叠加层载荷（{@code sectionBands}）每条带的字段数：轨hex / 区间id / 色号 / 方向x‰ / 方向z‰ / 弧起cm / 弧止cm。 */
+	public static final int SECTION_BAND_STRIDE = 7;
+
 	public PacketMmtrRoutes(PacketBufferReceiver packetBufferReceiver) {
 		super(packetBufferReceiver);
 	}
@@ -71,6 +74,20 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 
 	/** As above, carrying each lamp's guarded rails ({@code [lampKey, railHex] * n}). */
 	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects, Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails) {
+		return contentOf(nextRails, pendingEntries, restrictedNodes, lampAspects, lampRails, new ObjectArrayList<>());
+	}
+
+	/**
+	 * As above, plus the **区间叠加层**的载荷 {@code sectionBands}（notes/291）。
+	 *
+	 * <p>扁平步长 7：{@code [轨hex, 区间id, 色号, 方向x‰, 方向z‰, 弧起cm, 弧止cm]}。拿着信号灯建轨时，
+	 * 客户端按这份数据把"哪一段是哪个区间、往哪个方向走"画到轨面上 —— 颜色由**引擎**贪心分配
+	 * （相连的两段异色），客户端只显示。</p>
+	 *
+	 * <p>数值一律走整数（千分位方向 / 厘米弧长）：区域设置若用逗号作小数点，{@code Double.parseDouble}
+	 * 会静默失败，而弧长算错的表现是"带子画到别的轨上"，那种错排查起来极贵。</p>
+	 */
+	public static String contentOf(Object2ObjectOpenHashMap<String, ObjectArrayList<String>> nextRails, ObjectOpenHashSet<String> pendingEntries, ObjectOpenHashSet<String> restrictedNodes, Object2ObjectOpenHashMap<String, String> lampAspects, Object2ObjectOpenHashMap<String, ObjectArrayList<String>> lampRails, ObjectArrayList<String> sectionBands) {
 		final JsonObject json = new JsonObject();
 		final JsonArray next = new JsonArray();
 		nextRails.forEach((from, tos) -> tos.forEach(to -> {
@@ -96,6 +113,9 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 			lampRailsFlat.add(railHex);
 		}));
 		json.add("lampRails", lampRailsFlat);
+		final JsonArray sectionBandsFlat = new JsonArray();
+		sectionBands.forEach(sectionBandsFlat::add);
+		json.add("sectionBands", sectionBandsFlat);
 		return json.toString();
 	}
 
@@ -126,8 +146,11 @@ public final class PacketMmtrRoutes extends PacketRequestResponseBase {
 		for (int i = 0; i + 1 < lampRailEntries.size(); i += 2) {
 			lampRails.computeIfAbsent(lampRailEntries.get(i), key -> new java.util.ArrayList<>()).add(lampRailEntries.get(i + 1));
 		}
-		MmtrClientRoutes.update(next, pending, restrictedNodes, lampAspects, lampRails);
-		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s), " + lampRails.size() + " lamp binding(s)");
+		// 区间叠加层（拿信号灯时画带）: 扁平步长 7，见 contentOf 的说明。旧服务端不发这个字段 -> 空表。
+		final ObjectArrayList<String> sectionBands = new ObjectArrayList<>();
+		jsonReader.iterateStringArray("sectionBands", sectionBands::clear, sectionBands::add);
+		MmtrClientRoutes.update(next, pending, restrictedNodes, lampAspects, lampRails, sectionBands);
+		org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] routes mirror: " + next.size() + " locked rail(s), " + pending.size() + " pending entry rail(s), " + restrictedNodes.size() + " restricted junction(s), " + lampAspects.size() + " lamp aspect(s), " + lampRails.size() + " lamp binding(s), " + (sectionBands.size() / SECTION_BAND_STRIDE) + " section band(s)");
 	}
 
 	@Override

@@ -16,6 +16,10 @@
  *   wiperarm_1_1                the arm (a solid part)
  *   wiper_1_1                   the blade (a solid part)
  *                                  -> a SINGLE-AXIS wiper: one pivot, the blade rides the arm
+ *   mmtr_wipersweep_1_1_2       a SECOND wiper on the SAME glass (the same screen carries a pair, one
+ *   wiperarm_1_1_2, wiper_1_1_2    on each half): the third index is WHICH WIPER of the glass it is.
+ *                                  Mirrored, not copied - its own spindle, park direction and stroke
+ *                                  sign, so the two fans cover opposite halves of the screen.
  *   mmtr_windshield_1_2         cab 1 pane 2: a side window with NO sweep (pairing check)
  *   mmtr_windshield_1_3         cab 1 pane 3: a screen with a PARALLEL-LINKAGE wiper
  *   mmtr_wipersweep_1_3         its sector: apex = the main spindle P1
@@ -271,6 +275,34 @@ sweptRegionFan('mmtr_wipersweep_1_1', 0, 1.6, 0, P1, P1, BLADE_A, BLADE_B, SWEEP
 segmentBox('wiperarm_1_1', 0, 1.6, 0, P1, ARM_TIP, 0.02, 0.02);
 segmentBox('wiper_1_1', 0, 1.6, 0, BLADE_A, BLADE_B, 0.025, 0.02);
 
+// ---- cab 1, pane 1, SECOND wiper: the SAME glass carries a pair ------------------------------------
+// "One glass, two wipers" is modelled as ONE windshield plus TWO fans, told apart by the THIRD index of
+// mmtr_wipersweep_<cab>_<pane>_<n> (absent = 1, so every single-wiper model keeps its exact names). The
+// parts follow: wiper_1_1_2 and wiperarm_1_1_2 are wiper 2's blade and arm - the same screen, a second
+// mechanism - and the packed config writes them into a "wipers" array on windshield_1_1 rather than
+// overwriting wiper 1's flat fields.
+//
+// MIRRORED, NOT COPIED: the second wiper is the reflection of the first about the screen's centre line,
+// so its spindle is on the other half and its fan covers the OTHER 60 degrees. A copy would have put
+// two blades on one sector - the two fans would then overlap vertex for vertex, and "which fan belongs
+// to which blade" would be untestable (and wrong in game: both blades would sweep the same half).
+//
+// The stroke is NEGATIVE for the same reason: the mirror of a counter-clockwise sweep runs clockwise,
+// which is what gives this fixture a sweepSign of -1 to check against wiper 1's +1.
+const P1B = [-P1[0], P1[1]];              // the mirrored spindle: (1.2, -0.5) against wiper 1's (-1.2, -0.5)
+const PARK2_DEG = 180 - PARK_DEG;         // 160: the mirrored park BEARING (mirroring maps an angle to 180 - it)
+const SWEEP2_DEG = -SWEEP_DEG;            // ...and a mirrored rotation to its negative
+const ARM_TIP_2 = polar(P1B, 0.8, PARK2_DEG);   // the same 0.8 m arm as wiper 1, swung to the other side
+const BLADE_PERP_2 = [-Math.sin(PARK2_DEG * DEG), Math.cos(PARK2_DEG * DEG)];
+// The same asymmetric blade (0.15 m one side, 0.35 m the other): a centred blade puts both ends
+// equidistant from the pivot, and then "which end is A" is a coin flip for every implementation.
+const BLADE_A_2 = [ARM_TIP_2[0] - 0.15 * BLADE_PERP_2[0], ARM_TIP_2[1] - 0.15 * BLADE_PERP_2[1]];
+const BLADE_B_2 = [ARM_TIP_2[0] + 0.35 * BLADE_PERP_2[0], ARM_TIP_2[1] + 0.35 * BLADE_PERP_2[1]];
+
+sweptRegionFan('mmtr_wipersweep_1_1_2', 0, 1.6, 0, P1B, P1B, BLADE_A_2, BLADE_B_2, SWEEP2_DEG);
+segmentBox('wiperarm_1_1_2', 0, 1.6, 0, P1B, ARM_TIP_2, 0.02, 0.02);
+segmentBox('wiper_1_1_2', 0, 1.6, 0, BLADE_A_2, BLADE_B_2, 0.025, 0.02);
+
 // ---- cab 1, pane 2: a side window with NO wiper ---------------------------------------------------
 glass('mmtr_windshield_1_2', 0, 1.7, 1.8, 0.3, 0.3);
 
@@ -354,6 +386,9 @@ fs.writeFileSync(path.join(__dirname, 'wipefix.obj'), vertexLines.concat(lines).
 console.log('wrote wipefix.obj: ' + vertices.length + ' vertices, ' + lines.filter(l => l.startsWith('o ')).length + ' objects');
 console.log('single-axis  pane 1: P1=(' + P1 + ') park=' + PARK_DEG + ' sweep=' + SWEEP_DEG + ' arm=' + ARM_M);
 console.log('             blade A0=(' + BLADE_A.map(x => x.toFixed(6)) + ') B0=(' + BLADE_B.map(x => x.toFixed(6)) + ')');
+console.log('single-axis  pane 1, wiper 2 (the same glass): P1=(' + P1B + ') park=' + PARK2_DEG + ' sweep=' + SWEEP2_DEG);
+console.log('             blade A0=(' + BLADE_A_2.map(x => x.toFixed(6)) + ') B0=(' + BLADE_B_2.map(x => x.toFixed(6)) +
+  ')  <- MIRRORED about the screen centre, so the two fans do not overlap');
 console.log('parallelogram pane 3: P1=(' + Q1 + ') P2=(' + Q2 + ')');
 console.log('             arm link=(' + LINK + ') rod link=(' + LINK_ROD + ')  <- deliberately NOT equal:');
 console.log('             blade A0=(' + QA + ') B0=(' + QB + ')  B-A=(' + (QB[0] - QA[0]).toFixed(3) + ',' + (QB[1] - QA[1]).toFixed(3) +

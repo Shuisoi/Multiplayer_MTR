@@ -70,9 +70,11 @@ public final class Siding extends SidingSchema implements Utilities {
 	 */
 	private final Long2ObjectOpenHashMap<LongObjectImmutablePair<Vehicle>> vehicleTimesAlongRoute = new Long2ObjectOpenHashMap<>();
 
-	public static final double ACCELERATION_DEFAULT = 1D / 250000;
-	public static final double MAX_ACCELERATION = 1D / 50000;
-	public static final double MIN_ACCELERATION = 1D / 2500000;
+	/*
+	 * notes/235：原版的两个跑车参数（每个车场一份的"加减速度"）连同它们的三个常量
+	 * （ACCELERATION_DEFAULT / MAX_ACCELERATION / MIN_ACCELERATION）已删除。
+	 * 纵向物理只有一条：{@code TrainPhysics}（力模型）按车底算出来的加减速。
+	 */
 	private static final Random RANDOM = new Random();
 	private static final String KEY_VEHICLES = "vehicles";
 	/** Rate limit for the per-vehicle simulation failure report. */
@@ -116,13 +118,10 @@ public final class Siding extends SidingSchema implements Utilities {
 		generatePathDistancesAndTimeSegments();
 		if (area != null && defaultPathData != null) {
 			vehicleReaders.forEach(readerBase -> {
-				final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, readerBase, data);
+				final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, readerBase, data);
 				vehicleIdMap.put(vehicle.getId(), vehicle);
 			});
 		}
-		// Automatically clamp acceleration and deceleration values
-		setAcceleration(acceleration);
-		setDeceleration(deceleration);
 	}
 
 	public double getRailLength() {
@@ -167,14 +166,6 @@ public final class Siding extends SidingSchema implements Utilities {
 
 	public int getManualToAutomaticTime() {
 		return (int) manualToAutomaticTime;
-	}
-
-	public double getAcceleration() {
-		return acceleration;
-	}
-
-	public double getDeceleration() {
-		return deceleration;
 	}
 
 	public void setVehicleCars(ObjectArrayList<VehicleCar> newVehicleCars) {
@@ -223,14 +214,6 @@ public final class Siding extends SidingSchema implements Utilities {
 
 	public void setManualToAutomaticTime(int manualToAutomaticTime) {
 		this.manualToAutomaticTime = manualToAutomaticTime;
-	}
-
-	public void setAcceleration(double newAcceleration) {
-		acceleration = transportMode.continuousMovement ? MAX_ACCELERATION : roundAcceleration(newAcceleration);
-	}
-
-	public void setDeceleration(double newDeceleration) {
-		deceleration = transportMode.continuousMovement ? MAX_ACCELERATION : roundAcceleration(newDeceleration);
 	}
 
 	public void clearVehicles() {
@@ -342,7 +325,7 @@ public final class Siding extends SidingSchema implements Utilities {
 				}
 			}
 			if (vehicle == null) {
-				vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+				vehicle = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 				vehicleIdMap.put(vehicle.getId(), vehicle);
 				if (mmtrManualSpawn) {
 					mmtrSessionSpawned = true;
@@ -395,7 +378,7 @@ public final class Siding extends SidingSchema implements Utilities {
 		}
 		vehicleIdMap.remove(parked.getId());
 		setVehicleCars(cars); // keep the template consistent with the rebuilt formation
-		final Vehicle rebuilt = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), acceleration, deceleration, (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+		final Vehicle rebuilt = new Vehicle(VehicleExtraData.createWithLegs(area.getId(), id, railLength, vehicleCars, ObjectArrayList.wrap(new PathData[]{defaultPathData}), (getIsManual() || mmtrManualSpawn), maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicleIdMap.put(rebuilt.getId(), rebuilt);
 		return rebuilt;
 	}
@@ -432,7 +415,7 @@ public final class Siding extends SidingSchema implements Utilities {
 			vehicleIdMap.remove(parked.getId());
 		}
 		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, legs,
-			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+			true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicleIdMap.put(vehicle.getId(), vehicle);
 		return vehicle;
 	}
@@ -553,7 +536,7 @@ public final class Siding extends SidingSchema implements Utilities {
 			vehicleIdMap.remove(parked.getId());
 		}
 		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(),
-			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+			true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicle.engageMmtrConsistMotion(walker, cab);
 		vehicleIdMap.put(vehicle.getId(), vehicle);
 		mmtrManualSpawn = true;
@@ -591,7 +574,7 @@ public final class Siding extends SidingSchema implements Utilities {
 			vehicleIdMap.remove(parked.getId());
 		}
 		final Vehicle vehicle = new Vehicle(VehicleExtraData.createWithLegs(area == null ? 0 : area.getId(), id, railLength, vehicleCars, new ObjectArrayList<>(),
-			acceleration, deceleration, true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
+			true, maxManualSpeed, manualToAutomaticTime), this, transportMode, data);
 		vehicle.engageMmtrMotion(walker);
 		vehicleIdMap.put(vehicle.getId(), vehicle);
 		// Take the siding's spawn slot: the template respawner must not seed a second parked train once
@@ -1099,42 +1082,6 @@ public final class Siding extends SidingSchema implements Utilities {
 		return totalVehicleLength;
 	}
 
-	public static double roundAcceleration(double acceleration) {
-		final double tempAcceleration = Utilities.round(acceleration, 8);
-		return tempAcceleration <= 0 ? ACCELERATION_DEFAULT : Utilities.clampSafe(tempAcceleration, MIN_ACCELERATION, MAX_ACCELERATION);
-	}
-
-	/**
-	 * Finds an upcoming slower rail speed given the current position and speed. A new speed is only returned if the vehicle needs to slow down immediately.
-	 *
-	 * @return the new slower speed or -1 if no change
-	 */
-	public static double getUpcomingSlowerSpeed(ObjectList<PathData> path, int currentIndex, double railProgress, double currentSpeed, double deceleration) {
-		final double stoppingDistance = 0.5 * currentSpeed * currentSpeed / deceleration;
-		int index = currentIndex + 1;
-		double railSpeed = -1;
-		double bestDistance = 0;
-
-		while (true) {
-			final PathData pathData = Utilities.getElement(path, index);
-			if (pathData == null) {
-				return -1;
-			}
-
-			final double newRailSpeed = pathData.getSpeedLimitMetersPerMillisecond();
-			final double distance = pathData.getStartDistance() - railProgress;
-			if (newRailSpeed < currentSpeed && distance >= bestDistance && distance <= 0.5 * (currentSpeed * currentSpeed - newRailSpeed * newRailSpeed) / deceleration) {
-				railSpeed = newRailSpeed;
-				bestDistance = distance;
-			}
-
-			if (pathData.getEndDistance() >= railProgress + stoppingDistance) {
-				return railSpeed;
-			}
-
-			index++;
-		}
-	}
 
 	private record RoutePlatformInfo(Route route, int routeIndex, long platformId, String customDestination) {
 
@@ -1148,13 +1095,29 @@ public final class Siding extends SidingSchema implements Utilities {
 
 	private record TimeSegment(double startRailProgress, double startSpeed, double startTime, int speedChange, double acceleration, double deceleration) implements ConditionalList {
 
+		/**
+		 * 进路**时间估算**用的加减速度量程（原版那份车场常数，notes/235 之后只剩这一个用途）。
+		 *
+		 * <p>它**不驱动任何车辆** —— 车辆的加减速只来自 {@code TrainPhysics}（力模型）。
+		 * 这三个数只把"某段路大概要跑多久"的公式夹在合理量程里（{@code timeSegments} 当前生成器未启用 ⇒ 实际是空表）。
+		 * 谁要是拿它去算车速，那就是新的 bug。</p>
+		 */
+		private static final double TIME_ACCEL_DEFAULT = 1D / 250000;
+		private static final double TIME_ACCEL_MAX = 1D / 50000;
+		private static final double TIME_ACCEL_MIN = 1D / 2500000;
+
+		private static double roundTimeAcceleration(double acceleration) {
+			final double rounded = Utilities.round(acceleration, 8);
+			return rounded <= 0 ? TIME_ACCEL_DEFAULT : Utilities.clampSafe(rounded, TIME_ACCEL_MIN, TIME_ACCEL_MAX);
+		}
+
 		private TimeSegment(double startRailProgress, double startSpeed, double startTime, int speedChange, double acceleration, double deceleration) {
 			this.startRailProgress = startRailProgress;
 			this.startSpeed = startSpeed;
 			this.startTime = startTime;
 			this.speedChange = speedChange;
-			this.acceleration = roundAcceleration(acceleration);
-			this.deceleration = roundAcceleration(deceleration);
+			this.acceleration = roundTimeAcceleration(acceleration);
+			this.deceleration = roundTimeAcceleration(deceleration);
 		}
 
 		@Override

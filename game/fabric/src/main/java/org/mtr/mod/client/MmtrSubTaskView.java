@@ -74,10 +74,13 @@ public final class MmtrSubTaskView {
 	}
 
 	/**
-	 * 一行画出来的清单：{@code ✔✔到站停稳 ▶开门 ✔?停够 20s ·关门}。
+	 * 一行画出来的清单（**单行**形式）：{@code ◉停在 3站1台 ●开门 ○关门}。
 	 *
-	 * <p>两个勾 = "引擎判定完成 + 客户端已确认"，一个勾带问号 = "引擎说完成了，我这边还没确认"。
-	 * 用户要的"明确的双向确认"在屏幕上就是这一处差别 —— 它一眼能看出是哪一边没跟上。</p>
+	 * <p>用户要的"明确的双向确认"就在标记里一眼看得出：{@code ◉} = 引擎判定完成 + 客户端已确认，
+	 * {@code ◉?} = 引擎说完成了、我这边还没确认。见 {@link #marker}。</p>
+	 *
+	 * <p>HUD 现在**不再用这一行**（用户口径 2026-09-25「子任务为分点独立显示」：每条各自一行，
+	 * 见 {@code MmtrTaskHud}），保留它是给"需要一行摘要"的场合与既有调用方用。</p>
 	 */
 	public static String summary(List<Entry> entries) {
 		final StringBuilder builder = new StringBuilder();
@@ -90,10 +93,38 @@ public final class MmtrSubTaskView {
 		return builder.toString();
 	}
 
+	/** 一条子任务画成一行：{@code ◉停在 3站1台}（分点显示的单元）。 */
+	public static String line(Entry entry) {
+		return marker(entry) + entry.text();
+	}
+
+	/**
+	 * 每条的**状态标记**（用户口径 2026-09-25「子任务为分点独立显示而不是》》》》」）。
+	 *
+	 * <h3>为什么把 {@code ✔}/{@code ▶} 换掉了</h3>
+	 *
+	 * <p>原来每一条前面画的是 {@code ✔✔} / {@code ✔?} / {@code ▶} / {@code ·}（notes/170 那套）。
+	 * 实测（用 fontTools 读随包字体）：{@code ✔}(U+2714) 与 {@code ▶}(U+25B6) **都不在**
+	 * HarmonyOS Sans SC 里 —— 它们只能落到 MC 内置的 unifont，于是这些标记与其余文字
+	 * **不同源、不同基线、不同字面**，屏幕上看起来就是一串莫名其妙的符号。这正是用户报的
+	 * 「》》》》」。</p>
+	 *
+	 * <p>换成同一族、**该字体里确实有**、且进宽都是整齐 1.000 em 的三个几何符号，
+	 * 于是整条清单同源等距：</p>
+	 *
+	 * <table>
+	 *   <caption>标记含义</caption>
+	 *   <tr><th>标记</th><th>含义</th></tr>
+	 *   <tr><td>{@code ○}</td><td>还没轮到</td></tr>
+	 *   <tr><td>{@code ●}</td><td>正在做</td></tr>
+	 *   <tr><td>{@code ◉}</td><td>完成，且**客户端已确认**（两侧都算数）</td></tr>
+	 *   <tr><td>{@code ◉?}</td><td>引擎判定完成，但**客户端还没确认** —— 这一处差别就是"双向确认"的可视化</td></tr>
+	 * </table>
+	 */
 	private static String marker(Entry entry) {
 		if (entry.isDone()) {
-			return entry.acked() ? "✔✔" : "✔?";
+			return entry.acked() ? "◉" : "◉?";
 		}
-		return "ACTIVE".equals(entry.state()) ? "▶" : "·";
+		return "ACTIVE".equals(entry.state()) ? "●" : "○";
 	}
 }

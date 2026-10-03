@@ -50,21 +50,25 @@ public final class MmtrMotionFrameTests {
 		assertEquals(4 + 3, new MmtrMotionFrame.Writer().drop(1).byteCount(), "DROP = 头 + 3 B");
 		assertEquals(4 + 5, new MmtrMotionFrame.Writer().ping(0).byteCount(), "PING = 头 + 5 B");
 		assertEquals(4 + 25, new MmtrMotionFrame.Writer().slot(1, 0, 0, 0, 0, 0).byteCount(), "SLOT = 头 + 25 B");
-		assertEquals(4 + 6, new MmtrMotionFrame.Writer().legs(1, 0, List.of()).byteCount(), "LEGS 空 = 头 + 6 B");
+		assertEquals(4 + 6 + 4, new MmtrMotionFrame.Writer().legs(1, 0, 0, List.of()).byteCount(), "LEGS 空 = 头 + 6 B（slot/dropped/anchor/count）");
 	}
 
 	/**
-	 * ★ 腿阴影增量的字节数（notes/369 §4.4）：**一条腿 107 字节**，而一条腿是每 25–100 m
-	 * （60 km/h 下 1.5–6 秒）才出现一次 ⇒ 18–71 B/s。把它留在 ② 里则是"每长一条腿一份 7.4 KB 整份"。
+	 * ★ 腿表的字节数（notes/369 §4.4 / notes/375）：**一条腿 108 字节**（1 + 101 + 1/8 取整），
+	 * 而一条腿是每 25–100 m（60 km/h 下 1.5–6 秒）才出现一次 ⇒ ≈18 B/s。整表（换端/兜底）
+	 * 6 根腿 ≈ 660 B，只在表形变了与 20 秒兜底时发。
 	 */
 	@Test
 	public void legRecordsStayAtAboutOneHundredBytesPerNewLeg() {
 		final String hex = "0000000000000F51-0000000000000047-000000000000090B-000000000000102D-0000000000000047-000000000000090B";
 		assertEquals(101, hex.length(), "一条腿的 hex 是 101 字符（6 组 16 位十六进制 + 5 个连字符）");
-		final int oneLeg = new MmtrMotionFrame.Writer().legs(3, 1, List.of(hex)).byteCount();
-		assertEquals(4 + 6 + 1 + 101, oneLeg, "一条新腿 = 107 字节（+ 4 字节帧头）");
-		final int fourLegs = new MmtrMotionFrame.Writer().legs(3, 1, List.of(hex, hex, hex, hex)).byteCount();
-		assertEquals(4 + 6 + 4 * (1 + 101), fourLegs, "四条新腿 = 408 字节（+ 头）");
+		final MmtrMotionFrame.Leg leg = new MmtrMotionFrame.Leg(hex, true);
+		final int oneLeg = new MmtrMotionFrame.Writer().legs(3, 1, 1000.0, List.of(leg)).byteCount();
+		assertEquals(4 + 10 + 1 + 101 + 1, oneLeg, "一条新腿 = 108 字节（方向位不足 8 条也占 1 字节）+ 4 字节帧头");
+		final int fourLegs = new MmtrMotionFrame.Writer().legs(3, 1, 1000.0, List.of(leg, leg, leg, leg)).byteCount();
+		assertEquals(4 + 10 + 4 * (1 + 101) + 1, fourLegs, "四条新腿 = 419 字节（+ 头）");
+		final int sixteenLegs = new MmtrMotionFrame.Writer().legs(3, 1, 1000.0, java.util.Collections.nCopies(16, leg)).byteCount();
+		assertEquals(4 + 10 + 16 * (1 + 101) + 2, sixteenLegs, "16 条 = 2 字节方向位");
 	}
 
 	@Test
@@ -83,12 +87,34 @@ public final class MmtrMotionFrameTests {
 
 		final String hexA = "0000000000000F51-0000000000000047-000000000000090B-000000000000102D-0000000000000047-000000000000090B";
 		final String hexB = "FFFFFFFFFFFFE3FA-0000000000000041-000000000000067D-FFFFFFFFFFFFE435-0000000000000041-0000000000000683";
-		final List<Record> legRecords = MmtrMotionFrame.decode(new MmtrMotionFrame.Writer().legs(4, 2, List.of(hexA, hexB)).toCharArray());
+		final List<Record> legRecords = MmtrMotionFrame.decode(new MmtrMotionFrame.Writer()
+			.legs(4, 2, 45_948.5, List.of(new MmtrMotionFrame.Leg(hexA, true), new MmtrMotionFrame.Leg(hexB, false)))
+			.toCharArray());
 		assertEquals(1, legRecords.size());
 		final MmtrMotionFrame.Legs legs = (MmtrMotionFrame.Legs) legRecords.get(0);
 		assertEquals(4, legs.slot(), "槽位");
 		assertEquals(2, legs.droppedFromTrainTail(), "从尾巴丢两根");
-		assertEquals(List.of(hexA, hexB), legs.newLegs(), "车头新增的两根腿按顺序");
+		assertEquals(45_948.5f, (float) legs.anchorM(), "表的起点里程（整表替换时客户端按它重建）");
+		assertEquals(List.of(hexA, hexB), legs.newLegs().stream().map(MmtrMotionFrame.Leg::hexId).toList(), "车头新增的两根腿按顺序");
+		assertTrue(legs.newLegs().get(0).entryIsOrdered1(), "第一根从规范化顺序的第一端进");
+		assertFalse(legs.newLegs().get(1).entryIsOrdered1(), "第二根反着走（方向位必须活下来）");
+	}
+
+	/**
+	 * ★ **整表替换**（notes/375）：{@code droppedFromTrainTail = 0xFFFF} 是"别增量了"，不是"丢 65535 根"。
+	 * 换端就靠它 —— v1 的纯增量表达不了"同一批轨、相反顺序"。
+	 */
+	@Test
+	public void fullTableReplaceRoundTrips() {
+		final String hex = "0000000000000F51-0000000000000047-000000000000090B-000000000000102D-0000000000000047-000000000000090B";
+		final List<Record> records = MmtrMotionFrame.decode(new MmtrMotionFrame.Writer()
+			.legs(7, MmtrMotionFrame.LEGS_FULL_REPLACE, -12.5, List.of(new MmtrMotionFrame.Leg(hex, false)))
+			.toCharArray());
+		final MmtrMotionFrame.Legs legs = (MmtrMotionFrame.Legs) records.get(0);
+		assertTrue(legs.isFullReplace(), "这是整表替换");
+		assertEquals(MmtrMotionFrame.LEGS_FULL_REPLACE, legs.droppedFromTrainTail());
+		assertEquals(-12.5f, (float) legs.anchorM(), "锚点可以是负的（车头在表起点之前）");
+		assertFalse(legs.newLegs().get(0).entryIsOrdered1());
 	}
 
 	/**
@@ -286,49 +312,80 @@ public final class MmtrMotionFrameTests {
 	}
 
 	/*
-	 * 腿阴影的增量（notes/369 §4.4）。列表顺序是**车尾 → 车头**：新腿追加在末尾，尾巴从开头丢。
-	 * 这一段错了不会崩，只会"某一节车摆到别的轨上"——所以四种情形都钉一遍。
+	 * 腿表的增量（notes/369 §4.4 / notes/375）。列表顺序是**车尾 → 车头**：新腿追加在末尾，
+	 * 尾巴从开头丢。比的是 {@code Leg}（轨 + 方向）—— 这一段错了不会崩，只会"某一节车摆到别的轨上"
+	 * 或者"换端之后车不动再瞬移"，所以几种情形都钉一遍。
 	 */
+
+	/** 测试用的腿：{@code a+} = 轨 a、正向；{@code a-} = 同一根轨、反向（hex 相同、方向不同）。 */
+	private static MmtrMotionFrame.Leg leg(String rail, boolean forward) {
+		return new MmtrMotionFrame.Leg(rail, forward);
+	}
 
 	@Test
 	public void anUnchangedLegShadowProducesNoLegRecord() {
-		assertNull(MmtrMotionFrame.legDelta(List.of("a", "b"), List.of("a", "b")), "没变 ⇒ 不发 LEGS");
+		assertNull(MmtrMotionFrame.legDelta(List.of(leg("a", true), leg("b", true)), List.of(leg("a", true), leg("b", true))), "没变 ⇒ 不发 LEGS");
 	}
 
 	@Test
 	public void aNewHeadLegIsAppendedAtTheEnd() {
-		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of("a", "b"), List.of("a", "b", "c"));
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of(leg("a", true), leg("b", true)), List.of(leg("a", true), leg("b", true), leg("c", true)));
 		assertNotNull(delta);
 		assertEquals(0, delta.droppedFromTrainTail(), "没丢");
-		assertEquals(List.of("c"), delta.appended(), "新车头腿追加在末尾");
+		assertEquals(2, delta.appendedFromIndex(), "新车头腿从第 2 根起");
+		assertFalse(delta.replacesWholeTable(), "这是增量，客户端接上去就行");
 	}
 
 	@Test
 	public void aSlidingShadowDropsTheTailAndAppendsTheHead() {
-		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of("a", "b", "c"), List.of("b", "c", "d"));
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of(leg("a", true), leg("b", true), leg("c", true)), List.of(leg("b", true), leg("c", true), leg("d", true)));
 		assertNotNull(delta);
 		assertEquals(1, delta.droppedFromTrainTail(), "车尾那根 a 出列表了");
-		assertEquals(List.of("d"), delta.appended(), "车头接上 d");
+		assertEquals(2, delta.appendedFromIndex(), "车头接上 d");
 	}
 
 	@Test
 	public void aCompletelyDifferentShadowResetsTheList() {
-		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of("a", "b"), List.of("c", "d"));
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(List.of(leg("a", true), leg("b", true)), List.of(leg("c", true), leg("d", true)));
 		assertNotNull(delta);
 		assertEquals(2, delta.droppedFromTrainTail(), "一根都不重叠 ⇒ 旧的全丢");
-		assertEquals(List.of("c", "d"), delta.appended());
+		assertEquals(0, delta.appendedFromIndex());
+		assertTrue(delta.replacesWholeTable(), "旧表一根不留 ⇒ 客户端必须整表替换");
+	}
+
+	/**
+	 * ★ **换端**（notes/375 的病根）：同一批轨、相反顺序。
+	 *
+	 * <p>只比 hex 字符串的话，旧表的尾巴 {@code [r2,r3]} 与新表的头 {@code [r3,r2]} 会有 1 根"恰好相等"
+	 * （同一根轨），于是算出"丢 2 根、车头再接 2 根" —— 客户端接出一张方向错的表（现场：车不动、几十秒后瞬移）。
+	 * 带上方向位之后一根都不重叠 ⇒ 整表替换。</p>
+	 */
+	@Test
+	public void changeEndsIsAFullReplaceNotAnAppend() {
+		final List<MmtrMotionFrame.Leg> before = List.of(leg("r1", true), leg("r2", true), leg("r3", true));
+		final List<MmtrMotionFrame.Leg> after = List.of(leg("r3", false), leg("r2", false), leg("r1", false));
+		final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(before, after);
+		assertNotNull(delta);
+		assertEquals(3, delta.droppedFromTrainTail(), "整张表换掉");
+		assertEquals(0, delta.appendedFromIndex());
+		assertTrue(delta.replacesWholeTable());
+
+		// 反向：同一根轨的两个方向**不是**同一条腿（这是这条用例的全部意义）。
+		assertNotNull(MmtrMotionFrame.legDelta(List.of(leg("r1", true)), List.of(leg("r1", false))), "换向必须被看见");
+		assertNull(MmtrMotionFrame.legDelta(List.of(leg("r1", true)), List.of(leg("r1", true))), "同向同轨 = 没变");
 	}
 
 	@Test
 	public void emptyAndDisappearingShadowsAreHandled() {
-		final MmtrMotionFrame.LegDelta fromEmpty = MmtrMotionFrame.legDelta(List.of(), List.of("a", "b"));
+		final MmtrMotionFrame.LegDelta fromEmpty = MmtrMotionFrame.legDelta(List.of(), List.of(leg("a", true), leg("b", true)));
 		assertNotNull(fromEmpty);
 		assertEquals(0, fromEmpty.droppedFromTrainTail());
-		assertEquals(List.of("a", "b"), fromEmpty.appended(), "第一次给腿 ⇒ 全发");
+		assertEquals(0, fromEmpty.appendedFromIndex(), "第一次给腿 ⇒ 全发（整表）");
+		assertTrue(fromEmpty.replacesWholeTable());
 
-		final MmtrMotionFrame.LegDelta toEmpty = MmtrMotionFrame.legDelta(List.of("a", "b"), List.of());
+		final MmtrMotionFrame.LegDelta toEmpty = MmtrMotionFrame.legDelta(List.of(leg("a", true), leg("b", true)), List.of());
 		assertNotNull(toEmpty);
 		assertEquals(2, toEmpty.droppedFromTrainTail(), "腿全没了 ⇒ 让客户端清空");
-		assertTrue(toEmpty.appended().isEmpty());
+		assertEquals(0, toEmpty.appendedFromIndex());
 	}
 }

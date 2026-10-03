@@ -9,11 +9,11 @@ public final class DriveControllerTests {
 	private static final String SAMPLE_JSON = "{"
 		+ "  \"consistTypes\": ["
 		+ "    {\"id\":\"emu\",\"name\":\"EMU\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "     \"maxSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5},"
+		+ "     \"maxSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000},"
 		+ "    {\"id\":\"lr\",\"name\":\"LR\",\"controlMode\":\"STEPLESS\",\"maxSpeedKmh\":80,"
-		+ "     \"tractionAccelerationMps2\":0.7,\"serviceBrakeDecelerationMps2\":1.0,\"emergencyDecelerationMps2\":1.6},"
+		+ "     \"massKg\":60000,\"maxTractiveEffortN\":42000,\"serviceBrakeForceN\":60000,\"emergencyBrakeForceN\":96000},"
 		+ "    {\"id\":\"freight\",\"name\":\"Freight\",\"controlMode\":\"AIR_BRAKE\",\"powerNotches\":8,\"brakeNotches\":3,"
-		+ "     \"maxSpeedKmh\":100,\"tractionAccelerationMps2\":0.3,\"serviceBrakeDecelerationMps2\":0.7,\"emergencyDecelerationMps2\":1.2,"
+		+ "     \"maxSpeedKmh\":100,\"massKg\":60000,\"maxTractiveEffortN\":18000,\"serviceBrakeForceN\":42000,\"emergencyBrakeForceN\":72000,"
 		+ "     \"airPipeChargeRatePerSecond\":0.12,\"airPipeDischargeRatePerSecond\":0.5,"
 		+ "     \"airBrakeApplyRatePerSecond\":0.2,\"airBrakeReleaseRatePerSecond\":0.08}"
 		+ "  ]"
@@ -35,7 +35,7 @@ public final class DriveControllerTests {
 		final ConsistType type = ConsistType.fromJson(new com.google.gson.JsonObject());
 		assertEquals(ConsistType.ControlMode.DEFAULT, type.getControlMode());
 		assertEquals(7, type.getPowerNotches());
-		assertTrue(type.getTractionAccelerationMps2() > 0);
+		assertTrue(type.getPhysics().getTraction().getMaxTractiveEffortN() > 0, "缺省也要有牵引力（通用车力学）");
 	}
 
 	@Test

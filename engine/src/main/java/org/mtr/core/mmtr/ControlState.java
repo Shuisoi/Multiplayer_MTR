@@ -25,6 +25,14 @@ public final class ControlState {
 	 */
 	private int cruiseSpeedKmh;
 	private int reverser;
+	/**
+	 * 灯光开关的档位（{@link MmtrLightSwitch} 的 OFF / TAIL / LOW / HIGH = 关闭 / 尾灯 / 近光 / 远光）。
+	 *
+	 * <p>它描述的是**司机所在那个驾驶室那一端**的开关（每个驾驶室各一个），引擎按被占用驾驶室的端
+	 * 写进镜像（{@code mmtrLightA} / {@code mmtrLightB}）—— 客户端不告诉引擎"哪一端"，端由占用决定，
+	 * 这样"改别人那一端的灯"在协议上就不存在。</p>
+	 */
+	private int lightSwitch = MmtrLightSwitch.DEFAULT;
 	private double throttleAxis;
 	private double brakeAxis;
 	private boolean emergency;
@@ -44,6 +52,7 @@ public final class ControlState {
 	public int getDriveHandle() { return driveHandle; }
 	public int getCruiseSpeedKmh() { return cruiseSpeedKmh; }
 	public int getReverser() { return reverser; }
+	public int getLightSwitch() { return lightSwitch; }
 	public double getThrottleAxis() { return throttleAxis; }
 	public double getBrakeAxis() { return brakeAxis; }
 	public boolean isEmergency() { return emergency; }
@@ -55,6 +64,7 @@ public final class ControlState {
 	public ControlState setDriveHandle(int value) { this.driveHandle = value; return this; }
 	public ControlState setCruiseSpeedKmh(int value) { this.cruiseSpeedKmh = value; return this; }
 	public ControlState setReverser(int value) { this.reverser = value; return this; }
+	public ControlState setLightSwitch(int value) { this.lightSwitch = value; return this; }
 	public ControlState setThrottleAxis(double value) { this.throttleAxis = clamp01(value); return this; }
 	public ControlState setBrakeAxis(double value) { this.brakeAxis = clamp01(value); return this; }
 	public ControlState setEmergency(boolean value) { this.emergency = value; return this; }
@@ -82,6 +92,7 @@ public final class ControlState {
 		copy.driveHandle = driveHandle;
 		copy.cruiseSpeedKmh = cruiseSpeedKmh;
 		copy.reverser = reverser;
+		copy.lightSwitch = lightSwitch;
 		copy.throttleAxis = throttleAxis;
 		copy.brakeAxis = brakeAxis;
 		copy.emergency = emergency;
@@ -93,7 +104,7 @@ public final class ControlState {
 	@Override
 	public String toString() {
 		return "ControlState{throttleNotch=" + throttleNotch + ", brakeNotch=" + brakeNotch + ", driveHandle=" + driveHandle
-			+ ", cruiseSpeedKmh=" + cruiseSpeedKmh + ", reverser=" + reverser
+			+ ", cruiseSpeedKmh=" + cruiseSpeedKmh + ", reverser=" + reverser + ", lightSwitch=" + MmtrLightSwitch.label(lightSwitch)
 			+ ", throttleAxis=" + throttleAxis + ", brakeAxis=" + brakeAxis + ", emergency=" + emergency + "}";
 	}
 

@@ -1,4 +1,4 @@
-# Author the junction leg tables (进向表) the demo world needs:
+﻿# Author the junction leg tables (进向表) the demo world needs:
 #   Terminal turnback at the x=-155 south terminus (车站10 之后的换向区):
 #   a train arriving on the x=-155 -> x=-147 diagonal (#9) at node (-147,-169) may take
 #   - leg 0: the dead spur #61 (straight-ish, stays available),

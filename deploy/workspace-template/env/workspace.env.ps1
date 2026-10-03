@@ -1,4 +1,4 @@
-# MC 工作区环境变量单一真源（PowerShell 版）
+﻿# MC 工作区环境变量单一真源（PowerShell 版）
 #
 # 用法（从仓库脚本里）：
 #     . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'env\workspace.env.ps1')

@@ -12,9 +12,9 @@ public final class ConsistDynamicsAdvanceTests {
 		{
 		  "consistTypes": [
 		    {"id":"emu","controlMode":"NOTCHED","powerNotches":7,"brakeNotches":8,
-		     "maxSpeedKmh":120,"tractionAccelerationMps2":0.6,"serviceBrakeDecelerationMps2":0.9,"emergencyDecelerationMps2":1.5},
+		     "maxSpeedKmh":120,"massKg":60000,"maxTractiveEffortN":36000,"serviceBrakeForceN":54000,"emergencyBrakeForceN":90000},
 		    {"id":"freight","controlMode":"AIR_BRAKE","powerNotches":8,"brakeNotches":3,
-		     "maxSpeedKmh":100,"tractionAccelerationMps2":0.3,"serviceBrakeDecelerationMps2":0.7,"emergencyDecelerationMps2":1.2,
+		     "maxSpeedKmh":100,"massKg":60000,"maxTractiveEffortN":18000,"serviceBrakeForceN":42000,"emergencyBrakeForceN":72000,
 		     "airPipeChargeRatePerSecond":0.12,"airPipeDischargeRatePerSecond":0.5,
 		     "airBrakeApplyRatePerSecond":0.2,"airBrakeReleaseRatePerSecond":0.08}
 		  ]

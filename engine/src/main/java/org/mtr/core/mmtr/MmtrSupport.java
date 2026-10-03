@@ -1,13 +1,14 @@
 package org.mtr.core.mmtr;
 
 /**
- * Conversion helpers between the legacy single-handle power level (engine internal,
- * per-millisecond units) and the MMTR control model (SI units).
+ * 单位换算：MMTR 的操纵模型用 SI（m/s、m/s²），引擎内部用 m/ms、m/ms²。
+ *
+ * <p>notes/235：原来这里还有"把原版单手柄 {@code powerLevel}（-8 紧急 … -1 常用制动 … 1..7 牵引）
+ * 折算成 {@link ControlState} 的 {@code controlFromLegacyPowerLevel} 与
+ * {@code LEGACY_EMERGENCY_POWER_LEVEL}。那套映射属于被删除的原版加减速模型 ——
+ * 现在唯一的操纵输入就是 {@link ControlState}（三根手柄 + 定速），没有"单手柄"这个概念了。</p>
  */
 public final class MmtrSupport {
-
-	/** The legacy handle uses -(MAX_POWER_LEVEL + 1) as its emergency position (engine uses -8). */
-	public static final int LEGACY_EMERGENCY_POWER_LEVEL = -8;
 
 	private MmtrSupport() {
 	}
@@ -25,21 +26,5 @@ public final class MmtrSupport {
 	/** SI speed (m/s) -> engine internal (m/ms). */
 	public static double siSpeedToInternal(double metersPerSecond) {
 		return metersPerSecond * 0.001;
-	}
-
-	/**
-	 * Maps the legacy combined power handle onto the unified {@link ControlState}.
-	 * The handle ranges from -8 (emergency) ... -1 (service brake) 0 (coast) 1..7 (power).
-	 */
-	public static ControlState controlFromLegacyPowerLevel(int powerLevel, int powerNotches, int brakeNotches) {
-		final ControlState state = new ControlState();
-		if (powerLevel <= LEGACY_EMERGENCY_POWER_LEVEL) {
-			state.setEmergency(true);
-		} else if (powerLevel > 0) {
-			state.setThrottleNotch(Math.min(powerLevel, powerNotches));
-		} else if (powerLevel < 0) {
-			state.setBrakeNotch(Math.min(-powerLevel, brakeNotches));
-		}
-		return state;
 	}
 }

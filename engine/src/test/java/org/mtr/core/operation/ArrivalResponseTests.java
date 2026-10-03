@@ -22,7 +22,7 @@ public final class ArrivalResponseTests {
 
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
 		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
-			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.1, 0.1, false, 0, 0
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), false, 0, 0
 		);
 
 		final Simulator simulator = new Simulator("test", new String[]{"test"}, Paths.get("build/test-data-arrival"), false);

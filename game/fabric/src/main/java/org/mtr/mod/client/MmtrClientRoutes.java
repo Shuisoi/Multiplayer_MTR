@@ -1,5 +1,6 @@
 package org.mtr.mod.client;
 
+import org.mtr.core.mmtr.signal.MmtrSectionService;
 import org.mtr.mod.mmtr.MmtrSignalChain;
 
 import javax.annotation.Nullable;
@@ -26,6 +27,8 @@ import java.util.Set;
  *   <li>B3b: {@link #sections(String)} — the block sections the engine cut into a rail (only rails
  *       that a wayside signal actually splits are listed), so the renderer can count sections instead
  *       of whole rails.</li>
+ *   <li>notes/291: {@link #sectionBands(String)} — 拿着信号灯时画的**区间带**（弧窗 + 色号 + 行车方向），
+ *       由引擎的 {@code MmtrSectionService#sectionOverlay()} 算好（相连两段异色），客户端只显示。</li>
  * </ul>
  *
  * <p>Pure display data, replaced wholesale by {@code PacketMmtrRoutes}; empty means "no route
@@ -45,8 +48,47 @@ public final class MmtrClientRoutes {
 	 * 而"这盏灯到底守哪根轨"正是绑定工具要给人看的东西。</p>
 	 */
 	private static volatile Map<String, List<String>> lampRails = Collections.emptyMap();
+	/**
+	 * 区间叠加层用：轨 hex（规范化）→ 覆盖这段轨的**区间带**（notes/291）。
+	 *
+	 * <p>一条带 = 一个区间在这根轨上的一段弧窗 + 色号 + 行车方向。由引擎算（{@code sectionOverlay()}），
+	 * 客户端只按弧窗把它画到轨面上 —— 客户端自己按几何推"这段属于哪个区间"必然与引擎分叉，
+	 * 而"看得见边界"正是这个叠加层唯一要保证的事。</p>
+	 */
+	private static volatile Map<String, List<SectionBand>> sectionBands = Collections.emptyMap();
 
 	private MmtrClientRoutes() {
+	}
+
+	/**
+	 * 一条区间带（世界渲染用的一段弧窗）：{@code arcFromM..arcToM} 是**ordered-position-1 弧长**，
+	 * 与引擎 {@code RailMath.getPosition(arc, false)} 同一套坐标 —— 所以客户端直接用
+	 * {@code rail.railMath.getPosition} 取点，不需要任何换算。
+	 */
+	public static final class SectionBand {
+		/** 区间 id（诊断用；也是"这一段属于哪条区间"的唯一标识）。 */
+		public final String sectionId;
+		/** 客户端调色板下标（引擎的 {@code MmtrSectionOverlay.COLOR_COUNT} 取模）。 */
+		public final int colorIndex;
+		/** 本区间的行车方向（单位向量，世界 xz）。 */
+		public final double headingX;
+		public final double headingZ;
+		public final double arcFromM;
+		public final double arcToM;
+
+		SectionBand(String sectionId, int colorIndex, double headingX, double headingZ, double arcFromM, double arcToM) {
+			this.sectionId = sectionId;
+			this.colorIndex = colorIndex;
+			this.headingX = headingX;
+			this.headingZ = headingZ;
+			this.arcFromM = arcFromM;
+			this.arcToM = arcToM;
+		}
+
+		/** 本段长度（米）。 */
+		public double lengthM() {
+			return Math.abs(arcToM - arcFromM);
+		}
 	}
 
 	/** Replace the mirror (called from the packet handler on the client thread). */
@@ -74,6 +116,16 @@ public final class MmtrClientRoutes {
 	 * <p>这份关系由引擎算（它持有节点、朝向、人工绑定与区间那一整套），客户端只显示。</p>
 	 */
 	public static void update(Map<String, List<String>> next, Set<String> pending, Set<String> restricted, Map<String, String> lampAspectMap, Map<String, List<String>> lampRailMap) {
+		update(next, pending, restricted, lampAspectMap, lampRailMap, Collections.emptyList());
+	}
+
+	/**
+	 * As above, plus the **区间叠加层**的载荷（notes/291）：{@code [轨hex, 区间id, 色号, 方向x‰, 方向z‰, 弧起cm, 弧止cm] × n}。
+	 *
+	 * <p>数值一律走**整数**（千分位方向 / 厘米弧长）：{@code Double.parseDouble} 在逗号小数点的区域
+	 * 设置下会静默解析失败，而弧长算错的表现是"带子画到别的轨上"——那种错查起来极贵。</p>
+	 */
+	public static void update(Map<String, List<String>> next, Set<String> pending, Set<String> restricted, Map<String, String> lampAspectMap, Map<String, List<String>> lampRailMap, List<String> sectionBandWire) {
 		final Map<String, List<String>> copy = new HashMap<>();
 		next.forEach((railHex, nexts) -> copy.put(railHex, Collections.unmodifiableList(new java.util.ArrayList<>(nexts))));
 		nextRails = Collections.unmodifiableMap(copy);
@@ -83,6 +135,42 @@ public final class MmtrClientRoutes {
 		final Map<String, List<String>> lampRailsCopy = new HashMap<>();
 		lampRailMap.forEach((key, railHexes) -> lampRailsCopy.put(key, Collections.unmodifiableList(new java.util.ArrayList<>(railHexes))));
 		lampRails = Collections.unmodifiableMap(lampRailsCopy);
+		sectionBands = parseSectionBands(sectionBandWire);
+	}
+
+	/**
+	 * 把载荷解成"轨 → 区间带"的索引，键用**规范 hex**（{@link MmtrSectionService#canonicalHex}）。
+	 *
+	 * <p>规范化必须在**入索引**时做，而不是查的时候做：一根实体轨的 hex 有两种互为逆序的写法，
+	 * 引擎发的是规范写法，而客户端手里那条 {@code Rail} 的 hex 可能是逆序的 —— 不做这一步，
+	 * 表现是"有些轨有带、有些没有"，且随轨怎么被声明而变。</p>
+	 */
+	private static Map<String, List<SectionBand>> parseSectionBands(List<String> wire) {
+		final Map<String, List<SectionBand>> parsed = new HashMap<>();
+		for (int i = 0; i + 6 < wire.size(); i += 7) {
+			final String railHex = MmtrSectionService.canonicalHex(wire.get(i));
+			final List<SectionBand> list = parsed.computeIfAbsent(railHex, ignored -> new java.util.ArrayList<>());
+			list.add(new SectionBand(
+				wire.get(i + 1),
+				parseInt(wire.get(i + 2), 0),
+				parseInt(wire.get(i + 3), 0) / 1000.0,
+				parseInt(wire.get(i + 4), 0) / 1000.0,
+				parseInt(wire.get(i + 5), 0) / 100.0,
+				parseInt(wire.get(i + 6), 0) / 100.0
+			));
+		}
+		final Map<String, List<SectionBand>> frozen = new HashMap<>();
+		parsed.forEach((railHex, list) -> frozen.put(railHex, Collections.unmodifiableList(list)));
+		return Collections.unmodifiableMap(frozen);
+	}
+
+	/** 一条坏字段不该把整张叠加层丢掉：解析不了就退回 {@code fallback}（与网页读接口同一条规矩）。 */
+	private static int parseInt(String value, int fallback) {
+		try {
+			return Integer.parseInt(value);
+		} catch (NumberFormatException ignored) {
+			return fallback;
+		}
 	}
 
 	public static void clear() {
@@ -91,6 +179,34 @@ public final class MmtrClientRoutes {
 		restrictedNodes = Collections.emptySet();
 		lampAspects = Collections.emptyMap();
 		lampRails = Collections.emptyMap();
+		sectionBands = Collections.emptyMap();
+	}
+
+	/**
+	 * 覆盖这根轨的**区间带**（可能多条：双向各一条、咽喉上还叠着同一方向的几条）；没有则空表。
+	 *
+	 * <p>{@code railHex} 传客户端 {@code Rail.getHexId()} 的原文即可（内部会规范化）。</p>
+	 */
+	public static List<SectionBand> sectionBands(@Nullable String railHex) {
+		if (railHex == null) {
+			return Collections.emptyList();
+		}
+		final List<SectionBand> bands = sectionBands.get(MmtrSectionService.canonicalHex(railHex));
+		return bands == null ? Collections.emptyList() : bands;
+	}
+
+	/** 载荷里有几条区间带（诊断用）。 */
+	public static int sectionBandCount() {
+		int count = 0;
+		for (final List<SectionBand> bands : sectionBands.values()) {
+			count += bands.size();
+		}
+		return count;
+	}
+
+	/** 有几根轨带区间带（诊断用）。 */
+	public static int sectionRailCount() {
+		return sectionBands.size();
 	}
 
 	/**
@@ -145,10 +261,6 @@ public final class MmtrClientRoutes {
 	 */
 	public static List<MmtrSignalChain.Section> sections(@Nullable String railHex) {
 		return Collections.emptyList();
-	}
-
-	public static int sectionRailCount() {
-		return 0;
 	}
 
 	/**

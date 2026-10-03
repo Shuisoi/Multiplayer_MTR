@@ -22,7 +22,7 @@ public final class MmtrDoorSideControlTests {
 	private static VehicleExtraData data() {
 		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
 		cars.add(new VehicleCar("probe", 2, 1, 10, 0, 1, 0.1, 0.1));
-		return VehicleExtraData.createWithLegs(1L, 0L, 6, cars, new ObjectArrayList<>(), 0.0004, 0.0004, true, 120, 30000L);
+		return VehicleExtraData.createWithLegs(1L, 0L, 6, cars, new ObjectArrayList<>(), true, 120, 30000L);
 	}
 
 	@Test

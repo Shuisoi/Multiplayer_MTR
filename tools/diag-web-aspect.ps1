@@ -1,4 +1,4 @@
-# 网页信号灯显示核对：页面上每个灯点渲染出来的颜色 vs 引擎对该盏灯的判定
+﻿# 网页信号灯显示核对：页面上每个灯点渲染出来的颜色 vs 引擎对该盏灯的判定
 param([int]$Port = 9560)
 $ErrorActionPreference = "Stop"
 # 工作区路径单一真源（脚本里不得写用户目录字面路径，由 mmtr\scripts\check-paths.ps1 强制）

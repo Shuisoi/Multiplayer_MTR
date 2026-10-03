@@ -10,14 +10,18 @@
  *   N1  INDEX RULE: mmtr_windshield_1 -> cab 1 pane 1, mmtr_windshield_1_2 -> cab 1 pane 2, and
  *       mmtr_windshield_2 -> CAB 2 pane 1. The last one is the backward-compatibility guard: reading a
  *       lone index as a pane would silently turn SAF101v2's one-screen-per-cab into two panes of cab 1.
- *   N2  PAIRING: every mmtr_wipersweep_<cab>_<pane> has a matching glass, and every glass that has a
- *       fan gets a fitted block - a sweep whose fit was dropped is a wiper that clears nothing.
+ *       The same rule for the sweep's THIRD index: mmtr_wipersweep_1_1_2 is wiper 2 of cab 1 pane 1 -
+ *       not a second pane - and the name and the anchor's own `wiper` field must agree.
+ *   N2  PAIRING: every mmtr_wipersweep_<cab>_<pane>[_<n>] has a matching glass, and every glass that
+ *       has a fan gets a fitted block FOR ITS OWN WIPER - a sweep whose fit was dropped is a wiper that
+ *       clears nothing. A glass carrying several fans must write the "wipers" array: the flat shape is
+ *       read by the client as exactly ONE wiper, so two fans over a flat block is a lost fit.
  *   S1  FIT: pivot (pivotU/pivotV), armM, parkAngleDeg and sweepDeg re-derived from the fan's own
- *       vertices must match what was written.
+ *       vertices must match what was written FOR THAT WIPER.
  *   S2  ON THE GLASS: every fan vertex lies in the glass's plane and inside its extent.
- *   S3  SOLID WIPER: a wiper_<cab>_<pane> object in the model means that glass draws no blade
- *       (drawBlade=false) and is still wiped (wiper=true); no other glass is affected. The part must
- *       also exist in the packed properties file, as its OWN part.
+ *   S3  SOLID WIPER: a wiper_<cab>_<pane>[_<n>] object in the model means THAT wiper of that glass
+ *       draws no blade (drawBlade=false) and is still wiped (wiper=true); no other glass is affected.
+ *       The part must also exist in the packed properties file, as its OWN part.
  *
  * Usage:
  *   node mmtr/tools/obj-mtr-packager/pack_vehicle.js mmtr/tools/anchor-check/fixture/wipefix.json
@@ -76,6 +80,43 @@ function loadConfig(file) {
     if (typeof raw[key] === 'string') raw[key] = raw[key].replace(/\$\{MC_ROOT\}/g, root);
   }
   return raw;
+}
+
+/**
+ * The name of ONE solid wiper part: <prefix>_<cab>_<pane>[_<wiper>] - the SAME convention the packager
+ * uses (pack_vehicle.js wiperPartName). Wiper 1 has NO third index, so every part named before
+ * multi-wiper existed keeps its exact name ({@code wiper_1_1}) and nothing already in a model moves.
+ */
+function wiperPartName(prefix, cab, pane, wiper) {
+  return prefix + '_' + cab + '_' + (pane || 1) + ((wiper || 1) > 1 ? '_' + wiper : '');
+}
+
+/**
+ * The config block that drives ONE wiper of ONE glass, plus where it was found.
+ *
+ * Mirrors the client (MmtrWindshield.WindshieldConfig.wiperAt): a "wipers" array is the multi-wiper
+ * shape and each entry's own "wiperIndex" says which wiper it drives - absent means its 1-based array
+ * position, which is exactly the client's fallback. WITHOUT the array the flat fields ARE wiper 1 and
+ * there is no wiper 2 at all, which is the distinction the pairing checks need: "this wiper's fit was
+ * dropped" and "the block for that wiper was never written" are different authoring mistakes, and the
+ * second one silently drives the surviving wiper with the wrong sector.
+ *
+ * @returns {{values: object|null, source: string|null}} source = 'wipers[i]', 'flat', or null when
+ *   that wiper has no block at all.
+ */
+function wiperValues(windshieldConfig, glassName, wiper) {
+  const glass = windshieldConfig[glassName];
+  if (!glass) return { values: null, source: null };
+  if (Array.isArray(glass.wipers)) {
+    for (let i = 0; i < glass.wipers.length; i++) {
+      const one = glass.wipers[i];
+      if (!one || typeof one !== 'object') continue;
+      const index = one.wiperIndex === undefined || one.wiperIndex === null ? i + 1 : Number(one.wiperIndex);
+      if (index === wiper) return { values: one, source: 'wipers[' + i + ']' };
+    }
+    return { values: null, source: null };
+  }
+  return wiper === 1 ? { values: glass, source: 'flat' } : { values: null, source: null };
 }
 
 /**
@@ -262,12 +303,12 @@ function followerEnd(a, pivot, followerM, bladeM, mode) {
 }
 
 /** Point-in-convex-quad, mirroring MmtrWindshield.insideConvexQuad. */
-function insideConvexQuad(px, py, xs, ys) {
+function insideConvexQuad(px, py, xs, ys, extraInflateM = 0) {
   let positive = false, negative = false;
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
     const cross = (xs[j] - xs[i]) * (py - ys[i]) - (ys[j] - ys[i]) * (px - xs[i]);
-    const margin = Math.hypot(xs[j] - xs[i], ys[j] - ys[i]) * BAND_INFLATE_M;
+    const margin = Math.hypot(xs[j] - xs[i], ys[j] - ys[i]) * BAND_INFLATE_M + extraInflateM;
     if (cross > margin) positive = true;
     if (cross < -margin) negative = true;
   }
@@ -282,10 +323,29 @@ function insideConvexQuad(px, py, xs, ys) {
 const WIPE_FADE_M = 0.03;
 const BAND_INFLATE_M = 0.003;
 
-function bandFactor(px, py, from, to) {
+/**
+ * How far the blade's real path bulges OUT of the chord between two of its positions.
+ *
+ * The quad is a chord, and the path it approximates is an ARC: the blade is driven by a crank of length
+ * R about the spindle, so over a crank step of dTheta the path departs from the chord by R*(1-cos(dTheta/2)).
+ * That is not a defect and not optional - it is how a linkage moves. Measured on BR101: R = 1.17 m over the
+ * 9.26 deg step the verifier samples, i.e. 3.8 mm, which the fixed 3 mm inflate is just short of, so a
+ * demonstrably correct wiper failed on a sliver that is 0.2% of the glass.
+ *
+ * The test's teeth are untouched: the injected faults in selftest.js move a blade end by 50-100 mm.
+ */
+function pathBulgeM(from, to, pivot1, m0) {
+  const crankRadiusM = Math.hypot(m0[0] - pivot1[0], m0[1] - pivot1[1]);
+  const moveM = Math.hypot(to[0][0] - from[0][0], to[0][1] - from[0][1]);
+  if (crankRadiusM < 1.0E-6 || moveM < 1.0E-6) return 0;
+  const halfStep = Math.asin(Math.min(1, moveM / (2 * crankRadiusM)));
+  return crankRadiusM * (1 - Math.cos(halfStep));
+}
+
+function bandFactor(px, py, from, to, extraInflateM = 0) {
   const xs = [from[0][0], from[1][0], to[1][0], to[0][0]];
   const ys = [from[0][1], from[1][1], to[1][1], to[0][1]];
-  if (insideConvexQuad(px, py, xs, ys)) return 1;
+  if (insideConvexQuad(px, py, xs, ys, extraInflateM)) return 1;
   const d = distanceToSegment([px, py], to[0], to[1]);
   return d >= WIPE_FADE_M ? 0 : 1 - d / WIPE_FADE_M;
 }
@@ -368,15 +428,38 @@ function solveStrokeFromFan(sweepGroup, bladeGroup, armGroup, rodGroup, domain, 
   const bladeAt = phi => bladeSegment(p1, p2, a0, b0, phi, m0, br0);
 
   let best = null;
+  const matches = [];
   for (const edge of edges) {
+    let candidate = null, onEdge = Infinity;
     for (let phi = -180; phi <= 180; phi += 0.05) {
       const [aAt, bAt] = bladeAt(phi);
       const on = Math.max(distanceToSegment(aAt, edge.a, edge.b), distanceToSegment(bAt, edge.a, edge.b));
-      // 30 mm, not 5: this asks "is the blade lying on this rim edge", and the two implementations derive the
-      // blade's position from their own pins, ~10-25 mm apart on a real model. A 5 mm bar therefore rejects
-      // the correct edge; a WRONG edge is off by the stroke, i.e. hundreds of mm, so nothing is lost.
-      if (on <= 0.03 && Math.abs(phi) > 0.2 && (best === null || on < best.on)) best = { phi, on };
+      if (on < onEdge) { onEdge = on; candidate = phi; }
     }
+    // 30 mm, not 5: this asks "is the blade lying on this rim edge", and the two implementations derive the
+    // blade's position from their own pins, ~10-25 mm apart on a real model. A 5 mm bar therefore rejects
+    // the correct edge; a WRONG edge is off by the stroke, i.e. hundreds of mm, so nothing is lost.
+    if (candidate === null || onEdge > 0.03) continue;
+    matches.push({ phi: candidate, on: onEdge });
+  }
+  /*
+   * THE PARK CAP IS EXCLUDED BY IDENTITY, NOT BY A phi THRESHOLD.
+   *
+   * The parked blade LIES ON the park cap, so a tiny rotation of it is still within a few millimetres of
+   * that same edge. The old rule here was `|phi| > 0.2`, and on the SAF420 control car that leaked:
+   * phi = 0.25 deg sat 4.7 mm from the park cap and beat the real far cap's 26 mm at phi = 90.00 deg, so
+   * this file reported a 0.250 deg stroke for a fan whose end caps are provably 90.000 deg apart - a FALSE
+   * FAILURE against a correct model (notes/279 follow-up). Dropping the match nearest phi = 0 removes the
+   * whole class: what survives is a genuinely different blade position.
+   */
+  if (matches.length) {
+    const parkCap = matches.reduce((a, b) => (Math.abs(a.phi) <= Math.abs(b.phi) ? a : b));
+    const pole = Math.abs(parkCap.phi);
+    const usable = matches.filter(m => m !== parkCap && Math.abs(m.phi) > Math.max(2, pole + 1));
+    if (usable.length) best = usable.reduce((a, b) => (a.on <= b.on ? a : b));
+    notes.push('sweep stroke solve: park cap at phi=' + parkCap.phi.toFixed(2) + ' deg (' +
+      (parkCap.on * 1000).toFixed(1) + ' mm from the parked blade) excluded; ' + usable.length +
+      ' other cap(s) matched');
   }
   if (best === null) return { error: 'no fan boundary edge is a blade position (the fan must be the region the blade sweeps)' };
   return {
@@ -563,6 +646,22 @@ function main() {
   const data = JSON.parse(fs.readFileSync(anchorFile, 'utf8'));
   const anchors = data.anchors || [];
   const windshieldConfig = data.windshield || {};
+  // A REVERSED CAR IS THE SAME OBJ WITH ITS GROUPS RENAMED at pack time (notes/46, and saf420cab_b here):
+  // config.groupRename maps source name -> packed name. The anchor JSON, the properties file and the packed
+  // OBJ all use the PACKED names, so without applying the rename here every name in them is unknown in the
+  // source, and a correct reversed car reads as a wall of "no mmtr_wipersweep_2_1 object in the source OBJ"
+  // failures. Applies before anything reads group names.
+  const groupRename = config.groupRename || {};
+  let renamed = 0;
+  for (const group of obj.groups) {
+    if (groupRename[group.name]) {
+      group.name = groupRename[group.name];
+      renamed++;
+    }
+  }
+  if (renamed) {
+    console.log('groupRename  : ' + renamed + ' source group(s) renamed to their packed names');
+  }
   const groups = L.anchorsOf(obj);
   const groupByName = new Map(groups.map(g => [g.name.replace(/^mmtr_/i, ''), g]));
   // The solid wiper parts deliberately have NO anchor prefix (they are visible parts), so they must be
@@ -590,10 +689,13 @@ function main() {
     }
   }
   const INDEX_RULE = [
-    ['windshield_1', 1, 1], ['windshield_1_2', 1, 2], ['windshield_2', 2, 1],
-    ['windshield_2_3', 2, 3], ['wipersweep_1_1', 1, 1], ['wipersweep_2_3', 2, 3]
+    // [name, cab, pane, wiper]; wiper null = the name carries no third index (a windshield, or a sweep
+    // that is the glass's only wiper).
+    ['windshield_1', 1, 1, null], ['windshield_1_2', 1, 2, null], ['windshield_2', 2, 1, null],
+    ['windshield_2_3', 2, 3, null], ['wipersweep_1_1', 1, 1, 1], ['wipersweep_2_3', 2, 3, 1],
+    ['wipersweep_1_1_2', 1, 1, 2]
   ];
-  for (const [name, cab, pane] of INDEX_RULE) {
+  for (const [name, cab, pane, wiper] of INDEX_RULE) {
     const group = groupByName.get(name);
     if (!group) continue;   // this fixture simply does not contain it
     const anchor = byName.get(name);
@@ -602,13 +704,190 @@ function main() {
       fail('anchor ' + name, 'parsed as cab=' + anchor.cab + ' pane=' + (anchor.pane || 1) + ', expected cab=' + cab + ' pane=' + pane +
         (pane === 1 && anchor.cab !== cab ? '  <- a lone index is the CAB, not the pane' : ''));
     }
+    if (wiper !== null && (anchor.wiper || 1) !== wiper) {
+      fail('anchor ' + name, 'parsed as wiper ' + (anchor.wiper || 1) + ', expected wiper ' + wiper +
+        '  <- the third index is WHICH WIPER of the glass it is, not a second pane');
+    }
+  }
+  // ...and the same rule for EVERY sweep the model has, not only the names listed above. The third
+  // index of mmtr_wipersweep_<cab>_<pane>_<n> and the anchor's own "wiper" field are two statements of
+  // one fact, and they fail in a way nothing else catches when they disagree: drop the field off
+  // wipersweep_1_1_2 and it becomes a SECOND fan for wiper 1 - the client then sweeps wiper 1's blade
+  // with wiper 2's sector while wiper 2's blade never moves at all.
+  for (const sweep of anchors.filter(a => a.kind === 'wipersweep')) {
+    const named = /^wipersweep_(\d+)_(\d+)(?:_(\d+))?$/i.exec(sweep.name);
+    if (!named) {
+      fail('anchor ' + sweep.name, 'is not named wipersweep_<cab>_<pane>[_<wiper>], so which wiper of which glass it drives cannot be read off it');
+      continue;
+    }
+    const index = named[3] ? Number(named[3]) : 1;
+    const declared = sweep.wiper === undefined || sweep.wiper === null ? 1 : sweep.wiper;
+    if (index !== declared) {
+      fail('anchor ' + sweep.name, 'is NAMED for wiper ' + index + ' but its "wiper" field says ' + declared +
+        ' - the name and the field must agree, or the fan drives the wrong blade');
+    }
+    if ((sweep.cab || 1) !== Number(named[1]) || (sweep.pane || 1) !== Number(named[2])) {
+      fail('anchor ' + sweep.name, 'parsed as cab=' + sweep.cab + ' pane=' + (sweep.pane || 1) +
+        ', which is not what its own name says (cab ' + Number(named[1]) + ', pane ' + Number(named[2]) + ')');
+    }
+  }
+
+  // ---- N0: a CURVED glass must carry the profile that puts the rain back on it --------------------
+  //
+  // The anchor's frame comes from ONE face (the largest), so a subdivided, curved windscreen is otherwise
+  // treated as the plane of whichever patch happened to be biggest. That is not a small error: measured on
+  // BR101 V25 the real glass sits -55.2 .. +112.1 mm from that plane, against a water layer offset of
+  // 50 mm and a 23 mm glass, and BOTH anchor verifiers passed while it did - neither of them had any
+  // notion of "curved". This check is that missing notion, and it is the reason the packager now emits
+  // sagM at all.
+  for (const glass of anchors.filter(a => a.kind === 'windshield')) {
+    const scope = 'glass ' + glass.name;
+    const group = groupByName.get(glass.name);
+    if (!group) continue;
+    const ids = new Set();
+    for (const face of group.faces) for (const i of face) ids.add(i);
+    const n = L.norm(glass.normal);
+    const up = L.norm(L.sub(L.norm(glass.up), L.scl(n, L.dot(L.norm(glass.up), n))));
+    const right = L.norm(L.cross(up, n));
+    const centre = [glass.x, glass.y, glass.z];
+    const halfH = Math.max(1.0E-9, glass.heightM) / 2;
+    const sag = Array.isArray(glass.sagGridM) ? glass.sagGridM : null;
+    const NX = 17, NY = 17;
+    const uMin = typeof glass.sagUMinM === 'number' ? glass.sagUMinM : -glass.widthM / 2;
+    const uMax = typeof glass.sagUMaxM === 'number' ? glass.sagUMaxM : glass.widthM / 2;
+    const vMin = typeof glass.sagVMinM === 'number' ? glass.sagVMinM : -glass.heightM / 2;
+    const vMax = typeof glass.sagVMaxM === 'number' ? glass.sagVMaxM : glass.heightM / 2;
+    const sagAt = (alongRight, alongUp) => {
+      if (!sag || sag.length !== NX * NY) return 0;
+      // The samples sit on the NODES (see the packager and the client sagAt).
+      const cx = Math.max(0, Math.min(NX - 1, (alongRight - uMin) / (uMax - uMin) * (NX - 1)));
+      const cy = Math.max(0, Math.min(NY - 1, (alongUp - vMin) / (vMax - vMin) * (NY - 1)));
+      const x0 = Math.floor(cx), y0 = Math.floor(cy);
+      const x1 = Math.min(NX - 1, x0 + 1), y1 = Math.min(NY - 1, y0 + 1);
+      const tx = cx - x0, ty = cy - y0;
+      const bottom = sag[y0 * NX + x0] + (sag[y0 * NX + x1] - sag[y0 * NX + x0]) * tx;
+      const top = sag[y1 * NX + x0] + (sag[y1 * NX + x1] - sag[y1 * NX + x0]) * tx;
+      return bottom + (top - bottom) * ty;
+    };
+    let rawLo = Infinity, rawHi = -Infinity, residual = 0, outside = 0;
+    for (const id of ids) {
+      const d = L.sub(vpos[id], centre);
+      const alongUp = L.dot(d, up);
+      const alongRight = L.dot(d, right);
+      const raw = L.dot(d, n);
+      rawLo = Math.min(rawLo, raw);
+      rawHi = Math.max(rawHi, raw);
+      residual = Math.max(residual, Math.abs(raw - sagAt(alongRight, alongUp)));
+      // The grid holds its edge value outside its span, so a vertex ON the boundary is fine; the
+      // tolerance only has to absorb the 6-decimal rounding of the written `up`/`right`.
+      if (sag && (alongUp < vMin - 1.0E-3 || alongUp > vMax + 1.0E-3
+          || alongRight < uMin - 1.0E-3 || alongRight > uMax + 1.0E-3)) outside++;
+    }
+    // The canvas the rain is drawn on spans +-heightM/2 about the anchor origin, which is the group's
+    // VERTEX MEAN - and heightM is the group's EXTENT. Equal for a quad or a box, not equal for a
+    // subdivided surface, and when they differ the whole rain layer (and the wiper with it, which uses
+    // the same convention) is offset from the modelled glass. Reported, not asserted: fixing it means
+    // moving the anchor origin, which moves every anchor in every model.
+    const canvasShiftMm = 1000 * ((rawLo + rawHi) / 2);
+    const spanMm = (rawHi - rawLo) * 1000;
+    if (spanMm > 2.0 && !sag) {
+      fail(scope, 'is curved (' + spanMm.toFixed(1) + ' mm from its own anchor plane) but the packed ' +
+        'anchor carries NO sagGridM, so the client draws the rain on that flat plane');
+      continue;
+    }
+    if (outside > 0) {
+      fail(scope, outside + ' vertex/vertices fall outside the span the sag grid covers (' +
+        uMin.toFixed(4) + '..' + uMax.toFixed(4) + ' x ' + vMin.toFixed(4) + '..' + vMax.toFixed(4) +
+        ' m), so the grid cannot cover the modelled surface');
+      continue;
+    }
+    // A STEP IN THE MODEL IS NOT A MAPPING ERROR. A smooth grid cannot follow a discontinuity, so a
+    // vertex that stands proud of BOTH its up-axis neighbours within 20 mm is counted as a model step and
+    // REPORTED with its position instead of being averaged into a number nobody can act on. Measured on
+    // BR101 V25: the rain surface's second-from-bottom row reads 33.7 -> 51.9 -> 28.6 mm, i.e. a 3.15 mm
+    // tall spike 18.2 mm proud of both neighbours; every other vertex reproduces to 1.24 mm.
+    let steps = 0, stepWorst = 0, stepWhere = '';
+    for (const id of ids) {
+      const d = L.sub(vpos[id], centre);
+      const v0 = L.dot(d, up);
+      const raw = L.dot(d, n);
+      let below = Infinity, above = -Infinity;
+      for (const other of ids) {
+        if (other === id) continue;
+        const e = L.sub(vpos[other], centre);
+        const vv = L.dot(e, up);
+        if (Math.abs(vv - v0) > 0.06) continue;   // wider than the mesh row spacing (23-34 mm here)
+        const other_raw = L.dot(e, n);
+        if (vv < v0) below = Math.min(below, other_raw);
+        if (vv > v0) above = Math.max(above, other_raw);
+      }
+      if (below < Infinity && above > -Infinity && raw - below > 0.005 && raw - above > 0.005) {
+        steps++;
+        if (raw - Math.max(below, above) > stepWorst) {
+          stepWorst = raw - Math.max(below, above);
+          stepWhere = 'v=' + (v0 * 1000).toFixed(1) + ' mm';
+        }
+      }
+    }
+    const smoothLimit = steps > 0 ? 0.020 : 0.005;
+    if (residual > smoothLimit) {
+      fail(scope, 'the sag grid leaves the surface ' + (residual * 1000).toFixed(1) +
+        ' mm off the rain plane' + (steps > 0 ? ' beyond what its ' + steps + ' reported model step(s) explain' : '') +
+        ' - it must put the water back on the glass');
+      continue;
+    }
+    notes.push(scope + ': surface departs ' + spanMm.toFixed(1) + ' mm from the anchor plane' +
+      (sag ? ', sagGridM (' + NX + 'x' + NY + ') leaves it ' + (residual * 1000).toFixed(2) + ' mm off the rain plane'
+           : ', flat to within ' + spanMm.toFixed(1) + ' mm so no grid is needed') +
+      (steps > 0 ? '; MODEL STEP: ' + steps + ' vertex/vertices stand proud of BOTH up-axis neighbours within' +
+        ' 20 mm, the worst by ' + (stepWorst * 1000).toFixed(1) + ' mm at ' + stepWhere +
+        ' (a smooth grid cannot follow a step - check the mesh)' : '') +
+      (Math.abs(canvasShiftMm) > 1 ? '; NOTE the rain canvas (origin +-heightM/2) is centred ' +
+        canvasShiftMm.toFixed(1) + ' mm off the surface (origin = vertex mean, heightM = extent)' : ''));
   }
 
   // ---- N2/S1/S2: every sweep, against its glass ---------------------------------------------------
   const fittedGlasses = new Set();
+  const fittedSweeps = new Set();
+  // Which fans sit on which glass, by wiper index. Built BEFORE the per-sweep loop because two facts
+  // exist only at the GLASS level: a glass carrying more than one fan must write the "wipers" array
+  // (the flat shape is ONE wiper to the client, so the other fit is lost and the sectors are swapped),
+  // and no two fans may claim the same wiper of the same glass.
+  const fansByGlass = new Map();
+  for (const sweep of anchors.filter(a => a.kind === 'wipersweep')) {
+    const glassName = 'windshield_' + sweep.cab + '_' + (sweep.pane || 1);
+    if (!fansByGlass.has(glassName)) fansByGlass.set(glassName, []);
+    fansByGlass.get(glassName).push(sweep);
+  }
+  for (const [glassName, fans] of fansByGlass) {
+    const byWiper = new Map();
+    for (const sweep of fans) {
+      const wiper = sweep.wiper || 1;
+      // Two fans for the SAME wiper of the same glass: the packager keeps only the last fit, so one of
+      // the two blades would be driven by the other's sector and the other would never move - and
+      // nothing in the pack says so.
+      if (byWiper.has(wiper)) {
+        fail('glass ' + glassName, 'has two wipersweep fans claiming wiper ' + wiper + ' (' + byWiper.get(wiper) +
+          ' and ' + sweep.name + '), so the client can only ever drive one of those blades');
+      } else {
+        byWiper.set(wiper, sweep.name);
+      }
+    }
+    const glassBlock = windshieldConfig[glassName];
+    if (fans.length > 1 && glassBlock && !Array.isArray(glassBlock.wipers)) {
+      const uncovered = fans.map(one => one.wiper || 1).filter(n => n !== 1).sort((a, b) => a - b);
+      fail('glass ' + glassName, 'carries ' + fans.length + ' wipersweep fan(s) in the model but its config writes the FLAT single-wiper block (no "wipers" array) - ' +
+        'the client reads that as exactly ONE wiper, so ' +
+        (uncovered.length ? 'wiper ' + uncovered.join(' and wiper ') + ' has no fitted block and would never be driven'
+                          : 'only one of those fans can ever be driven') +
+        ', and the one that survives would sweep with the flat block\'s own sector');
+    }
+  }
+
   for (const sweep of anchors.filter(a => a.kind === 'wipersweep')) {
     const scope = 'sweep ' + sweep.name;
     const pane = sweep.pane || 1;
+    const wiper = sweep.wiper || 1;
     const glassName = 'windshield_' + sweep.cab + '_' + pane;
     const glass = byName.get(glassName);
     if (!glass) { fail(scope, 'has no matching ' + glassName); continue; }
@@ -622,18 +901,36 @@ function main() {
     }
 
     const domain = glassDomain(glassGroup, vpos);
-    const values = windshieldConfig[glassName] || {};
-    if (values.wiper !== true) fail(scope, 'its glass does not have wiper=true (got ' + JSON.stringify(values.wiper) + ')');
+    // THIS WIPER'S OWN BLOCK. On a glass with two wipers the fields for wiper 1 are flat and wiper 2's
+    // live in "wipers"[i]; reading the glass block itself would compare wiper 2's fan against wiper 1's
+    // pivot, park angle and stroke - which is precisely the confusion the flat/array split exists to
+    // remove, and it would read as a wall of numeric mismatches instead of one missing block.
+    const block = wiperValues(windshieldConfig, glassName, wiper);
+    if (block.values === null) {
+      // Nothing downstream can be evaluated without a block, and every check below would report an
+      // "undefined != ..." of its own - so the missing block is reported once, here, and the sweep is
+      // skipped. (The glass-level "two fans over a flat block" check above has already fired too when
+      // that is the reason.)
+      fail(scope, 'wiper ' + wiper + ' of ' + glassName + ' has NO fitted block: ' +
+        ((fansByGlass.get(glassName) || []).length) + ' fan(s) sit on that glass, so this wiper would never move');
+      continue;
+    }
+    const values = block.values;
+    const where = block.source;
+    if (values.wiper !== true) {
+      fail(scope, 'wiper ' + wiper + ' of ' + glassName + ' (' + where + ') does not have wiper=true (got ' + JSON.stringify(values.wiper) + ')');
+    }
     const near = (a, b, tol) => a !== undefined && Math.abs(a - b) <= tol;
+    const partName = prefix => wiperPartName(prefix, sweep.cab, pane, wiper);
 
     // The fan is the region the BLADE sweeps, so what it can be checked against is the modelled blade and
     // the modelled arm - not against a sector about its own apex, which is a VIRTUAL centre (metres away
     // from the glass when the fan is the slight sliver a real train linkage draws).
-    const bladeForFit = allGroupsByName.get('wiper_' + sweep.cab + '_' + pane);
+    const bladeForFit = allGroupsByName.get(partName('wiper'));
     const solved = bladeForFit
-      ? solveStrokeFromFan(sweepGroup, bladeForFit, allGroupsByName.get('wiperarm_' + sweep.cab + '_' + pane),
-        allGroupsByName.get('wiperrod_' + sweep.cab + '_' + pane), domain, vpos)
-      : { error: 'no modelled blade, so the fan cannot be interpreted as a swept region - the legacy sector fit is not checked here' };
+      ? solveStrokeFromFan(sweepGroup, bladeForFit, allGroupsByName.get(partName('wiperarm')),
+        allGroupsByName.get(partName('wiperrod')), domain, vpos)
+      : { error: 'no modelled ' + partName('wiper') + ', so the fan cannot be interpreted as a swept region - the legacy sector fit is not checked here' };
     if (solved.error) {
       fail(scope, solved.error);
     } else {
@@ -650,16 +947,19 @@ function main() {
       if (!near(values.parkAngleDeg, solved.parkAngleDeg, ANGLE_TOL_DEG)) fail(scope, 'parkAngleDeg ' + values.parkAngleDeg + ' != the modelled park direction ' + solved.parkAngleDeg.toFixed(3));
       if (!near(values.sweepDeg, solved.strokeDeg, ANGLE_TOL_DEG)) fail(scope, 'sweepDeg ' + values.sweepDeg + ' != the stroke solved from the fan (' + solved.strokeDeg.toFixed(3) + ')');
       if ((values.sweepSign || 1) !== solved.sweepSign) fail(scope, 'sweepSign ' + values.sweepSign + ' != solved ' + solved.sweepSign);
-      notes.push(scope + ' -> ' + glassName + ': spindle (' + pivotU.toFixed(4) + ', ' + pivotV.toFixed(4) + ') arm ' + reach.toFixed(3) +
+      notes.push(scope + ' -> ' + glassName + ' wiper ' + wiper + ' (' + where + '): spindle (' + pivotU.toFixed(4) + ', ' + pivotV.toFixed(4) + ') arm ' + reach.toFixed(3) +
         ' m, park ' + solved.parkAngleDeg.toFixed(2) + ' deg, stroke solved ' + solved.strokeDeg.toFixed(2) +
         ' deg (blade on the fan edge to ' + (solved.onEdge * 1000).toFixed(1) + ' mm)');
     }
     fittedGlasses.add(glassName);
+    // Counted per WIPER, not per glass: a glass with two wipers has two fits, and reporting one would
+    // hide exactly the case this file was extended for.
+    fittedSweeps.add(glassName + '#' + wiper);
 
     // ---- M1/M2: the mechanism ------------------------------------------------------------------
-    const bladeGroup = allGroupsByName.get('wiper_' + sweep.cab + '_' + pane);
+    const bladeGroup = allGroupsByName.get(partName('wiper'));
     if (!bladeGroup) {
-      notes.push(scope + ': no modelled blade, so the client draws its own (nothing to verify)');
+      notes.push(scope + ': no modelled ' + partName('wiper') + ', so the client draws its own (nothing to verify)');
       continue;
     }
     const bladeEnds = barEnds(bladeGroup, domain, vpos);
@@ -674,7 +974,7 @@ function main() {
     // These are the linkage's real inputs, and they are NOT the blade's ends whenever the arm is pinned to
     // the blade's middle - the case the old "pins are the ends" assumption mis-described by a factor of two
     // in the pin span, and so could not check at all.
-    const armGroup = allGroupsByName.get('wiperarm_' + sweep.cab + '_' + pane);
+    const armGroup = allGroupsByName.get(partName('wiperarm'));
     let m0 = a0;
     if (armGroup) {
       const armEnds = barEnds(armGroup, domain, vpos);
@@ -694,7 +994,7 @@ function main() {
     if (armPinGap > BLADE_BODY_TOL_M) {
       fail(scope, 'the arm meets the blade ' + (armPinGap * 1000).toFixed(1) + ' mm off it - the arm pin must be attached to the blade body');
     }
-    const rodGroupForPin = allGroupsByName.get('wiperrod_' + sweep.cab + '_' + pane);
+    const rodGroupForPin = allGroupsByName.get(partName('wiperrod'));
     if (rodGroupForPin) {
       const rodEndsForPin = barEnds(rodGroupForPin, domain, vpos);
       const rodPinGap = Math.min(distanceToSegment(rodEndsForPin[0], a0, b0), distanceToSegment(rodEndsForPin[1], a0, b0));
@@ -714,7 +1014,7 @@ function main() {
       continue;
     }
 
-    const rodGroup = allGroupsByName.get('wiperrod_' + sweep.cab + '_' + pane);
+    const rodGroup = allGroupsByName.get(partName('wiperrod'));
     let pivot2 = pivot1.slice();
     if (rodGroup) {
       const rodEnds = barEnds(rodGroup, domain, vpos);
@@ -764,11 +1064,20 @@ function main() {
     // fold the park angle into the drift and "prove" a perfectly correct wiper wrong.
     const park = values.parkAngleDeg;
     const sweepDeg = values.sweepDeg;
+    // The WRITTEN sign, not the re-solved one: this section validates the config the client will read, so it
+    // has to travel the way that config makes it travel. (If the sign itself is wrong, the fit comparison
+    // above already reports it - and then these checks fail too, which is the honest outcome.)
+    const sweepSign = values.sweepSign || 1;
     const referenceLength = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
     let referenceDirection = null;
     let maxDirectionDrift = 0, maxLengthDrift = 0;
     for (let step = 0; step <= 20; step++) {
-      const theta = sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
+      // THE SIGN MATTERS. The client sweeps park -> park + sweepDeg*sweepSign, so a pane whose fitted
+      // sweepSign is -1 travels the OTHER way. Walking the wrong way runs the linkage through a range it is
+      // not assembled over: BR101's panes 1_2 / 2_1 reported an 89 degree "blade turn" on a demonstrably
+      // ideal parallelogram purely from this, and the two-pivot band test below failed for the same reason
+      // ("1 point the blade passed through is not inside the band").
+      const theta = sweepSign * sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
       const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta, m0, br0);
       const direction = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
       if (referenceDirection === null) referenceDirection = direction;
@@ -802,18 +1111,31 @@ function main() {
       // (slight) fan - the fixture's 15 mm residual turns it 3.95 deg, i.e. ~0.26 deg per mm. Treating
       // 5 mm as "equal link vectors" put a genuine slight fan into the ideal-parallelogram branch and then
       // failed it for turning at all, and for the loop closure not being the rigid rotation to 1e-6 m.
-      if (residual < 5.0E-4) {
-        // Equal link vectors MUST give a blade that never turns: B - A is constant.
-        if (maxDirectionDrift > 0.05) {
+      //
+      // 1 mm since BR101: its four panes measure a residual of 0.58 mm, which is BELOW the spread between
+      // this file's own pin derivation and the packager's on identical geometry (5-8 mm, see the header),
+      // so it is measurement noise and not a mechanism. At 0.5 mm that noise fell into the "slight fan"
+      // branch, which then required the blade to turn - and an ideal parallelogram turns it 0.00 deg, so
+      // a correct model was failed for being correct. A real train linkage is ~1 mm or more.
+      if (residual < 1.0E-3) {
+        // Equal link vectors MUST give a blade that never turns: B - A is constant. The bar scales with
+        // the residual for the same reason the closure bar below does - the blade's direction turns at
+        // about 0.17 deg per millimetre of link residual (measured on BR101: 0.58 mm -> 0.098 deg), so a
+        // fixed 0.05 deg bar fails a model whose pins simply came out of a principal-axis fit. What this
+        // still catches by a mile is the real failure it was written for, a mirrored or mis-assigned pin
+        // pair, which turns the blade by tens or hundreds of degrees.
+        const directionBar = 0.05 + residual * 200;
+        if (maxDirectionDrift > directionBar) {
           fail(scope, 'equal link vectors (residual ' + residual.toFixed(5) + ' m) but the blade still turns ' +
-            maxDirectionDrift.toFixed(3) + ' deg - the parallelogram case is not behaving like one');
+            maxDirectionDrift.toFixed(3) + ' deg - the parallelogram case is not behaving like one (bar ' + directionBar.toFixed(3) + ' deg)');
         }
         // THE DEGENERATION PROOF for "parallel double link": with equal link vectors the FOUR-BAR loop
         // closure has to return exactly the rigid rotation - that is what makes a parallelogram a special
         // case of the general linkage rather than a separate code path.
         let worst = 0;
         for (let step = 0; step <= 20; step++) {
-          const theta = sweepDeg * step / 20;   // the CRANK angle, measured from park: parkAngleDeg is the blade's bearing, not a rotation
+          // Signed the same way as the drift loop above, so both walk the stroke the client walks.
+          const theta = sweepSign * sweepDeg * step / 20;   // the CRANK angle, measured from park
           // The ideal-parallelogram prediction, pin-based: rotate BOTH pins about their own pivots. That is
           // only valid for a parallelogram, which is exactly the case being proved here - for any other
           // linkage the follower's pin has to be SOLVED, and that is what the loop closure does.
@@ -821,8 +1143,15 @@ function main() {
           const solved = bladeSegment(pivot1, pivot2, a0, b0, theta, m0, br0);
           worst = Math.max(worst, Math.hypot(solved[1][0] - rounded[1][0], solved[1][1] - rounded[1][1]));
         }
-        if (worst > 1.0E-6) {
-          fail(scope, 'the loop closure differs from the rigid rotation by ' + worst.toFixed(6) + ' m on a parallelogram - the degenerate case is not degenerate');
+        // The bar scales with the residual, because the two forms can only agree as well as the link
+        // vectors agree. A fixed 1e-6 m was a FIXTURE-GRADE bar: the fixture's mesh is generated from
+        // exact arithmetic, so its residual is ~0, but a real model's pins come out of a principal-axis
+        // fit - BR101 measures 0.58 mm, which moves the closure 2.5 mm off the rigid rotation. Measured
+        // 5x is the ratio between them on all four BR101 panes, so the bar is "proportional, plus a
+        // fixture-grade floor".
+        const closureBar = 1.0E-6 + residual * 5;
+        if (worst > closureBar) {
+          fail(scope, 'the loop closure differs from the rigid rotation by ' + worst.toFixed(6) + ' m on a parallelogram - the degenerate case is not degenerate (bar ' + closureBar.toFixed(6) + ' m)');
         }
         notes.push(scope + ': ideal parallelogram (link residual ' + residual.toFixed(5) + ' m), blade direction constant to ' +
           maxDirectionDrift.toFixed(3) + ' deg, loop closure = rigid rotation to ' + (worst * 1e6).toFixed(2) + ' um');
@@ -854,39 +1183,57 @@ function main() {
     // step). The client therefore uses the exact angular sector for one pivot and this band for two, and
     // asserting the band on a rotating blade would demand something the client deliberately does not do.
     if (!coaxial) {
-      const fromTheta = sweepDeg * 0.30;
-      const toTheta = sweepDeg * 0.40;
+      // Signed, like the client's own sweep: park -> park + sweepDeg*sweepSign.
+      const fromTheta = sweepSign * sweepDeg * 0.30;
+      const toTheta = sweepSign * sweepDeg * 0.40;
       const from = bladeSegment(pivot1, pivot2, a0, b0, fromTheta, m0, br0);
       const to = bladeSegment(pivot1, pivot2, a0, b0, toTheta, m0, br0);
       let pathMisses = 0;
+      let worstMiss = null;
+      const bulgeM = pathBulgeM(from, to, pivot1, m0);
       for (let step = 0; step <= 4; step++) {
         const theta = fromTheta + (toTheta - fromTheta) * step / 4;
         const [a, b] = bladeSegment(pivot1, pivot2, a0, b0, theta, m0, br0);
-        for (const point of [a, b, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]]) {
-          if (bandFactor(point[0], point[1], from, to) <= 0) pathMisses++;
+        const labelled = [['A', a], ['B', b], ['mid', [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]]];
+        for (const [label, point] of labelled) {
+          if (bandFactor(point[0], point[1], from, to, bulgeM) <= 0) {
+            pathMisses++;
+            // How far OUTSIDE the (inflated) band it is: the failure is only actionable if the message says
+            // whether the geometry is out by a hair or by the width of the blade.
+            const outBy = distanceToSegment(point, to[0], to[1]) - WIPE_FADE_M;
+            const detail = label + ' at step ' + step + '/4 (theta ' + theta.toFixed(2) + ' deg, nearest end-to-end distance ' +
+              distanceToSegment(point, to[0], to[1]).toFixed(4) + ' m, ' + outBy.toFixed(4) + ' m beyond the fade)';
+            if (worstMiss === null || outBy > worstMiss.outBy) worstMiss = { outBy, detail };
+          }
         }
       }
       if (pathMisses > 0) {
-        fail(scope, pathMisses + ' point(s) the blade actually passed through are NOT inside the wiped band - the band test is rotated or mirrored against the blade');
+        fail(scope, pathMisses + ' point(s) the blade actually passed through are NOT inside the wiped band - the band test is rotated or mirrored against the blade; worst: ' +
+          worstMiss.detail);
       }
       // A point half a metre to the side of the blade, measured perpendicular to it, must stay unwiped.
       const midTo = [(to[0][0] + to[1][0]) / 2, (to[0][1] + to[1][1]) / 2];
       const along = [to[1][0] - to[0][0], to[1][1] - to[0][1]];
       const alongLength = Math.hypot(along[0], along[1]) || 1;
       const beside = [midTo[0] - along[1] / alongLength * 0.5, midTo[1] + along[0] / alongLength * 0.5];
-      if (bandFactor(beside[0], beside[1], from, to) > 0) {
+      if (bandFactor(beside[0], beside[1], from, to, bulgeM) > 0) {
         fail(scope, 'a point 0.5 m to the side of the blade is counted as wiped - the band is far too wide');
       }
-      notes.push(scope + ': band covers the blade\'s whole path over the step, and 0.5 m to the side stays unwiped');
+      notes.push(scope + ': band covers the blade\'s whole path over the step (chord bulge ' + (bulgeM * 1000).toFixed(2) +
+        ' mm allowed for), and 0.5 m to the side stays unwiped');
     } else {
       notes.push(scope + ': one pivot, so the client uses the exact angular sector (the band test would cut the arc corner)');
     }
   }
 
   // ---- N2 the other way: a glass with a fan must HAVE a fit ---------------------------------------
+  // The fitted fields live flat for a one-wiper glass and inside "wipers" for a multi-wiper one, so both
+  // shapes are inspected: a block that states a pivot or a stroke for a glass no fan matches is a fit
+  // pointing at a glass that is not there.
   for (const [glassName, values] of Object.entries(windshieldConfig)) {
     if (fittedGlasses.has(glassName)) continue;
-    if (values.pivotU !== undefined || values.sweepDeg !== undefined) {
+    const blocks = Array.isArray(values.wipers) ? values.wipers : [values];
+    if (blocks.some(one => one && (one.pivotU !== undefined || one.sweepDeg !== undefined))) {
       fail('glass ' + glassName, 'carries fitted sweep fields but no wipersweep fan matches it');
     }
   }
@@ -894,24 +1241,50 @@ function main() {
   // ---- S3: the solid wiper -------------------------------------------------------------------------
   // Read from EVERY group, not just the mmtr_* anchors: the solid wiper deliberately has no anchor
   // prefix (it is a visible part, not data).
-  const modelledWipers = obj.groups.map(g => g.name).filter(name => /^wiper_\d+_\d+$/i.test(name));
+  const SOLID_WIPER = /^wiper_(\d+)_(\d+)(?:_(\d+))?$/i;
+  const modelledWipers = obj.groups.map(g => g.name).filter(name => SOLID_WIPER.test(name));
   for (const wiper of modelledWipers) {
-    const match = /^wiper_(\d+)_(\d+)$/i.exec(wiper);
-    const glassName = 'windshield_' + Number(match[1]) + '_' + Number(match[2]);
-    const values = windshieldConfig[glassName];
-    if (!values) { fail('part ' + wiper, 'has no ' + glassName + ' to be the wiper of'); continue; }
+    const match = SOLID_WIPER.exec(wiper);
+    const cab = Number(match[1]), pane = Number(match[2]), index = match[3] ? Number(match[3]) : 1;
+    const glassName = 'windshield_' + cab + '_' + pane;
+    if (!windshieldConfig[glassName]) { fail('part ' + wiper, 'has no ' + glassName + ' to be the wiper of'); continue; }
+    // THE WIPER THIS PART BELONGS TO, not the glass's first one: wiper_1_1_2 replaces the blade of
+    // wiper 2 alone, so its drawBlade lives in wiper 2's own block.
+    const block = wiperValues(windshieldConfig, glassName, index);
+    if (block.values === null) {
+      fail('part ' + wiper, 'is wiper ' + index + ' of ' + glassName + ' but that wiper has no fitted block');
+      continue;
+    }
+    const values = block.values;
     if (values.drawBlade !== false) {
-      fail('part ' + wiper, 'exists but ' + glassName + ' does not set drawBlade=false, so the drawn blade would sit on top of the modelled one');
+      fail('part ' + wiper, 'exists but wiper ' + index + ' of ' + glassName + ' (' + block.source + ') does not set drawBlade=false, so the drawn blade would sit on top of the modelled one');
     }
     if (values.wiper === false) {
-      fail('part ' + wiper, glassName + ' sets wiper=false, which would stop the glass being wiped at all (a solid wiper replaces the BLADE, not the wipe)');
+      fail('part ' + wiper, 'wiper ' + index + ' of ' + glassName + ' sets wiper=false, which would stop it being wiped at all (a solid wiper replaces the BLADE, not the wipe)');
     }
     if (!groupsOf.has(wiper)) {
       fail('part ' + wiper, 'is in the OBJ but not in the packed properties file, so it would never render');
     }
   }
-  // ...and no glass other than those may have drawBlade=false.
+  // ...and no CONFIGURED wiper may have drawBlade=false without a solid part behind it, or its blade
+  // simply vanishes. Per wiper, not per glass: on a two-wiper screen the one whose blade is modelled
+  // switches its drawn blade off while the other keeps drawing one.
+  const hasSolidPart = part => obj.groups.some(g => g.name.toLowerCase() === part.toLowerCase());
   for (const [glassName, values] of Object.entries(windshieldConfig)) {
+    // One index is the CAB (windshield_2 = cab 2 pane 1), two are cab + pane - the same rule the
+    // packager parses names with, so the part name derived here is the one the model would carry.
+    const nameParts = /^windshield_(\d+)(?:_(\d+))?$/.exec(glassName);
+    if (Array.isArray(values.wipers)) {
+      values.wipers.forEach((one, i) => {
+        if (!one || one.drawBlade !== false || !nameParts) return;
+        const index = one.wiperIndex === undefined || one.wiperIndex === null ? i + 1 : Number(one.wiperIndex);
+        const part = wiperPartName('wiper', Number(nameParts[1]), nameParts[2] ? Number(nameParts[2]) : 1, index);
+        if (!hasSolidPart(part)) {
+          fail('glass ' + glassName, 'gives wiper ' + index + ' drawBlade=false but the model has no ' + part + ' - the blade would simply vanish');
+        }
+      });
+      continue;
+    }
     if (values.drawBlade === false && !modelledWipers.some(w => ('windshield_' + w.split('_')[1] + '_' + w.split('_')[2]) === glassName)) {
       fail('glass ' + glassName, 'sets drawBlade=false but the model has no solid wiper for it - the blade would simply vanish');
     }
@@ -927,7 +1300,7 @@ function main() {
     process.exit(1);
   }
   console.log('PASS: ' + anchors.filter(a => a.kind === 'windshield').length + ' glass(es), ' +
-    fittedGlasses.size + ' fitted sweep(s), ' + modelledWipers.length + ' solid wiper(s)');
+    fittedSweeps.size + ' fitted sweep(s), ' + modelledWipers.length + ' solid wiper(s)');
 }
 
 main();

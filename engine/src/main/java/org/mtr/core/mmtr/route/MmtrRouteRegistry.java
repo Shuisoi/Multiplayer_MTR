@@ -61,6 +61,8 @@ public final class MmtrRouteRegistry {
 			// T5：同一条 movement 重发布时**刷新计划时刻**（计划会随晚点/重排变），但仍保留原对象
 			// —— 身份不能churn（notes/78），而计划时刻不进 sameMovement 正是为了这一点。
 			existing.setPlannedMillis(route.getPlannedMillis());
+			// 服务等级/车号同理：车换了作业单（连挂、换班）时值要跟着变，对象身份不动。
+			existing.setTrainPriority(route.getTrainPriority());
 			return existing;
 		}
 		byVehicle.put(route.getVehicleId(), route);
@@ -265,19 +267,36 @@ public final class MmtrRouteRegistry {
 				}
 			}
 			return "敌对进路：与 v" + otherId + " " + conflict.detail + "；对方优先（"
-				+ (other.getPlannedMillis() == Long.MAX_VALUE ? "到达序在先" : "计划时刻更早") + "），本车退出（只有最优先的一条能 SET）";
+				+ describePriorityEdge(other, route) + "），本车退出（只有最优先的一条能 SET）";
 		}
 		return null;
 	}
 
 	/**
-	 * 优先次序：**计划时刻 > 到达序**（同刻按 vehicleId 定序）。
+	 * 优先次序：**服务等级/车号 > 计划时刻 > 到达序**（同刻按 vehicleId 定序）。
 	 *
-	 * <p>这就是 T1b 裁决链的头两档，只不过作用在**进路**上而不是道岔队列上。
+	 * <p>头一档是用户 2026-09-27 的运营规则（与道岔层 {@code MmtrPointAuthority} 同一条链）：
+	 * 等级高的踩等级低的头、同级车号小的先走。两条都问不出优先级（玩家车/测试夹具）时逐位退回老口径。
 	 * 计划时刻来自任务/作业单步骤，**没有计划的进路排在最后** —— 于是"任务固定的红利"
 	 * 在这里兑现：谁该先进咽喉由**计划**说了算，而不是谁先申请。</p>
 	 */
 	private static boolean outranks(MmtrRoute other, MmtrRoute mine) {
+		final org.mtr.core.mmtr.point.MmtrTrainPriority otherPriority = other.getTrainPriority();
+		final org.mtr.core.mmtr.point.MmtrTrainPriority minePriority = mine.getTrainPriority();
+		if (otherPriority != null || minePriority != null) {
+			if (otherPriority == null) {
+				return false;
+			}
+			if (minePriority == null) {
+				return true;
+			}
+			if (otherPriority.outranks(minePriority)) {
+				return true;
+			}
+			if (minePriority.outranks(otherPriority)) {
+				return false;
+			}
+		}
 		final boolean otherLive = hasLivePlan(other);
 		final boolean mineLive = hasLivePlan(mine);
 		if (otherLive != mineLive) {
@@ -308,6 +327,19 @@ public final class MmtrRouteRegistry {
 	/** 0 = 正线贯通 / 1 = 岔股开放（{@code MmtrTurnout} 的两个位置），给人看的中文。 */
 	private static String describeTurnoutPosition(int position) {
 		return position == MmtrTurnout.REVERSE ? "岔股开放" : "正线贯通";
+	}
+
+	/** 敌对进路的那句人话要说清**靠哪一档赢的**（等级/车号 → 计划时刻 → 到达序）。 */
+	private static String describePriorityEdge(MmtrRoute other, MmtrRoute mine) {
+		final org.mtr.core.mmtr.point.MmtrTrainPriority otherPriority = other.getTrainPriority();
+		final org.mtr.core.mmtr.point.MmtrTrainPriority minePriority = mine.getTrainPriority();
+		if (otherPriority != null && minePriority != null && otherPriority.outranks(minePriority)) {
+			return otherPriority.describe() + " 优先于 " + minePriority.describe() + "（等级/车号）";
+		}
+		if (otherPriority != null && minePriority == null) {
+			return otherPriority.describe() + " 有作业单（级别/车号）在先";
+		}
+		return other.getPlannedMillis() == Long.MAX_VALUE ? "到达序在先" : "计划时刻更早";
 	}
 
 	/**

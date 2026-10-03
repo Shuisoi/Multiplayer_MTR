@@ -9,6 +9,7 @@ import org.mtr.core.data.Data;
 import org.mtr.core.data.Position;
 import org.mtr.core.data.Rail;
 import org.mtr.core.data.VehiclePosition;
+import org.mtr.core.mmtr.probe.MmtrProbe;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.mmtr.signal.MmtrSignalRegistry.SignalEntry;
 import org.mtr.core.tool.Vector;
@@ -904,6 +905,15 @@ public final class MmtrSectionService {
 		this.simulator = simulator;
 	}
 
+	/**
+	 * **投影记忆化**（逐位相同的加速，见 {@link MmtrSectionGeometry.ProjectionCache}）。
+	 *
+	 * <p>重建里最贵的一段是"每根轨 × 每盏灯"的投影：每次投影都把整根轨按 0.25 m 扫一遍，
+	 * 而 (轨, 灯) 这对输入在每次重建里**原样重复**（灯的位置是世界里的固定点）。缓存按服务实例持有
+	 * （每仿真器一个），跟着世界一起生灭。</p>
+	 */
+	private final MmtrSectionGeometry.ProjectionCache projectionCache = new MmtrSectionGeometry.ProjectionCache();
+
 	// ---------------------------------------------------------------- queries
 
 	/** The section a lamp starts, or null when the lamp protects nothing. */
@@ -1795,11 +1805,31 @@ public final class MmtrSectionService {
 
 	/** As above, ignoring {@code excludeVehicleId}'s own footprints (the asking vehicle's body shadow). */
 	public int chainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth, long excludeVehicleId) {
-		/* 一次链走行 = 一帧：帧内那七八个公开查询只算一遍世界签名（notes/172） */
-		return withinRefreshFrame(() -> mmtrChainDepth(railHex, entryNode, trees, restrictedNodes, maxDepth, excludeVehicleId));
+		return chainDepth(railHex, entryNode, trees, restrictedNodes, maxDepth, excludeVehicleId, null);
 	}
 
-	private int mmtrChainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth, long excludeVehicleId) {
+	/**
+	 * 同上，并可指定**这一趟实际会走的轨**（{@code allowedRails}；{@code null} = 不知道，按所有分支保守走）。
+	 *
+	 * <p>为什么要这一档（用户 2026-09-27 现场，十站环线收车自锁）：岔口的后继是**所有分支**
+	 * （见下面那段注释），于是**任何一条股道里停着车，整个引入区间的灯就是红的**。实测：</p>
+	 * <pre>
+	 * 00109 要进 x=-97 那条股道（收车目标），链深=1
+	 *   +1  -102,70,68 -> DEAD_END spans=2 len=221.0 被占=true
+	 *       span (-102,65,-153)..(-102,65,67) [0..220]   ← 就是一整条 220 m 股道
+	 *       占它的是**已经收车停好的 00108**（x=-102 那条股道）
+	 * </pre>
+	 *
+	 * <p>00109 根本不走 x=−102 那一支 —— 它被别人的股道扣住了。五台车于是排在库里再也不动。
+	 * 灯本身没问题（每条股道一段区间是对的）：错的是"这一趟要不要管那条分支"。进路已经 SET
+	 * （要走的轨是已知的）时按进路判，没有进路的自由驾驶仍按所有分支保守判。</p>
+	 */
+	public int chainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth, long excludeVehicleId, java.util.function.@Nullable Predicate<String> allowedRails) {
+		/* 一次链走行 = 一帧：帧内那七八个公开查询只算一遍世界签名（notes/172） */
+		return withinRefreshFrame(() -> mmtrChainDepth(railHex, entryNode, trees, restrictedNodes, maxDepth, excludeVehicleId, allowedRails));
+	}
+
+	private int mmtrChainDepth(@Nullable String railHex, @Nullable Position entryNode, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> trees, java.util.function.Predicate<String> restrictedNodes, int maxDepth, long excludeVehicleId, java.util.function.@Nullable Predicate<String> allowedRails) {
 		/* 索引（railByHex/各表）只有 rebuild() 会填：公开查询一律先 refresh（notes/166 R4 的教训） */
 		refresh();
 		Section section = sectionProtecting(railHex, entryNode);
@@ -1815,9 +1845,41 @@ public final class MmtrSectionService {
 		 * 这里与它对齐：两侧同一条链，才不会"网页黄、游戏绿"。
 		 */
 		ObjectArrayList<Section> frontier = new ObjectArrayList<>();
-		frontier.add(section);
 		final ObjectOpenHashSet<String> seen = new ObjectOpenHashSet<>();
-		seen.add(section.id);
+		if (allowedRails != null && alreadyInsideSection(section, entryNode)) {
+			/*
+			 * **已经在这一段区间里的车，不受这一段自己的入口灯约束**（2026-09-27 现场，两处僵局同一根因）。
+			 *
+			 * <p>现场读数（用户十站环线，10 列车，2 圈）：</p>
+			 * <ul>
+			 *   <li>东行 S 弯：{@code 段 2519,77,1808 -> 3835,72,2317 spans=6 len=1451.18 被占=true} ——
+			 *       00103 已在段内（x=3218），00108 跟在它后面（x=2606）**也在这一段里**；</li>
+			 *   <li>入库引入线：{@code 段 500,66,1798 -> 99,66,1502 spans=13 len=1250.45 被占=true} ——
+			 *       00109 已进段（咽喉 x≈106..200），00110 跟在后面（x=500..600）**也在这一段里**。</li>
+			 * </ul>
+			 *
+			 * <p>两处的进向节点**都不是这一段的边界**（3218,73,2060 与 106,64,1718 都在区间中段），
+			 * 也就是车是**从区间中间进来的**。判定却按"整段有没有车"来算 —— 于是**跟在后面的那一列把
+			 * 前面的车扣成红灯**：前面的走不了，后面的等它，谁都不动，后面越排越长（实测整条线 10 列车全冻）。
+			 * 区间内部没有信号机，这一段的车前方的第一架灯在**下一段的入口**，所以链要从下一段开始数。</p>
+			 *
+			 * <p>安全性：进向节点落在段**边界**上时（正常"在入口灯前"的情形）一字不改；只有"已经在段里"的车
+			 * 才跳过本段。而"后面的车不许进同一段"由**它自己**那条链负责（它的进向节点就是段边界，
+			 * 整段占用照旧判红）—— 所以这条不是放宽闭塞，而是把"谁把谁扣住"判对。</p>
+			 */
+			seen.add(section.id);
+			for (final Section followed : followings(section)) {
+				if (!allowedByPath(followed, allowedRails)) {
+					continue;   // 这一趟不走那一支（别人的股道/邻线）：它占不占与本次行车许可无关
+				}
+				if (seen.add(followed.id)) {
+					frontier.add(followed);
+				}
+			}
+		} else {
+			frontier.add(section);
+			seen.add(section.id);
+		}
 		for (int depth = 1; depth <= maxDepth && !frontier.isEmpty(); depth++) {
 			for (final Section walk : frontier) {
 				if (isOccupied(walk, trees, excludeVehicleId)) {
@@ -1835,6 +1897,9 @@ public final class MmtrSectionService {
 			final ObjectArrayList<Section> nextFrontier = new ObjectArrayList<>();
 			for (final Section walk : frontier) {
 				for (final Section followed : followings(walk)) {
+					if (!allowedByPath(followed, allowedRails)) {
+						continue;   // 这一趟不走那一支（别人的股道/邻线）：它占不占与本次行车许可无关
+					}
 					if (seen.add(followed.id)) {
 						nextFrontier.add(followed);
 					}
@@ -1846,12 +1911,41 @@ public final class MmtrSectionService {
 	}
 
 	/**
+	 * **这一段里有没有这一趟要走的那根轨**（{@link #chainDepth} 的分支过滤；{@code allowedRails == null}
+	 * = 不知道（自由驾驶 / 没有进路）⇒ 一律放行，按岔口所有分支保守走）。
+	 *
+	 * <p>判"有没有"而不是"入口轨是不是"：区间可能只覆盖某根轨的一段（被灯切在轨中间），
+	 * 也可能一个区间横跨好几根轨 —— 只要这一趟的进路里有其中任何一根，这一段就是"要走的"。</p>
+	 */
+	private static boolean allowedByPath(Section section, java.util.function.@Nullable Predicate<String> allowedRails) {
+		if (allowedRails == null) {
+			return true;
+		}
+		for (final RailSpan span : section.spans) {
+			if (allowedRails.test(span.railHex)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * **这次要进的那一段，车是不是已经在里面了**（进向节点既不是它的入口边界、也不是它的出口边界）。
+	 *
+	 * <p>用途只有一处（见 {@code mmtrChainDepth}）：已经在段里的车不受这一段自己的入口灯约束 ——
+	 * 否则跟在它后面的车会把它扣成红灯，两列车在一个长区间里互锁（2026-09-27 现场实测整条线冻死）。
+	 * 进向节点落在边界上时返回 false（"在入口灯前"的正常情形，判定一字不改）。</p>
+	 */
+	private boolean alreadyInsideSection(Section section, @Nullable Position entryNode) {
+		return entryNode != null && !boundaryNodeKeys(section).contains(MmtrJunctionState.nodeKey(entryNode));
+	}
+
+	/**
 	 * The {@code x,y,z} keys of the node a section is entered through and the one it leaves through (④:
 	 * the caller tests these against its restricted-junction set). Both are rail endpoints, so they key
 	 * straight into the same node space the rest of the signal layer uses.
 	 */
-	public ObjectArrayList<String> boundaryNodeKeys(Section section) {
-		/* 索引（railByHex/各表）只有 rebuild() 会填：公开查询一律先 refresh（notes/166 R4 的教训） */
+	public ObjectArrayList<String> boundaryNodeKeys(Section section) {		/* 索引（railByHex/各表）只有 rebuild() 会填：公开查询一律先 refresh（notes/166 R4 的教训） */
 		refresh();
 		final ObjectArrayList<String> keys = new ObjectArrayList<>();
 		if (section.spans.isEmpty()) {
@@ -2150,6 +2244,77 @@ public final class MmtrSectionService {
 	}
 
 	/**
+	 * 游戏内**区间叠加层**的结论：每一条行车区间一行 —— 色号 + 行车方向 + 各段弧窗（notes/291）。
+	 *
+	 * <h3>为什么这一份由引擎给</h3>
+	 * <p>用户 2026-09-25 要的是"拿信号灯建轨时看得见区间"：用三角形表示方向、用颜色区分区间。
+	 * 颜色是<b>拓扑的函数</b>（相连的两段不许同色），而"哪两段算相连"只有引擎知道 ——
+	 * 客户端自己按几何推一遍必然分叉，推错的后果是"看着是两段、其实是一段"。所以照 S4 的老规矩：
+	 * 引擎算结论，客户端只显示。</p>
+	 *
+	 * <h3>相连 = 链上的下一段，或者同一根轨上叠着的段</h3>
+	 * <p>前者是"边界"，后者是"同一条带上前后两段"（同一根轨被切分后并排画出来，不同色才看得出切点）。
+	 * 两个方向各自一条带（按方向法向偏移，与网页方案 B 同一口径），所以这里**不**要求相对方向异色 ——
+	 * 它们本来就不在一条带上。</p>
+	 *
+	 * <h3>稳定性</h3>
+	 * <p>区间按 id 排序后再上色 ⇒ 世界不变时颜色逐段不变。不这么排的话，哈希序一变整张图就换色，
+	 * 而"颜色一闪"会让人以为区间真的变了。</p>
+	 */
+	public ObjectArrayList<OverlaySection> sectionOverlay() {
+		/* 一帧：整趟只算一遍世界签名（notes/172） */
+		return withinRefreshFrame(this::mmtrSectionOverlay);
+	}
+
+	private ObjectArrayList<OverlaySection> mmtrSectionOverlay() {
+		refresh();
+		final ObjectArrayList<Section> sections = new ObjectArrayList<>();
+		final ObjectArrayList<String> keys = new ObjectArrayList<>(sectionsBySignal.keySet());
+		keys.sort(String::compareTo);
+		for (final String key : keys) {
+			sections.addAll(sectionsBySignal.get(key));
+		}
+		// 无灯大区间也要露出来（用户裁定："没信号灯就按一整个大区间看"）—— 它们是真实的行车单位。
+		sections.addAll(uncoveredSections);
+		sections.sort((a, b) -> a.id.compareTo(b.id));
+
+		final Object2ObjectOpenHashMap<String, ObjectOpenHashSet<String>> neighbors = new Object2ObjectOpenHashMap<>();
+		for (final Section section : sections) {
+			final ObjectOpenHashSet<String> own = neighbors.computeIfAbsent(section.id, ignored -> new ObjectOpenHashSet<>());
+			final ObjectArrayList<Section> following = followingBySection.get(section.id);
+			if (following != null) {
+				for (final Section next : following) {
+					own.add(next.id);
+				}
+			}
+			for (final RailSpan span : section.spans) {
+				final ObjectArrayList<Section> covering = sectionsByRail.get(span.railHex);
+				if (covering != null) {
+					for (final Section other : covering) {
+						if (!other.id.equals(section.id)) {
+							own.add(other.id);
+						}
+					}
+				}
+			}
+		}
+
+		final ObjectArrayList<String> ids = new ObjectArrayList<>(sections.size());
+		for (final Section section : sections) {
+			ids.add(section.id);
+		}
+		final Object2ObjectOpenHashMap<String, Integer> colors = MmtrSectionOverlay.colorize(ids, neighbors, MmtrSectionOverlay.COLOR_COUNT);
+
+		final ObjectArrayList<OverlaySection> out = new ObjectArrayList<>();
+		for (final Section section : sections) {
+			final Direction direction = directionOf(section);
+			final Integer color = colors.get(section.id);
+			out.add(new OverlaySection(section.id, color == null ? 0 : color, direction.dx, direction.dz, section.spans));
+		}
+		return out;
+	}
+
+	/**
 	 * The travel direction a section belongs to, as a labelled heading.
 	 *
 	 * <p>Every section <em>is</em> a direction: it is the stretch of line between one lamp and the next lamp
@@ -2237,6 +2402,32 @@ public final class MmtrSectionService {
 				length += span.lengthM();
 			}
 			return length;
+		}
+	}
+
+	/**
+	 * 一条区间在**游戏内叠加层**上的样子（见 {@link #sectionOverlay()}）：色号 + 行车方向 + 各段弧窗。
+	 *
+	 * <p>与 {@link SectionView} 的分工：那个是给管理台网页的（带 aspect/占用/长度/成员段），
+	 * 每帧算占用；这个是给游戏里画带的（只要"往哪走、多长、第几号颜色"），**不碰占用树**，
+	 * 所以可以随镜像每 tick 复核。</p>
+	 */
+	public static final class OverlaySection {
+		public final String id;
+		/** 客户端调色板下标（见 {@link MmtrSectionOverlay#COLOR_COUNT}）。 */
+		public final int colorIndex;
+		/** 行车方向的单位向量（沿弧的哪一侧走）。 */
+		public final double headingX;
+		public final double headingZ;
+		/** 本区间走过的弧窗，按走行顺序；同一根轨可能出现多次（折返/回环）。 */
+		public final ObjectArrayList<RailSpan> spans;
+
+		OverlaySection(String id, int colorIndex, double headingX, double headingZ, ObjectArrayList<RailSpan> spans) {
+			this.id = id;
+			this.colorIndex = colorIndex;
+			this.headingX = headingX;
+			this.headingZ = headingZ;
+			this.spans = spans;
 		}
 	}
 
@@ -2404,12 +2595,26 @@ public final class MmtrSectionService {
 		}
 		final String signature = signature();
 		if (signature.equals(cachedSignature)) {
+			/*
+			 * 探针（notes/337）：**"签名没变"也要数**，而且要按次数看。
+			 *
+			 * <p>这一层最贵的不是重建本身，而是"每次查询都问一遍世界签名"（notes/172 实测一次约 25 µs，
+			 * 一次链走行问 7–8 遍）。{@code sections.signatureCheck} 的次数 ÷ tick 数就是放大倍数：
+			 * 正常应当在个位数，实测现场能到几百 —— 那说明有一处每 tick × 每灯/每轨的调用把它当成了免费操作。</p>
+			 */
+			MmtrProbe.hit("sections.signatureCheck");
 			return;
 		}
 		rebuilding = true;
 		try {
-			rebuild();
+			final long probeT = MmtrProbe.begin();
+			try {
+				rebuild();
+			} finally {
+				MmtrProbe.end("sections.rebuild", probeT);
+			}
 			cachedSignature = signature;
+			MmtrProbe.hit("sections.rebuildCount");
 		} finally {
 			rebuilding = false;
 		}
@@ -3071,7 +3276,7 @@ public final class MmtrSectionService {
 
 		// 不在节点旁（或节点上一条都不合适）：列出它旁边 6 格内的轨，方向对不上也列 —— 人工指定时可以无视方向
 		for (final Rail rail : simulator.rails) {
-			final Double arc = MmtrSectionGeometry.projectArc(rail, lampX, lampY, lampZ);
+			final Double arc = MmtrSectionGeometry.projectArc(projectionCache, rail, lampX, lampY, lampZ);
 			if (arc == null || rail.railMath.getLength() <= 1e-6) {
 				continue;
 			}
@@ -3119,7 +3324,7 @@ public final class MmtrSectionService {
 					rejected.append(" | ").append(shortHex(hex)).append(" 认不出这条轨（世界改画过？）");
 					continue;
 				}
-				final Double arc = MmtrSectionGeometry.projectArc(rail, lampX, lampY, lampZ);
+				final Double arc = MmtrSectionGeometry.projectArc(projectionCache, rail, lampX, lampY, lampZ);
 				if (arc == null) {
 					rejected.append(" | ").append(shortHex(hex)).append(" 离灯太远、投影不到这条轨上（")
 						.append(describeRailEnds(rail)).append("）");
@@ -3256,7 +3461,7 @@ public final class MmtrSectionService {
 
 		// ② 所有 6 格内的轨（不管方向对不对都列出来——"为什么没选它"必须看得见）
 		for (final Rail rail : simulator.rails) {
-			final Double arc = MmtrSectionGeometry.projectArc(rail, lampX, lampY, lampZ);
+			final Double arc = MmtrSectionGeometry.projectArc(projectionCache, rail, lampX, lampY, lampZ);
 			if (arc == null) {
 				continue;
 			}
@@ -3657,7 +3862,7 @@ public final class MmtrSectionService {
 		if (entry.target != null && !entry.target.isEmpty()) {
 			final Rail bound = railByHex.get(entry.target);
 			if (bound != null) {
-				final Double arc = MmtrSectionGeometry.projectArc(bound, lampX, lampY, lampZ);
+				final Double arc = MmtrSectionGeometry.projectArc(projectionCache, bound, lampX, lampY, lampZ);
 				if (arc != null) {
 					final ObjectArrayList<ProtectedRail> single = new ObjectArrayList<>();
 					single.add(new ProtectedRail(bound, arc, heading[0], heading[1]));
@@ -3772,7 +3977,7 @@ public final class MmtrSectionService {
 		double bestArc = 0;
 		double bestScore = Double.MAX_VALUE;
 		for (final Rail rail : simulator.rails) {
-			final Double arc = MmtrSectionGeometry.projectArc(rail, lampX, lampY, lampZ);
+			final Double arc = MmtrSectionGeometry.projectArc(projectionCache, rail, lampX, lampY, lampZ);
 			if (arc == null) {
 				continue;
 			}
@@ -3983,7 +4188,7 @@ public final class MmtrSectionService {
 			if (entrySignalKey != null && entrySignalKey.equals(MmtrSignalRegistry.key(entry.x, entry.y, entry.z))) {
 				continue;
 			}
-			final Double projected = MmtrSectionGeometry.projectArc(rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
+			final Double projected = MmtrSectionGeometry.projectArc(projectionCache, rail, entry.x + 0.5, entry.y + 0.5, entry.z + 0.5);
 			if (projected == null) {
 				continue;
 			}

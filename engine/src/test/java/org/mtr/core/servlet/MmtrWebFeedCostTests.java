@@ -246,7 +246,7 @@ public final class MmtrWebFeedCostTests {
 	/** 与 `DevA2RealGraphTests` 同一份最小编组类型（现场是 6 台车，见下一条用例）。 */
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	/**

@@ -1,4 +1,4 @@
-# 画面核对：地图上真的画出了什么（用可测的数字，不靠看图）
+﻿# 画面核对：地图上真的画出了什么（用可测的数字，不靠看图）
 param([int]$Port = 9556)
 $ErrorActionPreference = "Stop"
 $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"

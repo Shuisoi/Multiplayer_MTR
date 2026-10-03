@@ -88,14 +88,82 @@ public final class MmtrRollingStockManifest implements SerializedDataBase {
 				}
 				lines.add("vehicle spawn " + String.join(" ", cars)
 					+ " --depot=" + depot.depotId
-					+ " --siding=" + siding.sidingId);
+					+ " --siding=" + siding.sidingId
+					+ perCarOptions(siding.cars));
 			}
 		}
 		return lines;
 	}
 
-	/** 给一条股道写入编组（热改列车表用）；已存在则替换。 */
-	public void putSiding(long depotId, String depotName, long sidingId, String sidingName, java.util.List<String> carIds, double carLength) {
+	/**
+	 * **逐车车卡 → 指令片段**（notes/271 片 1）。
+	 *
+	 * <p>这是"清单 → 指令表"那条路上原来漏掉的一环：清单一向能存 {@code powered} /
+	 * {@code consistTypeId} / 车钩声明（{@link MmtrCarSpec} 是全字段的），但翻译成指令时**只拼了车型**，
+	 * 于是世界文件里写了 {@code powered:false} 也到不了车 —— 现场只能手改世界 json（notes/247 §2.4）。
+	 * 结果就是"挂车"在数据上一直是动力车。</p>
+	 *
+	 * <p>缺省值**不写**，所以老清单拼出来的指令逐字不变：{@code powered} 只有**显式声明过**才写
+	 * （三态必须保住 —— 没写和写了 false 不是一回事）、{@code consistTypeId} 非空才写、
+	 * {@code loadRatio} 非零才写、两个车钩开关只在偏离缺省时写。</p>
+	 */
+	public static String perCarOptions(java.util.List<MmtrCarSpec> cars) {
+		final StringBuilder powered = new StringBuilder();
+		final StringBuilder consistType = new StringBuilder();
+		final StringBuilder load = new StringBuilder();
+		final StringBuilder couplerAfter = new StringBuilder();
+		final StringBuilder manualCoupler = new StringBuilder();
+		boolean anyPowered = false;
+		boolean anyConsistType = false;
+		boolean anyLoad = false;
+		boolean anyCouplerAfter = false;
+		boolean anyManualCoupler = false;
+		for (final MmtrCarSpec car : cars) {
+			appendListItem(powered, car.poweredDeclared == null ? "" : String.valueOf(car.powered));
+			anyPowered |= car.poweredDeclared != null;
+			appendListItem(consistType, car.consistTypeId == null ? "" : car.consistTypeId);
+			anyConsistType |= car.consistTypeId != null && !car.consistTypeId.isEmpty();
+			appendListItem(load, car.loadRatio > 0 ? String.valueOf(car.loadRatio) : "");
+			anyLoad |= car.loadRatio > 0;
+			appendListItem(couplerAfter, car.mmtrCouplerAfter ? "true" : "");
+			anyCouplerAfter |= car.mmtrCouplerAfter;
+			appendListItem(manualCoupler, car.mmtrAutoCoupler ? "" : "true");
+			anyManualCoupler |= !car.mmtrAutoCoupler;
+		}
+		final StringBuilder out = new StringBuilder();
+		if (anyPowered) {
+			out.append(" --powered=").append(powered);
+		}
+		if (anyConsistType) {
+			out.append(" --consist-type=").append(consistType);
+		}
+		if (anyLoad) {
+			out.append(" --load=").append(load);
+		}
+		if (anyCouplerAfter) {
+			out.append(" --coupler-after=").append(couplerAfter);
+		}
+		if (anyManualCoupler) {
+			out.append(" --manual-coupler=").append(manualCoupler);
+		}
+		return out.toString();
+	}
+
+	private static void appendListItem(StringBuilder builder, String item) {
+		if (builder.length() > 0) {
+			builder.append(',');
+		}
+		builder.append(item);
+	}
+
+	/**
+	 * 给一条股道写入编组（**逐车车卡原样写入**）；已存在则替换。
+	 *
+	 * <p>notes/271 片 1：原来这里把 {@code spec.powered} 写死成 {@code true} —— 于是"清单里声明一列
+	 * 无动力挂车"这条路在**写盘那一步**就断了（存储侧本来是全字段的）。现在原样写入：缺省留
+	 * {@code poweredDeclared = null}（= 这个维度没说），与手写清单的行为一致。</p>
+	 */
+	public void putSiding(long depotId, String depotName, long sidingId, String sidingName, java.util.List<MmtrCarSpec> cars) {
 		MmtrManifestDepot target = null;
 		for (final MmtrManifestDepot depot : depots) {
 			if (depot.depotId == depotId) {
@@ -123,6 +191,12 @@ public final class MmtrRollingStockManifest implements SerializedDataBase {
 			target.sidings.add(targetSiding);
 		}
 		targetSiding.cars.clear();
+		targetSiding.cars.addAll(cars);
+	}
+
+	/** 老签名：只给车型，几何按 {@code carLength} 均分；车卡按"没说动力 / 没说车底 / 零载重"写。 */
+	public void putSiding(long depotId, String depotName, long sidingId, String sidingName, java.util.List<String> carIds, double carLength) {
+		final java.util.ArrayList<MmtrCarSpec> specs = new java.util.ArrayList<>();
 		for (final String carId : carIds) {
 			// MmtrCarSpec 只有无参构造（它是序列化用的数据类），字段直接赋值。
 			final MmtrCarSpec spec = new MmtrCarSpec();
@@ -131,9 +205,10 @@ public final class MmtrRollingStockManifest implements SerializedDataBase {
 			spec.width = 5;
 			spec.bogie1Position = -carLength / 3;
 			spec.bogie2Position = carLength / 3;
-			spec.powered = true;
-			targetSiding.cars.add(spec);
+			// 不再写死 powered = true：三态里"没说"才是缺省（片 1）。
+			specs.add(spec);
 		}
+		putSiding(depotId, depotName, sidingId, sidingName, specs);
 	}
 
 	/**

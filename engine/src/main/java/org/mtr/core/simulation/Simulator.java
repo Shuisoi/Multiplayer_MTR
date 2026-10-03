@@ -16,6 +16,8 @@ import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.core.servlet.QueueObject;
 import org.mtr.core.servlet.WebFeed;
 import org.mtr.core.servlet.WebRun;
+// 优先级（服务等级 + 车号，用户 2026-09-27）：道岔/进路裁决按它定序。
+import org.mtr.core.mmtr.point.MmtrTrainPriority;
 import org.mtr.core.tool.Utilities;
 import org.mtr.legacy.data.LegacyRailLoader;
 
@@ -207,7 +209,13 @@ public class Simulator extends Data implements Utilities {
 		 * （见 MmtrPointAuthority#request 里"位置已经就是我要的那一位不排队"那段）。权限层自己只有
 		 * "持有者驱动"的位置（没人持有 = 无主），问不出"现在实际在哪一位"，所以要由这里喂进去。
 		 */
-		.withActualPositionLookup(this::mmtrTurnoutPosition);
+		.withActualPositionLookup(this::mmtrTurnoutPosition)
+		/*
+		 * 优先级：**服务等级 + 车号**（用户 2026-09-27："同时抢一个道岔……同级谁车号小谁先走，
+		 * 不同级按级别踩头"）。权限层只认 owner 字符串，所以由这里把"车 → 任务 → 作业单"那条链
+		 * 翻出来：等级写在作业单上（{@code serviceClass}），车号从作业单号末两位取。
+		 */
+		.withOwnerPriority(this::mmtrTrainPriority);
 
 	/**
 	 * **某列车是不是还压在这处节点的轨上**（占用树答）。权限层用它决定"物理持有窗口到期能不能放位"：
@@ -272,6 +280,29 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * **这列车的优先级**（服务等级 + 车号；用户 2026-09-27）：{@code "v<车辆id>"} → 车 → 当前任务 →
+	 * 作业单号与服务等级 → {@link org.mtr.core.mmtr.point.MmtrTrainPriority}。
+	 *
+	 * <p>为什么要绕这一圈：优先级是**运营属性**（等级写在作业单上、车号写在作业单号里），
+	 * 而权限层只认 owner 字符串。这里每次现问，不缓存 —— 车跑完一条作业单换下一条（连挂/换单）时，
+	 * 下一次裁决就按新的作业单算。</p>
+	 *
+	 * @return {@code null} = 问不出（不是车辆 owner / 车不在场上 / 没有任务）⇒ 裁决退回老口径
+	 */
+	private @org.jspecify.annotations.Nullable MmtrTrainPriority mmtrTrainPriority(String owner) {
+		final long vehicleId = vehicleIdOfOwner(owner);
+		if (vehicleId == 0) {
+			return null;
+		}
+		final org.mtr.core.data.Vehicle vehicle = mmtrFindVehicle(vehicleId);
+		if (vehicle == null) {
+			return null;
+		}
+		final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
+		return mission == null ? null : org.mtr.core.mmtr.point.MmtrTrainPriority.of(mission.getJobId(), mission.getServiceClass());
+	}
+
+	/**
 	 * T4 准入门槛：**无任务不得操纵**。默认关（引擎单测与工具链在"没有任务"的前提下开车），
 	 * 真服务器上打开 —— 与 {@code mmtrDefaultPointsZero} 同一个策略开关模式。
 	 */
@@ -323,6 +354,14 @@ public class Simulator extends Data implements Utilities {
 	private int watchdogMmtrOverrides;
 	private int watchdogProtections;
 	private int watchdogJammedRoutes;
+
+	/**
+	 * 性能探针的维度标签（notes/337）：一个服务端可以有多个维度，汇总行里必须能分清是谁的。
+	 *
+	 * <p>探针默认关闭（{@code -Dmmtr.probe=true} / 运行中 {@code probe on}），关着时
+	 * {@link org.mtr.core.mmtr.probe.MmtrProbe#on()} 是一次 volatile 读，其余全部跳过。</p>
+	 */
+	private String mmtrProbeLabel = "dim?";
 
 	/*
 	 * ------------------------------------------------ 网页任务的 tick 预算（notes/172）
@@ -458,6 +497,21 @@ public class Simulator extends Data implements Utilities {
 		log.info("Data loading complete for {} in {} second(s)", dimension, (float) fileLoaderHolderAndDuration.rightLong() / MILLIS_PER_SECOND);
 		System.out.println("[MMTR-DBG] loaded stations=" + stations.size() + " platforms=" + platforms.size() + " rails=" + rails.size()
 			+ " sidings=" + sidings.size() + " depots=" + depots.size() + " routes=" + routes.size() + " lifts=" + lifts.size() + " for " + dimension);
+
+		/*
+		 * 性能探针接线（notes/337）。只做两件事：记住维度标签（汇总行要分得清是谁）、
+		 * 没显式指定明细文件时给一个**存档之外**的默认落点。
+		 *
+		 * <p>落点为什么在存档之外：notes/335 的崩溃与省查都在存档里翻，而探针明细是**可再生**的
+		 * 诊断产物，按工作区硬规矩（README「日志不要落在仓库里」）应该自己一处待着；
+		 * 这里相对于引擎数据根（{@code <rootPath>}）放一份，路径在启动时的那行 [MMTR-PROBE] 里会打出来。</p>
+		 */
+		mmtrProbeLabel = dimension; // dimension 形如 minecraft/overworld，汇总行里足够分辨
+		if (org.mtr.core.mmtr.probe.MmtrProbe.on() && org.mtr.core.mmtr.probe.MmtrProbe.getFile().isEmpty()) {
+			org.mtr.core.mmtr.probe.MmtrProbe.setFile(rootPath.resolve("mmtr-perf-probe.txt").toString());
+			System.out.println("[MMTR-PROBE] 探针已开（-Dmmtr.probe=true）；明细追加到 " + rootPath.resolve("mmtr-perf-probe.txt")
+				+ "，每 " + org.mtr.core.mmtr.probe.MmtrProbe.getReportIntervalTicks() + " tick 一行汇总；运行中可用 `probe off` 关掉");
+		}
 
 		// MMTR: optional server-side consist-type policy at <root>/<dimension>/mmtr-consist-types.json
 		final Path mmtrConfigPath = savePath.resolve("mmtr-consist-types.json");
@@ -1598,27 +1652,91 @@ public class Simulator extends Data implements Utilities {
 	/**
 	 * 轨图签名（只有轨）。{@code refreshMmtrTurnouts} 用它 —— 道岔是从**轨图**认出来的，
 	 * 认完才可能有位置，所以这条签名里绝不能出现道岔（否则就是自己调自己）。
+	 *
+	 * <h3>记忆化（2026-09-27，逐位相同的加速）</h3>
+	 * <p>JFR（10 ms 节拍、4 列车）读数：这一条占 **35% 的采样** —— 它每 tick 都被
+	 * {@link #mmtrRailSetSignature()}（信号显示视图的门）与 {@link #refreshMmtrTurnouts()} 各问一次，
+	 * 每次都要把 162 根轨的 hex 拼成 ~10 KB 的字符串、把那 162 个 hex 排一遍序、再 {@code toString()}
+	 * （拼串与排序占了 40%+17%）。而这些都是**同一份输入**上的重复劳动。</p>
+	 *
+	 * <p>判据用"轨对象引用逐个相同"而不是哈希：签名只是 {@code rails} 这个列表里**那些对象**的函数
+	 * （{@code Rail} 的端点只有构造时赋值，{@code TwoPositionsBase.hexId} 也是记忆化的、全仓没有一处把它置回 null），
+	 * 所以同一批对象必然给出同一个字符串。哈希会有碰撞，碰撞就会**漏掉一次重建** —— 那是改行为，不行。</p>
 	 */
+	private String mmtrRailGraphSignatureCache = "";
+	private org.mtr.core.data.Rail[] mmtrRailGraphSignatureRails = new org.mtr.core.data.Rail[0];
+
 	private String mmtrRailGraphSignature() {
-		final StringBuilder sig = new StringBuilder().append(rails.size()).append('|');
-		final ObjectArrayList<String> hexes = new ObjectArrayList<>();
+		final int railCount = rails.size();
+		if (railCount == mmtrRailGraphSignatureRails.length && !mmtrRailGraphSignatureCache.isEmpty()) {
+			boolean sameRails = true;
+			int index = 0;
+			for (final org.mtr.core.data.Rail rail : rails) {
+				if (mmtrRailGraphSignatureRails[index++] != rail) {
+					sameRails = false;
+					break;
+				}
+			}
+			if (sameRails) {
+				return mmtrRailGraphSignatureCache;
+			}
+		}
+		final org.mtr.core.data.Rail[] snapshot = rails.toArray(new org.mtr.core.data.Rail[0]);
+		final StringBuilder sig = new StringBuilder(railCount * 80 + 8).append(railCount).append('|');
+		final ObjectArrayList<String> hexes = new ObjectArrayList<>(railCount);
 		for (final org.mtr.core.data.Rail rail : rails) {
 			hexes.add(rail.getHexId());
 		}
 		hexes.sort(null);
 		hexes.forEach(hex -> sig.append(hex).append(','));
-		return sig.toString();
+		final String signature = sig.toString();
+		mmtrRailGraphSignatureCache = signature;
+		mmtrRailGraphSignatureRails = snapshot;
+		return signature;
 	}
 
+	/** {@link #mmtrRailSetSignature()} 的记忆化：见那两个字段的用法。 */
+	private String mmtrRailSetSignatureCache = "";
+	private @org.jspecify.annotations.Nullable String mmtrRailSetSignatureGraph;
+	private int[] mmtrRailSetSignaturePositions = new int[0];
+
+	/**
+	 * 轨图 + 道岔位置的签名（信号显示视图用它当"要不要重建"的门，每 tick 一次）。
+	 *
+	 * <p>记忆化与 {@link #mmtrRailGraphSignature()} 同一口径：轨图签名**引用**没变、且每个道岔的位置
+	 * 与上次逐个相同 ⇒ 返回同一个字符串实例（内容逐字符相同）。道岔集合与遍历顺序在图签名不变时是稳定的
+	 * —— {@code mmtrTurnouts} 只在 {@link #refreshMmtrTurnouts()} 里重建，而它自己就被图签名挡着。</p>
+	 */
 	private String mmtrRailSetSignature() {
-		final StringBuilder sig = new StringBuilder(mmtrRailGraphSignature());
+		final String graphSignature = mmtrRailGraphSignature();
 		// 道岔位置也进签名：区间"走到哪里为止、哪一段撞在禁行侧"取决于它（信号显示视图因此要失效重建）。
 		// 注意这不等于"灯守哪几条轨随位置变" —— 那是被用户否掉的规则，见 notes/115 §7。
 		refreshMmtrTurnouts();
+		final int turnoutCount = mmtrTurnouts.size();
+		boolean samePositions = turnoutCount == mmtrRailSetSignaturePositions.length;
+		int index = 0;
 		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
-			sig.append('|').append(turnout.key()).append(':').append(mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ));
+			if (samePositions && mmtrRailSetSignaturePositions[index] != mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ)) {
+				samePositions = false;
+			}
+			index++;
 		}
-		return sig.toString();
+		if (samePositions && graphSignature == mmtrRailSetSignatureGraph && !mmtrRailSetSignatureCache.isEmpty()) {
+			return mmtrRailSetSignatureCache;
+		}
+		final StringBuilder sig = new StringBuilder(graphSignature);
+		final int[] positions = new int[turnoutCount];
+		index = 0;
+		for (final org.mtr.core.mmtr.point.MmtrTurnout turnout : mmtrTurnouts.values()) {
+			final int position = mmtrPointBranches.nodePosition(turnout.nodeX, turnout.nodeY, turnout.nodeZ);
+			sig.append('|').append(turnout.key()).append(':').append(position);
+			positions[index++] = position;
+		}
+		final String signature = sig.toString();
+		mmtrRailSetSignatureCache = signature;
+		mmtrRailSetSignatureGraph = graphSignature;
+		mmtrRailSetSignaturePositions = positions;
+		return signature;
 	}
 
 	/** Discover all turnouts (道岔) on the rail graph with the operator branch states applied. */
@@ -2003,7 +2121,13 @@ public class Simulator extends Data implements Utilities {
 			return false;
 		}
 		// 第三道闸门与人工那条一样：车压在岔上不扳（同一条判定，见 MmtrJunctionState.blockedThrowReason）。
-		if (org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(this, new org.mtr.core.data.Position(x, y, z)) != null) {
+		//
+		// 但要**把请求方自己排除在外**（2026-09-27 现场修，与 mmtrSyncTurnoutPositionsToGrants 那两处同一条）：
+		// 车开到岔前时车头本来就进了 10 m 净空区，不带请求方的判定于是永远"净空被占" ⇒ 意图扳岔永远失败
+		// ⇒ 车停在岔前、灯按"走不出去"红着（诊断里那句"（改位置的请求方 ）"是空的，就是这条路留下的痕迹）。
+		// 净空闸的本意是"不许把道岔从**别的**车脚下抽走"，所以排除请求方不削弱安全性。
+		if (org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReasonExcept(this,
+			new org.mtr.core.data.Position(x, y, z), vehicleIdOfOwner(requesterOwner)) != null) {
 			return false;
 		}
 		final int wanted = position == org.mtr.core.mmtr.point.MmtrTurnout.REVERSE
@@ -3062,6 +3186,8 @@ public class Simulator extends Data implements Utilities {
 		if (queuedWebRuns.size() > 0 && wallClockMillis < webRunCooldownUntilMillis) {
 			webRunShed++;
 			webRunDeferred = queuedWebRuns.size();
+			org.mtr.core.mmtr.probe.MmtrProbe.hit("web.shed");
+			org.mtr.core.mmtr.probe.MmtrProbe.peak("web.queue", webRunDeferred);
 			return;
 		}
 
@@ -3069,8 +3195,11 @@ public class Simulator extends Data implements Utilities {
 		if ((currentNanos - tickStartNanos) / NANOS_PER_MILLISECOND >= WEB_RUN_SKIP_TICK_MILLIS && queuedWebRuns.size() > 0) {
 			webRunSkippedTicks++;
 			webRunDeferred = queuedWebRuns.size();
+			org.mtr.core.mmtr.probe.MmtrProbe.hit("web.skipSlowTick");
+			org.mtr.core.mmtr.probe.MmtrProbe.peak("web.queue", webRunDeferred);
 			return;
 		}
+		org.mtr.core.mmtr.probe.MmtrProbe.peak("web.queue", queuedWebRuns.size());
 
 		final long deadlineNanos = currentNanos + WEB_RUN_BUDGET_NANOS;
 		int processed = 0;
@@ -3180,6 +3309,15 @@ public class Simulator extends Data implements Utilities {
 	 * @return whether a record was actually removed
 	 */
 	public boolean removeClient(UUID uuid) {
+		// A player who leaves is not riding anything any more.
+		//
+		// This is the other half of Vehicle's per-tick cleanup (`removeRidingEntitiesIf(!isRiding)`): without
+		// it, the ride registration survives the session, the riding entity is never removed, and with it the
+		// DRIVER flag of a cab the player once occupied survives for ever. Measured in game (2026-09-25): a
+		// consist whose cab had been claimed once could not be driven again by anyone, because the occupation
+		// lock still counted the ghost as sitting in the driver's seat -
+		// "另一名司机正持有操纵权（占用锁；持有者仍在司机位上）" on every single request.
+		stopRiding(uuid);
 		return clients.removeIf(client -> client.uuid.equals(uuid));
 	}
 
@@ -3266,47 +3404,76 @@ public class Simulator extends Data implements Utilities {
 	private void tick(long millisElapsed) {
 		// 本 tick 的起点：网页任务的时间片与"整队让开"都按它算（notes/172）。
 		final long tickStartNanos = System.nanoTime();
+		// 探针帧起点（notes/337）：关着时是一次 volatile 读，开着时才开始计这一帧。
+		org.mtr.core.mmtr.probe.MmtrProbe.frameBegin();
 		lastMillis = getCurrentMillis();
 		setCurrentMillis(lastMillis + millisElapsed);
 		currentPassengerDirectionsRequests = 0;
 
 		try {
+			long probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			vehiclePositions.forEach(vehiclePositionsForTransportMode -> {
 				if (!vehiclePositionsForTransportMode.isEmpty()) {
 					vehiclePositionsForTransportMode.removeFirst();
 				}
 				vehiclePositionsForTransportMode.add(new Object2ObjectAVLTreeMap<>());
 			});
+			org.mtr.core.mmtr.probe.MmtrProbe.end("positions.roll", probeT);
 
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			rails.forEach(rail -> rail.tick1(this));
+			org.mtr.core.mmtr.probe.MmtrProbe.end("rails.tick1", probeT);
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			rails.forEach(rail -> rail.tick2(millisElapsed));
+			org.mtr.core.mmtr.probe.MmtrProbe.end("rails.tick2", probeT);
 			// MTR depot auto path-generation pipeline removed (auto rebuilt on Motion/tasks): nothing auto-dispatches.
 
 			// Try setting a siding's default path data
 			// If a siding doesn't have a rail associated with it, it should be removed from the data set
-			if (sidings.removeIf(Siding::tick)) {
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+			final boolean removedSidings = sidings.removeIf(Siding::tick);
+			if (removedSidings) {
 				sync();
 			}
+			org.mtr.core.mmtr.probe.MmtrProbe.end("sidings.tick", probeT);
 
 			jammedRouteIds.clear();
 			// MTR depot path auto-generation removed (auto rebuilt on Motion/tasks): stock runs on
 			// Motion legs, not depot-generated route legs.
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			sidings.forEach(siding -> siding.simulateVehicles(millisElapsed, vehiclePositions.get(siding.getTransportModeOrdinal())));
+			org.mtr.core.mmtr.probe.MmtrProbe.end("vehicles.simulate", probeT);
 			// C8 自动车钩: after the vehicle simulation (the surgery unregisters the trailing train, so
 			// it must not run while a siding iterates its vehicles), let trains with automatic couplers
 			// latch onto the rake they have drawn up to under a 调车授权.
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			org.mtr.core.mmtr.MmtrAutoCoupler.tick(this);
+			org.mtr.core.mmtr.probe.MmtrProbe.end("autocoupler", probeT);
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
+			org.mtr.core.mmtr.probe.MmtrProbe.end("periodic.sources", probeT);
 			// P4：时刻表派发（P 系列）。输入有错/未配置时内部直接返回，不做任何事。
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrTickPlanDispatchers();
+			org.mtr.core.mmtr.probe.MmtrProbe.end("plan.dispatchers", probeT);
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrEnsurePointDefaults();
+			org.mtr.core.mmtr.probe.MmtrProbe.end("points.defaults", probeT);
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrSyncTurnoutPositionsToGrants();
+			org.mtr.core.mmtr.probe.MmtrProbe.end("points.syncPhysical", probeT);
 			// 位置队列自愈：净空被挡时排队的那条申请必须**自己**再试（修前只有"持有者释放/过期"两个事件
 			// 会推进队列 ⇒ 出现"位置空着、车排第一却永远轮不到"，实测车停了三分钟，只能人工扳岔救）。
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrPointAuthority.retryPhysicalQueues(getCurrentMillis());
+			org.mtr.core.mmtr.probe.MmtrProbe.end("points.retryQueues", probeT);
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrRefreshSignalAspectView();
+			org.mtr.core.mmtr.probe.MmtrProbe.end("signal.aspectView", probeT);
 			if (mmtrJobScheduler != null && mmtrAiJobStepsEnabled) {
+				probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 				mmtrJobScheduler.tick(getCurrentMillis(), this);
+				org.mtr.core.mmtr.probe.MmtrProbe.end("jobs.scheduler", probeT);
 			}
 			/*
 			 * **同一 tick 内再同步一次道岔位置**（2026-09-17 现场问："为什么道岔请求慢半拍、不是换向后马上完成"）。
@@ -3319,26 +3486,38 @@ public class Simulator extends Data implements Utilities {
 			 * <p>这个方法本身"没变就不动 + 只在真变了才落盘"，重复调用是幂等的，所以直接补一次即可
 			 * （不动原来那一次：车辆走行之后立刻同步，是本 tick 里绝大多数授予该有的时机）。</p>
 			 */
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrSyncTurnoutPositionsToGrants();
+			org.mtr.core.mmtr.probe.MmtrProbe.end("points.syncPhysical2", probeT);
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			clients.forEach(client -> client.sendUpdates(this));
+			org.mtr.core.mmtr.probe.MmtrProbe.end("clients.sendUpdates", probeT);
 
 			if (autoSave) {
+				probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 				save(true);
+				org.mtr.core.mmtr.probe.MmtrProbe.end("save.auto", probeT);
 				autoSave = false;
 			}
 
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			lifts.forEach(lift -> lift.tick(millisElapsed));
 			landmarks.forEach(Landmark::tick);
 			homes.forEach(Home::tick);
+			org.mtr.core.mmtr.probe.MmtrProbe.end("lifts.landmarks.homes", probeT);
 
 			// Process queued runs
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			queuedRuns.process(Runnable::run);
+			org.mtr.core.mmtr.probe.MmtrProbe.end("queued.runs", probeT);
 
 			/*
 			 * 网页排队任务（notes/172）：单独排队、按时间片跑，tick 已经很慢时整队让开。
 			 * 放在游戏侧排队任务**之后**：网页慢了只是网页旧一拍，游戏侧的保活/清理不能被网页挡住。
 			 */
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrProcessWebRuns(tickStartNanos);
+			org.mtr.core.mmtr.probe.MmtrProbe.end("web.runs", probeT);
 
 			// 快照清扫：长时间没人看就把发布的那几份丢掉（大 JSON 不该一直占着内存）
 			if (++webFeedSweepTickCounter >= WEB_FEED_SWEEP_TICKS) {
@@ -3357,8 +3536,20 @@ public class Simulator extends Data implements Utilities {
 				watchdogTickCounter = 0;
 				watchdogHealthCheck();
 			}
+			/*
+			 * 性能探针的窗口汇总（notes/337）。
+			 *
+			 * <p>放在这里 —— 本 tick 所有工作都做完之后、**在 finally 之前** —— 是有意的：它是
+			 * 唯一能看见"这一整帧花了多少"的位置。挂在 watchdog（每 100 tick）上而不是自己数 tick，
+			 * 是为了让性能行与 [MMTR-HLTH] 健康行**同拍**：出问题时两张表说的是同一个 5 秒窗口，
+			 * 不需要在两份日志之间对时间轴。</p>
+			 */
+			org.mtr.core.mmtr.probe.MmtrProbe.reportIfDue(mmtrProbeLabel);
 		} catch (Throwable e) {
 			log.fatal("", e);
+		} finally {
+			// 异常路径也要收帧：否则"这一帧"永远悬着，后面每一帧的耗时都算错。
+			org.mtr.core.mmtr.probe.MmtrProbe.frameEnd();
 		}
 	}
 

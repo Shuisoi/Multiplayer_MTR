@@ -115,6 +115,8 @@ public final class MmtrCommandDispatcher {
 				return MmtrSignalCommands.execute(simulator, verb, positional, options);
 			case "point":
 				return MmtrPointCommands.execute(simulator, verb, positional, options);
+			case "rail":
+				return MmtrRailCommands.execute(simulator, verb, positional, options);
 			case "manifest":
 				return MmtrManifestCommands.execute(simulator, verb, positional, options);
 			case "job":
@@ -124,6 +126,8 @@ public final class MmtrCommandDispatcher {
 				return MmtrQueryCommands.execute(simulator, namespace, verb, positional, options);
 			case "server":
 				return MmtrServerCommands.execute(simulator, verb, positional, options);
+			case "probe":
+				return MmtrProbeCommands.execute(simulator, verb, positional, options);
 			default:
 				return usage("不认识的名词「" + namespace + "」");
 		}
@@ -161,6 +165,9 @@ public final class MmtrCommandDispatcher {
 		result.line(reason);
 		result.line("可用指令：");
 		result.line("  vehicle spawn <车型>... [--siding=<id|名>|--depot=<id|名> [--index=n]] [--count=n]");
+		result.line("      逐车参数（逗号列表，与车型位置对齐；只写一项则对全列生效，空项 = 这一节不说）：");
+		result.line("        [--powered=false,false,false] [--consist-type=,p1_trailer,p1_trailer] [--load=0,0.8,0.8]");
+		result.line("        [--coupler-after=true,…] [--manual-coupler=true,…] | --unpowered（全列无动力，= 显式 --powered=false）");
 		result.line("  vehicle remove <车辆id|all|--siding=<id>|--depot=<id>>   ← --depot 删该车辆段**全部股道**上的车");
 		result.line("  vehicle list [--depot=<id|名>]");
 		result.line("  train couple <主动车id> <目标车id> | train uncouple <车辆id> <在第几节之后切开>");
@@ -180,8 +187,13 @@ public final class MmtrCommandDispatcher {
 		result.line("  point locks                                                      ← 引擎现在锁着哪些（逐进向列出）");
 		result.line("  point why <x> <y> <z>                                             ← 这个节点为什么（没）被认成一处道岔");
 		result.line("  point list");
+		result.line("  rail add <x1> <y1> <z1> <x2> <y2> <z2> [--speed=300] [--platform] [--siding] [--angle1=deg --angle2=deg]   ← 运行时铺轨，方块与数据同时产生，不用重启");
+		result.line("      ★ 不给 --angle1/--angle2 只会画直线（两端朝向被钉在弦向上）；给了才能画转角与 S 弯");
+		result.line("  rail remove <x> <y> <z>   ← 删掉挂在这个节点上的所有轨（= 玩家敲掉该节点方块），不用人在游戏里敲");
+		result.line("  rail list");
 		result.line("  query <topology|signals|trains|points|sections|depots>");
 		result.line("  world scan-signals");
+		result.line("  probe on | probe off | probe dump | probe reset | probe status   ← 服务端性能探针（notes/337）");
 		result.line("  server restart [--delay=<秒>] | server stop");
 		return result;
 	}
@@ -295,9 +307,90 @@ public final class MmtrCommandDispatcher {
 	 * <p>参数照 {@code VehicleCar} 的完整构造器：{@code mmtrPowered} 决定这辆车出不出牵引力
 	 * （指令生成的默认给 true —— 管理员手写一条 {@code vehicle spawn} 时想要的是一列能开的车，
 	 * 而不是拖不动的死车；要挂无动力车就用 {@code --unpowered}）。</p>
+	 *
+	 * <p><b>notes/271 片 1</b>：多带三个字段 —— {@code consistTypeId}（逐车车底）、{@code loadRatio}
+	 * （载重比例 0..1）、{@code poweredDeclared}（"动力与否"是不是**显式说出来的**）。三者都从指令的
+	 * 逗号列表来（见 {@link #commaList}）：</p>
+	 *
+	 * <ul>
+	 *   <li>没给 {@code --powered} / {@code --unpowered} ⇒ {@code powered = true} 但
+	 *       {@code poweredDeclared = false}（沿用"借车底、最多一节借牵引"的老兜底）；</li>
+	 *   <li>给了 ⇒ {@code poweredDeclared = true}：显式无动力的车列永不给牵引。</li>
+	 * </ul>
 	 */
+	static VehicleCar carOf(String vehicleId, double length, boolean powered, boolean poweredDeclared, String consistTypeId, double loadRatio) {
+		final VehicleCar car = new VehicleCar(vehicleId, length, 5, 0, -length / 3.0, length / 3.0, 0, 0, powered, consistTypeId);
+		car.setMmtrPoweredDeclared(poweredDeclared);
+		car.setMmtrLoadRatio(loadRatio);
+		return car;
+	}
+
+	/** 老签名：只说动力、不说车底与载重，且"没说"就是没说（{@code poweredDeclared = false}）。 */
 	static VehicleCar carOf(String vehicleId, double length, boolean powered) {
-		return new VehicleCar(vehicleId, length, 5, 0, -length / 3.0, length / 3.0, 0, 0, powered, "");
+		return carOf(vehicleId, length, powered, false, "", 0);
+	}
+
+	/**
+	 * **逗号列表取第 {@code index} 项**（notes/271 片 1，用户口径 2026-09-26：逐车参数用与位置对齐的逗号列表）。
+	 *
+	 * <p>规则（三条都要记住，否则会静默配错车）：</p>
+	 *
+	 * <ul>
+	 *   <li>没给这个选项 ⇒ 返回 {@code null}（"没说"，调用方走缺省）；</li>
+	 *   <li>项数 1 而车有 N 节 ⇒ 这一项**对所有车生效**（{@code --powered=false} 就等于全列无动力，
+	 *       与 {@code --unpowered} 同义）；</li>
+	 *   <li><b>空串是有意的空项</b>（"这一节不说"），不是"没给" —— 于是
+	 *       {@code --consist-type=,p1_trailer,p1_trailer} 表示只有后两节有车底。</li>
+	 * </ul>
+	 */
+	static @org.jspecify.annotations.Nullable String commaList(java.util.Map<String, String> options, String key, int index, int carCount) {
+		final String raw = options.get(key);
+		if (raw == null) {
+			return null;
+		}
+		final String[] items = raw.split(",", -1);
+		if (items.length == 1 && carCount > 1) {
+			return items[0].isEmpty() ? null : items[0];
+		}
+		if (index < 0 || index >= items.length) {
+			return null;
+		}
+		return items[index].isEmpty() ? null : items[index];
+	}
+
+	/** 逗号列表里的布尔项：{@code true/false/on/off/1/0/yes/no}；解析不出来时返回 {@code null}（= 没说）。 */
+	static @org.jspecify.annotations.Nullable Boolean commaListBoolean(java.util.Map<String, String> options, String key, int index, int carCount) {
+		final String raw = commaList(options, key, index, carCount);
+		if (raw == null) {
+			return null;
+		}
+		switch (raw.trim().toLowerCase(java.util.Locale.ENGLISH)) {
+			case "true":
+			case "on":
+			case "1":
+			case "yes":
+				return Boolean.TRUE;
+			case "false":
+			case "off":
+			case "0":
+			case "no":
+				return Boolean.FALSE;
+			default:
+				return null;
+		}
+	}
+
+	/** 逗号列表里的数值项：越界/解析不出来都返回 {@code fallback}。 */
+	static double commaListDouble(java.util.Map<String, String> options, String key, int index, int carCount, double fallback) {
+		final String raw = commaList(options, key, index, carCount);
+		if (raw == null) {
+			return fallback;
+		}
+		try {
+			return Double.parseDouble(raw.trim());
+		} catch (NumberFormatException e) {
+			return fallback;
+		}
 	}
 }
 

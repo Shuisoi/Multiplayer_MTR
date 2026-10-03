@@ -161,6 +161,12 @@
 			"type": "number",
 			"minimum": 0
 		},
+		"mmtrMotorForceN": {
+			"type": "number"
+		},
+		"mmtrPneumaticBrakeForceN": {
+			"type": "number"
+		},
 		"isManualAllowed": {
 			"type": "boolean"
 		},
@@ -206,8 +212,6 @@
 		"totalVehicleLength",
 		"repeatIndex1",
 		"repeatIndex2",
-		"acceleration",
-		"deceleration",
 		"isManualAllowed",
 		"maxManualSpeed",
 		"manualToAutomaticTime",

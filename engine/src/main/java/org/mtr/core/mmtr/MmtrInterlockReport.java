@@ -45,6 +45,10 @@ public final class MmtrInterlockReport {
 		out.append(" target=").append(shortHex(route.getTargetRailHex()))
 			.append(" rails=").append(route.getRailHexes().size())
 			.append(" forks=").append(route.getForks().size());
+		// T6（2026-09-27）：冲突裁决的第一档是**服务等级 + 车号**。抢同一处道岔时"为什么它先走"
+		// 的答案就在这里，不打印出来只能靠人猜（同 notes/134 的教训）。
+		final org.mtr.core.mmtr.point.MmtrTrainPriority priority = route.getTrainPriority();
+		out.append("\n  优先级: ").append(priority == null ? "（问不出：没有作业单 —— 裁决退回计划时刻/到达序）" : priority.describe());
 		if (!route.isEstablished()) {
 			out.append("\n  PENDING: ").append(route.getStateReason());
 		}

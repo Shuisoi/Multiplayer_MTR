@@ -35,17 +35,15 @@ public final class MmtrVehicleLegsRunTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
-		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	private static Rail diverge(Position node, Position far) {
-		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	private static final class Net {
@@ -72,6 +70,12 @@ public final class MmtrVehicleLegsRunTests {
 		BranchStore branch(int op) {
 			final BranchStore s = new BranchStore();
 			s.set(node0.getX(), node0.getY(), node0.getZ(), rIn.getHexId(), op);
+			/*
+			 * notes/235：车列现在是**活走行体**（每一处岔按现场位置现场选定），不再照抄一份"预制进路"。
+			 * 所以"岔开哪一边"必须落在**运行中的操作位**上（{@code sim.mmtrPointBranches}），
+			 * 只交给建腿时用的那个临时 store 是不够的 —— 走行体看不到它。
+			 */
+			sim.mmtrPointBranches.set(node0.getX(), node0.getY(), node0.getZ(), rIn.getHexId(), op);
 			return s;
 		}
 	}
@@ -90,7 +94,7 @@ public final class MmtrVehicleLegsRunTests {
 	private static double driveWithExistingControl(Simulator sim, ObjectArrayList<org.mtr.core.data.PathData> legs) {
 		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
 		cars.add(new VehicleCar("probe", 2, 1, 10, 0, 1, 0.1, 0.1));
-		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 6, cars, legs, 0.0004, 0.0004, true, 120, 30000L);
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 6, cars, legs, true, 120, 30000L);
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
 		// T3b: existing engine cab control (ControlState) drives this Motion-legs Vehicle.
 		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
@@ -142,7 +146,7 @@ public final class MmtrVehicleLegsRunTests {
 	private static double driveDevVehicle(Simulator sim, ObjectArrayList<org.mtr.core.data.PathData> legs) {
 		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
 		cars.add(new VehicleCar("probe", 4, 1, 10, 0, 2, 0.1, 0.1));
-		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, cars, legs, 0.0004, 0.0004, true, 120, 30000L);
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, cars, legs, true, 120, 30000L);
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
 		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
 		double max = v.getRailProgress();
@@ -203,6 +207,8 @@ public final class MmtrVehicleLegsRunTests {
 	private static BranchStore devBranch(Simulator sim, Rail via, int op) {
 		final BranchStore s = new BranchStore();
 		s.set(NX, NY, NZ, via.getHexId(), op);
+		// notes/235：同上 —— 活走行体读的是**运行中的操作位**，所以这里也要落到 sim 上。
+		sim.mmtrPointBranches.set(NX, NY, NZ, via.getHexId(), op);
 		return s;
 	}
 

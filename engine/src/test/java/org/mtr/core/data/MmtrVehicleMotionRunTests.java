@@ -39,17 +39,15 @@ public final class MmtrVehicleMotionRunTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
-		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	private static Rail diverge(Position node, Position far) {
-		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	/**
@@ -89,10 +87,20 @@ public final class MmtrVehicleMotionRunTests {
 
 	/** A live-Motion-Core Vehicle standing at the entry of {@code startRail} (offset 0, no target). */
 	private static Vehicle motionVehicle(Net n, BranchStore store, Rail startRail, Position startAt) {
-		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 6, probeCars(), new ObjectArrayList<>(), 0.0004, 0.0004, true, 120, 30000L);
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 6, probeCars(), new ObjectArrayList<>(), true, 120, 30000L);
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, n.sim);
 		v.engageMmtrMotion(MmtrMotionWalker.start(n.sim, startRail, startAt, store, null));
 		return v;
+	}
+
+	/**
+	 * notes/233 司机优先：本类的用例考的是**走行/岔口路由**（未设岔停车 → 扳岔续行），不是"谁在开车"。
+	 * 手动车现在**跟随道岔的物理位置**（用户口径 2026-09-21：「只要司机能上车，什么都阻挡不了他开车」），
+	 * 所以路由合同改由**无人自动车**钉住；手动车的岔口行为由 {@code MmtrManualPriorityTests} 覆盖。
+	 */
+	private static void armAuto(Vehicle v) {
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(1_000_000, false);
 	}
 
 	private static double driveTicks(Vehicle v, int ticks, ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
@@ -113,7 +121,7 @@ public final class MmtrVehicleMotionRunTests {
 		final Net n = new Net();
 		final BranchStore store = new BranchStore();
 		final Vehicle v = motionVehicle(n, store, n.rIn, new Position(-20, 0, 0));
-		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		armAuto(v);
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vp = new ObjectArrayList<>();
 		vp.add(new Object2ObjectAVLTreeMap<>());
 		vp.add(new Object2ObjectAVLTreeMap<>());
@@ -169,7 +177,7 @@ public final class MmtrVehicleMotionRunTests {
 		final Net n = new Net();
 		final BranchStore store = new BranchStore();
 		final Vehicle v = motionVehicle(n, store, n.rIn, new Position(-20, 0, 0));
-		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		armAuto(v);
 
 		driveTicks(v, 300, null);
 		assertTrue(v.getMmtrMotionWalker().haltedAtAuthority(), "awaits authority at the unset fork");
@@ -195,13 +203,10 @@ public final class MmtrVehicleMotionRunTests {
 		spawned.engageMmtrMotion(MmtrMotionWalker.start(n.sim, n.rIn, new Position(-20, 0, 0), store, null));
 		assertTrue(spawned.isMmtrMotion(), "vehicle runs in live Motion-Core mode");
 
-		// A driver rides the cab; the existing operation-layer drive command drives it.
-		final UUID driver = UUID.randomUUID();
-		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
-		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
-		spawned.updateRidingEntities(entities);
-		new MmtrDriveControl(spawned.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
-		assertTrue(spawned.isMmtrManualOverride(), "drive command must hold the MMTR override");
+		// The existing operation-layer drive command drives it — note/233: these routing contracts are
+		// pinned on the AUTO run now, because a manual driver follows the turnout's physical position
+		// instead of stopping at an unset fork (user ruling 2026-09-21).
+		armAuto(spawned);
 
 		driveTicks(spawned, 300, null);
 		assertTrue(spawned.getMmtrMotionWalker().haltedAtAuthority(), "motion vehicle halts at the unset fork");
@@ -271,7 +276,7 @@ public final class MmtrVehicleMotionRunTests {
 	}
 
 	private static double driveUntilRail(Simulator sim, BranchStore store, Rail via, Position start, String targetHex, int maxTicks) {
-		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, probeCars(), new ObjectArrayList<>(), 0.0004, 0.0004, true, 120, 30000L);
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, probeCars(), new ObjectArrayList<>(), true, 120, 30000L);
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
 		v.engageMmtrMotion(MmtrMotionWalker.start(sim, via, start, store, null));
 		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));

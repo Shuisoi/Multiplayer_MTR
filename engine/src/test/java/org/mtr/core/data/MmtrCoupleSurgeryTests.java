@@ -38,9 +38,9 @@ public final class MmtrCoupleSurgeryTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"loco\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5,\"massRatio\":2.0},"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":120000,\"maxTractiveEffortN\":72000,\"serviceBrakeForceN\":108000,\"emergencyBrakeForceN\":180000},"
 		+ "{\"id\":\"wagon\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5,\"massRatio\":1.0}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
@@ -144,6 +144,65 @@ public final class MmtrCoupleSurgeryTests {
 		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
 		v.updateRidingEntities(entities);
 		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(throttle).setReverser(1), driver).apply(sim);
+	}
+
+	/**
+	 * notes/276 片 6：**钉住随连挂/解挂往返**（停放 = 钉住）。
+	 *
+	 * <p>停放待挂的车列（两节无动力货车、无人、无任务）应当被钉住；连上机车之后整列能出力 ⇒ 解钉；
+	 * 再解挂，剩下的无动力那半段**重新钉住**。这条判据是**推导**出来的（每 tick 重算），
+	 * 所以它天然不会在连挂手术里丢 —— 用例钉的就是这一点。</p>
+	 */
+	@Test
+	public void theWagonHalfIsPinnedAfterUncouplingAndReleasedWhileCoupled() {
+		final Net n = new Net("build/mmtr-pin-lifecycle");
+		// 停放待挂的车列：**显式**声明无动力（世界文件 / `--unpowered` 那条路写出来的就是它；
+		// 本类那个 `cars("wagon", …, false, "wagon")` 夹具的车底是有牵引的，不能用来测钉住）
+		final Vehicle rake = n.spawn(n.siding1, declaredUnpoweredCars("wagon", 2, "wagon"));
+		final Vehicle loco = n.spawn(n.siding2, cars("loco", 1, true, "loco"));
+		n.tick();
+		n.tick();
+		assertTrue(rake.isMmtrPinned(), "停放待挂的车列（显式无动力 + 无人 + 无任务）必须钉住");
+		assertFalse(loco.isMmtrPinned(), "机车自己能出力 ⇒ 不钉");
+		assertEquals(0, rake.getSpeed(), 1e-9, "钉住的车速度恒 0");
+
+		n.sim.mmtrShuntAuthorities.grant(loco.getId(), n.x2.getHexId(), n.y1.getHexId(), Kind.SUBSIDIARY_SHUNT, 0, 10 * 60 * 1000L);
+		boardDriver(n.sim, loco, 3);
+		n.tickUntil(() -> n.y1.getHexId().equals(loco.getMmtrMotionWalker().railHex()) && loco.getSpeed() == 0, 4000);
+
+		final MmtrCoupleSurgery.Result coupling = MmtrCoupleSurgery.couple(n.sim, loco.getId(), rake.getId());
+		assertTrue(coupling.ok(), coupling.reason());
+		final Vehicle merged = coupling.vehicle();
+		assertNotNull(merged);
+		for (int i = 0; i < 5; i++) {
+			n.tick();
+		}
+		assertFalse(merged.isMmtrPinned(), "连上机车（整列能出力）⇒ 解钉（判据每 tick 重算，不用搬标志）");
+
+		final MmtrCoupleSurgery.Result cut = MmtrCoupleSurgery.uncouple(n.sim, merged.getId(), 1);
+		assertTrue(cut.ok(), cut.reason());
+		final Vehicle head = cut.vehicle();
+		final Vehicle tail = cut.other();
+		assertNotNull(head);
+		assertNotNull(tail);
+		assertEquals(2, head.vehicleExtraData.immutableVehicleCars.size(), "前段是两节挂车");
+		assertEquals(1, tail.vehicleExtraData.immutableVehicleCars.size(), "后段是机车");
+		for (int i = 0; i < 5; i++) {
+			n.tick();
+		}
+		assertTrue(head.isMmtrPinned(), "解挂之后剩下的无动力那半段重新钉住（不被连上就钉死在地里）");
+		assertFalse(tail.isMmtrPinned(), "机车那半段不受影响");
+	}
+
+	/** 显式声明无动力的车列（世界文件 / `--unpowered` 那条路写出来的就是它）。 */
+	private static ObjectArrayList<VehicleCar> declaredUnpoweredCars(String vehicleId, int count, String consistTypeId) {
+		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+		for (int i = 0; i < count; i++) {
+			final VehicleCar car = new VehicleCar(vehicleId, 2, 1, 10, 0, 1, 0.1, 0.1, false, consistTypeId);
+			car.setMmtrPoweredDeclared(true);
+			cars.add(car);
+		}
+		return cars;
 	}
 
 	/** Rake (2 wagons) stabled on y1; loco (1 car) driven up to it under a 调车授权. */

@@ -1,0 +1,134 @@
+{
+  "id": "saf420cab_b",
+  "name": "SAF420 控制车（B 端）",
+  "color": "7FA8CC",
+  "transportMode": "TRAIN",
+  "carLengthBlocks": 19.5,
+  "carWidthBlocks": 2.95,
+  "carIndex": 0,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -6.625,
+  "bogie2OffsetBlocks": 6.625,
+  "couplingPadding1": 0.525,
+  "couplingPadding2": 0.525,
+  "sourceObj": "${MC_ROOT}/assets/models/blender/saf420cab/saf420cab.obj",
+  "textureDir": "${MC_ROOT}/assets/models/blender/saf420cab",
+  "rotationDegY": 0,
+  "_orientationNote": "B 端车 = rotationDegY 0 + groupRename 把 _1 改写成 _2（与 consist/saf420.json 的 saf420cab_b 同源，这里留一份是为了让这两端都能离线自检：verify_pid.js --config）。",
+  "recenter": false,
+  "flipTextureV": true,
+  "untexturedUv": [
+    0.5,
+    0.5
+  ],
+  "groupMap": {
+    "body": [
+      "cab_body",
+      "bogies",
+      "plow",
+      "coupler",
+      "underbox",
+      "roof_ac"
+    ],
+    "interior": [
+      "interior"
+    ],
+    "door_l": [
+      "door_l"
+    ],
+    "door_r": [
+      "door_r"
+    ],
+    "anchor": [
+      "mmtr_"
+    ],
+    "headlights": [
+      "headlights"
+    ],
+    "glass": [
+      "glass"
+    ]
+  },
+  "_pidNote": "水牌（notes/357）★ 2026-10-02 临时桥已拆：模型里那块牌自己就叫 mmtr_pid_1（单个四边形），所以 `dest_board` 改名已删除；这端要改的只有下面两条（无序号 + 带序号通配符，缺一条就会漏）。A/B 两端必须都改，否则 B 车的水牌会自称 cab1 却长在另一端 —— verify_pid.js 的 P6 就是抓这个。",
+  "groupRename": {
+    "mmtr_hud_1": "mmtr_hud_2",
+    "mmtr_seat_1": "mmtr_seat_2",
+    "mmtr_cabdoor_1_1": "mmtr_cabdoor_2_1",
+    "mmtr_cabdoor_1_2": "mmtr_cabdoor_2_2",
+    "mmtr_windshield_1_1": "mmtr_windshield_2_1",
+    "mmtr_wipersweep_1_1": "mmtr_wipersweep_2_1",
+    "mmtr_wipersweep_1_1_2": "mmtr_wipersweep_2_1_2",
+    "mmtr_light_1_*": "mmtr_light_2_*",
+    "mmtr_pid_1": "mmtr_pid_2",
+    "mmtr_pid_1_*": "mmtr_pid_2_*",
+    "mmtr_next_1": "mmtr_next_2",
+    "mmtr_next_1_*": "mmtr_next_2_*",
+    "wiper_1_1": "wiper_2_1",
+    "wiper_1_1_2": "wiper_2_1_2",
+    "wiperarm_1_1": "wiperarm_2_1",
+    "wiperarm_1_1_2": "wiperarm_2_1_2"
+  },
+  "_lightNote": "车灯 = 独立组 + condition/renderStage（一个组只能一个 renderStage）。condition 管画不画，renderStage 管发不发光；ALWAYS_ON_LIGHT 不吃世界光。当前只有白前照灯，红尾灯已删。",
+  "partSpecs": {
+    "headlights": [
+      {
+        "renderStage": "ALWAYS_ON_LIGHT",
+        "condition": "ON_ROUTE_FORWARDS"
+      }
+    ],
+    "glass": [
+      {
+        "renderStage": "INTERIOR_TRANSLUCENT"
+      }
+    ]
+  },
+  "_glassNote": "玻璃在模型里是【独立对象】glass ⇒ 独立部件，所以能带自己的一套材质/贴图（interior_translucent + saf420_glass.png）。不要退回到【在 interior 组内部换材质】：实测那样整个 interior 会按玻璃贴图画，从车外看不见内装（notes/345 §7.9）。",
+  "doorAnimationType": "STANDARD",
+  "doorSlidePx": 14,
+  "_doorSlideNote": "TWO leaves per doorway: the default is ONE sign for the whole side, which sends one leaf of every pair INTO its opening. These per-leaf signs are judged in the **OBJ runtime space** = the file space with z NEGATED (MTR negates doorZMultiplier for OBJ models: LegacyVehicleResource.java:398; the OBJ part box is negated on all three axes: ModelPropertiesPart.java:191) ⇒ the leaf on the file's **+Z side takes MINUS**. Confirmed in game 2026-10-01: v30-v32, written the other way round, showed 'doors still reversed'. Same block as consist/saf420.json's saf420cab_a, kept here so the offline checks have a stable staging dir that does not live in %TEMP%.",
+  "doorSlideByGroup": {
+    "door_l_1": -14,
+    "door_l_2": 14,
+    "door_l_3": -14,
+    "door_l_4": 14,
+    "door_l_5": -14,
+    "door_l_6": 14,
+    "door_r_1": -14,
+    "door_r_2": 14,
+    "door_r_3": -14,
+    "door_r_4": 14,
+    "door_r_5": -14,
+    "door_r_6": 14
+  },
+  "extraDoorways": [
+    "cabdoor_1_1",
+    "cabdoor_1_2"
+  ],
+  "outputPackName": "saf420cab_b_v1",
+  "outputDir": "${MC_ROOT}/assets/models/blender/saf420cab",
+  "stagingDir": "${MC_ROOT}/assets/models/blender/saf420cab/.pack_stage_saf420cab_b",
+  "packFormat": 18,
+  "_pidLayoutNote": "水牌版式（notes/358）：与 consist/saf420.json 同源（那份是发货用的，这份是离线自检/预览用的，两边保持一致）。",
+  "pid": {
+    "background": "#FF101418",
+    "textColor": "#FFF2F4F6",
+    "rows": [
+      {
+        "field": "service",
+        "x": 0.03,
+        "y": 0.5,
+        "size": 0.46,
+        "align": "left",
+        "color": "#FF9FB3C8"
+      },
+      {
+        "field": "terminus",
+        "x": 0.97,
+        "y": 0.5,
+        "size": 0.62,
+        "align": "right",
+        "prefix": "开往 "
+      }
+    ]
+  }
+}

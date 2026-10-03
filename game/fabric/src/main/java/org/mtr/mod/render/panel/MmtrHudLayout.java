@@ -40,8 +40,15 @@ import java.nio.charset.StandardCharsets;
  * </pre>
  *
  * <p>Widget kinds: {@code speed} (live km/h), {@code limit} (live speed limit, {@code --} when 0),
- * {@code text} (static), and the shapes {@code rect} / {@code roundRect} / {@code line} /
- * {@code circle} / {@code arc}. Colours are {@code #RRGGBB} or {@code #AARRGGBB}.</p>
+ * {@code text} (static), {@code gauge} (a LIVE analog dial + needle, see {@link #paintGauge}), and the
+ * static shapes {@code rect} / {@code roundRect} / {@code line} / {@code circle} / {@code arc}.
+ * Colours are {@code #RRGGBB} or {@code #AARRGGBB}.</p>
+ *
+ * <pre>
+ * "gauge": {"kind": "gauge", "x": 0.32, "y": 0.5, "radius": 0.44, "start": 225, "end": -45,
+ *           "max": 160, "ticks": 10, "labelEvery": 2, "color": "#FF8FA6B8",
+ *           "needleColor": "#FFFF3B30", "needleWidth": 0.05}
+ * </pre>
  *
  * <p>A model without a {@code hud} object falls back to {@link #DEFAULT}, which is the plain
  * centred speed readout the panel used before layouts existed.</p>
@@ -116,10 +123,64 @@ public final class MmtrHudLayout {
 				case "line" -> canvas.line(widget.x * width, widget.y * height, widget.x2 * width, widget.y2 * height, widget.lineWidth * height, widget.color);
 				case "circle" -> canvas.circle(widget.x * width, widget.y * height, widget.radius * height, widget.color);
 				case "arc" -> canvas.arc(widget.x * width, widget.y * height, widget.radius * height, widget.lineWidth * height, widget.start, widget.end, widget.color);
+				case "gauge" -> paintGauge(canvas, widget, speedKmh);
 				default -> {
 				}
 			}
 		}
+	}
+
+	/**
+	 * A LIVE analog gauge: the dial (arc + optional ticks and numbers) plus a needle that follows the
+	 * speed. Everything the needle needs is already in the layout - {@code start}/{@code end} are the
+	 * needle's sweep in the same counter-clockwise-from-+X degrees the {@code arc} widget uses, and
+	 * {@code max} is the speed at {@code end}.
+	 *
+	 * <p>This is the one widget that had to be added to give a locomotive a real instrument panel: the
+	 * static shapes can draw a dial, but only a live widget can move the needle, and a locomotive desk
+	 * without a needle is not an instrument.</p>
+	 *
+	 * <p>A speedo sweeps CLOCKWISE on screen, so a layout wants {@code end < start} (the conventional
+	 * {@code start: 225, end: -45} = 270 degrees of sweep). Interpolating start→end directly gives that:
+	 * the needle angle is {@code start + (end - start) * speed / max}, clamped at both ends, so an
+	 * over-speed reading pins the needle at full scale rather than wrapping it around the dial.</p>
+	 */
+	private static void paintGauge(MmtrPanelCanvas canvas, Widget widget, int speedKmh) {
+		final double width = canvas.widthM();
+		final double height = canvas.heightM();
+		final double cx = widget.x * width;
+		final double cy = widget.y * height;
+		final double radius = widget.radius * height;
+		if (radius <= 0) {
+			return;
+		}
+
+		canvas.arc(cx, cy, radius, Math.max(widget.lineWidth, 0.004) * height, widget.start, widget.end, widget.color);
+
+		if (widget.ticks > 0) {
+			final double tickLength = (widget.tickLength > 0 ? widget.tickLength : 0.12) * height;
+			for (int i = 0; i <= widget.ticks; i++) {
+				final double fraction = (double) i / widget.ticks;
+				final double angle = Math.toRadians(widget.start + (widget.end - widget.start) * fraction);
+				final double cos = Math.cos(angle);
+				final double sin = Math.sin(angle);
+				// Every fifth tick is long, the rest short: that is what makes a dial readable at a glance.
+				final boolean major = widget.ticks <= 12 || i % 5 == 0;
+				final double inner = radius - tickLength * (major ? 1 : 0.55);
+				canvas.line(cx + cos * inner, cy + sin * inner, cx + cos * radius, cy + sin * radius, Math.max(widget.lineWidth * 0.7, 0.003) * height, widget.color);
+				if (widget.labelEvery > 0 && i % widget.labelEvery == 0 && widget.labelSize > 0) {
+					final double labelRadius = radius - tickLength - widget.labelSize * height * 0.7;
+					canvas.text(String.valueOf((int) Math.round(widget.max * fraction)), cx + cos * labelRadius, cy + sin * labelRadius,
+							widget.labelSize * height, widget.labelColor == 0 ? widget.color : widget.labelColor,
+							IGui.HorizontalAlignment.CENTER, IGui.VerticalAlignment.CENTER);
+				}
+			}
+		}
+
+		final double fraction = widget.max <= 0 ? 0 : Math.max(0, Math.min(1, speedKmh / widget.max));
+		canvas.needle(cx, cy, radius * (widget.needleLength > 0 ? widget.needleLength : 0.94), Math.max(widget.needleWidth, 0.01) * height,
+				widget.start + (widget.end - widget.start) * fraction, widget.needleColor);
+		canvas.circle(cx, cy, Math.max(widget.needleWidth, 0.02) * height, widget.needleColor);
 	}
 
 	/**
@@ -144,6 +205,16 @@ public final class MmtrHudLayout {
 		private int color = DEFAULT_TEXT;
 		private IGui.HorizontalAlignment align = IGui.HorizontalAlignment.CENTER;
 		private String text = "";
+		// gauge only (see paintGauge)
+		private double max;
+		private int ticks;
+		private double tickLength;
+		private int labelEvery;
+		private double labelSize;
+		private int labelColor;
+		private double needleWidth;
+		private double needleLength;
+		private int needleColor = 0xFFFF3B30;
 
 		private Widget(String kind) {
 			this.kind = kind;
@@ -186,6 +257,17 @@ public final class MmtrHudLayout {
 			widget.color = parseColor(getString(object, "color", ""), DEFAULT_TEXT);
 			widget.align = parseAlign(getString(object, "align", "center"));
 			widget.text = getString(object, "text", "");
+			// gauge fields: `max` defaults to a locomotive full-scale (160 km/h) rather than 0, so a
+			// layout that forgets it still draws a working needle instead of a dead one.
+			widget.max = getDouble(object, "max", 160);
+			widget.ticks = (int) getDouble(object, "ticks", 0);
+			widget.tickLength = getDouble(object, "tickLength", 0.12);
+			widget.labelEvery = (int) getDouble(object, "labelEvery", 0);
+			widget.labelSize = getDouble(object, "labelSize", 0.13);
+			widget.labelColor = parseColor(getString(object, "labelColor", ""), 0);
+			widget.needleWidth = getDouble(object, "needleWidth", 0.05);
+			widget.needleLength = getDouble(object, "needleLength", 0.94);
+			widget.needleColor = parseColor(getString(object, "needleColor", ""), 0xFFFF3B30);
 			return widget;
 		}
 	}
@@ -218,9 +300,21 @@ public final class MmtrHudLayout {
 		if (content[0].isEmpty()) {
 			return DEFAULT;
 		}
+		return parse(vehicleId, content[0]);
+	}
 
+	/**
+	 * Parses the ANCHOR FILE's text into a layout - the same code path {@link #read} uses, exposed so the
+	 * layout can be previewed OUTSIDE the game ({@code mmtr/tools/panel-preview}): a dashboard is judged by
+	 * looking at it, and iterating on one through a game launch is how a "just move this line" change turns
+	 * into an afternoon. Returns {@link #DEFAULT} on anything unreadable, and logs why.
+	 *
+	 * @param vehicleId the model id, for logs and the redraw identity
+	 * @param anchorFileText the whole {@code mmtr_anchors_<id>.json} (the {@code hud} key is what matters)
+	 */
+	public static MmtrHudLayout parse(String vehicleId, String anchorFileText) {
 		try {
-			final JsonElement root = JsonParser.parseString(content[0]);
+			final JsonElement root = JsonParser.parseString(anchorFileText);
 			if (!root.isJsonObject()) {
 				return DEFAULT;
 			}
@@ -250,7 +344,7 @@ public final class MmtrHudLayout {
 				return DEFAULT;
 			}
 			// The identity changes whenever the authored layout changes, so a resource reload repaints.
-			return new MmtrHudLayout(vehicleId + "@" + content[0].hashCode(), background, widgets);
+			return new MmtrHudLayout(vehicleId + "@" + anchorFileText.hashCode(), background, widgets);
 		} catch (Exception e) {
 			Init.LOGGER.error("[MMTR] failed to parse the HUD layout of {}", vehicleId, e);
 			return DEFAULT;

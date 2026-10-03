@@ -1,6 +1,7 @@
 package org.mtr.core.mmtr;
 
 import org.junit.jupiter.api.Test;
+import org.mtr.core.mmtr.physics.TrainPhysics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,29 +17,36 @@ public final class MmtrMirrorTests {
 		{
 		  "consistTypes": [
 		    {"id":"emu","name":"EMU","controlMode":"NOTCHED","powerNotches":7,"brakeNotches":8,
-		     "maxSpeedKmh":120,"manualMaxSpeedKmh":110,"tractionAccelerationMps2":0.6,"serviceBrakeDecelerationMps2":0.9,"emergencyDecelerationMps2":1.5,
-		     "tractionBreakpointKmh":40,"resistanceA":0.02,"resistanceB":0.0001,"resistanceC":0.000002,
+		     "maxSpeedKmh":120,"manualMaxSpeedKmh":110,"massKg":60000,"rotatingMassFactor":1.06,
+		     "maxTractiveEffortN":36000,"maxPowerW":1200000,"serviceBrakeForceN":54000,"emergencyBrakeForceN":90000,
+		     "resistanceAN":1200,"resistanceBN":6,"resistanceCN":0.12,
 		     "airPipeChargeRatePerSecond":0.1,"airPipeDischargeRatePerSecond":0.4,
-		     "airBrakeApplyRatePerSecond":0.15,"airBrakeReleaseRatePerSecond":0.1,"massRatio":2},
+		     "airBrakeApplyRatePerSecond":0.15,"airBrakeReleaseRatePerSecond":0.1},
 		    {"id":"freight","name":"Freight","controlMode":"AIR_BRAKE","powerNotches":8,"brakeNotches":3,
-		     "maxSpeedKmh":100,"tractionAccelerationMps2":0.3,"serviceBrakeDecelerationMps2":0.7,"emergencyDecelerationMps2":1.2,
+		     "maxSpeedKmh":100,"massKg":180000,"rotatingMassFactor":1.0,
+		     "maxTractiveEffortN":18000,"maxPowerW":400000,"serviceBrakeForceN":126000,"emergencyBrakeForceN":216000,
 		     "airPipeChargeRatePerSecond":0.12,"airPipeDischargeRatePerSecond":0.5,
-		     "airBrakeApplyRatePerSecond":0.2,"airBrakeReleaseRatePerSecond":0.08,"massRatio":3}
+		     "airBrakeApplyRatePerSecond":0.2,"airBrakeReleaseRatePerSecond":0.08}
 		  ]
 		}
 		""";
 
-	/** Mirrors every ConsistType field the snapshot carries. */
+	/** Mirrors every ConsistType field the snapshot carries（力模型口径，notes/235）。 */
 	private static ConsistType mirror(ConsistType source) {
+		final TrainPhysics physics = source.getPhysics();
 		return new ConsistType(
 			"mirror", "", source.getControlMode(),
 			source.getPowerNotches(), source.getBrakeNotches(),
-			source.getMaxSpeedKmh(), source.getTractionAccelerationMps2(), source.getServiceBrakeDecelerationMps2(),
-			source.getEmergencyDecelerationMps2(), source.getTractionBreakpointKmh(), source.getResistanceA(),
-			source.getResistanceB(), source.getResistanceC(), source.getAirPipeChargeRatePerSecond(),
-			source.getAirPipeDischargeRatePerSecond(), source.getAirBrakeApplyRatePerSecond(),
-			source.getAirBrakeReleaseRatePerSecond(), source.getManualMaxSpeedMetersPerSecond() * 3.6,
-			source.getMassRatio()
+			source.getMaxSpeedKmh(),
+			physics.getMassKg(), physics.getRotatingMassFactor(),
+			physics.getTraction().getMaxTractiveEffortN(), physics.getTraction().getMaxPowerW(),
+			physics.getBrake().getServiceForceN(), physics.getBrake().getEmergencyForceN(),
+			physics.getResistance().getAN(), physics.getResistance().getBN(), physics.getResistance().getCN(),
+			source.getAdhesion().usableMuMax(), source.getAdhesion().isSanding(),
+			source.getAirPipeChargeRatePerSecond(), source.getAirPipeDischargeRatePerSecond(),
+			source.getAirBrakeApplyRatePerSecond(), source.getAirBrakeReleaseRatePerSecond(),
+			source.getManualMaxSpeedMetersPerSecond() * 3.6,
+			null
 		);
 	}
 
@@ -52,15 +60,16 @@ public final class MmtrMirrorTests {
 			assertEquals(source.getPowerNotches(), copy.getPowerNotches(), id);
 			assertEquals(source.getBrakeNotches(), copy.getBrakeNotches(), id);
 			assertEquals(source.getMaxSpeedKmh(), copy.getMaxSpeedKmh(), 1e-9, id);
-			assertEquals(source.getTractionAccelerationMps2(), copy.getTractionAccelerationMps2(), 1e-9, id);
-			assertEquals(source.getServiceBrakeDecelerationMps2(), copy.getServiceBrakeDecelerationMps2(), 1e-9, id);
-			assertEquals(source.getEmergencyDecelerationMps2(), copy.getEmergencyDecelerationMps2(), 1e-9, id);
-			assertEquals(source.getTractionBreakpointKmh(), copy.getTractionBreakpointKmh(), 1e-9, id);
-			assertEquals(source.getResistanceA(), copy.getResistanceA(), 1e-12, id);
-			assertEquals(source.getResistanceB(), copy.getResistanceB(), 1e-12, id);
-			assertEquals(source.getResistanceC(), copy.getResistanceC(), 1e-12, id);
+			assertEquals(source.getMassKg(), copy.getMassKg(), 1e-9, id);
+			assertEquals(source.getRotatingMassFactor(), copy.getRotatingMassFactor(), 1e-9, id);
+			assertEquals(source.getTraction().getMaxTractiveEffortN(), copy.getTraction().getMaxTractiveEffortN(), 1e-9, id);
+			assertEquals(source.getTraction().getMaxPowerW(), copy.getTraction().getMaxPowerW(), 1e-9, id);
+			assertEquals(source.getBrake().getServiceForceN(), copy.getBrake().getServiceForceN(), 1e-9, id);
+			assertEquals(source.getBrake().getEmergencyForceN(), copy.getBrake().getEmergencyForceN(), 1e-9, id);
+			assertEquals(source.getResistance().getAN(), copy.getResistance().getAN(), 1e-9, id);
+			assertEquals(source.getResistance().getBN(), copy.getResistance().getBN(), 1e-9, id);
+			assertEquals(source.getResistance().getCN(), copy.getResistance().getCN(), 1e-9, id);
 			assertEquals(source.getManualMaxSpeedMetersPerSecond(), copy.getManualMaxSpeedMetersPerSecond(), 1e-9, id);
-			assertEquals(source.getMassRatio(), copy.getMassRatio(), 1e-12, id);
 		}
 	}
 

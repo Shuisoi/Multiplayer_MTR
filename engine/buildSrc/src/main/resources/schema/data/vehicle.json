@@ -97,6 +97,18 @@
 			"type": "integer",
 			"default": 0
 		},
+		"mmtrLightA": {
+			"type": "integer",
+			"default": 1
+		},
+		"mmtrLightB": {
+			"type": "integer",
+			"default": 1
+		},
+		"mmtrLightLoco": {
+			"type": "boolean",
+			"default": false
+		},
 		"mmtrDriveHandle": {
 			"type": "integer",
 			"default": 0
@@ -112,6 +124,10 @@
 		"mmtrHoldReason": {
 			"type": "string",
 			"default": ""
+		},
+		"mmtrPinned": {
+			"type": "boolean",
+			"default": false
 		},
 		"mmtrThrottleAxis": {
 			"type": "number",
@@ -145,33 +161,41 @@
 			"type": "number",
 			"default": 0
 		},
-		"mmtrTractionAccelerationMps2": {
+		"mmtrMassKg": {
 			"type": "number",
-			"default": 0.5
+			"default": 60000
 		},
-		"mmtrServiceBrakeDecelerationMps2": {
+		"mmtrRotatingMassFactor": {
 			"type": "number",
-			"default": 0.8
+			"default": 1.06
 		},
-		"mmtrEmergencyDecelerationMps2": {
+		"mmtrMaxTractiveEffortN": {
 			"type": "number",
-			"default": 1.5
+			"default": 100000
 		},
-		"mmtrTractionBreakpointKmh": {
+		"mmtrMaxPowerW": {
 			"type": "number",
-			"default": 120
+			"default": 600000
 		},
-		"mmtrResistanceA": {
+		"mmtrServiceBrakeForceN": {
 			"type": "number",
-			"default": 0
+			"default": 60000
 		},
-		"mmtrResistanceB": {
+		"mmtrEmergencyBrakeForceN": {
 			"type": "number",
-			"default": 0
+			"default": 90000
 		},
-		"mmtrResistanceC": {
+		"mmtrResistanceAN": {
 			"type": "number",
-			"default": 0
+			"default": 900
+		},
+		"mmtrResistanceBN": {
+			"type": "number",
+			"default": 12
+		},
+		"mmtrResistanceCN": {
+			"type": "number",
+			"default": 1.8
 		},
 		"mmtrAirPipeChargeRatePerSecond": {
 			"type": "number",
@@ -196,10 +220,6 @@
 		"mmtrBrakeCylinderPressure": {
 			"type": "number",
 			"default": 0
-		},
-		"mmtrMassRatio": {
-			"type": "number",
-			"default": 1
 		},
 		"mmtrAirState": {
 			"type": "string",
@@ -288,6 +308,18 @@
 		"mmtrSubTaskAcks": {
 			"type": "integer",
 			"default": 0
+		},
+		"mmtrPidService": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrPidTerminus": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrPidNext": {
+			"type": "string",
+			"default": ""
 		}
 	}
 }

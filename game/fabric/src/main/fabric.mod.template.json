@@ -29,7 +29,9 @@
 	},
 	"mixins": [
 		"mtr.mixins.json",
-		"mtr.library.mixins.json"
+		"mtr.library.mixins.json",
+		"mtr.iris.mixins.json",
+		"mtr.sodium.mixins.json"
 	],
 	"depends": {
 		"fabric": "*",

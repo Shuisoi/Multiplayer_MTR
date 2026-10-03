@@ -37,11 +37,11 @@ public final class MmtrMultiplayerFoundationTests {
 	private static final String CONFIG = "{"
 		+ "  \"consistTypes\": ["
 		+ "    {\"id\":\"emu\",\"name\":\"EMU\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "     \"maxSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5,"
+		+ "     \"maxSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000,"
 		+ "     \"airPipeChargeRatePerSecond\":0.1,\"airPipeDischargeRatePerSecond\":0.4,"
 		+ "     \"airBrakeApplyRatePerSecond\":0.15,\"airBrakeReleaseRatePerSecond\":0.1},"
 		+ "    {\"id\":\"freight\",\"name\":\"Freight\",\"controlMode\":\"AIR_BRAKE\",\"powerNotches\":8,\"brakeNotches\":3,"
-		+ "     \"maxSpeedKmh\":100,\"tractionAccelerationMps2\":0.3,\"serviceBrakeDecelerationMps2\":0.7,\"emergencyDecelerationMps2\":1.2,"
+		+ "     \"maxSpeedKmh\":100,\"massKg\":60000,\"maxTractiveEffortN\":18000,\"serviceBrakeForceN\":42000,\"emergencyBrakeForceN\":72000,"
 		+ "     \"airPipeChargeRatePerSecond\":0.12,\"airPipeDischargeRatePerSecond\":0.5,"
 		+ "     \"airBrakeApplyRatePerSecond\":0.2,\"airBrakeReleaseRatePerSecond\":0.08}"
 		+ "  ]"
@@ -114,7 +114,7 @@ public final class MmtrMultiplayerFoundationTests {
 		vehicleCars.add(new VehicleCar("car_0", 10, 2, 100, 0, 5, 0.5, 0.5));
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
 		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
-			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.000004, 0.000004, false, 0, 10000
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), false, 0, 10000
 		);
 
 		final Vehicle serverVehicle = new Vehicle(vehicleExtraData, null, TransportMode.TRAIN, simulator);
@@ -129,8 +129,12 @@ public final class MmtrMultiplayerFoundationTests {
 		assertEquals(0, snapshot.get("mmtrBrakeNotch").getAsInt());
 		assertFalse(snapshot.get("mmtrProtection").getAsBoolean());
 		assertFalse(snapshot.get("mmtrEmergency").getAsBoolean());
-		assertTrue(snapshot.has("mmtrTractionAccelerationMps2"), "consist parameters should also be mirrored on the wire");
-		assertEquals(1.0, snapshot.get("mmtrMassRatio").getAsDouble(), 1e-12, "mass ratio defaults to 1 on legacy vehicles");
+		// 力模型口径（notes/235）：镜像带的是质量/牵引力/功率/制动力，不再是"加速度常数"。
+		assertTrue(snapshot.has("mmtrMassKg"), "consist parameters should also be mirrored on the wire");
+		assertTrue(snapshot.has("mmtrMaxTractiveEffortN"));
+		assertTrue(snapshot.has("mmtrMaxPowerW"));
+		assertTrue(snapshot.has("mmtrServiceBrakeForceN"));
+		assertEquals(60_000, snapshot.get("mmtrMassKg").getAsDouble(), 1e-9, "the generic-vehicle mass mirrors when no consist type resolves");
 	}
 
 	@Test

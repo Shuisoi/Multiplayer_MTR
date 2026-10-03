@@ -8,6 +8,7 @@
 | `打开-Game-工程.bat` | `env\idea\bin\idea64.exe` 打开 `mmtr\game` |
 | `打开-Creator作者端.bat` | 转发到 `mmtr\apps\creator-studio\start-creator-studio.bat`（原版 MTR 4.0.5 作者端） |
 | `启动-MagicaVoxel.bat` | `env\magica-voxel\...\MagicaVoxel.exe` |
+| `打开-动态面工作室.bat` | 转发到 `mmtr\tools\face-studio\face-studio.ps1 -Action open`（本地 web 工作室：看/调车辆动态面；notes/359） |
 
 ## 规矩
 

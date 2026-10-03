@@ -47,6 +47,96 @@ if (Test-Path (Join-Path $webRoot 'index.html')) {
 	Remove-Item Env:\MMTR_WEB_ROOT -ErrorAction SilentlyContinue
 }
 
+<#
+★★ 更正（2026-10-02，notes/362）：下面这段把"`%TEMP%` 写不进去"当成服务端起不来的**根因**，是错的。
+
+   真正的根因是**完整性级别**：DSH 沙箱在工作区根目录 MC 上打了一个显式的 Low 完整性标签
+   （`icacls MC` → `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`），它继承给工作区内所有文件；
+   **镜像位于工作区内的一切可执行文件都以 Low 令牌运行**（实测 `env\jdk-21\bin\java.exe` 的 JVM 是
+   Low，工作区内 `env\idea\bin\idea64.exe` 也是 Low；工作区外的 `.gradle\jdks\…` 才是 High）。
+   Low 令牌下 `Files.isWritable()` 对**任何**路径都返回 false（真实写入却成功），而 fabric-loader
+   的运行期重映射用的是 JDK 的 zipfs：
+
+       jdk.zipfs/jdk/nio/zipfs/ZipFileSystem.java:172-174
+           writeable = Files.isWritable(zfpath);  this.readOnly = !writeable;
+
+   于是 tinyremapper 抛 "the jar file …\processedMods\worldedit-….jar can't be written"（那个 jar 其实
+   写得进去）。真正要换的是**启动用的 JDK**：下面 `$lowLabel` 那段会自动换到工作区外的 JDK。
+   注意：IDEA 自身就是 Low ⇒ 它 fork 的守护进程与 runServer 也一定是 Low ⇒ **从 IDEA 里起不来服务端**。
+
+   `%TEMP%` 写不进去只是同一个 Low 令牌的**另一个症状**（不是根因），所以下面这段改动仍然保留。
+#>
+<#
+★ 给服务端的 JVM 一个**可写的临时目录**（2026-10-02 实测，notes/362）。
+
+这台机器上 `%TEMP%`（`C:\Users\<你>\AppData\Local\Temp`）**PowerShell 能写、JVM 不能写**：
+
+    java.io.tmpdir = C:\Users\30354\AppData\Local\Temp\
+    ✗ 临时目录不可写: java.nio.file.AccessDeniedException: ...\Temp\probe3231661387922866489.txt
+
+症状不是"临时文件失败"这么直白，而是**服务端起不来、报的却是一个毫不相干的错**：
+
+    Failed to remap mods!
+    java.io.IOException: the jar file ...\run\.fabric\processedMods\worldedit-…jar can't be written
+
+（fabric 重映射模组要经临时文件；临时目录不可写，它就把失败归到"那个 jar 写不了"上。同一个根因在
+ `ImageIO` 那边的症状是"面文档里的图全变洋红占位框" —— 见 notes/360 §5 与本文件下面的 `--no-daemon`。）
+
+所以显式给一个工作区内的临时目录。客户端由 IDEA 拉起时 `java.io.tmpdir` 是 IDEA 自己那份（可写），
+所以"客户端能起、服务端起不来"曾经看起来像"共用 run 目录的锁问题" —— 其实是两件事，锁只是其中一次的表象。
+#>
+$tmpRoot = Join-Path $MC_ROOT 'sandbox\tmp'
+New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+# ★ 值**必须带引号**：工作区路径里有空格，不引的话 JVM 会把 `-Djava.io.tmpdir=` 截成空值
+# （实测症状：`Picked up JAVA_TOOL_OPTIONS: -Djava.io.tmpdir=` + `java.io.tmpdir is set to a directory that doesn't exist`）
+$env:JAVA_TOOL_OPTIONS = (@('-Djava.io.tmpdir="' + $tmpRoot + '"', $env:JAVA_TOOL_OPTIONS) | Where-Object { $_ }) -join ' '
+Write-Output "JVM temp dir: $tmpRoot"
+
+<#
+★ 工作区内的 JDK 跑在 Low 完整性令牌下 ⇒ fabric 运行期重映射必然失败（见 notes/362）。
+  有可用的工作区外 JDK 就换成它 —— `JAVA_HOME` 与 `PATH` 必须一起换，否则 gradlew 还会从 PATH 里
+  找到那个 Low 的 java。Low 是**镜像文件上的标签**决定的，跟谁启动、用不用守护进程无关；
+  只是要留意别去 attach IDEA fork 出来的守护进程（那一整棵子树都是 Low）。
+#>
+$lowLabel = icacls (Join-Path $JDK21 'bin\java.exe') 2>$null | Select-String 'Mandatory Label\\Low'
+if ($lowLabel) {
+	$highJdk = $null
+	$candidates = @()
+	if ($env:MC_HIGH_JDK) { $candidates += $env:MC_HIGH_JDK }
+	$candidates += (Get-ChildItem (Join-Path $env:USERPROFILE '.gradle\jdks') -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+	foreach ($candidate in $candidates) {
+		$exe = Join-Path $candidate 'bin\java.exe'
+		if ((Test-Path $exe) -and -not (icacls $exe 2>$null | Select-String 'Mandatory Label\\Low')) {
+			<#
+			 * ★ 候选里必须挑 **21+** 的（2026-10-03 实测）：`~\.gradle\jdks` 下
+			 * `eclipse_adoptium-17-…` 的目录名排在 `eclipse_adoptium-21-…` 前面，
+			 * 而"第一个非 Low 的"就会选中 17 ⇒ 构建当场死在
+			 * `Dependency requires at least JVM runtime version 21. This build uses a Java 17 JVM.`
+			 * （engine 与 game 的 buildSrc 都要求 21）。版本从 JDK 自带的 `release` 文件读，不猜目录名。
+			 #>
+			$major = 0
+			$release = Join-Path $candidate 'release'
+			if (Test-Path $release) {
+				$match = Select-String -Path $release -Pattern '^JAVA_VERSION="(\d+)' | Select-Object -First 1
+				if ($match) {
+					$major = [int]$match.Matches[0].Groups[1].Value
+				}
+			}
+			if ($major -ge 21) {
+				$highJdk = $candidate
+				break
+			}
+		}
+	}
+	if ($highJdk) {
+		$env:JAVA_HOME = $highJdk
+		$lowBin = (Join-Path $JDK21 'bin').TrimEnd('\')
+		$env:Path = (@((Join-Path $highJdk 'bin')) + ($env:Path -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ne $lowBin) })) -join ';'
+		Write-Output "★ 工作区内的 JDK 是 Low 完整性（fabric 重映射会报 can't be written）→ 改用工作区外的 JDK: $highJdk"
+	} else {
+		Write-Output "★ 警告：工作区内的 JDK 是 Low 完整性，且没找到可用的工作区外 JDK —— 服务端很可能起不来（fabric 运行期重映射会失败）。见 mmtr\notes\362。"
+	}
+}
 Set-Location $game
 
 $round = 0

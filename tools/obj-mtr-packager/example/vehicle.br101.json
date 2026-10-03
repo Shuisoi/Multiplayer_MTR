@@ -1,0 +1,115 @@
+{
+  "id": "br101",
+  "name": "DB BR 101",
+  "color": "C8322B",
+  "transportMode": "TRAIN",
+  "carIndex": 0,
+  "carLengthBlocks": 19.9652,
+  "carWidthBlocks": 3.0836,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -5.723,
+  "bogie2OffsetBlocks": 5.723,
+  "couplingPadding1": 0,
+  "couplingPadding2": 0,
+  "sourceObj": "${MC_ROOT}/assets/models/blender/br101/br101.obj",
+  "textureDir": "${MC_ROOT}/assets/models/blender/br101",
+  "rotationDegY": 0,
+  "recenter": true,
+  "flipTextureV": true,
+  "untexturedUv": [
+    0.407843,
+    0.568627
+  ],
+  "floor": true,
+  "floorHeightBlocks": 1.2434247,
+  "extraDoorways": [
+    "cabdoor_1_1",
+    "cabdoor_1_2",
+    "cabdoor_2_1",
+    "cabdoor_2_2"
+  ],
+  "groupMap": {
+    "body": [
+      "body",
+      "car_body",
+      "buffer_beam",
+      "buffers",
+      "bogies",
+      "wiper_motors"
+    ],
+    "interior": [
+      "interior",
+      "interior_glass",
+      "handles"
+    ],
+    "anchor": [
+      "mmtr_"
+    ]
+  },
+  "outputPackName": "BR101_v1",
+  "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
+  "hudLayout": "${MC_ROOT}/mmtr/tools/obj-mtr-packager/example/br101_hud.json",
+  "packFormat": 18,
+  "windshield": {
+    "windshield_1_1": {
+      "waterOffsetM": -0.003,
+      "raindrops": 140,
+      "fallMps": 0.75,
+      "staticThresholdM": 0.0038,
+      "growthMps": 0.0012,
+      "minVisibleRadiusM": 0.004,
+      "maxVisibleRadiusM": 0.009,
+      "densityCellM": 0.05,
+      "densityThresholdPerM2": 130,
+      "runoffMps": 0.45,
+      "pushM": 0.02,
+      "mergeDistanceM": 0.012,
+      "collectZoneM": 0.15
+    },
+    "windshield_1_2": {
+      "waterOffsetM": -0.003,
+      "raindrops": 140,
+      "fallMps": 0.75,
+      "staticThresholdM": 0.0038,
+      "growthMps": 0.0012,
+      "minVisibleRadiusM": 0.004,
+      "maxVisibleRadiusM": 0.009,
+      "densityCellM": 0.05,
+      "densityThresholdPerM2": 130,
+      "runoffMps": 0.45,
+      "pushM": 0.02,
+      "mergeDistanceM": 0.012,
+      "collectZoneM": 0.15
+    },
+    "windshield_2_1": {
+      "waterOffsetM": -0.003,
+      "raindrops": 140,
+      "fallMps": 0.75,
+      "staticThresholdM": 0.0038,
+      "growthMps": 0.0012,
+      "minVisibleRadiusM": 0.004,
+      "maxVisibleRadiusM": 0.009,
+      "densityCellM": 0.05,
+      "densityThresholdPerM2": 130,
+      "runoffMps": 0.45,
+      "pushM": 0.02,
+      "mergeDistanceM": 0.012,
+      "collectZoneM": 0.15
+    },
+    "windshield_2_2": {
+      "waterOffsetM": -0.003,
+      "raindrops": 140,
+      "fallMps": 0.75,
+      "staticThresholdM": 0.0038,
+      "growthMps": 0.0012,
+      "minVisibleRadiusM": 0.004,
+      "maxVisibleRadiusM": 0.009,
+      "densityCellM": 0.05,
+      "densityThresholdPerM2": 130,
+      "runoffMps": 0.45,
+      "pushM": 0.02,
+      "mergeDistanceM": 0.012,
+      "collectZoneM": 0.15
+    }
+  }
+}

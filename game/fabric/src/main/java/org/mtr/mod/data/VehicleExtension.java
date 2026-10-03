@@ -400,8 +400,11 @@ public class VehicleExtension extends Vehicle implements Utilities {
 			 * 且横过来"是**几米到几十米**的越界（阴影完全不更新）才有的现象，不是这个量级。</p>
 			 */
 			if (railProgress > shadowEnd + MMTR_SHADOW_OVERRUN_ALLOWANCE_M) {
-				MmtrVehicleMotionClient.noteShadowOverrun(railProgress - shadowEnd);
+				MmtrVehicleMotionClient.noteShadowOverrun(getId(), railProgress - shadowEnd);
 				railProgress = shadowEnd + MMTR_SHADOW_OVERRUN_ALLOWANCE_M;
+			} else {
+				// 这一拍车头在阴影里 —— 清掉"腿表跟不上"的计时（notes/375：不动→瞬移那件事的自证）。
+				MmtrVehicleMotionClient.noteShadowCovered(getId());
 			}
 			final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> positions = getVehicleCarsAndPositions();
 			railProgress = oldRailProgress;
@@ -416,9 +419,14 @@ public class VehicleExtension extends Vehicle implements Utilities {
 
 	/**
 	 * 腿阴影允许的**渲染越界**（米）：见 {@code getSmoothedVehicleCarsAndPositions} 里那段说明。
-	 * 0.75 m 是"一根轨接头处那一小段"的量级（车头正好压在轨末端时，下一根腿还在路上）。
+	 *
+	 * <p>notes/375 实机量出来的量级：腿表每拍只有 **10 Hz**（+ 单程网络延迟），车头压过一根轨的接头时，
+	 * "新腿那一拍"最多晚 ~100 ms ⇒ 60 km/h 下约 **1.1 m**（实测窗口 {@code 阴影越界=15次/1.105m}，
+	 * 也就是 0.1 秒内被夹了十几帧）。0.75 m 会把这种**正常瞬态**也夹住（画面上是接头处那一小下）；
+	 * 2 m 让它自然外推过去 —— 而它要防的那种病（阴影几十秒不更新）是**几米到几十米**量级
+	 * （实测 824 m），2 m 完全不影响那道闸。</p>
 	 */
-	private static final double MMTR_SHADOW_OVERRUN_ALLOWANCE_M = 0.75;
+	private static final double MMTR_SHADOW_OVERRUN_ALLOWANCE_M = 2.0;
 
 	/**
 	 * 腿阴影覆盖到哪（米，与 {@code railProgress} 同一坐标空间）= 最后一条腿的 {@code endDistance}。
@@ -444,10 +452,11 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	 * 与"车尾在哪"（{@code railProgress - 车长}，只用来判断车尾端那几根腿能不能丢）这两件
 	 * mod 侧才知道的事递进去。</p>
 	 */
-	public org.mtr.core.path.MmtrLegAppender.Applied mmtrApplyLegDeltaFromSync(int droppedFromTrainTail, java.util.List<String> newLegHexIds) {
+	public org.mtr.core.path.MmtrLegAppender.Applied mmtrApplyLegDeltaFromSync(int droppedFromTrainTail, double anchorM, java.util.List<org.mtr.core.mmtr.net.MmtrMotionFrame.Leg> newLegs) {
 		return vehicleExtraData.mmtrApplyLegDelta(
 			droppedFromTrainTail,
-			newLegHexIds,
+			anchorM,
+			newLegs,
 			MinecraftClientData.getInstance().railIdMap,
 			getRailProgress() - vehicleExtraData.getTotalVehicleLength()
 		);

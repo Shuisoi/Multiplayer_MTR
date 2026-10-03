@@ -1,6 +1,7 @@
 package org.mtr.mod.packet;
 
 import org.mtr.core.mmtr.ControlState;
+import org.mtr.core.mmtr.MmtrLightSwitch;
 import org.mtr.core.operation.MmtrDriveControl;
 import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.mapping.holder.MinecraftServer;
@@ -30,6 +31,13 @@ public final class PacketDriveControl extends PacketHandler {
 	private final int driveHandle;
 	private final int cruiseSpeedKmh;
 	private final int reverser;
+	/**
+	 * 灯光开关档位（{@code MmtrLightSwitch}：0 关 / 1 尾 / 2 日 / 3 夜），描述**司机所在驾驶室那一端**。
+	 *
+	 * <p>车灯要别人也看得见，所以开关状态由引擎权威保存、再镜像回所有客户端（notes/352）；
+	 * 这一包只上报"我这端的开关在哪一档"，**端由引擎按占用状态决定** —— 客户端改不了别人那一端。</p>
+	 */
+	private final int lightSwitch;
 	private final boolean emergency;
 	private final boolean acknowledge;
 
@@ -40,6 +48,7 @@ public final class PacketDriveControl extends PacketHandler {
 		driveHandle = packetBufferReceiver.readInt();
 		cruiseSpeedKmh = packetBufferReceiver.readInt();
 		reverser = packetBufferReceiver.readInt();
+		lightSwitch = packetBufferReceiver.readInt();
 		emergency = packetBufferReceiver.readBoolean();
 		acknowledge = packetBufferReceiver.readBoolean();
 	}
@@ -54,12 +63,18 @@ public final class PacketDriveControl extends PacketHandler {
 
 	public PacketDriveControl(long vehicleId, int throttleNotch, int brakeNotch, int reverser, boolean emergency, boolean acknowledge,
 		int driveHandle, int cruiseSpeedKmh) {
+		this(vehicleId, throttleNotch, brakeNotch, reverser, emergency, acknowledge, driveHandle, cruiseSpeedKmh, MmtrLightSwitch.DEFAULT);
+	}
+
+	public PacketDriveControl(long vehicleId, int throttleNotch, int brakeNotch, int reverser, boolean emergency, boolean acknowledge,
+		int driveHandle, int cruiseSpeedKmh, int lightSwitch) {
 		this.vehicleId = vehicleId;
 		this.throttleNotch = throttleNotch;
 		this.brakeNotch = brakeNotch;
 		this.driveHandle = driveHandle;
 		this.cruiseSpeedKmh = cruiseSpeedKmh;
 		this.reverser = reverser;
+		this.lightSwitch = lightSwitch;
 		this.emergency = emergency;
 		this.acknowledge = acknowledge;
 	}
@@ -72,6 +87,7 @@ public final class PacketDriveControl extends PacketHandler {
 		packetBufferSender.writeInt(driveHandle);
 		packetBufferSender.writeInt(cruiseSpeedKmh);
 		packetBufferSender.writeInt(reverser);
+		packetBufferSender.writeInt(lightSwitch);
 		packetBufferSender.writeBoolean(emergency);
 		packetBufferSender.writeBoolean(acknowledge);
 	}
@@ -80,7 +96,7 @@ public final class PacketDriveControl extends PacketHandler {
 	public void runServer(MinecraftServer minecraftServer, ServerPlayerEntity serverPlayerEntity) {
 		final ControlState state = new ControlState()
 			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setDriveHandle(driveHandle)
-			.setCruiseSpeedKmh(cruiseSpeedKmh).setReverser(reverser)
+			.setCruiseSpeedKmh(cruiseSpeedKmh).setReverser(reverser).setLightSwitch(lightSwitch)
 			.setEmergency(emergency).setAcknowledge(acknowledge);
 		// The engine only honours control from the player currently occupying a cab driver seat
 		// of this consist (occupation lock), so attach the sender's identity.

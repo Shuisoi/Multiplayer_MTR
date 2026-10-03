@@ -29,21 +29,18 @@ public final class MmtrLiveRouterTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 
 	private static Rail through(Position p1, Position p2) {
-		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	private static Rail diverge(Position node, Position far) {
-		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	// Perpendicular rail with matching tangents (90/270): an x-axis helper with 0/180 tangents would
 	// collapse into a zero-length rail, so vertical continuations must carry their own tangents.
 	private static Rail railZ(Position p1, Position p2) {
 		final boolean plus = p2.getZ() > p1.getZ();
-		return Rail.newRail(p1, plus ? Angle.fromAngle(90) : Angle.fromAngle(270), p2, plus ? Angle.fromAngle(270) : Angle.fromAngle(90), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(p1, plus ? Angle.fromAngle(90) : Angle.fromAngle(270), p2, plus ? Angle.fromAngle(270) : Angle.fromAngle(90), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	// Yard mainline with a real fork: approach -> node0 -> { straight to A, 45deg diverge to B };
@@ -313,7 +310,7 @@ public final class MmtrLiveRouterTests {
 		// A real Vehicle's path carrier can be built straight from the Motion Core legs.
 		final org.mtr.core.data.VehicleExtraData ved = org.mtr.core.data.VehicleExtraData.createWithLegs(
 			1L, n.node0.getX(), 10, new it.unimi.dsi.fastutil.objects.ObjectArrayList<org.mtr.core.data.VehicleCar>(),
-			legs, 0.0008, 0.0008, true, 20, 30000L);
+			legs, true, 20, 30000L);
 		assertEquals(3, ved.immutablePath.size(), "Vehicle path == Motion Core legs count");
 		double prev = -1;
 		for (final org.mtr.core.data.PathData pd : ved.immutablePath) {

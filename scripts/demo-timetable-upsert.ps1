@@ -1,4 +1,4 @@
-# Demo timetable (环形线时刻表演示): six 1-car HST services on the depot-987654 loop.
+﻿# Demo timetable (环形线时刻表演示): six 1-car HST services on the depot-987654 loop.
 # Each consist leaves its depot siding, serves the ten stations of the loop once per round
 # (1..3 on the x=-170 down spine, 4..10 on the x=-155 up corridor), then runs empty around
 # the x=-147 / x=-176 return legs back into its own depot siding and loops again.

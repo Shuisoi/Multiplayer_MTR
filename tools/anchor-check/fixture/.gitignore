@@ -4,6 +4,10 @@
 #
 # Each fixture needs its OWN staging directory: the packager wipes the staging dir it is given
 # (fs.rmSync), so two fixtures sharing one would delete each other's anchor file.
+#
+# stage-panelfix/ is NOT ignored on purpose: it is the checked-in fixture for verify_panel_frame.js,
+# generated from a real BR101 pack by make_panelfix.js. Unlike the two above it ships no OBJ, because
+# the client-frame checks are pure anchor arithmetic and must not need the Blender model to run.
 out/
 stage/
 stage-wipefix/

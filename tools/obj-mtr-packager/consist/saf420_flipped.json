@@ -1,0 +1,207 @@
+{
+  "packName": "SAF420_v4",
+  "description": "SAF420 commuter EMU - v3 orientation (flipped) + bead density sized to the glass",
+  "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
+  "packFormat": 18,
+  "cars": [
+    {
+      "id": "saf420cab_a",
+      "name": "SAF420 控制车（A 端）",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 19.5,
+      "carWidthBlocks": 2.95,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -6.625,
+      "bogie2OffsetBlocks": 6.625,
+      "couplingPadding1": 0.525,
+      "couplingPadding2": 0.525,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf420cab/saf420cab.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf420cab",
+      "rotationDegY": 180,
+      "recenter": true,
+      "flipTextureV": true,
+      "untexturedUv": [
+        0.125,
+        0.5
+      ],
+      "groupMap": {
+        "body": [
+          "cab_body",
+          "bogies"
+        ],
+        "interior": [
+          "interior"
+        ],
+        "door_l": [
+          "door_l"
+        ],
+        "door_r": [
+          "door_r"
+        ],
+        "anchor": [
+          "mmtr_"
+        ]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "_doorSlideNote": "TWO leaves per doorway: the packager's default is ONE sign for the whole side (door_l* +, door_r* -), which sends one leaf of every pair INTO its own opening. These per-leaf signs send each leaf AWAY from its doorway centre - check with mmtr/tools/anchor-check/verify_doors.js.",
+      "doorSlideByGroup": {
+        "door_l_1": 14,
+        "door_l_2": -14,
+        "door_l_3": 14,
+        "door_l_4": -14,
+        "door_l_5": 14,
+        "door_l_6": -14,
+        "door_r_1": 14,
+        "door_r_2": -14,
+        "door_r_3": 14,
+        "door_r_4": -14,
+        "door_r_5": 14,
+        "door_r_6": -14
+      },
+      "extraDoorways": [
+        "cabdoor_1_1",
+        "cabdoor_1_2"
+      ],
+      "windshield": {
+        "windshield_1_1": {
+          "raindrops": 220
+        }
+      }
+    },
+    {
+      "id": "saf420cab_b",
+      "name": "SAF420 控制车（B 端）",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 19.5,
+      "carWidthBlocks": 2.95,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -6.625,
+      "bogie2OffsetBlocks": 6.625,
+      "couplingPadding1": 0.525,
+      "couplingPadding2": 0.525,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf420cab/saf420cab.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf420cab",
+      "rotationDegY": 0,
+      "recenter": true,
+      "flipTextureV": true,
+      "untexturedUv": [
+        0.125,
+        0.5
+      ],
+      "groupMap": {
+        "body": [
+          "cab_body",
+          "bogies"
+        ],
+        "interior": [
+          "interior"
+        ],
+        "door_l": [
+          "door_l"
+        ],
+        "door_r": [
+          "door_r"
+        ],
+        "anchor": [
+          "mmtr_"
+        ]
+      },
+      "groupRename": {
+        "mmtr_hud_1": "mmtr_hud_2",
+        "mmtr_seat_1": "mmtr_seat_2",
+        "mmtr_cabdoor_1_1": "mmtr_cabdoor_2_1",
+        "mmtr_cabdoor_1_2": "mmtr_cabdoor_2_2",
+        "mmtr_windshield_1_1": "mmtr_windshield_2_1",
+        "mmtr_wipersweep_1_1": "mmtr_wipersweep_2_1",
+        "mmtr_wipersweep_1_1_2": "mmtr_wipersweep_2_1_2",
+        "wiper_1_1": "wiper_2_1",
+        "wiper_1_1_2": "wiper_2_1_2",
+        "wiperarm_1_1": "wiperarm_2_1",
+        "wiperarm_1_1_2": "wiperarm_2_1_2"
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "_doorSlideNote": "The reversed car: rotationDegY bakes the vertices, so the SAME leaf names now sit mirrored in z and every sign is the forward car's NEGATED (verify_doors.js decides it from the packed geometry, not from this note).",
+      "doorSlideByGroup": {
+        "door_l_1": -14,
+        "door_l_2": 14,
+        "door_l_3": -14,
+        "door_l_4": 14,
+        "door_l_5": -14,
+        "door_l_6": 14,
+        "door_r_1": -14,
+        "door_r_2": 14,
+        "door_r_3": -14,
+        "door_r_4": 14,
+        "door_r_5": -14,
+        "door_r_6": 14
+      },
+      "extraDoorways": [
+        "cabdoor_2_1",
+        "cabdoor_2_2"
+      ],
+      "windshield": {
+        "windshield_2_1": {
+          "raindrops": 220
+        }
+      }
+    },
+    {
+      "id": "saf420car",
+      "name": "SAF420 拖车",
+      "color": "7FA8CC",
+      "transportMode": "TRAIN",
+      "carLengthBlocks": 16.95,
+      "carWidthBlocks": 2.95,
+      "bogieCount": 2,
+      "bogieOffsetBlocks": -5.5,
+      "bogie2OffsetBlocks": 5.5,
+      "couplingPadding1": 0.525,
+      "couplingPadding2": 0.525,
+      "sourceObj": "${MC_ROOT}/assets/models/blender/saf420car/saf420car.obj",
+      "textureDir": "${MC_ROOT}/assets/models/blender/saf420car",
+      "rotationDegY": 180,
+      "recenter": true,
+      "flipTextureV": true,
+      "untexturedUv": [
+        0.125,
+        0.5
+      ],
+      "groupMap": {
+        "body": [
+          "cab_body",
+          "bogies"
+        ],
+        "interior": [
+          "interior"
+        ],
+        "door_l": [
+          "door_l"
+        ],
+        "door_r": [
+          "door_r"
+        ]
+      },
+      "doorAnimationType": "STANDARD",
+      "doorSlidePx": 14,
+      "_doorSlideNote": "Same two-leaves-per-doorway fix as the control car (this body shares its door layout).",
+      "doorSlideByGroup": {
+        "door_l_1": 14,
+        "door_l_2": -14,
+        "door_l_3": 14,
+        "door_l_4": -14,
+        "door_l_5": 14,
+        "door_l_6": -14,
+        "door_r_1": 14,
+        "door_r_2": -14,
+        "door_r_3": 14,
+        "door_r_4": -14,
+        "door_r_5": 14,
+        "door_r_6": -14
+      }
+    }
+  ]
+}

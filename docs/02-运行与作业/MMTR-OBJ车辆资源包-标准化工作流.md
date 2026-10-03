@@ -10,6 +10,11 @@
 | 你（建模端） | 在 Blender 里按规范建模并导出 OBJ(+MTL+PNG)；填参数文件；游戏内验收反馈 |
 | 打包端（DSH/脚本） | 读参数 → 几何规范化(旋转/居中/分组改名) → 整理贴图 → 生成注册/属性/门洞 JSON → 打包 zip → 放入 resourcepacks |
 
+> ⚠️ **跑脚本用 `pwsh`，不要用 `powershell`（5.1）**：工作区脚本是 UTF-8 无 BOM + 中文注释，
+> PS 5.1 会按 ANSI(GBK) 解码。要么整行被吞（"解析通过"但语句没了），要么直接语法错 ——
+> 踩过的实例见 **notes/196**（`dev-client.ps1` 的 dot-source 被吞 → `JAVA_HOME` 没设 → 客户端起不来）。
+> 若必须用 5.1，先跑一次 `powershell -File mmtr\scripts\add-utf8-bom.ps1`（幂等）。
+
 ## 1. Blender 建模与导出规范
 
 坐标系（MTR/NTE 车辆 OBJ 规范）：
@@ -18,6 +23,83 @@
 - 模型原点放在**整节车几何中心**（X、Z 居中；Y 可取地板处）
 - 所有面保留 UV；车窗/玻璃等透明材质 PNG 带 alpha 通道
 - 贴图：导出时勾选写 MTL，PNG 与 OBJ 放同一文件夹即可（打包端会处理路径）
+- **`flipTextureV: true`**（打包参数）—— Blender 导出的 `vt` 是 v 向上、Minecraft 的贴图是 v 向下，
+  所以 Blender 模型一律要 `true`。判断依据：**贴图的 alpha 分布 vs 模型 UV 的 bbox**
+  （模型的 UV 应该落在贴图不透明的那一半）。写错**不会报错**，只会让整台车消失（notes/194）。
+
+### 1.5 ★ MTR 读 OBJ 的方式（硬约束，违反即静默丢几何）
+
+> 2026-09-19 反汇编 `org/mtr/mapping/render/obj/ObjModelLoader`（`de.javagl.obj`）确认，
+> 起因是 BR101「只有雨刷显示」，全过程见 `mmtr/notes/194`。
+```java
+for (int i = 0; i < obj.getNumVertices(); i++) {
+    normal = i < obj.getNumNormals()   ? obj.getNormal(i)   : ZERO3;
+    uv     = i < obj.getNumTexCoords() ? obj.getTexCoord(i) : ZERO2;   // (0,0)
+}
+for (each face) new Face(new int[]{ f.getVertexIndex(0), f.getVertexIndex(1), f.getVertexIndex(2) });
+```
+
+MTR **不读**面里的 `v/vt/vn` 三元组，而是**按顶点下标把三张表焊在一起**（第 i 个顶点配第 i 个 vt、第 i 个 vn），
+并且**每个面只读前 3 个角**。所以 MTR 能读的 OBJ 只有一种布局：
+
+| 要求 | 说明 |
+|---|---|
+| `#v == #vt == #vn` | 三张表等长，且第 i 项互相对应 |
+| 每个面是**三角形** | 四边形会丢第 4 个角，n 边形会变成乱三角 |
+| 每个角写成 `f i/i/i` | `vt`/`vn` 下标与顶点下标相同 |
+
+**Blender 的默认导出两条都不满足**（顶点共享、`vt`/`vn` 各自索引空间、保留四边形）。
+
+✅ **打包器现在自动改写**（`pack_vehicle.js` 的 `toMtrObj()`：去焊接 + 耳切三角化，写盘前最后一步，
+三条不变量不满足就直接抛异常），所以**建模端不需要做任何事**。但有两件事建模端要负责：
+
+1. **没有 UV 的面**：MTR 永远会取一个 UV，所以"这个面没有 UV 层"在 MTR 里不存在。
+   打包参数 `"untexturedUv": [u, v]` 指定这类面该采的纹素（不配则采 (0,0)）。
+   BR101 的雨刷整套在 Blender 里没有 UV 层，配的就是贴图上的一块深灰。
+2. **模型的 UV 必须落在贴图的不透明区域**（`flipTextureV` 正确的前提下；
+   贴图 58% 透明时，UV 落错半张图 = 整车被抠光）。
+
+**离线判据**：`node mmtr/tools/obj-mtr-packager/verify_mtr_obj.js --config <vehicle.json>`
+—— 按 MTR 的读法重新解析打包产物并与源模型对照（布局 / (位置,UV) 配对 / 面积 / 包围盒）。
+**"资源都在、日志正常、但部件看不见或贴图错位"先跑它。**
+
+### 1.6 ★ MTR 给 **OBJ 车不建地板/门洞盒** → 人站在 y=1，与模型地板无关
+
+> 2026-09-19 反查 `ModelPropertiesPart.writeCache` / `VehicleResource` 确认，起因是 **BR101 按 G 上不了车**，
+> 全过程见 `mmtr/notes/198`（NPE 层）与 **notes/199**（本篇）。
+
+MTR 有两个 `writeCache` 重载，**功能不对等**：
+
+| 路径 | NORMAL | FLOOR | DOORWAY |
+| --- | --- | --- | --- |
+| Blockbench（`.bbmodel`） | ✓ | ✓ 收集盒 | ✓ 收集盒 |
+| **OBJ（我们用的一律是这条）** | ✓ | **✗ 不收集** | **✗ 不收集** |
+
+于是 OBJ 车的 `floors` **恒为空**，`VehicleResource` 走兜底，日志里会出现
+`[<车型>] No floors or doorways found in vehicle models`：
+
+```java
+final double y = 1 + legacyRiderOffset;          // ← 合成地板的高度
+floors.add(new Box(-x1, y, -z, x1, y, z));       // x1 = width/2 + 0.25, z = length/2 - 0.5
+```
+
+而 `VehicleRidingMovement.clampPosition` 找地板的方式是：
+**主判据 = 盒在 Y 上包住骑手**；**兜底 = `|盒顶 − 骑手Y| ≤ 1 m`**。
+`legacyRiderOffset` 默认 0 ⇒ 合成地板钉在 **y = 1.0** ⇒ **模型地板离 y=1 超过 1 m 的车，人一上车就被踢下来**
+（症状：按 G 有反应、引擎也批准，但人上不去 / "四个角都没有地板"）。
+
+**规则（打包器已自动处理，不必手写）**：`legacyRiderOffset` = `riderFeetY − 1`，其中
+`riderFeetY = mmtr_seat 的 y − 1.62`（MC 玩家眼高）；没有 seat 锚点时用打包器生成的地板顶面。
+可用 `params.legacyRiderOffset` 覆盖。打包时会打印：
+
+```
+rider offset: legacyRiderOffset=2.1300 (mmtr_seat seat_1 eye 4.750 - eye height 1.62) -> MTR synthetic floor y=3.130
+```
+
+⚠️ **建车时必须让"地板/台面/座位眼位"与 MC 的 1.62 m 眼高对齐**：座位眼位 ≈ 地板顶面 + 1.62 时最自然；
+眼位写得比这高，相机就会落在台面下方（101 就是按真车高度建的，台面在地板之上 1.83 m，见 notes/198 §4）。
+**参考值**：`legacyRiderOffset` 落在 0 附近（±1）的车不受影响；超过 ±1 就必须写对，否则上不去车。
+（现有包：br101 需要 **2.13**；saf101 / hst_h 算出来是 **−0.12**，不写也能用。）
 
 分组(部件)约定（导出前把模型按部件分成独立 Object）：
 - 车身/所有不可动件合并为一个：`body`
@@ -38,7 +120,19 @@
 | `mmtr_seat_1` / `mmtr_seat_2` | 驾驶室 1/2 的司机座位点（相机眼位） | 行进方向 | 可选 |
 | `mmtr_ack_1` / `mmtr_ack_2` | AWS 确认按钮位 | 司机 | 可选 |
 | `mmtr_windshield_<驾驶室>[_<玻璃>]` | 驾驶室 `<驾驶室>` 的第 `<玻璃>` 块风挡（下雨/雨刷平面） | 车外 | 做雨雪就必需 |
-| `mmtr_wipersweep_<驾驶室>_<玻璃>` | 该玻璃的**雨刷作用面**（三角扇，见 §1.4②） | 车外 | 有雨刷就必需 |
+| `mmtr_wipersweep_<驾驶室>_<玻璃>[_<第几把>]` | 该玻璃的**雨刷作用面**（三角扇，见 §1.4②）；同一块玻璃可以有多把（§1.4⑥） | 车外 | 有雨刷就必需 |
+| `mmtr_pid_<驾驶室>[_<第几块>]` | **水牌**：面中心 = 牌面中心，尺寸 = 牌面大小；客户端在这一面上画「班次号 + 本趟终点」 | **车外**（站台上的人要看得见） | 做水牌就必需 |
+| `mmtr_next_<驾驶室>[_<第几块>]` | **下一站牌**（车内显示屏）：客户端画「下一站 X」 | **车内**（乘客要看得见） | 可选 |
+
+- **水牌 / 下一站牌（notes/357）**：两块牌的形状一样，判据只差"读它的人在哪一侧"——
+  `mmtr_pid_*` 的法线必须**背离车心**（车外），`mmtr_next_*` 必须**指向车心**（车内）。
+  文字由客户端画（底 + 字都在 `MmtrPidBoard` 里烤成一张贴图），所以**牌底不用建模成可见几何**：
+  模型里那块牌只需要一个四边形 Object，打包器会把它的面剥掉、只留下中心/法线/up/尺寸。
+  `up` 那一侧决定字的上方向（水牌的 up 必须立着，否则字横躺）。A/B 两端要各写一块
+  （`_1` / `_2`），B 端车的 `groupRename` 里记得成对改名 —— 漏了就是"B 车水牌自称 cab1 却长在另一端"，
+  离线判据 `mmtr/tools/anchor-check/verify_pid.js`（P1..P7）会红。
+  **已经有一块现成的可见牌**（例如 SAF420 的 `dest_board`）不必重做：把它从 `groupMap.body`
+  里拿掉、在 `groupRename` 里改名成 `mmtr_pid_<驾驶室>` 即可（notes/357 §2）。
 
 - **驾驶室编号：1 = A 端（车头端 -Z），2 = B 端（车尾端 +Z）**；不带编号按 1 处理。
 - **`mmtr_cabdoor_*` 会同时作为"可见部件"输出**（部件名去掉 `mmtr_` 前缀，如 `cabdoor_1_1`，EXTERIOR 渲染），所以你在 Blender 里把司机门做成实体就能看见、能瞄准；其余锚点（`mmtr_hud` / `mmtr_seat_*` / `mmtr_ack_*`）是纯数据，会从几何里剥掉。
@@ -89,6 +183,47 @@
 ```
 部件输出：`body` / `door_l_1` / `door_l_2` / `door_r_1` + `doorway_door_l_1` / `doorway_door_l_2` / `doorway_door_r_1` + `floor`。
 
+### 1.1.1 在 Blender 里建水牌面（`mmtr_pid_*` / `mmtr_next_*`，notes/357）
+
+水牌（车外目的地牌）与下一站牌（车内屏）**只需要一个平四边形**：位置、尺寸、朝向由它定，
+牌底（深色）与文字（班次号 + 本趟终点 / 下一站 X）**由客户端画**，所以不要把牌面做成可见几何。
+
+1. **建面**：在水牌该在的地方建一个四边形（4 个顶点、共面），Object 命名
+   `mmtr_pid_1`（A 端）/ `mmtr_pid_2`（B 端）；同一端两侧各一块就 `mmtr_pid_1_1` / `mmtr_pid_1_2`
+   （带序号时最后一个数字是"这一端的第几块"，内容相同）。
+2. **朝向（最重要）**：水牌的**法线必须朝车外**（站台那一侧）—— 读它的人站在法线那一侧。
+   绕序反了 = 牌背朝站台，而那一层**开背面剔除** ⇒ 整块牌**看不见**（打包与日志都不会报错）。
+   车内的下一站牌相反：法线朝**车内**（乘客那侧）。
+3. **文字方向**：`up` = 与世界 +Y 最贴合的那条边，所以牌面要有一条边大致竖直（字才是正的；
+   横躺的 up 会让字横过来 —— `verify_pid.js` 的 P5 抓这个）。
+4. **尺寸**：`widthM × heightM` 就是字能用的范围（客户端按它烤贴图，超宽会等比缩小）。
+   车上常见的扁牌（如 1.24 × 0.22 m）排成两行：上一行班次号（小字）、下一行终点（大字）。
+5. **不要重复**：锚点的面会被打包器**剥掉**，所以模型里**不要**再放一块可见的牌面；
+   若原来已经有一块（SAF420 的 `dest_board` 就是），把它从 `groupMap.body` 里拿掉并改名成
+   `mmtr_pid_<驾驶室>`（见 §1.1 的说明），或者删掉它、只留新锚点四边形。
+   ⚠ 两处都产出同一块牌时，锚点会有两条同名记录（`verify_pid.js` P1 会红）。
+6. **两端成对**：B 端车（`rotationDegY 0` + `groupRename`）里加
+   `"mmtr_pid_1": "mmtr_pid_2"`、`"mmtr_pid_1_*": "mmtr_pid_2_*"`（`next` 同理）——
+   无序号写法**匹配不到**通配符（少一个 `_`），所以两种都写。
+   ⚠ **同一端可以挂好几块**（现场 SAF420：车头正脸 1 块 + 车头端两侧各 1 块 + 车尾端两侧各 1 块 = 5 块）。
+   **单驾驶室车的车侧中部牌仍然是那一个 cab** —— 它们在同一节车上、显示同一份内容（notes/357 §9）。
+   `verify_pid.js` 的 P6 就是这么判的：全车只有一个 cab（看 hud/cabdoor/seat 的 cab 值）时，
+   所有牌必须都是那个 cab；只有**两端都有驾驶室**的车才用"文件 z>0 = cab1"的符号口径。
+7. **自检**（改完就跑，不用进游戏）：
+   ```powershell
+   node mmtr\tools\anchor-check\verify_pid.js mmtr\tools\obj-mtr-packager\example\vehicle.saf420cab_a.json
+   pwsh -File sandbox\pid-anchor-probe\check.ps1   # 对自检本身做故障注入（6 种坏法各自变红）
+   ```
+8. **过渡说明（2026-10-01 → 2026-10-02 已拆桥）**：SAF420 曾经走的是"把可见组 `dest_board` 改名成
+   `mmtr_pid_1/2`"这条桥（零建模成本，先让功能可见）。**2026-10-02 桥已拆**：`sandbox/saf420_destboard.py`
+   现在直接生成规范锚点名 `mmtr_pid_1`（**单个四边形**：面心 (0, 3.41, −9.756)、1.24 × 0.22 m、
+   法线 −Z 朝车外、up = +Y），`consist/saf420.json` 与两份 `example/vehicle.saf420cab_*.json` 里的
+   `groupRename.dest_board` 条目**已删除**（留着它，模型里一旦再出现同名组就会把同一块牌产出两次）。
+   ⚠ 顺带记一条踩过的隐患：**别拿可见盒子当锚点**——盒子的前后面面积相等（都 0.2728 m²），
+   打包器取"第一个面积最大的面"，法线朝里还是朝外**只取决于网格面顺序**；朝里那一层开背面剔除，
+   游戏里整块牌看不见，而导出/打包/自检一个都不报错。
+   历史记录见 `mmtr/notes/357-水牌PID-锚点契约与客户端渲染.md`；判据 `verify_pid.js`（A/B 两端各 7 项全 PASS）。
+
 ### 1.2 游戏内如何使用锚点（B7.6d）
 
 - **瞄准驾驶室门 → 提示按 F**：客户端用 `mmtr_cabdoor_<cab>_<n>` 算出门的实际世界坐标，取视线夹角最小且在 5 m 内的那扇门，屏幕下方提示「按 F 进入 N 号驾驶室」；按 F 即把该驾驶室钥匙交给引擎并**把玩家钉到驾驶室眼位**。
@@ -98,6 +233,61 @@
 - **离开**：对着同一扇门再按 F（或对着车按 F）= 拔钥匙。客户端日志会打印 `[MMTR] cab N of vehicle ... seat car-local (...)`，缺锚点时会打印实际加载到的锚点数量。
 
 Blender 导出：File → Export → Wavefront (.obj)，勾选 Materials / Write Normals / Include UVs。
+
+### 1.2.1 水牌版式：每个车型（甚至每块牌）自己一套（notes/358）
+
+**尺寸本来就独立**（`widthM × heightM` 是打包器从那块四边形量出来的），但"排版"默认只有一套两行规则 ——
+一块 1.24 × 0.22 m 的扁牌和一块 0.5 × 0.5 m 的方牌用同一套字号比例，总有一边难看。于是版式也交给配置：
+
+```json
+"pid": {
+  "background": "#FF101418", "textColor": "#FFF2F4F6", "pxPerMetre": 512,
+  "rows": [
+    { "field": "service",  "x": 0.03, "y": 0.5, "size": 0.46, "align": "left", "color": "#FF9FB3C8" },
+    { "field": "terminus", "x": 0.97, "y": 0.5, "size": 0.62, "align": "right", "prefix": "开往 " }
+  ]
+},
+"next": {
+  "rows": [ { "text": "下一站", "x": 0.5, "y": 0.75, "size": 0.22 },
+            { "field": "next", "x": 0.5, "y": 0.35, "size": 0.5 } ]
+}
+```
+
+| 键 | 写在哪 | 说明 |
+| --- | --- | --- |
+| `pid` / `next` | 车辆配置（每节车各写各的） | 打包器**原样**写进 `mmtr_anchors_<车型>.json`；**不写 = 默认版式**（班次号在上、站名在下两行），老包一个字节都不用改 |
+| `background` / `textColor` | 段 | 牌底色与默认字色（`#RRGGBB` / `#AARRGGBB`） |
+| `pxPerMetre` | 段 | 这块牌的像素密度（缺省 512；画布长边仍会被夹在 512 px） |
+| `rows[]` | 段 | 自上而下**不会自动排序**：`y` 就是位置，自己写 |
+| `field` | 行 | `service`（班次号）/ `terminus`（本趟终点）/ `next`（下一站）；拼错 = 这一行不画 |
+| `text` | 行 | 字面量（如"下一站"、"回库"）；与 `field` 二选一 |
+| `x` / `y` | 行 | 位置，**牌面宽/高的 0..1**（0,0 = 左下角） |
+| `size` | 行 | 字高，**牌高的比例**（0.02..1.5，超界钳回） |
+| `align` | 行 | `left` / `center`（缺省）/ `right` |
+| `color` | 行 | 这一行的字色（缺省用 `textColor`） |
+| `prefix` / `suffix` | 行 | 内容前后加的固定字（如"开往 "） |
+
+四条经验（第一条是实测踩出来的）：
+
+1. **并排要"靠边对齐"**：一行里放两块内容时用 `align: left` + `x: 0.03` 与 `align: right` + `x: 0.97`。
+   两块都 `center` 时，大字号那一行的宽度会盖到另一块上（第一版示范就是这么压在一起的）。
+2. **全是比例 ⇒ 同一版式在任何尺寸下自动等比**：字号是牌高的比例、位置是牌面比例，所以"换尺寸不用改版式"；
+   某一行超过牌宽 90% 会自动**等比缩小**（不会被牌边切掉）。
+3. **取不到内容的行不画**：回库趟（终点未知）只画班次号那一行；下一站牌没有站名时整块不画。
+   `text` 那种字面量行不看字段 —— 所以"回库趟显示『回库』"这类版式写得出来（整块牌挂不挂仍由作业单决定）。
+4. **不带 `pid` 段就还是老样子**：默认版式与 notes/357 那套写死的排版逐字一致（有用例钉着）。
+
+**离线出图（改版式时别起客户端）**：
+
+```powershell
+pwsh -File mmtr\tools\pid-preview\preview.ps1 -Anchor <mmtr_anchors_x.json> `
+     [-Board pid|next] [-Service 00101] [-Terminus 海山] [-Next 鸥湾] `
+     [-Out <png>] [-WidthM 1.24 -HeightM 0.22 -PxPerMetre 512]
+```
+
+尺寸默认从锚点读（与游戏里一致）；给 `-WidthM/-HeightM` 就能回答"这块牌做成 1.6 × 0.12 m 好不好看"。
+它跑的是**真的那条链**（`MmtrPidLayout.parse` + `MmtrPanelCanvas`，与游戏同一份 Java2D），只写 `sandbox\`。
+CJK 字形走**系统兜底**（离线预览拿不到资源包里的 HarmonyOS），所以字面形状与游戏里有细微差别。
 
 ### 1.3 仪表面板渲染契约（B7.6e，2026-09-09 实测固化）
 
@@ -116,7 +306,14 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
 `GraphicsHolder.drawTextureInWorld` 给四个角的 UV 依次是 `(u1,v2) (u2,v2) (u2,v1) (u1,v1)`（反汇编确认），和矩形重载的参数命名相反。想让图像正立，要传 `v1=0, v2=1`（图像顶行落在面板顶边）。
 
 **⑤ 朝哪一面画、U 往哪边走**
-- 锚面帧：解 `rotateY(yaw)·rotateX(pitch)·rotateZ(roll) = [right, up, normal]`（三列分别是锚面的右/上/法线），不再需要任何硬编码 roll；
+- 锚面帧：**直接用锚点自己的正交基摆四个角** —— `centre + sideRight·a + up·b + sideNormal·lift`，
+  然后**只套车体变换**（`carTransform.transform`）后就画，**没有局部旋转**。
+  > ⚠️ **永远不要反解欧拉角。** 曾经用过 `pitch=asin(-up.y) / yaw=atan2(n.x,n.z) / roll=atan2(up.x,up.y)`
+  > 那套解：它把 `up` 的竖直分量当成 pitch 的全部，**只对"竖直朝前的面板"成立**，
+  > 倾斜面（风挡、上仰仪表台）会被绕车的横轴转掉一大截 —— 风挡实测差 **90°**（notes/179 §10）、
+  > BR101 仪表实测差 **68°**（notes/200）。判别法：把 `normal/up/right` 两两点乘，
+  > **正交就说明锚点没错，是代码用错了这三个向量**。离线量偏差：`node sandbox/panel_euler_error.js <anchors.json>`。
+  > 摆完角点**必须 `graphicsHolder.pop()`**（`transform()` 会 push，漏了会破坏矩阵栈）。
 - 画哪一面：模型空间里车体以原点为中心，所以**仪表"朝车内"的一侧 = 法线指向原点的那一侧**，自动选边；法线与车长平行时无法判断，才两面都画；
 - U 方向：**与 `side` 无关，永远不需要翻 U**。被绘制的那一面法线是 `side·normal`、它指向司机，所以司机视线 `f = -side·normal`，司机右手
   `f × up = -side·(normal × up) = side·(up × normal) = sideRight` —— 正好是四边形局部 +X。
@@ -144,8 +341,19 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
 - 每个面的**司机侧判定是逐面**做的（折面各面朝向不同，用组级平均法线会整体选错边）；
 - 单面模型**不写** `faces`/`canvas*` → 走原来的单 quad 路径，**老资源包不用重打**。
 - 离线验证：`mmtr/tools/anchor-check/`（`anchor_faces.js` 判断是不是折面、`verify_facets.js` 校验
-  UV 连续性/覆盖/朝向等八项、`selftest.js` 用故障注入证明验证器有牙）；合成 fixture 在
-  `mmtr/tools/anchor-check/fixture/`。
+  UV 连续性/覆盖/朝向等八项、**`verify_panel_frame.js` 用客户端的取景数学再校验一遍**（见下）、
+  `selftest.js` 用故障注入证明验证器有牙）；合成 fixture 在 `mmtr/tools/anchor-check/fixture/`。
+- **为什么折面要验两遍**：`verify_facets.js` 验的是**打包器自己的展开坐标系**（沿折痕展开、累加偏移，
+  数字自洽）。客户端**不用**这套坐标系 —— 它对每个 facet 重算
+  `right = cross(up, normal)`、`side = facingSide(position, normal)`（车体以原点为中心，法线指向车内的一侧）、
+  局部 +X = `side * right`，`u0` 落在局部 −X、`u1` 落在 +X，再沿局部 +Z 抬离锚面。
+  两套坐标系之间可以**连续地错开**：BR101 仪表台曾是**剪切**的平行四边形，修直之后画布在两道折痕上
+  又**不连续**（跨过共边 u 从 1 跳到 0.412），直到把 Blender 里 `mmtr_hud` 面的**绕序**重做才对齐。
+  这些在打包器自己的数字里**全都看不出来**，截图也只能告诉你"看着不对"。
+  `verify_panel_frame.js` 因此按客户端的方式摆每个角点，落在同一点（≤ 2 cm）的两个角必须拿到**同一个 (u,v)**；
+  并按 **u 必须朝司机的右手方向增大** 判定没有镜像 —— 全局镜像（`u → 1-u` 且 `u0/u1` 仍有序）
+  既连续、又正好铺满画布、也满足展开比例，**只有这一条能发现**（故障注入里有这一例）。
+  用法：`node mmtr/tools/anchor-check/verify_panel_frame.js --config <车型参数.json>`。
 
 **⑧ 画面按车型：`hud` 布局块**
 面板内容不是写死在代码里的，而是每个**车型**一份布局，写在锚点 JSON 的 `hud` 块里（打包器从参数 `hud`/`hudLayout` 生成，见 §1.1）：
@@ -161,9 +369,13 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
 }
 ```
 - **坐标全部是面板的比例（0..1）**，不是米：`x/w/x2` 相对面板宽，`y/h/size/radius/lineWidth` 相对面板高 → 改面板尺寸不用重画布局。原点在左下角。
-- 控件：`speed`（实时 km/h）、`limit`（实时限速，0 时显示 `--`）、`text`（静态文字，`align` = left/center/right）；图形 `rect`/`roundRect`（`w,h,radius`）、`line`（`x,y`→`x2,y2`，`lineWidth`）、`circle`（`radius`）、`arc`（`radius`、`start`/`end` 度、逆时针从 +X 起算）。
+- 控件：`speed`（实时 km/h）、`limit`（实时限速，0 时显示 `--`）、`text`（静态文字，`align` = left/center/right）、`gauge`（**实时指针表盘**，见下）；图形 `rect`/`roundRect`（`w,h,radius`）、`line`（`x,y`→`x2,y2`，`lineWidth`）、`circle`（`radius`）、`arc`（`radius`、`start`/`end` 度、逆时针从 +X 起算）。
+- **`gauge`（模拟指针表）**：`x,y` 圆心、`radius` 表盘半径、`start`/`end` = 指针在 **0 与满量程**时的角度（同样是逆时针从 +X 起算的度；`end < start` 表示顺时针扫，BR101 用 `210 → -30` 即左下→顶→右下共 240°）、`max` 满量程（默认 160，忘写也仍有指针）、`ticks` 主刻度段数、`tickLength` 刻度长（默认 0.12）、`labelEvery` 每几格标一次数字（0 = 不标）、`labelSize`/`labelColor`、`lineWidth`+`color` 画表盘弧、`needleColor`（默认红 `#FFFF3B30`）/`needleWidth`/`needleLength`（相对半径，默认 0.94）+ 圆心点。指针角 = `start + (end-start) * 速度/max`，**两端都钳位**（超速顶在满量程，不回绕）。
+  > `ticks > 12` 时每 5 格才画长刻度；`ticks ≤ 12` 时全部按主刻度画。静态 `rect`/`arc`/`text` 拼不出会动的指针，所以仪表必须用 `gauge`。
 - 颜色 `#RRGGBB` 或 `#AARRGGBB`。
 - 没有 `hud` 块 → 客户端用默认画面（居中速度 + `km/h`）。
+- **改完先在离线预览里看**：`pwsh -File mmtr\tools\panel-preview\preview.ps1 -Anchor <layout.json> -Speed 87 -Limit 100`
+  会用**客户端同一套类**（`MmtrHudLayout.parse` + `MmtrPanelCanvas`）画到 PNG，不必进游戏。
 
 ### 1.4 风挡：多块玻璃、雨刷作用面、实体雨刷
 
@@ -173,6 +385,23 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
 > **W3/W4 未实现**（曲面玻璃的展开渲染；实体雨刷**渲染在建模位置但不会转** —— 绕支点旋转要改 MTR 部件渲染）。
 > ⚠️ 另：`driverOnBoard()` 目前硬编码 `false`（上下车重构期间，notes/185），所以**在游戏里雨刷暂时不会动，只有雨滴**。
 > 实现顺序与理由见 `mmtr/notes/187-风挡多玻璃与雨刷作用面-规范冻结.md`。
+>
+> **2026-09-19 追补（notes/193）**：`notes/189` 已把 `driverOnBoard` 实装（雨刷会动了）。
+> 首次真车入包（BR101）暴露并修掉**打包器 3 处真缺陷**：① 锚点法线曾取"组质心三点叉积"，
+> 折面组偏 49° → 折面仪表拿不到 facet 数据；② 行程求解曾分不清"停放边/远端边"，
+> 真实机车两条边近乎平行时会写出 0.3° 这种行程；③ `foldAboutUp`（竖折痕）分支的 v 矩形曾用错坐标。
+> **给模型的硬性要求因此再明确一次**：折面锚点**每块面必须是矩形**（相邻边 90°），
+> 错切的平行四边形客户端画不出来（矩形与面不等大）；雨刷必须建在**行程端点**上（= 扇形的边界边）。
+>
+> **2026-09-19 追补（notes/202、notes/203）**：**W4 已实现**（实体雨刷随档位按机构运动学转动），
+> W3（曲面玻璃）仍未做。两轮的根因分别在"渲染链"和"两个坐标/角度轴"：
+> 几何在 OBJ 路径上落在 `optimizedModelDoor`、且被 optimized 批量渲染吞掉（notes/202）；
+> 让它转起来之后又"动得不对"—— 欧拉反解读错矩阵元（轴偏 13.81°）＋ 支点被当成模型坐标
+> （旋转轴穿过模型原点、杆子飞到天上）＋ 配置比例漏了 `−0.5`（半屏偏移）（notes/203）。
+> 离线判据新增 `mmtr/tools/anchor-check/verify_plane_frame.js`（源码守卫 + 帧契约 + 与二维运动学的桥梁断言），
+> `selftest` 30/30；注意**轴对齐的夹具测不到这个 bug**（yaw=±90° 处 pitch/roll 退化，错解与正解同矩阵），
+> 所以回归必须打在客户端源码上。
+
 
 一个驾驶室通常有**多块玻璃**（前挡可能还分左右两片，另有侧窗、车门玻璃），每块**各自**下雨、各自有湿度与雨刷。
 客户端本来就是"每个锚点一份独立状态"（`findWindshields` 返回该车所有风挡锚点，各自一份雨滴/湿度/画布/贴图），
@@ -182,17 +411,22 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
 
 | 命名 | 含义 |
 | --- | --- |
-| `mmtr_windshield_<驾驶室>_<玻璃>` | 驾驶室 `<驾驶室>` 的第 `<玻璃>` 块玻璃（**无雨刷**） |
-| `mmtr_wipersweep_<驾驶室>_<玻璃>` | 同编号玻璃的**雨刷作用面**（扇形） |
-| `wiper_<驾驶室>_<玻璃>` | 雨刷本体（**实体建模**的可见部件，见 ④） |
+| `mmtr_windshield_<驾驶室>_<玻璃>` | 驾驶室 `<驾驶室>` 的第 `<玻璃>` 块玻璃 |
+| `mmtr_wipersweep_<驾驶室>_<玻璃>[_<第几把>]` | 同编号玻璃上**第 `<第几把>` 把**雨刷的作用面（扇形）；缺省 = 1 |
+| `wiper_<驾驶室>_<玻璃>[_<第几把>]` | 该把雨刷的刀片（**实体建模**的可见部件，见 ④） |
+| `wiperarm_<…>` / `wiperrod_<…>` | 同一把雨刷的臂 / 拉杆（见 ⑤） |
 
-- **有 `mmtr_wipersweep_<cab>_<pane>` 锚点 = 那块玻璃有雨刷**，名字里不再重复编码这件事。
+- **有 `mmtr_wipersweep_<cab>_<pane>[_<n>]` 锚点 = 那块玻璃有这一把雨刷**，名字里不再重复编码这件事。
 - 玻璃编号：**主档永远 = 1**，侧窗/其它依次递增。
 - **索引规则（向后兼容，务必遵守）**：只写**一个**索引 = **驾驶室号**（玻璃默认 1）；
   写**两个**索引 = 驾驶室号 + 玻璃号。
   所以 `mmtr_windshield_1` = 驾驶室 1 主档、`mmtr_windshield_2` = **驾驶室 2** 主档（老模型照旧），
   `mmtr_windshield_1_2` = 驾驶室 1 的第 2 块玻璃。
   锚点 JSON 里 `pane` **只在不是 1 的时候才写**（缺省 = 1），这样单玻璃模型的老锚点条目逐字节不变。
+- **雨刷索引是第三个索引，且只在不是 1 的时候写**：`mmtr_wipersweep_1_1` = 驾驶室 1 第 1 块玻璃的
+  **第 1 把**雨刷，`mmtr_wipersweep_1_1_2` = **同一块玻璃的第 2 把**。
+  于是 `mmtr_wipersweep_1_2` 仍然是"驾驶室 1、第 2 块玻璃、第 1 把" —— 老模型逐字节不变。
+  一块玻璃两把雨刷 = **一个玻璃锚点 + 两个扇形 + 两套实体件**，不是两块玻璃：见 ⑥。
 - 一个驾驶室有多块玻璃后，"按驾驶室找玻璃"必须返回**全部**同编号玻璃（雨刷档、司机在车上、面板指示灯都要按此判定）。
   客户端为此提供两把：`findWindshields(car, cab)`（该驾驶室**全部**玻璃，驾驶室级判断用这个）与
   `findWindshield(car, cab, pane)`（指定玻璃）；`Anchor.pane` 缺省 1。
@@ -206,7 +440,10 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
   **几何上无法分辨哪个角是支点** —— 打包器会退而采用"每个三角形的第一个顶点"作为支点并打一条 NOTE；
   三个以上就没有这个歧义。
 - 扇形与它作用的那块玻璃**共面/共曲面**，画在玻璃上（可以略微抬起避免 z-fighting）。
-- 打包器**拟合**出下面这些量，写进该玻璃锚点的 `windshield` 配置块（**复用现有字段，客户端不需要新代码**）：
+  ⚠️ 扇形的**绕序（法线朝向）不影响拟合** —— 拟合全部在**玻璃**的二维域里做，扇形的法线不参与；
+  但把两个镜像雨刷画成同一绕序会让第二个扇形法线朝里，看着奇怪而已。
+- 打包器**拟合**出下面这些量，写进该玻璃锚点的 `windshield` 配置块（**复用现有字段**，单雨刷模型
+  客户端一行代码都不需要改）：
 
 | 拟合量 | 来源 | 客户端字段 | 参照 |
 | --- | --- | --- | --- |
@@ -231,9 +468,10 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
 - 雨层与雨刷刀片**逐面**渲染（每面取自己的 UV 子矩形），刀片按面裁剪。
 - 单面玻璃**完全不写** `faces`，走原来的单 quad 路径。
 
-**④ 实体雨刷（`wiper_<cab>_<pane>`）**
+**④ 实体雨刷（`wiper_<cab>_<pane>[_<n>]`）**
 
-- 模型里是**独立可见部件**，每个雨刷**一个** Object，名字 `wiper_<cab>_<pane>`。
+- 模型里是**独立可见部件**，每把雨刷**一个** Object，名字 `wiper_<cab>_<pane>[_<n>]`
+  （`wiperarm_` / `wiperrod_` 同规则）。
 - **不需要往 `groupMap` 里加角色**：打包器按名字约定直接认它（和门叶一样每个雨刷**独立成件**，
   这样才能各自绕自己的支点转）。这也顺便避开了两个坑：没有 `mmtr_` 前缀的组如果不被识别，
   它的面会**不写 `g` 行却仍写出去**（静默粘到前一个组）；而用一个通用 `"wiper"` 角色会把**所有**
@@ -243,10 +481,15 @@ MTR 的渲染队列是 `stage → QueuedRenderLayer → Map<Identifier, 回调�
   这两个概念是分开的，别把它们混成一个开关。
 - 角度与玻璃上的刮拭**共用同一份动画状态**（就是现在驱动画刀片的那个 `wiperAngleDeg`），
   所以"雨刮动画"和"雨滴被刮掉"天然同步，不存在两套时间。
-- ⚠️ **W4 未做**：实体雨刷目前**渲染在建模位置（停放态）但不会转**。OBJ 部件目前的每帧变换只有
-  **平移 + 0/π 的 Y 旋转**，绕支点连续转需要给部件渲染加一个动态旋转（并量 optimized 缓存的代价）。
-  注意 W4 要做成**通用刚体变换（转角 + 平移）**而不是"绕支点旋转"：平行连杆的刀片是**纯平移**，
-  只做旋转的话这一族做不出来。
+- ✅ **W4 已实现**（notes/202、notes/203）：实体雨刷按机构运动学随档位转动。做法是给部件渲染加一层
+  每帧的刚体变换（`MmtrWindshield.pushPartTransform`）：臂/杆绕各自支点转，刀片按"销对"走过的角
+  转 + 把停位销平移到当前位置（因此**平行连杆的纯平移天然落在这个式子里**，不是另一条分支）。
+  三个必须一起对的量（错一个就"动得不对"，见 notes/203）：**轴**（欧拉角必须从玻璃基向量
+  `(right, up, normal)` 的矩阵元取：`pitch=asin(-normal.y())`、`roll=atan2(right.y(), up.y())`，
+  不能拿 `up` 的分量去猜）、**支点**（`plane.pointAt()` 要"相对玻璃中心的米"，必须先把配置里的
+  0..1 比例减 0.5 再乘尺寸）、**变换落点**（矩阵栈是模型空间，先 `pointAt` 把支点抬到玻璃上，
+  再平移/旋转/反平移）。
+  `verify_plane_frame.js` 就是这三条的离线判据（含源码守卫与"共轭旋转 vs 二维运动学"的桥梁断言）。
 
 **⑤ 雨刷机构：单轴 / 平行连杆（两族都支持）**
 
@@ -320,6 +563,38 @@ wiper mechanism: windshield_1_3 parallel linkage, blade turns 2.13 deg over the 
 > 四边形是**直边**，会切掉转动刀片真正扫过的**弧**（矢高 ≈ R(1−cos)，一个重绘步长下约 1–5 mm）。
 > 平移（平行连杆）用四边形是**精确**的，转动不是。所以转动继续用扇形。
 
+**⑥ 一块玻璃上两把雨刷（多雨刷）**
+
+客车/动车组的大风挡常常**一块玻璃两把雨刷**（一对刮臂共用一条水槽）。这是支持的，而且
+**不是**"把玻璃拆成两块"：玻璃锚点仍然只有一个，雨刷按**第三个索引**编号。
+
+```
+mmtr_windshield_1_1        一块玻璃（1.2 m 宽的那种）
+mmtr_wipersweep_1_1        第 1 把的作用面
+wiper_1_1 / wiperarm_1_1   第 1 把的实体件
+mmtr_wipersweep_1_1_2      第 2 把的作用面（同一块玻璃）
+wiper_1_1_2 / wiperarm_1_1_2
+```
+
+- **每把雨刷自己一套参数**：各自的支点、停放方向、扫过角、方向、机构类型（一把单轴 + 一把连杆也行）。
+  打包器为每把单独拟合一次，写进同一块玻璃的配置块。
+- **一块玻璃只有一份雨**：雨滴、湿度、密度、径流这些是**玻璃级**的（`WindshieldConfig` 的字段），
+  两把雨刷刮的是**同一片水**；两把的**顺序执行**，第二把看到的是第一把留下的场面。
+- **一把刀片带走的水归那把刀片**：客户端给每颗雨滴记了"正被哪把雨刷推着"（`Drop.carriedByWiper`），
+  另一把的通过会**完全跳过**它。否则两把的"到端释放"会互相打架，水会在行程中间被放下。
+- 配置的两种形状（**打包器自动决定，人不写**）：
+  | 该玻璃的扇形数 | 写出来的形状 |
+  | --- | --- |
+  | 1 个（且索引 = 1） | **扁平字段**，与多雨刷出现之前**逐字节一致** |
+  | ≥2 个 | 玻璃级字段 + `"wipers": [ {…}, {…} ]`，每个元素带 `"wiperIndex"` |
+  客户端只在 `wipers` 存在时按数组读，否则扁平字段就是**第 1 把**。老包因此**零改动**。
+- `wiperIndex` 是**显式写入**的，不靠数组下标：模型只画了第 2 把、或编号不连续（1、3）时，
+  下标对齐会**静默**把配置接到另一把刀片上（表现为"这把不动、那把乱动"）。
+- 打包器日志会点名：`windshield windshield_1_1: 2 wipers on one glass (wipers 1, 2)`。
+  两个扇形抢同一把（重名）会打 WARNING；只有一把扇形但索引不是 1 也照实写出（那把就是唯一一把）。
+- 离线判据（`verify_windshield.js`）对**每一把**分别重算支点/半径/停放角/行程，并检查
+  "扇形的索引 ↔ 配置块 ↔ 实体件"三者一一对应；扇形的索引与配置块对不上会 FAIL。
+
 ## 2. 参数文件（你只需填这个）
 
 模板见 `mmtr/tools/obj-mtr-packager/example/vehicle.template.json`：
@@ -349,6 +624,7 @@ wiper mechanism: windshield_1_3 parallel linkage, blade turns 2.13 deg over the 
   "doorAnimationType": "STANDARD",
   "doorSlidePx": 14,
   "flipTextureV": true,
+  "hudLayout": "${MC_ROOT}/mmtr/tools/obj-mtr-packager/example/br101_hud.json",
   "outputPackName": "HST_hstcar_auto",
   "outputDir": "C:/.../mmtr/game/fabric/run/resourcepacks"
 }
@@ -359,6 +635,10 @@ wiper mechanism: windshield_1_3 parallel linkage, blade turns 2.13 deg over the 
 - `rotationDegY`：游戏导出素材车长常沿 X，需转90°到 Z(车头- Z)。Create 区域导出经验值 **-90**；装车后头尾反→改 +90
 - `groupMap`：源 OBJ 的 `o`/`g` 名 → 角色；不匹配的组会跳过并告警
 - `doorSlidePx`：STANDARD 门开门位移(像素，16px=1格)；MTR 内置车用 14
+- `hudLayout`（或内联 `hud`）：这个车型的仪表画面，见 §1.3⑧；`${MC_ROOT}` 占位符由打包器解析
+- `legacyRiderOffset`：**一般不用填** —— 打包器按 `mmtr_seat` 眼位自动算（§1.6）。
+  只有在想手动覆盖骑手参考高度时才写（值 = 合成地板 y − 1）
+- `untexturedUv`：没有 UV 层的面采哪个纹素，见 §1.5
 
 ## 3. 一键打包（固化流程）
 
@@ -391,15 +671,42 @@ powershell -File mmtr\scripts\pack-vehicle.ps1 mmtr\tools\obj-mtr-packager\examp
 | `mmtr_seat_<驾驶室>` | 司机座位/眼位 | 可选；法线 = 行进方向 |
 | `mmtr_ack_<驾驶室>` | AWS 确认按钮 | 可选 |
 | `mmtr_windshield_<驾驶室>[_<玻璃>]` | 风挡玻璃 | 每块一个 Object；一个索引 = 驾驶室（玻璃默认 1），两个索引 = 驾驶室 + 玻璃。折面/曲面玻璃见 §1.4③ |
-| `mmtr_wipersweep_<驾驶室>_<玻璃>` | 雨刷作用面 | 三角扇，共享顶点 = 支点；有它 = 这块玻璃有雨刷。见 §1.4② |
-| `wiper_<驾驶室>_<玻璃>` | 雨刷本体 | **可见部件**（无 `mmtr_` 前缀），每个雨刷一个 Object；见 §1.4④ |
+| `mmtr_wipersweep_<驾驶室>_<玻璃>[_<第几把>]` | 雨刷作用面 | 三角扇，共享顶点 = 支点；有它 = 这块玻璃有这一把雨刷。同一块玻璃可以有多把（见 §1.4⑥） |
+| `mmtr_pid_<驾驶室>[_<第几块>]` | **水牌**（车外目的地牌） | 面中心 = 牌面中心，法线朝**车外**，尺寸按米；客户端画「班次号 + 本趟终点」。同一端可以有多块（两侧各一块，内容相同） |
+| `mmtr_next_<驾驶室>[_<第几块>]` | **下一站牌**（车内屏） | 约定同水牌，但法线朝**车内**；客户端画「下一站 X」 |
+| `wiper_<驾驶室>_<玻璃>[_<第几把>]` | 雨刷本体 | **可见部件**（无 `mmtr_` 前缀），每把雨刷一个 Object；见 §1.4④ |
+| `wiperarm_<驾驶室>_<玻璃>[_<第几把>]` / `wiperrod_<…>` | 雨刷臂 / 拉杆 | 同样每把一个 Object（主轴与第二支点的来源）；见 §1.4⑤ |
 
 驾驶室编号：**1 = A 端（车头端 −Z），2 = B 端（车尾端 +Z）**；不带编号按 1 处理。除 `mmtr_cabdoor_*` 外，`mmtr_*` 面都是**纯数据**（几何会被剥掉）。`wiper_*` 是可见部件，**没有** `mmtr_` 前缀，`groupMap` 必须给它一个角色（见 §1.4④的坑）。
 
 ## 4. 验收与调参闭环
 
+**打包后先跑离线判据（全绿才进游戏）** —— 每个判据都对应一类"打包成功但游戏里不对"：
+
+```
+node mmtr\tools\obj-mtr-packager\verify_mtr_obj.js      --config <车型.json>   # OBJ 布局/UV 配对/面积/包围盒（§1.5）
+node mmtr\tools\anchor-check\verify_facets.js           --config <车型.json>   # 折面 UV 连续性/覆盖/朝向
+node mmtr\tools\anchor-check\verify_panel_frame.js      --config <车型.json>   # ★ 按客户端取景数学再验一遍（§1.3⑦）
+node mmtr\tools\anchor-check\verify_windshield.js       --config <车型.json>   # 玻璃/雨刷扇形/联动
+node mmtr\tools\anchor-check\verify_plane_frame.js      --config <车型.json>   # ★ 客户端能否把二维雨刷运动在模型空间重现（含源码守卫，notes/203）
+node mmtr\tools\anchor-check\verify_doors.js            --config <车型.json>   # ★ 门叶是不是**朝开门方向**滑（两叶门同侧同号 = 一叶往门洞里滑，notes/279）
+node mmtr\tools\anchor-check\selftest.js                                       # 故障注入：证明上面几个真的有牙
+```
+
+面板画面本身用离线预览看，别拿游戏当画布（§1.3⑧）：
+`pwsh -File mmtr\tools\panel-preview\preview.ps1 -Anchor <layout.json> -Speed 87 -Limit 100`
+
+> **症状速查**：下面这张表是"改了怎么办"。如果你想的是"**出了这个现象，先量哪个数**"，
+> 看 **《MMTR-OBJ车辆-故障谱系与离线判据.md》** —— 它按症状把 notes/187–203 的坑重排了一遍
+> （含"整车看不见"的三种独立死法、"雨刷不对"的三种、以及"命令跑完了但东西没变"的流程性坑），
+> 并给出每类的可测量中间量与对应判据。
+
 | 现象 | 改法 |
 | --- | --- |
+| **只有少数几个部件显示，其余全看不见**（日志里组名/锚点全对、无报错） | ★ **MTR 只读一种 OBJ 布局**（§1.5）：`#v==#vt==#vn` + 全三角形 + `f i/i/i`。跑 `verify_mtr_obj.js`；BR101 实例见 notes/194 |
+| **按 G 有反应但上不去车 / "四个角都没有地板"** | ★ OBJ 车没有地板盒，MTR 的合成地板在 `y = 1 + legacyRiderOffset`（§1.6）：**重打包**（打包器会自动按 seat 眼位算好）；日志里 `No floors or doorways found in vehicle models` 就是它 |
+| **整车消失但日志一切正常** | ① `flipTextureV` 是否为 `true`（Blender 模型一律 true）；② 模型 UV 是否落在贴图**不透明**的那半张；③ 是否大片面没有 UV 层（用 `untexturedUv` 指到不透明纹素） |
+| 没有 UV 层的部件（如雨刷）整块不见 | MTR 永远取 UV，缺省就是 (0,0) = 贴图左下角；配 `untexturedUv`（§1.5） |
 | 提示不兼容/旧版本 | pack_format：1.20.4=18，1.20.1=15 |
 | 材质紫黑 | 贴图放 `assets/mtr/<id>/` **子目录**(别放 mtr 根)；mtl 相对化 |
 | 车体全黑 | 导出保留 UV；打包端勿重排顶点/面 |
@@ -413,10 +720,16 @@ powershell -File mmtr\scripts\pack-vehicle.ps1 mmtr\tools\obj-mtr-packager\examp
 | 面板只剩缝隙里的碎块 | 绕序让可见面朝里 → 显式按左下/右下/右上/左上给角点（§1.3③） |
 | 面板文字上下颠倒 | `v1/v2` 传反了：`v2` 才是上边缘（§1.3④） |
 | 面板文字左右镜像 | 只有模型面"右"边方向与打包器约定相反时才需要 `panelFlipU`；正常不该出现（§1.3⑤） |
+| **折面仪表跨折痕撕裂 / 整体镜像** | 打包器自己的展开数字全绿也**照样会**（两套取景坐标系，§1.3⑦）→ 跑 `verify_panel_frame.js`：撕裂 = `mmtr_hud` 各面**绕序**不一致，镜像 = u 没朝司机右手增大。修法是回 Blender 翻面的绕序（BR101 用 `sandbox/br101_r52_hud_winding.py`），别用 `panelFlipU` 硬糊 |
+| 折面仪表拿不到 facet（变成一块大平板） | 折面组的锚点法线取错（notes/193）→ 重打包，看打包日志里有没有 `hud facets: ... faces=N` |
 | 双端机车只有一端有仪表 | 客户端按该节车的**每个** `mmtr_hud_<驾驶室>` 锚点各画一块（§1.3⑥）；没有说明另一端没写锚点或没进锚点 JSON |
 | 不同车型要不同仪表画面 | 在打包参数里给 `hud` / `hudLayout`（§1.1、§1.3⑧） |
 | 一列车上好几块仪表 | 每节车都带 `mmtr_hud`（同一模型复用）→ 客户端只画乘坐中的那节（§1.3⑥） |
 | 面板完全看不见 | 先看 `[MMTR-DBG] panel` 日志：`registeredGl == textureGl` 说明绑定正常、问题在几何/遮挡（§1.3⑦） |
+| **按 J 雨刷完全不动**（档位/状态日志正常） | 几何**没进那次带旋转的绘制**：OBJ 部件默认全进 optimized 主批次，部件级变换作用在空气上（notes/202）→ 确认 `wiper*` 走了 `isMechanism()`/`optimizedModelDoor` 那条路，并看 `[MMTR-WSHLD] wiper part …` 一行 |
+| **雨刷会动但"动得不对"**（刀片向下弯/飞出玻璃、杆子飞到天上） | ★ 三个量必须同时对（notes/203）：**轴**（欧拉角要从玻璃基向量 `(right, up, normal)` 的矩阵元取，`pitch=asin(-normal.y())`、`roll=atan2(right.y(), up.y())`，**不能**拿 `up` 的分量猜；倾斜玻璃上差十几度到 68°）、**支点**（矩阵栈是模型空间，先 `plane.pointAt()` 把支点抬到玻璃上；直接平移平面坐标 = 绕模型原点转 → 杆子飞天）、**比例**（配置里 pin/pivot 是 0..1 比例，`pointAt` 要相对**玻璃中心**的米，先 `−0.5`）。跑 `verify_plane_frame.js`；**轴对齐的夹具测不到**（yaw=±90° 处退化，错解与正解同矩阵），所以回归打在客户端源码上 |
+| **静止的雨刷不消失、开雨刷又多出一个雨刷** | 机构件仍在 **doors-closed** 那张 optimized 批次里（整车车身画的正是那张）→ 两份几何：停位重合、一动就分开（notes/203 §8）。修法是 `ModelPropertiesPart` 的 OBJ `writeCache`：机构件登记进一张**临时表**、两张批次表都不进（门与普通件行为不变）。★ **别用"干脆不登记"来修**：`addObjModelPosition` 同时负责 `objModel.addTransformation`，而 OBJ wrapper 的几何**只从登记过的变换里生成** —— 不登记会让 wrapper 变空、**雨刷整体消失**。`verify_plane_frame.js` 的源码守卫同时挡这两个互为反面的错 |
+| **雨刷整体不见了**（刚改过部件批次相关代码） | 机构件**漏登记**位置 → wrapper 为空（见上一行）。跑 `verify_plane_frame.js`，它会报 `disappears` |
 
 游戏内：Options→资源包启用新包(旧包先关)。按你的常规列车测试流程验收。
 

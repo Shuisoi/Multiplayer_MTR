@@ -149,13 +149,25 @@ public final class MmtrSignalAspect {
 	 * the driver touched the throttle and the emergency brake stopped the train dead (notes/112 §4).</p>
 	 */
 	public Aspect aspectFrom(@Nullable String railHex, @Nullable Position entryNode, long excludeVehicleId) {
+		return aspectFrom(railHex, entryNode, excludeVehicleId, null);
+	}
+
+	/**
+	 * 同上，并可指定**这一趟实际会走的轨**（{@code allowedRails}；{@code null} = 不知道 ⇒ 按岔口所有分支保守走）。
+	 *
+	 * <p>只有**行车许可**这一条路会传它（{@code MmtrMovementAuthority} 手里有本车的进路）：进路已经 SET
+	 * 时"要走哪一支"是已知的，不该被**别的**支上停着的车扣成红灯（现场：库里第一台车停好之后，
+	 * 后面每一台去别的股道的车都被它扣住，五台车再也不动）。灯显/镜面那条路不传（它没有"谁的进路"这个信息），
+	 * 于是仍是岔区级的保守显示 —— 这一处不对称是刻意的：**灯守岔区，行车许可按进路**。</p>
+	 */
+	public Aspect aspectFrom(@Nullable String railHex, @Nullable Position entryNode, long excludeVehicleId, java.util.function.@Nullable Predicate<String> allowedRails) {
 		if (railHex == null || railHex.isEmpty() || !byHex.containsKey(railHex)) {
 			return Aspect.GREEN;
 		}
 		if (routes.pendingEntryRails().contains(railHex)) {
 			return Aspect.RED;
 		}
-		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode, excludeVehicleId));
+		return entryNode == null ? aspectOf(railHex) : fromDepth(chainDepth(railHex, entryNode, excludeVehicleId, allowedRails));
 	}
 	private static Aspect fromDepth(int depth) {
 		return switch (depth) {
@@ -187,6 +199,10 @@ public final class MmtrSignalAspect {
 	}
 
 	private int chainDepth(String hex, Position entryPos, long excludeVehicleId) {
+		return chainDepth(hex, entryPos, excludeVehicleId, null);
+	}
+
+	private int chainDepth(String hex, Position entryPos, long excludeVehicleId, java.util.function.@Nullable Predicate<String> allowedRails) {
 		/*
 		 * notes/166 R4：链**只走新层**（Level 2 行车区间）。
 		 *
@@ -197,7 +213,7 @@ public final class MmtrSignalAspect {
 		final java.util.function.Predicate<String> restricted = excludeVehicleId == 0
 			? this::junctionRestrictedKey
 			: restrictedNodeKeysExcluding(excludeVehicleId)::contains;
-		return simulator.mmtrSections.chainDepth(hex, entryPos, occupancyTrees, restricted, MAX_DEPTH, excludeVehicleId);
+		return simulator.mmtrSections.chainDepth(hex, entryPos, occupancyTrees, restricted, MAX_DEPTH, excludeVehicleId, allowedRails);
 	}
 
 	/** ④: whether {@code node} is a junction that cannot be cleared (fouled zone / undecided points). */

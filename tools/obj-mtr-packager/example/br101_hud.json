@@ -1,0 +1,36 @@
+{
+  "_comment": "BR 101 驾驶台仪表画面（画布 3.156 x 0.459 m，三块折面展开）。u=0 = 司机最左，u=1 = 司机最右：u[0,0.412]=左翼 / [0.412,0.760]=中板 / [0.760,1]=右翼（由 sandbox/panel_crease_check.js 用客户端自己的数学验证）。活控件：gauge（表盘+指针）/ speed / limit；其余是铭牌。字段见 docs 工作流 §1.3⑧ 与 §1.4。",
+  "hud": {
+    "background": "#FF06080B",
+    "widgets": [
+      { "kind": "roundRect", "x": 0.004, "y": 0.045, "w": 0.992, "h": 0.91, "radius": 0.16, "color": "#FF11151B" },
+      { "kind": "rect", "x": 0.004, "y": 0.046, "w": 0.992, "h": 0.016, "color": "#FF1B2028" },
+
+      { "kind": "rect", "x": 0.012, "y": 0.062, "w": 0.392, "h": 0.005, "color": "#FFC8322B" },
+      { "kind": "text", "text": "DB", "x": 0.046, "y": 0.615, "size": 0.35, "color": "#FFF2F4F6", "align": "left" },
+      { "kind": "text", "text": "Baureihe 101", "x": 0.046, "y": 0.255, "size": 0.145, "color": "#FF9FB3C6", "align": "left" },
+      { "kind": "text", "text": "Elektrolokomotive", "x": 0.046, "y": 0.135, "size": 0.10, "color": "#FF5F7280", "align": "left" },
+
+      { "kind": "line", "x": 0.418, "y": 0.10, "x2": 0.418, "y2": 0.90, "lineWidth": 0.012, "color": "#FF232A34" },
+
+      { "kind": "speed", "x": 0.470, "y": 0.560, "size": 0.30, "color": "#FFFFFFFF", "align": "center" },
+      { "kind": "text", "text": "km/h", "x": 0.470, "y": 0.300, "size": 0.115, "color": "#FF8FA6B8", "align": "center" },
+
+      { "kind": "gauge", "x": 0.585, "y": 0.535, "radius": 0.39, "start": 210, "end": -30, "max": 160,
+        "ticks": 8, "tickLength": 0.115, "labelEvery": 2, "labelSize": 0.095, "labelColor": "#FF9FB3C6",
+        "lineWidth": 0.026, "color": "#FF6E839A",
+        "needleColor": "#FFFF3B30", "needleWidth": 0.040, "needleLength": 0.86 },
+
+      { "kind": "circle", "x": 0.700, "y": 0.610, "radius": 0.26, "color": "#FFF2F4F6" },
+      { "kind": "arc", "x": 0.700, "y": 0.610, "radius": 0.26, "lineWidth": 0.07, "start": 0, "end": 360, "color": "#FFC8322B" },
+      { "kind": "limit", "x": 0.700, "y": 0.610, "size": 0.185, "color": "#FF101418", "align": "center" },
+      { "kind": "text", "text": "限速", "x": 0.700, "y": 0.245, "size": 0.105, "color": "#FF8FA6B8", "align": "center" },
+
+      { "kind": "line", "x": 0.766, "y": 0.09, "x2": 0.766, "y2": 0.91, "lineWidth": 0.012, "color": "#FF232A34" },
+
+      { "kind": "text", "text": "101 012-3", "x": 0.782, "y": 0.635, "size": 0.21, "color": "#FFE6E9EC", "align": "left" },
+      { "kind": "text", "text": "DB Fernverkehr", "x": 0.782, "y": 0.375, "size": 0.115, "color": "#FF9FB3C6", "align": "left" },
+      { "kind": "text", "text": "Zugfunk · GSM-R", "x": 0.782, "y": 0.185, "size": 0.095, "color": "#FF5F7280", "align": "left" }
+    ]
+  }
+}

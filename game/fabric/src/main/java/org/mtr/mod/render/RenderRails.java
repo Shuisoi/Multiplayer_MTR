@@ -66,6 +66,14 @@ public class RenderRails implements IGui {
 		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 		final boolean holdingRailRelated = isHoldingRailRelated(clientPlayerEntity);
+		/*
+		 * 区间叠加层（用户 2026-09-25）：**手持信号灯**时，轨面不再刷"轨道类型"的颜色，改成按区间上色
+		 * （相连两段异色）+ 方向三角形。见 MmtrSectionBands。
+		 *
+		 * <p>为什么只认信号灯：用户的原话是「在手持信号灯时不显示轨道类型而显示区间」—— 建轨、放灯时
+		 * 手里拿的正是信号灯；其余铁轨工具（连接器/节点/刷子）保持原来的轨道类型配色不动。</p>
+		 */
+		final boolean holdingSignalLight = isHoldingSignalLight(clientPlayerEntity);
 
 		// Finding visible rails
 		final ObjectArrayList<Rail> railsToRender = new ObjectArrayList<>();
@@ -141,16 +149,18 @@ public class RenderRails implements IGui {
 
 		railsToRender.forEach(rail -> {
 			final RenderState renderState = holdingRailRelated ? hoverRails.contains(rail) ? RenderState.FLASHING : RenderState.COLORED : RenderState.NORMAL;
+			// 区间模式：轨面按正常画（不上类型色），单向箭头与轨上信号色照旧（那是信号层，不是类型色）。
+			final RenderState railPaint = holdingSignalLight ? RenderState.NORMAL : renderState;
 			switch (rail.getTransportMode()) {
 				case TRAIN:
-					renderRailStandard(clientWorld, rail, renderState, 1);
+					renderRailStandard(clientWorld, rail, railPaint, 1);
 					if (renderState.hasColor) {
 						renderRailOneWayArrows(rail, 0.25F);
 						renderSignalsStandard(clientWorld, rail);
 					}
 					break;
 				case BOAT:
-					renderRailStandard(clientWorld, rail, renderState, 0.5F);
+					renderRailStandard(clientWorld, rail, railPaint, 0.5F);
 					if (renderState.hasColor) {
 						renderRailOneWayArrows(rail, 0.25F);
 						renderSignalsStandard(clientWorld, rail);
@@ -158,28 +168,35 @@ public class RenderRails implements IGui {
 					break;
 				case CABLE_CAR:
 					if (rail.isPlatform() || rail.isSiding() || rail.getSpeedLimitKilometersPerHour(false) == RailType.CABLE_CAR_STATION.speedLimit || rail.getSpeedLimitKilometersPerHour(true) == RailType.CABLE_CAR_STATION.speedLimit) {
-						renderRailStandard(clientWorld, rail, 0.25F + SMALL_OFFSET, renderState, 0.25F, METAL_TEXTURE, 0.25F, 0, 0.75F, 1);
+						renderRailStandard(clientWorld, rail, 0.25F + SMALL_OFFSET, railPaint, 0.25F, METAL_TEXTURE, 0.25F, 0, 0.75F, 1);
 					}
 					if (renderState.hasColor && !rail.isPlatform() && !rail.isSiding()) {
 						renderRailOneWayArrows(rail, 0.5F + SMALL_OFFSET);
 					}
-					MainRenderer.scheduleRender(QueuedRenderLayer.LINES, (graphicsHolder, offset) -> renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> graphicsHolder.drawLineInWorld(
-							(float) (x1 - offset.getXMapped()),
-							(float) (y1 - offset.getYMapped() + 0.5),
-							(float) (z1 - offset.getZMapped()),
-							(float) (x3 - offset.getXMapped()),
-							(float) (y2 - offset.getYMapped() + 0.5),
-							(float) (z3 - offset.getZMapped()),
-							holdingRailRelated ? RailType.getRailColor(rail) : ARGB_BLACK
-					), 0.5, 0, 0));
+					// 索道没有闭塞区间：区间模式下不画它的"类型色中线"（那是轨道类型那一套）。
+					if (!holdingSignalLight) {
+						MainRenderer.scheduleRender(QueuedRenderLayer.LINES, (graphicsHolder, offset) -> renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> graphicsHolder.drawLineInWorld(
+								(float) (x1 - offset.getXMapped()),
+								(float) (y1 - offset.getYMapped() + 0.5),
+								(float) (z1 - offset.getZMapped()),
+								(float) (x3 - offset.getXMapped()),
+								(float) (y2 - offset.getYMapped() + 0.5),
+								(float) (z3 - offset.getZMapped()),
+								holdingRailRelated ? RailType.getRailColor(rail) : ARGB_BLACK
+						), 0.5, 0, 0));
+					}
 					break;
 				case AIRPLANE:
-					renderRailStandard(clientWorld, rail, 0.0625F + SMALL_OFFSET, renderState, 0.25F, IRON_BLOCK_TEXTURE, 0.25F, 0, 0.75F, 1);
+					renderRailStandard(clientWorld, rail, 0.0625F + SMALL_OFFSET, railPaint, 0.25F, IRON_BLOCK_TEXTURE, 0.25F, 0, 0.75F, 1);
 					if (renderState.hasColor) {
 						renderRailOneWayArrows(rail, 0.25F);
 						renderSignalsStandard(clientWorld, rail);
 					}
 					break;
+			}
+			if (holdingSignalLight) {
+				// 区间带：按弧窗 + 行车方向画在这根轨上（引擎给的结论，见 MmtrSectionBands）
+				MmtrSectionBands.render(rail);
 			}
 		});
 
@@ -230,6 +247,20 @@ public class RenderRails implements IGui {
 						Block.getBlockFromItem(item).data instanceof BlockNode ||
 						Block.getBlockFromItem(item).data instanceof BlockSignalSemaphoreBase ||
 						Block.getBlockFromItem(item).data instanceof PlatformHelper
+		);
+	}
+
+	/**
+	 * 手上是不是**信号灯**（含臂板信号机）—— 区间叠加层的开关（用户 2026-09-25）。
+	 *
+	 * <p>与 {@link #isHoldingRailRelated} 分开是有意的：那个决定"要不要显示轨道叠加层"，
+	 * 这个决定"轨面刷类型色还是刷区间色"。两者都在 {@code isHoldingRailRelated} 里判的话，
+	 * 下次想给别的工具加区间模式就没地方下手了。</p>
+	 */
+	public static boolean isHoldingSignalLight(ClientPlayerEntity clientPlayerEntity) {
+		return PlayerHelper.isHolding(new PlayerEntity(clientPlayerEntity.data),
+				item -> Block.getBlockFromItem(item).data instanceof BlockSignalLightBase ||
+						Block.getBlockFromItem(item).data instanceof BlockSignalSemaphoreBase
 		);
 	}
 

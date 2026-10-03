@@ -79,8 +79,28 @@ public interface MmtrMotionPosition {
 	/** Ordered legs as engine path data (the vehicle's mirror path). */
 	ObjectArrayList<PathData> buildLegs();
 
+	/**
+	 * **镜像里程坐标系里这张腿表的起点**（= 第一根腿的 {@code startDistance}）。
+	 *
+	 * <p>它是 {@code buildMirrorLegs} 生成累计里程时用的那个锚（{@code MmtrConsistWalker} =
+	 * {@code distanceM - mirrorHeadArcM()}）。① 的 {@code LEGS} 记录要把它带上，客户端才能在
+	 * **整表替换**（换端）时重建出一张与镜像 {@code railProgress} 同坐标系的表 ——
+	 * 少了它就只能拿旧表的里程硬撑，而那正是"换端开出去车不动、过一会儿瞬移"。</p>
+	 *
+	 * <p>默认 {@code 0} = 与 {@code buildLegs()} 自己的约定一致（遗留单点走行器从 0 起算）。</p>
+	 */
+	default double mirrorPathAnchorM() {
+		return 0;
+	}
+
 	/** Wire this source into the turnout authority under {@code owner} (null/null unwires). */
 	void setPointAuthority(@Nullable MmtrPointAuthority authority, @Nullable String owner);
+
+	/**
+	 * 司机持操纵权时置真：岔口没有人工位/授权/目标可选举时**跟随道岔当前物理位置**而不停车
+	 * （见 {@code MmtrForkElection.elect} 的 {@code manualDrive}）。自动/无人运行恒为假，行为一字不变。
+	 */
+	void setManualDrive(boolean manualDrive);
 
 	/** Forks crossed since the last drain, as {@code x,y,z|viaHex} keys. */
 	ObjectArrayList<String> drainCrossedPointKeys();

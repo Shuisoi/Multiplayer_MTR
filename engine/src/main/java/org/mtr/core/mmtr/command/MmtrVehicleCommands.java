@@ -47,6 +47,9 @@ final class MmtrVehicleCommands {
 	 *
 	 * <p>车型是游戏里已定义的车辆 id（见 {@code mmtr-rolling-stock} 里各股道模板的车，例如 {@code saf101}）。
 	 * 多写几个就是多节编组，按书写顺序连挂。</p>
+	 *
+	 * <p><b>逐车参数</b>（notes/271 片 1）见 {@link #carsFor}：{@code --powered=} / {@code --consist-type=} /
+	 * {@code --load=} / {@code --coupler-after=} / {@code --manual-coupler=}，都是**逗号列表**。</p>
 	 */
 	private static MmtrCommandDispatcher.Result spawn(Simulator simulator, List<String> positional, Map<String, String> options) {
 		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "vehicle", "spawn");
@@ -79,11 +82,7 @@ final class MmtrVehicleCommands {
 				return new MmtrCommandDispatcher.Result(false, "vehicle", "spawn");
 			}
 			final double carLengthOnRail = MmtrCommandDispatcher.longOption(options, "length", 16);
-			final boolean poweredOnRail = !options.containsKey("unpowered");
-			final var railCars = new it.unimi.dsi.fastutil.objects.ObjectArrayList<VehicleCar>();
-			for (final String vehicleId : positional) {
-				railCars.add(MmtrCommandDispatcher.carOf(vehicleId, carLengthOnRail, poweredOnRail));
-			}
+			final var railCars = carsFor(positional, options, carLengthOnRail);
 			final double railTotal = Siding.getTotalVehicleLength(railCars);
 			final java.util.List<org.mtr.core.data.Position> ends = new java.util.ArrayList<>();
 			final org.mtr.core.data.Position[] ordered = rail.mmtrOrderedPositions();
@@ -118,13 +117,9 @@ final class MmtrVehicleCommands {
 		}
 
 		// 编组：按用户写的车型逐个建车卡；车身长度取一个合理值（MTR 的模板车多为 16 m）。
-		// 默认给动力（管理员要的是一列能开的车），--unpowered 用来挂无动力的拖车。
+		// 默认给动力（管理员要的是一列能开的车），--unpowered / --powered=… 用来挂无动力的挂车。
 		final double carLength = MmtrCommandDispatcher.longOption(options, "length", 16);
-		final boolean powered = !options.containsKey("unpowered");
-		final var cars = new it.unimi.dsi.fastutil.objects.ObjectArrayList<VehicleCar>();
-		for (final String vehicleId : positional) {
-			cars.add(MmtrCommandDispatcher.carOf(vehicleId, carLength, powered));
-		}
+		final var cars = carsFor(positional, options, carLength);
 
 		final double totalLength = Siding.getTotalVehicleLength(cars);
 		if (totalLength > siding.getRailLength() + 1e-6) {
@@ -158,6 +153,47 @@ final class MmtrVehicleCommands {
 			+ "，停在 " + siding.getDepotName() + " / 股道 " + siding.getId()
 			+ "（长 " + Math.round(siding.getRailLength()) + " m）");
 		return result;
+	}
+
+	/**
+	 * 按**逐车参数**建一列车的车卡（notes/271 片 1，用户口径 2026-09-26：逐车参数用与位置对齐的逗号列表）。
+	 *
+	 * <p>支持的键（都可以只给一项，那一项对全列生效；空项 = "这一节不说"）：</p>
+	 *
+	 * <ul>
+	 *   <li>{@code --powered=false,false,false} —— 这一节出不出牵引（**显式**声明；给了就永不走"借车底"兜底）</li>
+	 *   <li>{@code --consist-type=,p1_trailer,p1_trailer} —— 这一节自己的车底 id（空 = 用车型映射/编组缺省）</li>
+	 *   <li>{@code --load=0,0.8,0.8} —— 载重比例 0..1（逐车质量 = 整备 + 比例 × 车底载重能力）</li>
+	 *   <li>{@code --coupler-after=true,…} —— 这一节之后有车钩（能不能在那儿解挂）</li>
+	 *   <li>{@code --manual-coupler=true,…} —— 螺旋车钩（true = 要司机按 K 才挂）</li>
+	 * </ul>
+	 *
+	 * <p>{@code --unpowered} 仍是"全列无动力"的简写，等价于 {@code --powered=false} 且算**显式声明**。</p>
+	 */
+	static it.unimi.dsi.fastutil.objects.ObjectArrayList<VehicleCar> carsFor(List<String> vehicleIds, Map<String, String> options, double carLength) {
+		final int carCount = vehicleIds.size();
+		final boolean unpoweredAll = options.containsKey("unpowered");
+		final var cars = new it.unimi.dsi.fastutil.objects.ObjectArrayList<VehicleCar>();
+		for (int i = 0; i < carCount; i++) {
+			final Boolean poweredOption = MmtrCommandDispatcher.commaListBoolean(options, "powered", i, carCount);
+			final boolean powered = poweredOption != null ? poweredOption : !unpoweredAll;
+			// "显式"只有两种来源：写了 --powered=… 或写了 --unpowered；否则就是没表态。
+			final boolean poweredDeclared = poweredOption != null || unpoweredAll;
+			final String consistTypeId = MmtrCommandDispatcher.commaList(options, "consist-type", i, carCount);
+			final double loadRatio = MmtrCommandDispatcher.commaListDouble(options, "load", i, carCount, 0);
+			final VehicleCar car = MmtrCommandDispatcher.carOf(vehicleIds.get(i), carLength, powered, poweredDeclared,
+				consistTypeId == null ? "" : consistTypeId, loadRatio);
+			final Boolean couplerAfter = MmtrCommandDispatcher.commaListBoolean(options, "coupler-after", i, carCount);
+			if (couplerAfter != null) {
+				car.setMmtrCouplerAfter(couplerAfter);
+			}
+			final Boolean manualCoupler = MmtrCommandDispatcher.commaListBoolean(options, "manual-coupler", i, carCount);
+			if (manualCoupler != null) {
+				car.setMmtrAutoCoupler(!manualCoupler);
+			}
+			cars.add(car);
+		}
+		return cars;
 	}
 
 	/** {@code vehicle remove <车辆id|all|--siding=<id>|--depot=<id|名>>} */
@@ -263,7 +299,14 @@ final class MmtrVehicleCommands {
 			result.line("车辆 " + vehicle.getId()
 				+ "  股道=" + siding.getDepotName() + "/" + siding.getId()
 				+ "  在途=" + vehicle.getIsOnRoute()
-				+ "  车内=" + vehicle.vehicleExtraData.immutableVehicleCars.size() + " 节");
+				+ "  车内=" + vehicle.vehicleExtraData.immutableVehicleCars.size() + " 节"
+				// notes/354 水牌（PID）：三项都是作业调度器从作业单算好写进镜像的，这里读的正是
+				// 客户端那份镜像字段（同一份数据）—— 于是"水牌对不对"在游戏里有一条能查的读数。
+				+ "  水牌=" + (vehicle.getMmtrPidServiceFromSync().isEmpty()
+					? "（无：不挂在在跑的作业单上）"
+					: vehicle.getMmtrPidServiceFromSync()
+						+ " 终点 " + (vehicle.getMmtrPidTerminusFromSync().isEmpty() ? "—" : vehicle.getMmtrPidTerminusFromSync())
+						+ " 下一站 " + (vehicle.getMmtrPidNextFromSync().isEmpty() ? "—" : vehicle.getMmtrPidNextFromSync())));
 		}));
 		if (shown[0] == 0) {
 			result.line(depotHint == null ? "（世界上没有车辆）" : "（该车辆段没有车辆）");

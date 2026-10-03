@@ -79,6 +79,28 @@ public final class MmtrMission {
 	private double targetRailFraction = 1.0;
 
 	/**
+	 * **经由点（路径点）**：这次任务的进路必须**依次穿过**这些图节点（世界坐标 {@code "x,y,z"}）。
+	 *
+	 * <p>作业单步骤的 {@code viaNodes} 原样搬到任务上；车辆自臂时交给
+	 * {@code MmtrRunPlanner.planToRail(…, viaNodeKeys)}。为什么必须落到任务上：规划发生在**车辆侧**
+	 * （{@link Vehicle#mmtrMotionSelfArmMission} 每 tick 按当前位置重规划），而"回库车走哪条引入线"
+	 * 是这一步的编排属性 —— 离了任务，车辆无从知道。</p>
+	 */
+	private final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> targetViaNodes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+
+	public void setTargetViaNodes(it.unimi.dsi.fastutil.objects.ObjectArrayList<String> viaNodes) {
+		targetViaNodes.clear();
+		if (viaNodes != null) {
+			targetViaNodes.addAll(viaNodes);
+		}
+	}
+
+	/** 经由点（可能为空：绝大多数步骤没有）。 */
+	public it.unimi.dsi.fastutil.objects.ObjectArrayList<String> getTargetViaNodes() {
+		return targetViaNodes;
+	}
+
+	/**
 	 * Attach the task definition this mission executes (where/when/what for timetable/interlocking).
 	 *
 	 * <p>同时**翻译成"模板 + 参数"**（用户口径：「主任务和子任务分离，并将任务目标分离」）：
@@ -109,14 +131,28 @@ public final class MmtrMission {
 	 *             直接发给客户端当提示用，引擎不替它改写
 	 */
 	public void attachJobStep(String jobId, int stepIndex, int stepCount, @Nullable String note) {
+		attachJobStep(jobId, stepIndex, stepCount, note, "");
+	}
+
+	/**
+	 * 同上，并把作业单的**服务等级**（{@code 通勤/区域/城际/高铁}）一起带上 —— 抢同一处道岔时的
+	 * 优先级要读它（{@link org.mtr.core.mmtr.point.MmtrTrainPriority}，用户 2026-09-27）。
+	 */
+	public void attachJobStep(String jobId, int stepIndex, int stepCount, @Nullable String note, @Nullable String serviceClass) {
 		this.jobId = jobId == null ? "" : jobId;
 		this.jobStepIndex = stepIndex;
 		this.jobStepCount = stepCount;
 		this.jobStepNote = note == null ? "" : note;
+		this.serviceClass = serviceClass == null ? "" : serviceClass;
 	}
 
 	public String getJobId() {
 		return jobId;
+	}
+
+	/** 这条作业单的服务等级（空 = 没写 = 通勤）。 */
+	public String getServiceClass() {
+		return serviceClass;
 	}
 
 	/** 0 起的步号；{@code -1} = 这一步不属于任何作业表。 */
@@ -136,6 +172,8 @@ public final class MmtrMission {
 	private int jobStepIndex = -1;
 	private int jobStepCount;
 	private String jobStepNote = "";
+	/** 作业单的服务等级（{@code 通勤/区域/城际/高铁}，空 = 没写）—— 道岔/进路裁决读它。 */
+	private String serviceClass = "";
 
 	/*
 	 * ============================ 子任务（主任务 → 基础操作） ============================

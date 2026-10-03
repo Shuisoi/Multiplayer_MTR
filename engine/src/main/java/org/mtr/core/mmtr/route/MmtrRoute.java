@@ -3,6 +3,7 @@ package org.mtr.core.mmtr.route;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.mmtr.point.MmtrTrainPriority;
 
 /**
  * MMTR 进路 (route) — the missing first-class object of the low-speed interlocking
@@ -59,6 +60,8 @@ public final class MmtrRoute {
 	 */
 	private final ObjectOpenHashSet<String> crossedForkKeys = new ObjectOpenHashSet<>();
 	private long plannedMillis = Long.MAX_VALUE;
+	/** 服务等级 + 车号（用户 2026-09-27）；{@code null} = 问不出 ⇒ 裁决退回计划时刻。 */
+	private @Nullable MmtrTrainPriority trainPriority;
 	private boolean established;
 	private String stateReason = "not refreshed";
 
@@ -131,6 +134,22 @@ public final class MmtrRoute {
 	/** T5: 由任务层在发布进路时填，或由登记表在同 movement 重发布时刷新（计划会随晚点变）。 */
 	public void setPlannedMillis(long plannedMillis) {
 		this.plannedMillis = plannedMillis;
+	}
+
+	/**
+	 * **本车的优先级**（服务等级 + 车号，用户 2026-09-27）：敌对进路裁决的**第一档**。
+	 *
+	 * <p>与 {@link #plannedMillis} 同一个位置、同一个道理：从任务/作业单读出来
+	 * （{@link org.mtr.core.mmtr.point.MmtrTrainPriority}），发布进路时由 {@code Vehicle} 填。
+	 * {@code null} = 问不出（玩家车、没有作业单的调车、测试夹具）⇒ 这一档说不出先后，
+	 * 裁决落回计划时刻。它也**不进 sameMovement**：换班/改等级只刷新值，不换进路对象。</p>
+	 */
+	public @Nullable MmtrTrainPriority getTrainPriority() {
+		return trainPriority;
+	}
+
+	public void setTrainPriority(@Nullable MmtrTrainPriority trainPriority) {
+		this.trainPriority = trainPriority;
 	}
 
 	/** The rail the movement starts on (the one the train stands on when the route is set). */

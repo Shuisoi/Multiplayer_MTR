@@ -40,15 +40,11 @@ public final class SidingTests {
 		assertEquals(0, siding.getMaxManualSpeed(), 1e-10, "Default max manual speed should be 0");
 	}
 
-	@Test
-	public void testAccelerationDefaults() {
-		assertEquals(0.000004, siding.getAcceleration(), 1e-10, "Default acceleration should be 0.000004");
-	}
-
-	@Test
-	public void testDecelerationDefaults() {
-		assertEquals(0.000004, siding.getDeceleration(), 1e-10, "Default deceleration should be 0.000004");
-	}
+	/*
+	 * notes/235：`testAccelerationDefaults` / `testDecelerationDefaults` 已删除 ——
+	 * 车场不再有"加减速度"这两个参数（那套原版加减速模型整条删除），所以没有默认值可断言。
+	 * 车辆的加减速现在由车底（{@code ConsistType} / {@code TrainPhysics}）决定。
+	 */
 
 	@Test
 	public void testManualToAutomaticTime() {

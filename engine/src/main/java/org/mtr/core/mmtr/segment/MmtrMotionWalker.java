@@ -37,6 +37,8 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 	private boolean haltedAtAuthority;
 	private boolean endOfLine;
 	private boolean atTarget;
+	/** 司机正在手动开车：岔口选不出腿时跟随道岔物理位置（见 {@code MmtrForkElection#elect}）。 */
+	private boolean manualDrive;
 	/** Authority-question forks (>=2 continuations) this walker has actually crossed since the last
 	 * drain, as point keys x,y,z|viaHex - lets the owner stop refreshing crossed holds. */
 	private final ObjectArrayList<String> crossedPointKeys = new ObjectArrayList<>();
@@ -226,6 +228,11 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 		pointAuthorityOwner = owner;
 	}
 
+	@Override
+	public void setManualDrive(boolean manualDrive) {
+		this.manualDrive = manualDrive;
+	}
+
 	/**
 	 * MMTR (L3, slice 8): live retargeting of a RUNNING walker — the task/ops layer can redirect the
 	 * vehicle at its next fork: {@link MmtrNodeRouter} gives the task target priority over a stale
@@ -334,7 +341,7 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 		if (far == null || !org.mtr.core.mmtr.point.MmtrForkElection.hasContinuation(data, far, target)) {
 			return false;
 		}
-		return org.mtr.core.mmtr.point.MmtrForkElection.elect(data, branches, pointAuthority, pointAuthorityOwner, targetRailHex, far, entry, target) == null;
+		return org.mtr.core.mmtr.point.MmtrForkElection.elect(data, branches, pointAuthority, pointAuthorityOwner, targetRailHex, far, entry, target, manualDrive) == null;
 	}
 
 	private @Nullable Rail electAtFork(ObjectArrayList<Rail> forwardRails, ObjectArrayList<Position> forwardEnds) {
@@ -342,8 +349,9 @@ public final class MmtrMotionWalker implements MmtrMotionPosition {
 		// now lives in MmtrForkElection so the consist-body walker (B3) shares one implementation.
 		// Continuations are ordered deterministically per approach direction (straight > left > right
 		// > other, MmtrPoint); an authoritative junction table (进向表) for (node, via) overrides the
-		// geometry entirely.
-		return org.mtr.core.mmtr.point.MmtrForkElection.elect(data, branches, pointAuthority, pointAuthorityOwner, targetRailHex, ahead, enteredFrom, rail);
+		// geometry entirely. A manual driver (manualDrive) additionally falls back to the turnout's
+		// physical position instead of halting.
+		return org.mtr.core.mmtr.point.MmtrForkElection.elect(data, branches, pointAuthority, pointAuthorityOwner, targetRailHex, ahead, enteredFrom, rail, manualDrive);
 	}
 
 	private @Nullable Position otherEnd(Position at, Rail rail) {

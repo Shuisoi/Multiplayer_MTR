@@ -34,7 +34,9 @@ import java.util.UUID;
  * <ul>
  *   <li><b>一个客户端一帧一个包</b>（默认 10 Hz = 每 2 tick）：通道头的固定开销只付一次；</li>
  *   <li><b>只发变的</b>：位置每帧（7 B/车），速度每 5 帧（+4 B），手柄与旗标/夹紧量走**边沿**
- *       （变了才发），腿阴影走增量（默认开；稳态 0 字节，只有新踏上一根轨时才发那根轨的 hex id）；</li>
+ *       （变了才发），腿阴影走**增量**（默认开；稳态 0 字节，只有新踏上一根轨时才发那根轨）
+ *       —— **形状一变（换端）就发整张表**（+ 锚点 + 逐腿方向），另有 20 秒一次的整表兜底
+ *       （notes/375：v1 的纯增量表达不了"整表反序"，客户端只能拿旧表硬撑 = 车不动再瞬移）；</li>
  *   <li><b>可见集与 ② 同源</b>：用 {@link Client#tracksVehicle}（② 上次真的发过镜像给这个客户端的那些车）——
  *       于是不会出现"① 有包、客户端没镜像"或"有镜像、① 永远不动它"；</li>
  *   <li><b>槽位是每客户端一份</b>的 u16，随 {@code SLOT} 记录一次性告知，{@code DROP} 时归还。</li>
@@ -44,8 +46,9 @@ import java.util.UUID;
  * <pre>
  *   -Dmmtr.motion.stream=false   ⇒ 完全回到旧行为（一个字节都不发）
  *   -Dmmtr.motion.hz=5|10|20     ⇒ 帧率（默认 10）
- *   -Dmmtr.motion.legs=false     ⇒ 关掉腿阴影增量（**默认开**：客户端那一半已落地，见 notes/369 S3b。
+ *   -Dmmtr.motion.legs=false     ⇒ 关掉腿表通道（**默认开**：客户端那一半已落地，见 notes/369 S3b。
  *                                   关掉的表现是"车头走到阴影末端就停住、等下一拍整份再跳"）
+ *   -Dmmtr.motion.legs.fullSeconds=60 ⇒ 每隔这么多秒发一次**整表**兜底（0 = 关；notes/375）
  * </pre>
  */
 public final class MmtrVehicleMotionSync {
@@ -68,6 +71,19 @@ public final class MmtrVehicleMotionSync {
 	 * 顺带让镜像被整份快照重建之后自己收敛回来。</p>
 	 */
 	private static final int EDGE_REFRESH_EVERY_FRAMES = HZ;
+	/**
+	 * 每隔这么多帧无条件发一次**整张腿表**（兜底，notes/375）。
+	 *
+	 * <p>兜底要治的是"客户端手上那张表与服务端不同源"里**剩下**的那一类：`缺轨` 已经由客户端的
+	 * **本地重试**治了（轨数据到了就接上，≤1 秒，不花一个字节），② 重建镜像也已经由
+	 * {@code Client#tookFullVehicleUpdate} 当场重新锚定了；剩下的只有"客户端原子拒绝了增量、
+	 * 而两本账再也没对齐"这种没想到的情况 —— 60 秒一次足够把它拉回来。</p>
+	 *
+	 * <p>代价：一张表 ~660 B（6 根腿）⇒ {@code 660 / 60 ≈ 11 B/s/车}。8 辆车在场 ≈ 88 B/s，
+	 * 而它平时一次都用不到（真正的路是"形状变了就发"）。可用
+	 * {@code -Dmmtr.motion.legs.fullSeconds=} 调（0 = 关掉定时兜底）。</p>
+	 */
+	private static final int FULL_LEGS_REFRESH_EVERY_FRAMES = Math.max(0, Integer.getInteger("mmtr.motion.legs.fullSeconds", 60)) * HZ;
 
 	private static final Map<UUID, ClientFrames> CLIENTS = new HashMap<>();
 
@@ -76,6 +92,8 @@ public final class MmtrVehicleMotionSync {
 	private static int sentFrames;
 	private static int sentBytes;
 	private static int sentRecords;
+	/** 这一窗口里发了几次**整张**腿表（notes/375：形状变了必发，另有定时兜底）。 */
+	private static int sentFullLegTables;
 
 	private MmtrVehicleMotionSync() {
 	}
@@ -117,6 +135,7 @@ public final class MmtrVehicleMotionSync {
 		}
 		final int frameIndex = minecraftServer.getTicks() / FRAME_TICKS;
 		final boolean withEdgeRefresh = frameIndex % EDGE_REFRESH_EVERY_FRAMES == 0;
+		final boolean withFullLegs = LEGS_ENABLED && FULL_LEGS_REFRESH_EVERY_FRAMES > 0 && frameIndex % FULL_LEGS_REFRESH_EVERY_FRAMES == 0;
 		for (final ServerWorld serverWorld : minecraftServer.getWorlds()) {
 			final Simulator simulator = main.getSimulator(Init.getWorldId(new World(serverWorld)));
 			if (simulator == null || simulator.clients.isEmpty()) {
@@ -130,7 +149,7 @@ public final class MmtrVehicleMotionSync {
 					// 这个引擎客户端不在这个维度（换维度的那一拍）：下一帧再说。
 					continue;
 				}
-				final char[] frame = buildFrame(simulator, client, withSpeed, withPing, withEdgeRefresh);
+				final char[] frame = buildFrame(simulator, client, withSpeed, withPing, withEdgeRefresh, withFullLegs);
 				if (frame != null) {
 					Init.REGISTRY.sendPacketToClient(player, new PacketMmtrVehicleMotion(frame));
 					sentFrames++;
@@ -142,7 +161,7 @@ public final class MmtrVehicleMotionSync {
 		logIfDue();
 	}
 
-	/** 服务端侧 5 秒一行：帧数/记录数/字节数（跨所有客户端）。 */
+	/** 服务端侧 5 秒一行：帧数/记录数/字节数（跨所有客户端）+ 整表腿表发了几次（notes/375 的读数）。 */
 	private static void logIfDue() {
 		final long now = System.currentTimeMillis();
 		if (windowStartMillis == 0) {
@@ -162,15 +181,17 @@ public final class MmtrVehicleMotionSync {
 		System.out.println("[MMTR-MOTION] 运动流(服务端)："
 			+ (sentFrames * 1000L / elapsed) + " 帧/s "
 			+ (sentRecords * 1000L / elapsed) + " 记录/s "
-			+ (sentBytes * 1000L / elapsed) + " 字节/s 客户端=" + CLIENTS.size() + " 帧率=" + HZ + "Hz");
+			+ (sentBytes * 1000L / elapsed) + " 字节/s 客户端=" + CLIENTS.size() + " 帧率=" + HZ + "Hz"
+			+ " 腿整表=" + sentFullLegTables + "（形状变了/定时兜底）");
 		windowStartMillis = now;
 		sentFrames = 0;
 		sentBytes = 0;
 		sentRecords = 0;
+		sentFullLegTables = 0;
 	}
 
 	/** @return 这一帧的载荷；{@code null} = 一条记录都没有（不发包） */
-	private static char[] buildFrame(Simulator simulator, Client client, boolean withSpeed, boolean withPing, boolean withEdgeRefresh) {
+	private static char[] buildFrame(Simulator simulator, Client client, boolean withSpeed, boolean withPing, boolean withEdgeRefresh, boolean withFullLegs) {
 		final ClientFrames state = CLIENTS.computeIfAbsent(client.uuid, uuid -> new ClientFrames());
 		final MmtrMotionFrame.Writer writer = new MmtrMotionFrame.Writer();
 		final Set<Long> seen = new HashSet<>();
@@ -182,7 +203,7 @@ public final class MmtrVehicleMotionSync {
 				return;
 			}
 			seen.add(vehicleId);
-			writeVehicle(writer, state, vehicle, withSpeed, withEdgeRefresh);
+			writeVehicle(writer, state, client, vehicle, withSpeed, withEdgeRefresh, withFullLegs);
 		}));
 
 		// 车离开视距 / 被删 / 驾驶室解散：释放槽位并告诉客户端（镜像的生死仍归 ② 管，这里只归还编号）。
@@ -207,7 +228,7 @@ public final class MmtrVehicleMotionSync {
 		return writer.isEmpty() ? null : writer.toCharArray();
 	}
 
-	private static void writeVehicle(MmtrMotionFrame.Writer writer, ClientFrames state, Vehicle vehicle, boolean withSpeed, boolean withEdgeRefresh) {
+	private static void writeVehicle(MmtrMotionFrame.Writer writer, ClientFrames state, Client client, Vehicle vehicle, boolean withSpeed, boolean withEdgeRefresh, boolean withFullLegs) {
 		final long vehicleId = vehicle.getId();
 		final int flags = flagsOf(vehicle);
 		final int control = MmtrMotionFrame.packControl(
@@ -240,9 +261,13 @@ public final class MmtrVehicleMotionSync {
 			sent.runTotalDistance = runTotalDistance;
 			sent.blockStopM = blockStopM;
 			if (LEGS_ENABLED) {
-				final List<String> legs = vehicle.getMmtrMotionLegHexIds();
-				writer.legs(slot, 0, legs);
+				// 首帧发**整张表**（不是增量）：客户端此刻多半还没有镜像（② 的整份在路上），
+				// 丢掉也无所谓 —— 之后每一拍要么是形状变了的整表、要么是能接上的增量，
+				// 而且还有定时兜底，不会像 v1 那样"丢了初值就永远对不上"。
+				final List<MmtrMotionFrame.Leg> legs = vehicle.getMmtrMotionLegsForWire();
+				writer.legs(slot, MmtrMotionFrame.LEGS_FULL_REPLACE, vehicle.getMmtrMotionPathAnchorM(), legs);
 				sent.legs = legs;
+				sentFullLegTables++;
 			}
 			return;
 		}
@@ -264,11 +289,40 @@ public final class MmtrVehicleMotionSync {
 			writer.state(sent.slot, flags, runStopTarget, runTotalDistance, blockStopM);
 		}
 		if (LEGS_ENABLED) {
-			final List<String> legs = vehicle.getMmtrMotionLegHexIds();
-			final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(sent.legs, legs);
-			if (delta != null && !delta.isEmpty()) {
-				writer.legs(sent.slot, delta.droppedFromTrainTail(), delta.appended());
+			/*
+			 * 腿表（notes/375）：**形状变了就发整表**，只有"旧表原封不动、只多了车头那几根"才走增量。
+			 *
+			 * <p>{@code legDelta} 比的是 {@link MmtrMotionFrame.Leg}（轨 + 方向）。换端是"同一批轨、
+			 * 相反顺序"：只比 hex 的话会算出"丢两根、再在车头接两根"，客户端接出一张方向错的表 ——
+			 * 现场就是"换端开出去车不动、过一会儿瞬移"。比方向之后换端必然落到
+			 * {@code replacesWholeTable()}，于是发整表 + 锚点，客户端重建。</p>
+			 *
+			 * <p>另外两处也发整表：**② 这一拍整份重建过这辆车的镜像**（客户端手上的表换成了 ② 那份，
+			 * 与这里的基准可能不同源 ⇒ 继续发增量只会被原子拒绝，几何停在旧值上）与**定时兜底**
+			 * （客户端"缺轨"这类它自己修不了的情况）。</p>
+			 */
+			final List<MmtrMotionFrame.Leg> legs = vehicle.getMmtrMotionLegsForWire();
+			final double anchorM = vehicle.getMmtrMotionPathAnchorM();
+			if (client.tookFullVehicleUpdate(vehicleId)) {
+				writer.legs(sent.slot, MmtrMotionFrame.LEGS_FULL_REPLACE, anchorM, legs);
 				sent.legs = legs;
+				sentFullLegTables++;
+			} else {
+				final MmtrMotionFrame.LegDelta delta = MmtrMotionFrame.legDelta(sent.legs, legs);
+				if (delta != null && !delta.isEmpty()) {
+					if (delta.replacesWholeTable()) {
+						writer.legs(sent.slot, MmtrMotionFrame.LEGS_FULL_REPLACE, anchorM, legs);
+						sentFullLegTables++;
+					} else {
+						writer.legs(sent.slot, delta.droppedFromTrainTail(), anchorM, legs.subList(delta.appendedFromIndex(), legs.size()));
+					}
+					sent.legs = legs;
+				} else if (withFullLegs) {
+					// 定时兜底：客户端手上那张表与这里不同源时（接不上、缺轨），靠它回到正轨。
+					writer.legs(sent.slot, MmtrMotionFrame.LEGS_FULL_REPLACE, anchorM, legs);
+					sent.legs = legs;
+					sentFullLegTables++;
+				}
 			}
 		}
 
@@ -352,7 +406,8 @@ public final class MmtrVehicleMotionSync {
 		private double runStopTarget;
 		private double runTotalDistance;
 		private double blockStopM;
-		private List<String> legs = List.of();
+		/** 上次发出去的**腿表**（含方向 —— 它同时也是 {@code legDelta} 的基准，所以必须带方向）。 */
+		private List<MmtrMotionFrame.Leg> legs = List.of();
 
 		private SentState(int slot) {
 			this.slot = slot;

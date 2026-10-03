@@ -1612,4 +1612,105 @@ public final class MmtrSectionServiceTests {
 		assertEquals("AUTO", entry.mode, "and the lamp is back to inference");
 		assertNotNull(service.sectionOfSignal(lamp), "an unbound lamp still guards what it faces");
 	}
+
+	// ---------------------------------------------------------------- 区间叠加层（notes/291）
+
+	/**
+	 * 相隔两段必须异色：这是整个叠加层唯一要保证的事（用户：「仅需相连颜色不同即可」）。
+	 *
+	 * <p>做法：两根轨、两盏都朝东的灯 —— 东边那盏开出的区间与西边那盏的**首尾相接**（灯到灯），
+	 * 于是它们在 {@code followingBySection} 上互为邻居。颜色若在边界处不跳变，人眼就看不见"这里换区间了"。</p>
+	 */
+	@Test
+	public void twoSectionsThatMeetAtALampGetDifferentColours() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Simulator simulator = sim("build/mmtr-overlay-chain", r1, r2);
+		final String westLamp = addLamp(simulator, r1, 0, EAST);
+		final String eastLamp = addLamp(simulator, r1, 100, EAST);
+		final MmtrSectionService service = new MmtrSectionService(simulator);
+
+		final MmtrSectionService.Section west = service.sectionOfSignal(westLamp);
+		final MmtrSectionService.Section east = service.sectionOfSignal(eastLamp);
+		assertNotNull(west, "西边那盏灯开出它守的那段区间");
+		assertNotNull(east, "东边那盏灯同样开出一段");
+		assertTrue(service.followings(west).contains(east), "两段在灯处首尾相接（否则这条用例什么都没验到）");
+
+		final java.util.Map<String, Integer> colors = new java.util.HashMap<>();
+		for (final MmtrSectionService.OverlaySection row : service.sectionOverlay()) {
+			colors.put(row.id, row.colorIndex);
+		}
+		assertNotEquals(colors.get(west.id), colors.get(east.id), "相接的两段必须异色 —— 边界就靠它显出来");
+	}
+
+	/**
+	 * 同一根轨上叠着两段时也必须异色：它们会画在**同一条带**上（同向），撞色的话切点就看不见了。
+	 *
+	 * <p>做法：一根 100 m 轨，西端一盏朝东的灯（守整根、走行向东），轨中段一盏朝西的灯（守它西边那一段、
+	 * 走行向西）。后者不构成前者的边界（背向），所以前者仍走满整根轨 —— 于是西半根上叠了两段。</p>
+	 */
+	@Test
+	public void twoSectionsOverlappingOnOneRailGetDifferentColours() {
+		final Rail line = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Simulator simulator = sim("build/mmtr-overlay-overlap", line);
+		final String eastwardLamp = addLamp(simulator, line, 0, EAST);
+		final String westwardLamp = addLamp(simulator, line, 50, WEST);
+		final MmtrSectionService service = new MmtrSectionService(simulator);
+
+		final MmtrSectionService.Section eastward = service.sectionOfSignal(eastwardLamp);
+		final MmtrSectionService.Section westward = service.sectionOfSignal(westwardLamp);
+		assertNotNull(eastward);
+		assertNotNull(westward);
+		assertTrue(overlaps(eastward, westward), "两段必须真的压在同一根轨上（否则这条用例什么都没验到）");
+
+		final java.util.Map<String, Integer> colors = new java.util.HashMap<>();
+		for (final MmtrSectionService.OverlaySection row : service.sectionOverlay()) {
+			colors.put(row.id, row.colorIndex);
+		}
+		assertNotEquals(colors.get(eastward.id), colors.get(westward.id), "同轨叠着（同一条带）的两段也必须异色");
+	}
+
+	/**
+	 * 颜色必须**稳定**：世界不变时连算两次要逐段同色。
+	 *
+	 * <p>不稳定的后果不是"难看"，是"看着像区间变了"—— 每帧换色的图层没法用来认边界。</p>
+	 */
+	@Test
+	public void theOverlayColoursAreStableAcrossCalls() {
+		final Rail r1 = rail(new Position(0, 0, 0), new Position(100, 0, 0));
+		final Rail r2 = rail(new Position(100, 0, 0), new Position(200, 0, 0));
+		final Simulator simulator = sim("build/mmtr-overlay-stable", r1, r2);
+		addLamp(simulator, r1, 0, EAST);
+		addLamp(simulator, r1, 100, EAST);
+		final MmtrSectionService service = new MmtrSectionService(simulator);
+
+		final java.util.Map<String, Integer> first = new java.util.HashMap<>();
+		for (final MmtrSectionService.OverlaySection row : service.sectionOverlay()) {
+			first.put(row.id, row.colorIndex);
+			assertTrue(row.colorIndex >= 0 && row.colorIndex < MmtrSectionOverlay.COLOR_COUNT, "色号必须落在调色板内：" + row.colorIndex);
+			assertTrue(row.spans.size() > 0, "一条区间至少要有一段轨（" + row.id + "）");
+			for (final MmtrSectionService.RailSpan span : row.spans) {
+				assertTrue(span.arcToM >= span.arcFromM, "弧窗必须是 [起, 止]");
+			}
+		}
+		assertFalse(first.isEmpty(), "这个世界里必须有区间，否则用例是空转");
+
+		final java.util.Map<String, Integer> second = new java.util.HashMap<>();
+		for (final MmtrSectionService.OverlaySection row : service.sectionOverlay()) {
+			second.put(row.id, row.colorIndex);
+		}
+		assertEquals(first, second, "同样的世界连算两次必须给同样的颜色");
+	}
+
+	/** 两段区间是不是压在至少同一根轨上（弧窗有重叠）。 */
+	private static boolean overlaps(MmtrSectionService.Section a, MmtrSectionService.Section b) {
+		for (final MmtrSectionService.RailSpan spanA : a.spans) {
+			for (final MmtrSectionService.RailSpan spanB : b.spans) {
+				if (spanA.railHex.equals(spanB.railHex) && spanA.arcFromM < spanB.arcToM - 1e-6 && spanB.arcFromM < spanA.arcToM - 1e-6) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 }

@@ -103,7 +103,7 @@ public final class PassengerTests {
 		vehicleCars.add(new VehicleCar("car_3", 10, 2, 100, 0, 5, 0.5, 0.5));
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
 		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
-			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.1, 0.1, false, 0, 0
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), false, 0, 0
 		);
 
 		assertEquals(3, vehicleExtraData.passengers.size(), "Should have one set per car");
@@ -121,7 +121,7 @@ public final class PassengerTests {
 		vehicleCars.add(new VehicleCar("car_1", 10, 2, 100, 0, 5, 0.5, 0.5));
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
 		final VehicleExtraData original = VehicleExtraData.createWithLegs(
-			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.1, 0.1, false, 0, 0
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), false, 0, 0
 		);
 
 		final Passenger passenger = new Passenger(simulator);
@@ -138,7 +138,7 @@ public final class PassengerTests {
 		vehicleCars.add(new VehicleCar("car_0", 10, 2, 100, 0, 5, 0.5, 0.5));
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
 		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
-			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.1, 0.1, false, 0, 0
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), false, 0, 0
 		);
 
 		final Passenger passenger = new Passenger(simulator);
@@ -159,7 +159,7 @@ public final class PassengerTests {
 		vehicleCars.add(new VehicleCar("car_1", 10, 2, 100, 0, 5, 0.5, 0.5));
 		final PathData dummyPath = new PathData(new JsonReader(new JsonObject()));
 		final VehicleExtraData vehicleExtraData = VehicleExtraData.createWithLegs(
-			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), 0.1, 0.1, false, 0, 0
+			0, 0, 10, vehicleCars, ObjectArrayList.wrap(new PathData[]{dummyPath}), false, 0, 0
 		);
 
 		final Passenger passenger1 = new Passenger(simulator);

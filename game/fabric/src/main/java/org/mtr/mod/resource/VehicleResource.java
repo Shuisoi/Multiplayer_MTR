@@ -17,6 +17,7 @@ import org.mtr.mod.render.DynamicVehicleModel;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.StoredMatrixTransformations;
+import org.mtr.mod.render.light.MmtrHeadlights;
 import org.mtr.mod.sound.BveVehicleSound;
 import org.mtr.mod.sound.BveVehicleSoundConfig;
 import org.mtr.mod.sound.LegacyVehicleSound;
@@ -27,6 +28,8 @@ import javax.annotation.Nullable;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
+import static org.mtr.mod.data.IGui.ARGB_WHITE;
 
 public final class VehicleResource extends VehicleResourceSchema {
 
@@ -224,18 +227,57 @@ public final class VehicleResource extends VehicleResourceSchema {
 	public void queue(StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int carNumber, int totalCars, int light, boolean noOpenDoorways) {
 		final VehicleResourceCache vehicleResourceCache = getCachedVehicleResource(carNumber, totalCars, false);
 		if (vehicleResourceCache != null) {
+			/*
+			 * MMTR 车灯灯罩的颜色（notes/374）：**这一节车**的灯罩该是什么颜色（近光/远光 = 白、
+			 * 尾灯 = 红、关闭/回库 = 暗），逐 draw 交给 MTR 的优化渲染器 ——
+			 * 它那个 color 参数在 GL 里就是 COLOR 顶点属性，而 COLOR 在 MTR 的顶点映射里是
+			 * VertexAttributeSource.GLOBAL（每个 draw 一个常量）⇒ 染色粒度正好是"一组几何"。
+			 *
+			 * <p>判据与光场同源（MmtrHeadlights.lampColor：端 + 档位 + 换向器），所以灯罩颜色
+			 * 与灯投出的光束不可能对不上。没装灯的部件（车体、内装、门）照旧拿 ARGB_WHITE = 不染。</p>
+			 */
+			final int lampColor = MmtrHeadlights.lampColor(vehicle, carNumber);
 			if (noOpenDoorways) {
-				queue(vehicleResourceCache.optimizedModelsDoorsClosed, storedMatrixTransformations, vehicle, light, true);
+				logQueueDiagnostics(vehicle, carNumber, vehicleResourceCache.optimizedModelsDoorsClosed, true, lampColor);
+				queue(vehicleResourceCache.optimizedModelsDoorsClosed, storedMatrixTransformations, vehicle, light, true, lampColor);
 			} else {
-				queue(vehicleResourceCache.optimizedModels, storedMatrixTransformations, vehicle, light, false);
+				logQueueDiagnostics(vehicle, carNumber, vehicleResourceCache.optimizedModels, false, lampColor);
+				queue(vehicleResourceCache.optimizedModels, storedMatrixTransformations, vehicle, light, false, lampColor);
 			}
 		}
+	}
+
+	/**
+	 * 每 2 秒一行：**这一节车这一帧到底有哪些条件真的有几何**，以及灯罩算出来的颜色。
+	 *
+	 * <p>为什么需要它（notes/374）：原来那行只报 {@code 0/11 part conditions have optimized geometry} ——
+	 * 看不出是哪一组，于是"灯罩那组几何到底在不在被画的那张表里"只能靠猜。2026-10-03 的现场正是这样：
+	 * 颜色算得对（另一行有日志），画面还是白的，而"这条 draw 到底有没有料"没有第三行可以对照。</p>
+	 */
+	private void logQueueDiagnostics(VehicleExtension vehicle, int carNumber, Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, boolean noOpenDoorways, int lampColor) {
+		final long nowMillis = System.currentTimeMillis();
+		if (nowMillis - mmtrLastQueueLogMillis <= 2000) {
+			return;
+		}
+		mmtrLastQueueLogMillis = nowMillis;
+		final StringBuilder withGeometry = new StringBuilder();
+		optimizedModels.forEach((partCondition, wrapper) -> {
+			if (wrapper.optimizedModel != null) {
+				if (withGeometry.length() > 0) {
+					withGeometry.append(',');
+				}
+				withGeometry.append(partCondition);
+			}
+		});
+		Init.LOGGER.info("[MMTR-DBG] vehicle queue: {}/{} 条件有几何 [{}] doorsClosed={} 灯罩色=#{} model={}",
+				withGeometry.toString().isEmpty() ? 0 : withGeometry.toString().split(",").length, optimizedModels.size(), withGeometry,
+				noOpenDoorways, String.format("%08X", lampColor), getId());
 	}
 
 	public void queueBogie(int bogieIndex, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light) {
 		final VehicleResourceCache vehicleResourceCache = getCachedVehicleResource(0, 1, false);
 		if (vehicleResourceCache != null && Utilities.isBetween(bogieIndex, 0, 1)) {
-			queue(bogieIndex == 0 ? vehicleResourceCache.optimizedModelsBogie1 : vehicleResourceCache.optimizedModelsBogie2, storedMatrixTransformations, vehicle, light, true);
+			queue(bogieIndex == 0 ? vehicleResourceCache.optimizedModelsBogie1 : vehicleResourceCache.optimizedModelsBogie2, storedMatrixTransformations, vehicle, light, true, ARGB_WHITE);
 		}
 	}
 
@@ -384,6 +426,11 @@ public final class VehicleResource extends VehicleResourceSchema {
 				return vehicle.persistentVehicleData.getDoorValue() == 0 && noOpenDoorways;
 			case DOORS_OPENED:
 				return vehicle.persistentVehicleData.getDoorValue() > 0 || !noOpenDoorways;
+			case MMTR_LAMP:
+				// 灯罩**一直在**（notes/374）：灭灯 = 一块暗玻璃，而不是把车头挖一个洞
+				// （2026-10-03 之前用 ON_ROUTE_FORWARDS 那类方向条件，车往另一端跑时两端的灯罩
+				//  一起消失，现场就是"灯没了"）。颜色由 queue 里那个逐 draw 的顶点色决定。
+				return true;
 			default:
 				return getChristmasLightState(partCondition);
 		}
@@ -518,24 +565,14 @@ public final class VehicleResource extends VehicleResourceSchema {
 		return CHRISTMAS_LIGHT_STAGES[(int) ((System.currentTimeMillis() / 500) % CHRISTMAS_LIGHT_STAGES.length)][index];
 	}
 
-	private static void queue(Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light, boolean noOpenDoorways) {
-		final long nowMillis = System.currentTimeMillis();
-		if (nowMillis - mmtrLastQueueLogMillis > 2000) {
-			mmtrLastQueueLogMillis = nowMillis;
-			int withGeometry = 0;
-			for (final OptimizedModelWrapper optimizedModelWrapper : optimizedModels.values()) {
-				if (optimizedModelWrapper.optimizedModel != null) {
-					withGeometry++;
-				}
-			}
-			final var cars = vehicle.getVehicleCarsAndPositions();
-			Init.LOGGER.info("[MMTR-DBG] vehicle queue: {}/{} part conditions have optimized geometry, doorsClosed={}, model={}", withGeometry, optimizedModels.size(), noOpenDoorways, cars.isEmpty() ? "-" : cars.get(0).left().getVehicleId());
-		}
+	private static void queue(Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light, boolean noOpenDoorways, int lampColor) {
 		optimizedModels.forEach((partCondition, optimizedModel) -> {
 			if (matchesCondition(vehicle, partCondition, noOpenDoorways)) {
+				// 只有灯罩那一组几何吃 lampColor，其余部件一律不染（notes/374）。
+				final int color = partCondition == PartCondition.MMTR_LAMP ? lampColor : ARGB_WHITE;
 				MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
 					storedMatrixTransformations.transform(graphicsHolder, offset);
-					CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(optimizedModel, graphicsHolder, light);
+					CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(optimizedModel, graphicsHolder, color, light);
 					graphicsHolder.pop();
 				});
 			}

@@ -37,7 +37,7 @@ public final class MmtrMotionBlockingTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 	/** Simulated foreign train occupying a rail segment (id never collides with real vehicles). */
 	private static final long OBSTACLE_VEHICLE_ID = 999_999_001L;
@@ -225,8 +225,14 @@ public final class MmtrMotionBlockingTests {
 		// manual v2 under a live driver (throttle held, NO stop target): the occupancy stop must
 		// override the driver - service-brake to rest at the MA end node and suppress traction.
 		boardDriver(n.sim, v2, 3);
-		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 45.5, 4000);
-		assertEquals(46.0 - 0.001, v2.getRailProgress(), 0.02, "manual v2 forced to rest at the occupied rail entrance");
+		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 44.0, 4000);
+		/*
+		 * notes/233 司机优先：手动车不再被"钉"在 ε 处，而是**紧急制动**（司机越界那一路，可按响应键解除）
+		 * 把它刹停在界限之前 —— 紧急减速比服务减速强，所以停点比"贴界限"略靠前（安全侧）。
+		 * 不变量照旧：**绝不越过界限进入被占用的轨**。
+		 */
+		assertTrue(v2.getRailProgress() <= 46.0, "never past the occupied rail entrance: " + v2.getRailProgress());
+		assertTrue(v2.getRailProgress() >= 44.0, "held close to the entrance: " + v2.getRailProgress());
 		assertTrue(v2.isMmtrManualOverride(), "driver still holds the cab override");
 		assertEquals(0, v2.getSpeed(), 1e-9, "v2 at rest");
 
@@ -343,22 +349,27 @@ public final class MmtrMotionBlockingTests {
 		// command) but must stop GAP metres (2.0) short of the occupancy face at 10.5 - i.e. at
 		// physical x = 8.5 - and hold there no matter how hard the driver pushes: same-rail
 		// exact-interval following.
+		//
+		// notes/233 司机优先：手动车靠**紧急制动**（司机越界那一路）停在界限之前，所以停点会略早于
+		// 那个"贴界限"的值（紧急减速比服务减速强 ⇒ 安全侧）。不变量照旧：**绝不越过占用面**。
 		boardDriver(n.sim, v2, 3);
 		final double holdProgress = 38.5;
-		for (int i = 0; i < 80 && v2.getRailProgress() < holdProgress - 0.01; i++) {
+		for (int i = 0; i < 120; i++) {
 			injectMaOccupancy(n);
 			n.tick();
 		}
-		assertEquals(holdProgress, v2.getRailProgress(), 0.05, "v2 rests 2 m GAP before the occupancy face at 10.5");
 		assertEquals(0, v2.getSpeed(), 1e-9, "v2 at rest against the same-rail occupancy");
+		assertTrue(v2.getRailProgress() <= holdProgress + 1e-6, "never past the 2 m GAP: " + v2.getRailProgress());
+		assertTrue(v2.getRailProgress() >= holdProgress - 2.0, "held close to the GAP: " + v2.getRailProgress());
 		assertEquals(n.ma.getHexId(), v2.getMmtrMotionWalker().railHex(), "v2 never crossed the occupancy face");
 		assertTrue(v2.isMmtrManualOverride(), "driver still holds the cab");
 		// While the occupancy persists (injected every tick), fresh traction never closes the GAP.
+		final double heldProgress = v2.getRailProgress();
 		for (int i = 0; i < 30; i++) {
 			injectMaOccupancy(n);
 			n.tick();
 		}
-		assertEquals(holdProgress, v2.getRailProgress(), 1e-3, "fresh traction never closes the 2 m GAP");
+		assertEquals(heldProgress, v2.getRailProgress(), 1e-3, "fresh traction never closes the 2 m GAP");
 
 		// The occupancy clears (no more injection): the SAME held throttle drives v2 on.
 		n.tickUntil(() -> v2.getRailProgress() > 39.0, 2000);

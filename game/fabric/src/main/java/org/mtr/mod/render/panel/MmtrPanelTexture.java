@@ -86,21 +86,50 @@ public final class MmtrPanelTexture {
 		return !signature.equals(this.signature);
 	}
 
-	/** Repaints the texture. Must run on the render thread. */
+	/**
+	 * Repaints the texture. Must run on the render thread.
+	 *
+	 * <p><b>The texture object is STABLE and only its pixels are replaced.</b> Three approaches were
+	 * tried on this, and the two failures are worth keeping because each looked right on paper:</p>
+	 *
+	 * <ol>
+	 *   <li>{@code setImage(image); upload();} on a cached texture - the panel was painted once and then
+	 *       never changed. The render layer caches the texture's GL id (see {@link #releaseTexture}), so
+	 *       the layer kept binding the id the texture had when the layer was first built.</li>
+	 *   <li>Destroying and re-registering the texture on every repaint - the layer then points at a
+	 *       texture that no longer exists for part of every frame, which shows up in game as the
+	 *       missing-texture colour FLASHING (purple/black) on the glass. It also churns GL ids at ~18 Hz
+	 *       per pane.</li>
+	 * </ol>
+	 *
+	 * <p>So neither the layer cache nor the texture identity may change. What changes is the pixel data,
+	 * through the {@link NativeImage} the texture already owns: the canvas is copied into that image in
+	 * place and the texture is uploaded. The GL id therefore never changes, and no layer has to be
+	 * rebuilt - which is what makes the repaint reach the screen at all.</p>
+	 */
 	public void redraw(MmtrPanelCanvas canvas, String signature) {
-		final NativeImage image = canvas.toNativeImage();
+		boolean uploaded = false;
 
-		if (texture == null || widthPx != image.getWidth() || heightPx != image.getHeight()) {
-			// First paint, or the panel changed size: the constructor is the only path that allocates
-			// GPU storage (prepareImage) before uploading, so build a fresh texture and identifier.
-			destroy();
-			texture = new NativeImageBackedTexture(image);
-			widthPx = image.getWidth();
-			heightPx = image.getHeight();
+		if (texture != null && widthPx == canvas.widthPx() && heightPx == canvas.heightPx()) {
+			// The steady state: the texture keeps its identity and its GL id, and only its pixels change.
+			// Writing straight into the image the texture already owns is what makes the repaint reach the
+			// screen - no layer has to be rebuilt, because nothing the layer refers to has changed.
+			final NativeImage target = texture.getImage();
+			if (target != null && canvas.writeInto(target)) {
+				texture.upload();
+				uploaded = true;
+			}
+		}
+
+		if (!uploaded) {
+			// First paint, a size change, or a texture that lost its image: build a fresh one. This is the
+			// path that changes the GL id, so it also has to drop the render layers cached around the old
+			// one - see releaseTexture.
+			releaseTexture();
+			texture = new NativeImageBackedTexture(canvas.toNativeImage());
+			widthPx = canvas.widthPx();
+			heightPx = canvas.heightPx();
 			identifier = MinecraftClient.getInstance().getTextureManager().registerDynamicTexture("mmtr_panel_" + sanitise(key), texture);
-		} else {
-			texture.setImage(image);
-			texture.upload();
 		}
 
 		if (DEBUG_DUMP && DUMPED.add(key)) {
@@ -110,7 +139,7 @@ public final class MmtrPanelTexture {
 			// identifier and its GL id, versus the GL id of Minecraft's missing texture.
 			final AbstractTexture registered = MinecraftClient.getInstance().getTextureManager().getTexture(identifier);
 			Init.LOGGER.info("[MMTR-DBG] panel {} image={}x{} textureGl={} registered={} registeredGl={} missingGl={} png={} ({})",
-					identifier, image.getWidth(), image.getHeight(), texture.getGlId(),
+					identifier, widthPx, heightPx, texture.getGlId(),
 					registered == null ? "null" : registered.getClass().getSimpleName(),
 					registered == null ? -1 : registered.getGlId(),
 					MinecraftClient.getInstance().getTextureManager().getTexture(TextureManager.getMissingIdentifierMapped()).getGlId(),
@@ -149,6 +178,32 @@ public final class MmtrPanelTexture {
 			}
 		});
 		DUMPED.clear();
+	}
+
+	/**
+	 * Frees the GL texture and the identifier that names it, and DROPS THE RENDER-LAYER CACHE for it.
+	 *
+	 * <p>The cache eviction is the load-bearing half, and it took three attempts to find. A
+	 * {@code RenderLayer} built by {@code RenderLayer.getEntityTranslucent(texture)} binds the texture's
+	 * GL id through a {@code RenderStateShard} that is RESOLVED ONCE, when the layer is built. The layer
+	 * is then cached per identifier in {@link MoreRenderLayers}. So rebuilding the texture and
+	 * re-registering it under the same identifier gives the queue a brand-new image while the cached
+	 * layer keeps drawing the OLD GL id - the panel is repainted correctly every time
+	 * ({@code rebuilds} climbs, and the offline harness proves the canvas changes frame to frame) and
+	 * the glass still shows one frozen picture. Only dropping the cache entry makes the next lookup
+	 * build a layer around the new texture.</p>
+	 *
+	 * <p>What this deliberately does NOT do is {@link #destroy()}'s {@code MainRenderer.cancelRender}:
+	 * that would cancel the very draws about to use the fresh texture. Cancelling and cache-evicting are
+	 * two different repairs for two different symptoms, and running them together made both look wrong.</p>
+	 */
+	private void releaseTexture() {
+		if (identifier != null) {
+			MoreRenderLayers.removeFromCache(identifier);
+			MinecraftClient.getInstance().getTextureManager().destroyTexture(identifier);
+			identifier = null;
+		}
+		texture = null;
 	}
 
 	private void destroy() {

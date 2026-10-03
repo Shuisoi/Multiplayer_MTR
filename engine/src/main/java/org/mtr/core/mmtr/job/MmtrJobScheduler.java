@@ -357,7 +357,52 @@ public final class MmtrJobScheduler {
 					}
 				}
 			}
+			if (instance.state == JobState.RUNNING && instance.vehicleId != 0) {
+				pushPid(instance, simulator);
+			}
 		}
+		/*
+		 * 第二遍才清：**同一台车可能同时被两条作业单记着**（连挂之后被并进来的那一份仍是 DONE 且
+		 * 记着这台车；`loopAdvance` 重置、换单也是这个形状）。若一边推一边清，结果就取决于
+		 * `instances`（HashMap）的遍历顺序 —— 那种"大部分时候对"的错误最难查。于是先让所有在跑的
+		 * 作业单写完，再清"没有任何在跑作业单认领"的车。
+		 */
+		for (final JobInstance instance : instances.values()) {
+			if (instance.vehicleId != 0 && instance.state != JobState.RUNNING && !claimedByRunningJob(instance.vehicleId)) {
+				final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+				if (vehicle != null) {
+					vehicle.clearMmtrPid();
+				}
+			}
+		}
+	}
+
+	/**
+	 * **水牌 / PID**（notes/354）：把这趟车的"班次号 / 本趟终点 / 下一站"算好写到车上。
+	 *
+	 * <p>为什么由调度器写而不是车辆自己算：这三项的真源是**作业单 + 车跑到第几步**，而"跑到第几步"
+	 * 只有调度器（{@link JobInstance#stepIndex}）知道 —— 车辆侧只有在某一步挂过 mission 时才间接知道，
+	 * 而换端/连挂那几步按设计**没有 mission**，正好是水牌要翻面的时刻（"只在有 mission 时算"
+	 * 会让水牌在换端时闪成空白）。</p>
+	 *
+	 * <p>每 tick 都算、都写：一次 O(作业单步骤数) 的扫描（现场 244 步），且值不变时
+	 * {@code setMmtrPid} 不会标脏 ⇒ 不会每 tick 推一份补丁给客户端。</p>
+	 */
+	private void pushPid(JobInstance instance, Simulator simulator) {
+		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
+		if (vehicle != null) {
+			vehicle.setMmtrPid(org.mtr.core.mmtr.MmtrPid.of(simulator, instance.job, instance.stepIndex));
+		}
+	}
+
+	/** 这台车现在有没有被**任何一条在跑的**作业单认领（清空水牌前的守卫，见 {@link #tick}）。 */
+	private boolean claimedByRunningJob(long vehicleId) {
+		for (final JobInstance other : instances.values()) {
+			if (other.vehicleId == vehicleId && other.state == JobState.RUNNING) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static final long SPAWN_GRACE_MILLIS = 30_000;
@@ -734,28 +779,15 @@ public final class MmtrJobScheduler {
 					}
 				}
 			}
-			// AUTO: the engine's startUp no-ops while the spawn-time door cooldown is active, so a
-			// single call can leave a service permanently parked in the yard. Re-issue it every tick
-			// until the consist is actually on route.
-			if (!kickParkedAutoDeparture(instance, simulator)) {
-				return;
-			}
 			break;
 		}
 		if (instance.stepIndex >= instance.job.steps.size()) {
 			instance.state = JobState.DONE;
 			return;
 		}
-		// Step progress on the current leg: mission end (MANUAL, incl. while parked back at the yard)
-		// or platform arrivals / dwell departures (AUTO, only while en route).
-		if (instance.mode == Mode.MANUAL) {
-			advanceManual(instance, simulator);
-		} else {
-			final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
-			if (vehicle != null && !vehicleParkedOnYard(instance, vehicle, simulator)) {
-				advanceAuto(instance, simulator);
-			}
-		}
+		// notes/235：两种模式**同一条任务路** —— 一步的完成由它自己的任务终态判定（MOVE_TO 到点/
+		// 贴上车钩、SERVE 开关门与停留、COUPLE/UNCOUPLE 手术），不再有"引擎 ATO 数站台到站"那一套。
+		advanceManual(instance, simulator);
 	}
 
 	/** Whether the given vehicle currently stands parked on this job's own yard siding. */
@@ -795,13 +827,13 @@ public final class MmtrJobScheduler {
 		}
 		instance.started = true;
 		instance.awaitingStart = false;
-		if (instance.mode == Mode.MANUAL) {
-			runManualStep(instance, simulator);
-		} else {
-			if (!startAutoService(instance, simulator)) {
-				return false;
-			}
-		}
+		/*
+		 * notes/235：原版发车路径（{@code Vehicle#startUp} + "档位 × 固定加减速度"）已删除，所以
+		 * MANUAL / AUTO 现在走**同一条任务路** —— 给这一步挂一个 {@code MmtrMission} 并当 tick 自臂，
+		 * 由 Motion-Core 驱动。两者剩下的差别只有"执行者是谁"（有司机绑定时标 PLAYER，见 runManualStep），
+		 * 不再是"引擎 ATO 另走一条原版发车路径"。
+		 */
+		runManualStep(instance, simulator);
 		if (instance.state == JobState.FAILED) {
 			return false;
 		}
@@ -884,10 +916,17 @@ public final class MmtrJobScheduler {
 		}
 		final MmtrMission mission = new MmtrMission(vehicle.getId(), kind, instance.job.sidingId, targetId, simulator.getCurrentMillis());
 		mission.setNeedsShuntAuthority(shuntNeeded);
-		// 任务身份：作业号 + 第几步 + 这一步的人话说明（客户端提示与"做完了算哪一步"都读它）
-		mission.attachJobStep(instance.job.jobId, (int) instance.stepIndex, instance.job.steps.size(), step.note);
+		// 任务身份：作业号 + 第几步 + 这一步的人话说明（客户端提示与"做完了算哪一步"都读它）；
+		// 服务等级随作业单一起来（抢同一处道岔时按"等级踩头、同级车号小者先"裁决，用户 2026-09-27）
+		mission.attachJobStep(instance.job.jobId, (int) instance.stepIndex, instance.job.steps.size(), step.note, instance.job.serviceClass);
 		if (railTargetStep) {
 			mission.setTargetRail(railTarget.getHexId(), step.targetRailFraction);
+		}
+		if (!step.viaNodes.isEmpty()) {
+			// **经由点**（路径点）：这一步的进路必须先穿过这些节点（用户口径 2026-09-27："所有回库列车
+			// 都需要经过 106,65,1600 点"——那条立交上的引入线是单向的，逆行会堵死咽喉）。
+			mission.setTargetViaNodes(step.viaNodes);
+			System.out.println("[MMTR-JOB] step " + step.stepId + " 经由点 " + step.viaNodes);
 		}
 		if (task != null) {
 			mission.attachTask(task);
@@ -1206,98 +1245,13 @@ public final class MmtrJobScheduler {
 			runManualStep(instance, simulator);
 		}
 	}
-
-	// --- AUTO mode: engine ATO runs the generated service; steps track platform visits ---
-
-	/**
-	 * AUTO re-kick: while the current step is a main-line/platform move and the consist is still
-	 * parked at the yard (not yet on route), keep calling {@link Vehicle#startUp} so the spawn-time
-	 * door cooldown cannot strand the service. Yard cross-side relocations are excluded - they use
-	 * the relocate/rebuild path instead of a depot departure.
+	/*
+	 * notes/235：**AUTO 模式的原版 ATO 支路已删除** ——
+	 * {@code kickParkedAutoDeparture} / {@code startAutoService}（靠 {@code Vehicle#startUp} + 车场发车时刻
+	 * 把车放到路线上）与 {@code advanceAuto}（靠 {@code thisPlatformId} 数站台到站，Motion 时代这个字段
+	 * 已经没人写）都不存在了。AUTO 与 MANUAL 现在共用 {@link #runManualStep} / {@link #advanceManual}：
+	 * 一步的完成由它自己的任务终态判定。
 	 */
-	private boolean kickParkedAutoDeparture(JobInstance instance, Simulator simulator) {
-		if (instance.mode != Mode.AUTO || instance.humanHold || !instance.started || instance.vehicleId == 0) {
-			return true;
-		}
-		final MmtrJobStep step = instance.stepIndex < instance.job.steps.size() ? instance.job.steps.get((int) instance.stepIndex) : null;
-		if (step == null || step.type != MmtrJobStep.StepType.MOVE_TO && step.type != MmtrJobStep.StepType.SERVE) {
-			return true;
-		}
-		if (findSiding(simulator, step.targetId) != null) {
-			return true; // yard cross-side moves use relocation, not a depot departure
-		}
-		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
-		if (vehicle == null || vehicle.getIsOnRoute() || vehicle.isMoving()) {
-			return true;
-		}
-		if (!instance.autoDepartureKickLogged) {
-			instance.autoDepartureKickLogged = true;
-			System.out.println("[MMTR-JOB] auto re-kick " + instance.job.jobId + " vehicle=" + vehicle.getId() + " (parked, not yet on route)");
-		}
-		vehicle.startUp(0, instance.startAbs);
-		return true;
-	}
-
-	private boolean startAutoService(JobInstance instance, Simulator simulator) {
-		final Siding siding = findSiding(simulator, curSiding(instance));
-		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
-		if (siding == null || vehicle == null) {
-			fail(instance, "auto service siding/vehicle unavailable");
-			return false;
-		}
-		// Give the engine one valid departure entry so its bookkeeping keeps the consist while
-		// it runs the service, then start it explicitly at the job time.
-		siding.startGeneratingDepartures();
-		if (!siding.addDeparture(instance.startAbs)) {
-			fail(instance, "could not schedule auto departure");
-			return false;
-		}
-		vehicle.startUp(0, instance.startAbs);
-		System.out.println("[MMTR-JOB] auto service started vehicle=" + vehicle.getId() + " startAbs=" + instance.startAbs);
-		return true;
-	}
-
-	private void advanceAuto(JobInstance instance, Simulator simulator) {
-		final MmtrJobStep step = instance.job.steps.get((int) instance.stepIndex);
-		final Vehicle vehicle = findVehicle(simulator, instance.vehicleId);
-		if (vehicle == null) {
-			fail(instance, "consist vanished mid-service");
-			return;
-		}
-		if (step.type == MmtrJobStep.StepType.CHANGE_ENDS) {
-			// ATO completes 换端 itself once the consist stands (§3.5.1 decision 3).
-			if (completeChangeEndsStep(instance, vehicle, step) && instance.stepIndex >= instance.job.steps.size()) {
-				instance.state = JobState.DONE;
-			}
-			return;
-		}
-		if (step.type == MmtrJobStep.StepType.COUPLE || step.type == MmtrJobStep.StepType.UNCOUPLE) {
-			fail(instance, "COUPLE/UNCOUPLE must run while parked on the yard siding, not mid-route (step " + step.stepId + ")");
-			return;
-		}
-		final long platformNow = vehicle.vehicleExtraData.getThisPlatformId();
-		final boolean stoppedAtTarget = !vehicle.isMoving() && vehicle.getIsOnRoute() && platformNow == step.targetId;
-
-		if (step.type == MmtrJobStep.StepType.MOVE_TO) {
-			if (stoppedAtTarget) {
-				System.out.println("[MMTR-JOB] MOVE_TO done at platform " + step.targetId);
-				instance.stepIndex++;
-			}
-		} else if (step.type == MmtrJobStep.StepType.SERVE) {
-			// Complete when the consist leaves the platform (doors have run their dwell cycle).
-			final boolean atTarget = platformNow == step.targetId;
-			if (instance.wasAtTarget && !atTarget) {
-				System.out.println("[MMTR-JOB] SERVE done (departed platform " + step.targetId + ")");
-				instance.stepIndex++;
-			}
-			instance.wasAtTarget = atTarget || instance.wasAtTarget && stoppedAtTarget;
-		}
-
-		if (instance.stepIndex >= instance.job.steps.size()) {
-			instance.state = JobState.DONE;
-		}
-	}
-
 	private static void fail(JobInstance instance, String reason) {
 		instance.state = JobState.FAILED;
 		instance.failureReason = reason;

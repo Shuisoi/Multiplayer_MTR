@@ -44,6 +44,11 @@ public final class MmtrDriveAccess {
 		state.setDriveHandle(clamp(state.getDriveHandle(), -MAX_DRIVE_HANDLE, MAX_DRIVE_HANDLE));
 		state.setCruiseSpeedKmh(clamp(state.getCruiseSpeedKmh(), 0, MAX_CRUISE_KMH));
 		state.setReverser(clamp(state.getReverser(), -1, 1));
+		/*
+		 * 灯光开关（notes/352）：这里只做"是不是一个已知档位"的外层守卫（越界 ⇒ 尾灯）。
+		 * "这列车底有没有关闭这一档"是**车底属性**，由写镜像时再钳一次（见 MmtrLightSwitch.sanitize）。
+		 */
+		state.setLightSwitch(MmtrLightSwitch.sanitize(state.getLightSwitch(), true));
 		state.setThrottleAxis(clamp(state.getThrottleAxis(), -1, 1));
 		state.setBrakeAxis(clamp(state.getBrakeAxis(), -1, 1));
 	}
@@ -98,5 +103,25 @@ public final class MmtrDriveAccess {
 	 */
 	public static boolean shouldAutoRelease(boolean overrideActive, @Nullable UUID currentDriver, boolean currentDriverStillRiding) {
 		return overrideActive && currentDriver != null && !currentDriverStillRiding;
+	}
+
+	/**
+	 * **停放 = 钉住**（notes/276 片 6，用户口径 2026-09-26：停放制动"简化为不动就行了"，
+	 * 多人游戏里"不被连上就钉死在地里"）。
+	 *
+	 * <p>三条同时成立才钉住：</p>
+	 * <ul>
+	 *   <li><b>没有司机</b>（既没有手动 override，也没有人坐在司机位上）；</li>
+	 *   <li><b>没有在跑的任务</b>（任务就是"让它动的理由"）；</li>
+	 *   <li><b>整列车列没有任何能出力的车底</b>（判据与准入层同源：
+	 *       {@code MmtrCarTypeResolver.anyCarCanPull}，含 powered 三态）。</li>
+	 * </ul>
+	 *
+	 * <p>它不是"制动模型"：不建手制动机的力锚、不接坡道力（决定 1/6）。被连上并开始充风之后，
+	 * 第三条自然不再成立 ⇒ 自动解钉；解挂切出来的无动力那半段又满足三条 ⇒ 重新钉住。
+	 * 状态不进连挂状态串：它是**推导出来的**，不是要搬来搬去的量（比"搬一个标志"更不容易不同步）。</p>
+	 */
+	public static boolean shouldPin(boolean hasDriver, boolean hasLiveTask, boolean consistCanPull) {
+		return !hasDriver && !hasLiveTask && !consistCanPull;
 	}
 }

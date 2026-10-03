@@ -30,6 +30,16 @@ public final class MmtrCommandExecutor {
 	}
 
 	private static void tick(MinecraftServer minecraftServer) {
+		final long probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+		try {
+			tickMeasured(minecraftServer);
+		} finally {
+			// 指令执行器本身应当接近 0；这里出现毫秒级读数就说明**指令本身**很贵（扫描/铺轨都在这一格里）。
+			org.mtr.core.mmtr.probe.MmtrProbe.end("server.commandExecutor", probeT);
+		}
+	}
+
+	private static void tickMeasured(MinecraftServer minecraftServer) {
 		final Main main = Init.getMain();
 		if (main == null) {
 			return;
@@ -284,8 +294,347 @@ public final class MmtrCommandExecutor {
 			executeTraceCommand(simulator, parts);
 			return;
 		}
+		/*
+		 * 性能探针（notes/337）：`probe on|off|status|dump|reset` 加上三个可调旋钮。
+		 *
+		 * <p>为什么值得有一条自己的指令：现场"服务端落后 40 s"这件事拿到手时，需要的不是重启加参数
+		 * （重启就要重新等区块生成），而是**当场开着、当场读一次**。三个旋钮也都能在不动服务端的情况下改 ——
+		 * interval 调小是为了抓尖峰，warnMs 调小是为了把"多慢算慢"的门槛压到当前规模以下。</p>
+		 */
+		if (parts[0].equals("probe")) {
+			executeProbeCommand(simulator, serverWorld, parts);
+			return;
+		}
+		// 铺轨: rail add <x1> <y1> <z1> <x2> <y2> <z2> [--speed=300] [--platform] [--siding]
+		// 放在游戏端做，是因为造轨的两半里"节点方块"只有游戏端能放；一次调用同时产生两半，
+		// 从此不会出现"文件写了、方块没放"那种两侧对不上的状态。
+		if (parts[0].equals("rail")) {
+			executeRailCommand(simulator, serverWorld, parts);
+			return;
+		}
 		simulator.mmtrCommandResult("未知指令: " + command + " (支持: signals scan | interlock <id>|all | tracks [<railHex>] | lamps | totals | blocks [all|<railHex>] | blocks-v2 [all|<railHex>] | changeends <id> | cab <id> <A|B|out> | doors <id> [open|close|toggle] [left|right|both] | shunt <id> <targetRailHex|off> [minutes] [kmh] [SUBTYPE] | couple <initiatorId> <targetId> | uncouple <id> <cutAfterCarIndex> | board <id> [<车节><A|B>] [玩家名] | trace [on|off])"
-			+ "（这些也都能用名词打头的写法从网页指令栏发：train doors <id> open / train couple <a> <b> / train board <id> / …）");
+			+ "（这些也都能用名词打头的写法从网页指令栏发：train doors <id> open / train couple <a> <b> / train board <id> / rail add … / rail remove <x> <y> <z> / …）");
+	}
+
+	/**
+	 * 运行时铺轨: {@code rail add <x1> <y1> <z1> <x2> <y2> <z2> [--speed=300] [--platform] [--siding]}。
+	 *
+	 * <h3>为什么必须由游戏端执行</h3>
+	 * <p>MTR 的一条轨道在磁盘上是<b>两半</b>：世界里的 {@code mtr:rail} 节点方块，
+	 * 以及引擎的轨道数据（{@code rails/<hex>}，只在 {@code Simulator} 构造时读一次）。
+	 * 从外部改文件只能产生后者，于是必然要重启，而且极容易做出<b>两侧对不上</b>的状态 ——
+	 * 实测就踩过：文件写了、起点方块却是 air。</p>
+	 *
+	 * <p>这里一次调用同时完成三件事，顺序与 {@code ItemRailModifier.placeNodeAndConnect}
+	 * （玩家亲手放轨走的那段）一致：</p>
+	 * <ol>
+	 *   <li>两端放 {@code mtr:rail} 节点方块，朝向用<b>同一套游戏函数</b>算
+	 *       （{@link org.mtr.core.data.Rail#getAngles} + {@code BlockNode.getStateWithAngle}）；</li>
+	 *   <li>构造 {@link org.mtr.core.data.Rail}；</li>
+	 *   <li>{@code PacketUpdateData.sendDirectlyToServerRail(...)} 推给引擎 ——
+	 *       引擎的 {@code UpdateDataRequest.update()} 会运行时建轨、
+	 *       顺手调 {@code checkOrCreateSavedRailAndUpdateTiltAngles} 创建站台/股道记录、
+	 *       再 {@code data.sync()} 重建 {@code positionsToRail} 图。<b>全程不重启。</b></li>
+	 * </ol>
+	 *
+	 * <h3>节点朝向是怎么定的（这里曾经错过一次）</h3>
+	 * <p>第一次手工铺轨时我按源码推 {@code facing=true}，实机看是反的。原因是
+	 * {@code BlockNode.getAngle} 与 {@code getStateWithAngle} 的组合语义没法靠读代码可靠地反推
+	 * （22.5/45 的位组合与 facing 的镜像关系绕）。所以这里不硬编码那套位组合，而是
+	 * <b>先算方向、再用候选 yaw 试算并回读校验</b>：把候选 yaw 代进
+	 * {@code getStateWithAngle}，再用 {@code BlockNode.getAngle} 读回来，与"起点指向终点的
+	 * 几何方位"比对 —— 夹角在 90° 以内的那个候选才被采用。朝向因此是<b>验出来的</b>，不是猜的。</p>
+	 *
+	 * <h3>{@code --angle1=} / {@code --angle2=}：显式朝向，用来画曲线（2026-09-26 加）</h3>
+	 * <p>不给这两个参数时，两端节点的朝向都取自"另一端点方向"（弦向），于是
+	 * {@code RailMath} 永远走 case 1.a「平行且共线」⇒ <b>这条指令过去只会画直线</b>
+	 * （实测：16 条侧线精确 220 m，见 notes/288）。给了之后，两端的行进方向可以不同：</p>
+	 * <ul>
+	 *   <li>两端方向<b>不同</b> ⇒ 转角。差 90° 且 {@code along == lateral} 时是干净的纯圆弧
+	 *       （例如 {@code (0,0,h0) → (R,R,h90)} ⇒ 长度 πR/2）；</li>
+	 *   <li>两端方向<b>相同</b>但横向错开 ⇒ S 弯（两段圆弧，{@code R = (L²+o²)/(4o)}）。</li>
+	 * </ul>
+	 * <p>角度口径 = <b>行进方向</b>，0=东、90=南、180=西、270=北，与节点方块同一套
+	 * （节点朝向空间是 mod 180，见 {@link #resolveNodeState} 的说明）。</p>
+	 */
+	private static void executeRailCommand(Simulator simulator, ServerWorld serverWorld, String[] parts) {
+		if (parts.length >= 2 && parts[1].equals("remove")) {
+			executeRailRemoveCommand(simulator, serverWorld, parts);
+			return;
+		}
+		if (parts.length < 2 || !parts[1].equals("add")) {
+			simulator.mmtrCommandResult("[rail] 用法: rail add <x1> <y1> <z1> <x2> <y2> <z2> [--speed=300] [--platform] [--siding]"
+				+ " [--angle1=deg --angle2=deg]  |  rail remove <x> <y> <z>");
+			return;
+		}
+		if (parts.length < 8) {
+			simulator.mmtrCommandResult("[rail] 需要六个坐标: rail add <x1> <y1> <z1> <x2> <y2> <z2>");
+			return;
+		}
+
+		final long x1;
+		final long y1;
+		final long z1;
+		final long x2;
+		final long y2;
+		final long z2;
+		try {
+			x1 = Long.parseLong(parts[2]);
+			y1 = Long.parseLong(parts[3]);
+			z1 = Long.parseLong(parts[4]);
+			x2 = Long.parseLong(parts[5]);
+			y2 = Long.parseLong(parts[6]);
+			z2 = Long.parseLong(parts[7]);
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[rail] 坐标必须是整数: rail add <x1> <y1> <z1> <x2> <y2> <z2>");
+			return;
+		}
+
+		if (x1 == x2 && y1 == y2 && z1 == z2) {
+			simulator.mmtrCommandResult("[rail] 两端点相同，无法构成轨道");
+			return;
+		}
+
+		boolean isPlatform = false;
+		boolean isSiding = false;
+		long speed = 300;
+		Double angle1Override = null;
+		Double angle2Override = null;
+		for (int i = 8; i < parts.length; i++) {
+			final String token = parts[i];
+			if (token.equals("--platform")) {
+				isPlatform = true;
+			} else if (token.equals("--siding")) {
+				isSiding = true;
+			} else if (token.startsWith("--speed=")) {
+				try {
+					speed = Long.parseLong(token.substring("--speed=".length()).trim());
+				} catch (NumberFormatException e) {
+					simulator.mmtrCommandResult("[rail] --speed 必须是整数（公里/小时），收到: " + token);
+					return;
+				}
+			} else if (token.startsWith("--angle1=")) {
+				angle1Override = parseDegrees(token.substring("--angle1=".length()));
+				if (angle1Override == null) {
+					simulator.mmtrCommandResult("[rail] --angle1 必须是度数，收到: " + token);
+					return;
+				}
+			} else if (token.startsWith("--angle2=")) {
+				angle2Override = parseDegrees(token.substring("--angle2=".length()));
+				if (angle2Override == null) {
+					simulator.mmtrCommandResult("[rail] --angle2 必须是度数，收到: " + token);
+					return;
+				}
+			}
+		}
+		if (isPlatform && isSiding) {
+			simulator.mmtrCommandResult("[rail] --platform 与 --siding 互斥");
+			return;
+		}
+		if ((angle1Override == null) != (angle2Override == null)) {
+			// 只给一个时另一端会落回弦向 ⇒ 得到的形状既不是转角也不是 S 弯，且不会报错。宁可拒绝。
+			simulator.mmtrCommandResult("[rail] --angle1 与 --angle2 必须成对给出（只给一个时另一端的朝向无从确定）");
+			return;
+		}
+
+		// 坐标：直接用引擎侧的 Position 构造，不走 Init.blockPosToPosition ——
+		// 后者吃的是**映射层**的 org.mtr.mapping.holder.BlockPos，而这里的 posStart 是原生
+		// net.minecraft.util.math.BlockPos，两者不可隐式转换。
+		final org.mtr.core.data.Position positionStart = new org.mtr.core.data.Position(x1, y1, z1);
+		final org.mtr.core.data.Position positionEnd = new org.mtr.core.data.Position(x2, y2, z2);
+
+		// 映射层的世界与坐标：节点方块的状态读写要走 org.mtr.mapping.holder 那一套
+		// （与 BlockNode.resetRailNode 同款），所以这里转一次。
+		final org.mtr.mapping.holder.ServerWorld mappedWorld = new org.mtr.mapping.holder.ServerWorld(serverWorld);
+		final org.mtr.mapping.holder.BlockPos mappedPosStart = new org.mtr.mapping.holder.BlockPos((int) x1, (int) y1, (int) z1);
+		final org.mtr.mapping.holder.BlockPos mappedPosEnd = new org.mtr.mapping.holder.BlockPos((int) x2, (int) y2, (int) z2);
+
+		// ---- 1) 节点方块：朝向用"穷举 + 比对"定，不推公式、不硬编码位组合 ----
+		//     --angle1/--angle2 给了就用它当目标方位；没给才退回"另一端点方向"（= 弦向 ⇒ 直线）
+		final BlockState stateStart = resolveNodeState(org.mtr.mod.Blocks.RAIL_NODE.get().getDefaultState(), positionStart, positionEnd, angle1Override);
+		final BlockState stateEnd = resolveNodeState(org.mtr.mod.Blocks.RAIL_NODE.get().getDefaultState(), positionEnd, positionStart, angle2Override);
+		if (stateStart == null || stateEnd == null) {
+			simulator.mmtrCommandResult("[rail] 无法为这两个端点定出节点朝向（两端点重合？）");
+			return;
+		}
+
+		// ---- 2) 构造轨道（角度口径与 ItemRailModifier 完全一致）----
+		final org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<org.mtr.core.tool.Angle, org.mtr.core.tool.Angle> angles =
+			org.mtr.core.data.Rail.getAngles(positionStart, org.mtr.mod.block.BlockNode.getAngle(stateStart), positionEnd, org.mtr.mod.block.BlockNode.getAngle(stateEnd));
+
+		final org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList<String> styles = org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList.of("default");
+		final org.mtr.core.data.Rail rail;
+		if (isSiding) {
+			rail = org.mtr.core.data.Rail.newSidingRail(positionStart, angles.left(), positionEnd, angles.right(),
+				org.mtr.core.data.Rail.Shape.QUADRATIC, 0, styles, org.mtr.core.data.TransportMode.TRAIN);
+		} else {
+			/*
+			 * 普通轨与站台轨走同一条构造路径，只有 isPlatform 不同。
+			 *
+			 * 为什么不给站台轨用 Rail.newPlatformRail：那个便捷方法把限速写死成 80
+			 * （见 RailType.PLATFORM == 80），而"是不是站台轨"与"限速多少"在引擎里是两个
+			 * 独立参数（见 Rail.newRail 的 isPlatform 与 speedLimit1/2）。用 newRail 显式传
+			 * isPlatform，就能做出**160 限速的站台轨**——这正是用户要的：
+			 * MTR 的站台轨类型存在，但不必被它的默认限速绑住。
+			 *
+			 * canAccelerate：站台轨按 MTR 的 RailType 惯例应当是 false（列车在站台不做加速区段），
+			 * 但 canHaveSignal 保持 true —— 站台轨同样要能装信号灯，否则闭塞区间会在站台断开。
+			 */
+			rail = org.mtr.core.data.Rail.newRail(positionStart, angles.left(), positionEnd, angles.right(),
+				org.mtr.core.data.Rail.Shape.QUADRATIC, 0, styles, speed, speed,
+				isPlatform, false, !isPlatform, false, true, org.mtr.core.data.TransportMode.TRAIN);
+		}
+
+		// ---- 3) 放方块并推给引擎 ----
+		// 方块读写走映射层的 ServerWorld（与 BlockNode.resetNode 同款），
+		// 推送走 PacketUpdateData（与玩家亲手放轨同一条路）。
+		mappedWorld.setBlockState(mappedPosStart, stateStart.with(new org.mtr.mapping.holder.Property<>(org.mtr.mod.block.BlockNode.IS_CONNECTED.data), true));
+		mappedWorld.setBlockState(mappedPosEnd, stateEnd.with(new org.mtr.mapping.holder.Property<>(org.mtr.mod.block.BlockNode.IS_CONNECTED.data), true));
+		org.mtr.mod.packet.PacketUpdateData.sendDirectlyToServerRail(mappedWorld, rail);
+
+		final String kind = isPlatform ? "站台" : isSiding ? "股道" : "普通";
+		simulator.mmtrCommandResult("[rail] 已铺 " + kind + "轨 (" + x1 + "," + y1 + "," + z1 + ") → (" + x2 + "," + y2 + "," + z2 + ")"
+			+ (isSiding ? "  （股道限速固定 40）" : "  限速 " + speed + " km/h")
+			+ (isPlatform ? "  isPlatform=true" : "")
+			+ "  轨 hex=" + rail.getHexId()
+			+ "  已推给引擎热建（无需重启）。用 query node " + x1 + "," + y1 + "," + z1 + " 核对。");
+	}
+
+	/**
+	 * 运行时**删轨**: {@code rail remove <x> <y> <z>}。
+	 *
+	 * <h3>为什么加这一条</h3>
+	 * <p>在此之前删轨<b>只能靠人在游戏里手动敲节点方块</b>：{@code rail} 命名空间只有
+	 * {@code add}/{@code list}，而 {@code /setblock … air} 实测<b>不触发</b>
+	 * {@code BlockNode.onBreak2}（notes/306 实测：setblock 前后 {@code rail list} 都是 74 条）。
+	 * 于是改一段标高、切一段节点分段都要人肉敲几十下 —— notes/307、notes/315 两次卡在这里。</p>
+	 *
+	 * <h3>做法：与玩家敲掉节点方块**完全同一条通路**</h3>
+	 * <ol>
+	 *   <li>把该节点方块换成空气（等价于"方块没了"）；</li>
+	 *   <li>{@code PacketDeleteData.sendDirectlyToServerRailNodePosition(…)} ——
+	 *       与 {@link org.mtr.mod.block.BlockNode#onBreak2} 里那一行<b>逐字相同</b>，
+	 *       引擎据此删掉<b>挂在这个节点上的所有轨</b>。</li>
+	 * </ol>
+	 *
+	 * <p>⚠ 删一个节点会连带删掉以它为端点的**全部**轨（中间节点 = 左右两段一起没）。
+	 * 这与玩家敲方块的行为一致，是刻意的。</p>
+	 */
+	private static void executeRailRemoveCommand(Simulator simulator, ServerWorld serverWorld, String[] parts) {
+		if (parts.length < 5) {
+			simulator.mmtrCommandResult("[rail] 用法: rail remove <x> <y> <z>");
+			return;
+		}
+		final long x;
+		final long y;
+		final long z;
+		try {
+			x = Long.parseLong(parts[2]);
+			y = Long.parseLong(parts[3]);
+			z = Long.parseLong(parts[4]);
+		} catch (NumberFormatException e) {
+			simulator.mmtrCommandResult("[rail] 坐标必须是整数: rail remove <x> <y> <z>");
+			return;
+		}
+
+		final BlockPos pos = new BlockPos((int) x, (int) y, (int) z);
+		final net.minecraft.block.BlockState vanillaState = serverWorld.getBlockState(pos);
+		if (!(vanillaState.getBlock() instanceof org.mtr.mod.block.BlockNode)) {
+			// 幂等：方块已经不在了（或不是节点）就当"没什么可删"，别报成失败
+			simulator.mmtrCommandResult("[rail] (" + x + "," + y + "," + z + ") 不是 mtr:rail 节点方块（当前 "
+				+ vanillaState.getBlock().getTranslationKey() + "），未做改动");
+			return;
+		}
+
+		final org.mtr.mapping.holder.ServerWorld mappedWorld = new org.mtr.mapping.holder.ServerWorld(serverWorld);
+		serverWorld.setBlockState(pos, net.minecraft.block.Blocks.AIR.getDefaultState());
+		org.mtr.mod.packet.PacketDeleteData.sendDirectlyToServerRailNodePosition(mappedWorld, new org.mtr.core.data.Position(x, y, z));
+
+		simulator.mmtrCommandResult("[rail] 已删节点 (" + x + "," + y + "," + z + ") 及其上所有轨"
+			+ "  （方块→空气 + 已发 PacketDeleteData）。用 rail list 核对条数。");
+	}
+
+	/**
+	 * 求节点方块的朝向状态：让"这个节点本身朝向哪"与"它指向另一个端点的几何方位"最接近。
+	 *
+	 * <h3>为什么不用 {@code getStateWithAngle(state, yaw)}</h3>
+	 * <p>玩家放轨走的是那条路，但它要的是<b>玩家 yaw</b>，而这里没有玩家。
+	 * 第一版我按几何反推 yaw，再用 {@code getStateWithAngle} 造状态 —— 实机验证时
+	 * 守卫直接拒绝了：造出来的状态再过 {@code BlockNode.getAngle} 读回来，
+	 * 与目标方位对不上（差 90°），说明"yaw ↔ 属性位组合"的换算不是我推的那个。</p>
+	 *
+	 * <p>所以这里换一种<b>可验证</b>的定法：属性只有三个布尔（facing / is_45 / is_22_5），
+	 * 一共 8 种组合，全部枚举出来，每种都用 {@code BlockNode.getAngle} 读回它的实际朝向角，
+	 * 取与目标方位夹角最小的那个。于是"节点朝向"这件事完全不依赖我对位组合语义的理解：
+	 * 组合是穷举的，角度是游戏函数自己报的。</p>
+	 *
+	 * <p>注意 {@code getAngle} 返回的角度口径（+X 为 0、逆时针？顺时针）也不必假定：
+	 * {@code Rail.getAngles} 与它是<b>同一口径</b>（玩家放轨时正是把 {@code getAngle(stateEnd)}
+	 * 直接喂给 {@code getAngles}），所以只要"节点朝向"与"轨的几何方位"在<b>同一个口径里</b>
+	 * 一一对应即可，两个口径一起错反而仍然自洽。</p>
+	 *
+	 * <h3>⚠️ 角度必须按 mod 180 比（2026-09-25 实机修正）</h3>
+	 * <p>上面那句"两个口径一起错反而仍然自洽"是**错的**，它漏了一个前提：两个口径的<b>取值范围</b>
+	 * 也得一样。{@code BlockNode.getAngle} 的取值只有 {@code 0 / 22.5 / … / 157.5} —— 看
+	 * {@code assets/mtr/blockstates/rail.json} 就明白：节点总共 8 个分支，是 4 个模型
+	 * （{@code rail_node} / {@code _22_5} / {@code _45} / {@code _67_5}）各配 {@code facing}
+	 * 的 0°/90° 两种 y 旋转，<b>根本没有 180° 以上的值</b>。也就是说节点的朝向空间本身是
+	 * <b>mod 180</b> 的：一根直轨的两端，本来就应该摆成同一个朝向。</p>
+	 *
+	 * <p>原实现拿 {@code 0..360} 的几何方位去比 {@code 0..157.5} 的可达角，于是"远端"出错：
+	 * 沿 Z 的一根轨，起点方位 90° 命中 90°（对），终点方位 270° 在可达集合里的最近值却是
+	 * <b>0°</b>（差 90°）而不是 90°。<b>实机现象</b>：16 条沿 Z 的侧线，z=-153 那端横平竖直，
+	 * z=67 那端整个横了 90°（用户当场指出）。</p>
+	 *
+	 * <p>所以这里把目标方位与候选角度<b>都折到 mod 180</b> 再比最小夹角 —— 直轨两端因此得到
+	 * 同一个状态，与 blockstate 的 8 分支一一对应。</p>
+	 *
+	 * @param bearingOverride 显式给的行进方向（{@code --angle1=} / {@code --angle2=}，度）；
+	 *                        为 {@code null} 时退回"从 {@code from} 指向 {@code to} 的几何方位"
+	 *                        （弦向 ⇒ 两端朝向相同 ⇒ 引擎只会给一条直线，见铁律 5）
+	 * @return 朝向最贴合的节点状态；两端点重合时返回 {@code null}
+	 */
+	private static BlockState resolveNodeState(BlockState defaultState, org.mtr.core.data.Position from, org.mtr.core.data.Position to, Double bearingOverride) {
+		final double dx = to.getX() - from.getX();
+		final double dz = to.getZ() - from.getZ();
+		if (dx == 0 && dz == 0) {
+			return null;
+		}
+		// 目标方位：与 Rail.getAngles 内部同一个式子（Math.atan2(dz, dx) 的度数形式），折到 [0, 180)
+		// 显式朝向走同一条折叠加（口径一致：0=东、90=南，与节点朝向空间一样是 mod 180）
+		final double rawBearing = bearingOverride != null ? bearingOverride : Math.toDegrees(Math.atan2(dz, dx));
+		final double targetBearing = ((rawBearing % 180) + 180) % 180;
+
+		BlockState best = null;
+		double bestDifference = Double.MAX_VALUE;
+		for (final boolean facing : new boolean[]{false, true}) {
+			for (final boolean is45 : new boolean[]{false, true}) {
+				for (final boolean is225 : new boolean[]{false, true}) {
+					final BlockState candidate = defaultState
+						.with(new org.mtr.mapping.holder.Property<>(org.mtr.mod.block.BlockNode.FACING.data), facing)
+						.with(new org.mtr.mapping.holder.Property<>(org.mtr.mod.block.BlockNode.IS_45.data), is45)
+						.with(new org.mtr.mapping.holder.Property<>(org.mtr.mod.block.BlockNode.IS_22_5.data), is225);
+					final double actual = org.mtr.mod.block.BlockNode.getAngle(candidate) % 180;
+					// 两个角度之间的最小夹角（mod 180：raw 与 180-raw 取小）
+					final double raw = ((actual - targetBearing) % 180 + 180) % 180;
+					final double difference = Math.min(raw, 180 - raw);
+					if (difference < bestDifference) {
+						bestDifference = difference;
+						best = candidate;
+					}
+				}
+			}
+		}
+		return best;
+	}
+
+	/** 解析 {@code --angle1=} / {@code --angle2=} 的度数；不是数就返回 {@code null}（调用方报错，不静默退回）。 */
+	private static Double parseDegrees(String raw) {
+		try {
+			return Double.parseDouble(raw.trim());
+		} catch (NumberFormatException e) {
+			return null;
+		}
 	}
 
 	/**
@@ -378,6 +727,73 @@ public final class MmtrCommandExecutor {
 			}
 		}
 		simulator.mmtrCommandResult("[trace] 每 tick 走行/同步日志 = " + (org.mtr.core.mmtr.MmtrTrace.isEnabled() ? "开" : "关"));
+	}
+
+	/**
+	 * 性能探针开关与读数：{@code probe on|off|status|dump|reset [--interval=n] [--warnMs=n] [--file=path]}。
+	 *
+	 * <h3>为什么读数是"引擎侧 + 服务端侧"一起报</h3>
+	 * <p>分段表是**共用**的（引擎的 {@code MmtrProbe} 与游戏端的 {@code MmtrTickProbe} 写同一张表），
+	 * 所以一次 {@code probe dump} 就能同时看到 {@code server.*}（服务端 tick 视角）与
+	 * {@code sections.*} / {@code projection.*}（引擎视角）。两边分开读会得出矛盾的结论 ——
+	 * 现场那 40 s 正是"服务端帧很长、引擎分段却不大"的组合，必须并排看。</p>
+	 *
+	 * <p>汇总里的帧统计按**帧槽**分开：{@code frame=sim} 是引擎一次模拟 tick，
+	 * {@code frame=server} 是 MC 一次服务端 tick，两者不是一回事。</p>
+	 */
+	private static void executeProbeCommand(Simulator simulator, ServerWorld serverWorld, String[] parts) {
+		final String action = parts.length >= 2 ? parts[1] : "status";
+		final String label = simulator.dimension;
+		switch (action) {
+			case "on", "start" -> {
+				org.mtr.core.mmtr.probe.MmtrProbe.setEnabled(true);
+				simulator.mmtrCommandResult("[probe] 已开（每 " + org.mtr.core.mmtr.probe.MmtrProbe.getReportIntervalTicks()
+					+ " tick 一行汇总；超过 " + org.mtr.core.mmtr.probe.MmtrProbe.getWarnMillis() + " ms 的帧进最坏帧榜）。"
+					+ " 现在起着：服务端 tick（server.*）与引擎 tick（rails/vehicles/sections/projection…）两个视角。");
+			}
+			case "off", "stop" -> {
+				org.mtr.core.mmtr.probe.MmtrProbe.setEnabled(false);
+				simulator.mmtrCommandResult("[probe] 已关（分段不再计时；累计量保留，用 probe reset 清）");
+			}
+			case "dump", "report", "show" -> {
+				// fullReport 里既有引擎分段表，也有游戏端注册的补充行（世界规模）。
+				simulator.mmtrCommandResult(org.mtr.core.mmtr.probe.MmtrProbe.fullReport(label));
+			}
+			case "reset" -> {
+				org.mtr.core.mmtr.probe.MmtrProbe.resetAll();
+				simulator.mmtrCommandResult("[probe] 窗口与累计都已清零（做前后对照时先 reset，再跑一段，再 dump）");
+			}
+			case "interval", "warn", "file", "status" -> {
+				boolean changed = false;
+				for (int i = 2; i < parts.length; i++) {
+					final String token = parts[i];
+					if (token.startsWith("--interval=")) {
+						final int ticks = (int) parseLong(token.substring("--interval=".length()), org.mtr.core.mmtr.probe.MmtrProbe.getReportIntervalTicks());
+						org.mtr.core.mmtr.probe.MmtrProbe.setReportIntervalTicks(ticks);
+						System.setProperty("mmtr.probe.interval", Integer.toString(org.mtr.core.mmtr.probe.MmtrProbe.getReportIntervalTicks()));
+						changed = true;
+					} else if (token.startsWith("--warnMs=")) {
+						org.mtr.core.mmtr.probe.MmtrProbe.setWarnMillis(parseLong(token.substring("--warnMs=".length()), org.mtr.core.mmtr.probe.MmtrProbe.getWarnMillis()));
+						changed = true;
+					} else if (token.startsWith("--file=")) {
+						org.mtr.core.mmtr.probe.MmtrProbe.setFile(token.substring("--file=".length()));
+						changed = true;
+					}
+				}
+				if (action.equals("interval") && !changed) {
+					org.mtr.core.mmtr.probe.MmtrProbe.setReportIntervalTicks((int) parseLong(parts.length >= 3 ? parts[2] : "", 100));
+					changed = true;
+				}
+				simulator.mmtrCommandResult("[probe] 开=" + org.mtr.core.mmtr.probe.MmtrProbe.isEnabled()
+					+ " 每=" + org.mtr.core.mmtr.probe.MmtrProbe.getReportIntervalTicks() + " tick"
+					+ " 慢帧门槛=" + org.mtr.core.mmtr.probe.MmtrProbe.getWarnMillis() + " ms"
+					+ " 明细文件=" + (org.mtr.core.mmtr.probe.MmtrProbe.getFile().isEmpty() ? "（关）" : org.mtr.core.mmtr.probe.MmtrProbe.getFile())
+					+ (changed ? "  —— 已按本条指令调整" : ""));
+			}
+			default -> simulator.mmtrCommandResult("[probe] 用法: probe on | probe off | probe status | probe dump | probe reset"
+				+ " | probe interval <tick> | probe --warnMs=<ms> | probe --file=<路径|空>"
+				+ "（启动参数同名：-Dmmtr.probe=true -Dmmtr.probe.interval=100 -Dmmtr.probe.warnMs=40 -Dmmtr.probe.file=…）");
+		}
 	}
 
 	/**

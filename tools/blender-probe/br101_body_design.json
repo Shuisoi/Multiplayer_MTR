@@ -1,0 +1,9 @@
+{
+  "width": 5.0,
+  "tolerance": 0.02,
+  "watertight": true,
+  "single_component": true,
+  "min_volume": 537.0767625231912,
+  "axis": "z",
+  "slices": 11
+}

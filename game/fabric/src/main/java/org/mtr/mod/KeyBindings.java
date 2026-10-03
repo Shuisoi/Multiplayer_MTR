@@ -53,19 +53,47 @@ public final class KeyBindings {
 		/*
 		 * 三手柄机车（BR101）的驾驶输入，见 docs/01-设计/驾驶输入与控制模型.md §7。
 		 *
-		 * 油门手柄是一根**双向**手柄：↑ 往牵引侧、↓ 往电阻制动侧，中央 = 关闭；1% 一档，长按会扫。
-		 * 制动手柄是离散的 11 个位置（运行/1A/1B/2…8/EB），; 施加、' 缓解，一直按到 EB 就是紧急。
-		 * 定速巡航（AFB）暂定数字键 9 / 0（−5 / +5 km/h），这是用户本轮指定的键位。
-		 * 换向器沿用 ← →（引擎红线：只在停稳时可动）。
+		 * 键位是**用户 2026-09-29 指定**的那一套（A/D 油门、; ' 刹车、R/F 定速、Q 响应、J 雨刷、L 灯光），
+		 * 它们与游戏内操作（A/D 平移、Q 丢弃、F 交换副手）**故意重合** —— 驾驶室里那套按键由
+		 * {@link org.mtr.mixin.ClientInputDecoupleMixin} 从原版动作上摘下来（只在司机位上生效，人一下车立刻恢复）。
+		 *
+		 * 油门手柄是一根**双向**手柄：A 往牵引侧、D 往电阻制动侧，中央 = 关闭；1% 一档，长按会扫。
+		 * 制动手柄是离散的 11 个位置（运行/1A/1B/2…8/EB），' 施加、; 缓解，一直按到 EB 就是紧急。
+		 * 定速巡航（AFB）R = +5 km/h、F = −5 km/h；响应键（AWS 确认 / 解除紧急制动）= Q。
+		 * **换向器 = W 上（前进）/ S 下（后退）**（用户 2026-10-01 改；原来沿用 ← →，而 JourneyMap 的
+		 * 全屏地图也占着 ← →，换到 W/S 就少一组撞键。引擎红线照旧：只在停稳时可动）。
 		 */
-		MMTR_DRIVE_TRACTION = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.drive.traction", GLFW.GLFW_KEY_UP, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_DRIVE_ELECTRIC_BRAKE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.drive.electric_brake", GLFW.GLFW_KEY_DOWN, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_BRAKE_APPLY = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake.apply", GLFW.GLFW_KEY_SEMICOLON, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_BRAKE_RELEASE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake.release", GLFW.GLFW_KEY_APOSTROPHE, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_AFB_DOWN = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.afb.down", GLFW.GLFW_KEY_9, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_AFB_UP = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.afb.up", GLFW.GLFW_KEY_0, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_REVERSER_FORWARD = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser.forward", GLFW.GLFW_KEY_RIGHT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
-		MMTR_REVERSER_BACK = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser.back", GLFW.GLFW_KEY_LEFT, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_DRIVE_TRACTION = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.drive.traction", GLFW.GLFW_KEY_A, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_DRIVE_ELECTRIC_BRAKE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.drive.electric_brake", GLFW.GLFW_KEY_D, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_BRAKE_APPLY = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake.apply", GLFW.GLFW_KEY_APOSTROPHE, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_BRAKE_RELEASE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.brake.release", GLFW.GLFW_KEY_SEMICOLON, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_AFB_DOWN = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.afb.down", GLFW.GLFW_KEY_F, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_AFB_UP = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.afb.up", GLFW.GLFW_KEY_R, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_REVERSER_FORWARD = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser.forward", GLFW.GLFW_KEY_W, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		MMTR_REVERSER_BACK = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.reverser.back", GLFW.GLFW_KEY_S, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
+		 * **灯光开关（L）**：每个驾驶室各一个开关，按一下循环本端档位 ——
+		 * 动车组 尾灯→近光→远光→尾灯，机车 关闭→尾灯→近光→远光→关闭（车底配置 lightSwitch: "LOCO"）。
+		 * 换向器 N 时两端固定红（判据在引擎的 {@code MmtrLightSwitch}，客户端只发档位、不算灯）。
+		 */
+		MMTR_LIGHTS = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.lights", GLFW.GLFW_KEY_L, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
+		 * **手动重拉引擎数据**（H）：从外部新建的轨道（rail add / 别的玩家铺的）不会自动出现在客户端，
+		 * 因为客户端只在**区块加载**时才去拉附近新数据 —— 站着不动就永远不拉，只能重连。
+		 * 详见 {@link org.mtr.mod.client.MmtrDataResync}。H 键目前没被任何其他键占用。
+		 */
+		MMTR_RESYNC = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.resync", GLFW.GLFW_KEY_H, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
+		 * **响应键（AWS 确认 / 解除紧急制动）—— Q**（用户 2026-09-29 指定的那一套键位）。
+		 *
+		 * <p>引擎侧的 AWS 状态机（{@code Vehicle.tickMmtrAwsWarning}）从 A3 起就要求"报警后 2.5 s 内确认，
+		 * 否则 SPAD 紧急制动"，并且司机闯过信号/占用触发的紧急制动也由这一个键解除
+		 * （用户口径 2026-09-21：闯信号触发紧急制动、按响应键解除才是正常逻辑）。
+		 * 但这条键在 notes/185 删除整套旧驾驶键位时**跟着一起没了**，而 {@code PacketDriveControl}
+		 * 的 acknowledge 字段在客户端恒为 false（{@link MmtrDriveInput}）——于是手动开车一接近非绿灯信号
+		 * 或占用区间就必然被紧急制动，司机在游戏里**没有任何办法解除**。这里把它补回来。</p>
+		 */
+		MMTR_AWS_ACK = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.aws.ack", GLFW.GLFW_KEY_Q, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_1_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_1_NEGATIVE.key, GLFW.GLFW_KEY_KP_4, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_2_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_2_NEGATIVE.key, GLFW.GLFW_KEY_KP_5, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		DEBUG_3_NEGATIVE = InitClient.REGISTRY_CLIENT.registerKeyBinding(TranslationProvider.KEY_MTR_DEBUG_3_NEGATIVE.key, GLFW.GLFW_KEY_KP_6, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
@@ -99,6 +127,8 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_BRAKE_APPLY;
 	/** 三手柄：气制动 −1 档（缓解，最低回"运行"位）。 */
 	public static final KeyBinding MMTR_BRAKE_RELEASE;
+	/** 灯光开关（L）：循环**本端**档位（动车组三档 / 机车四档，见 {@code MmtrLightSwitch}）。 */
+	public static final KeyBinding MMTR_LIGHTS;
 	/** 三手柄：定速巡航 −5 km/h（到 0 = 关闭）。 */
 	public static final KeyBinding MMTR_AFB_DOWN;
 	/** 三手柄：定速巡航 +5 km/h（上限 160）。 */
@@ -107,6 +137,10 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_REVERSER_FORWARD;
 	/** 换向器后退。 */
 	public static final KeyBinding MMTR_REVERSER_BACK;
+	/** 手动重拉引擎数据（H）：让外部新建的轨道立刻出现在客户端，不必重连。 */
+	public static final KeyBinding MMTR_RESYNC;
+	/** 响应键（Q）：确认 AWS 报警 / 解除闯信号触发的紧急制动。 */
+	public static final KeyBinding MMTR_AWS_ACK;
 	public static final KeyBinding DEBUG_1_NEGATIVE;
 	public static final KeyBinding DEBUG_2_NEGATIVE;
 	public static final KeyBinding DEBUG_3_NEGATIVE;

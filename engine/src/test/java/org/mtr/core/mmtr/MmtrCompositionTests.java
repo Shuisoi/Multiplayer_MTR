@@ -10,12 +10,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Coupling/uncoupling groundwork: composition list ops + mass-weighted aggregation + per-unit air. */
 public final class MmtrCompositionTests {
 
-	private static ConsistType type(String id, double maxKmh, double traction, double service, double mass) {
-		return new ConsistType(id, "", ConsistType.ControlMode.NOTCHED, 7, 8, maxKmh, traction, service, 1.5, maxKmh, 0, 0, 0, 0.1, 0.4, 0.15, 0.1, 0, mass);
+	/** 一个"质量单位"= 60 t（λ=1）。用例里的数字仍是"加速度量级"，这里换算成力 ⇒ 聚合结果逐点不变。 */
+	private static final double UNIT_MASS_KG = 60_000;
+
+	private static ConsistType type(String id, double maxKmh, double tractionAccelerationMps2, double serviceDecelerationMps2, double massUnits) {
+		final double massKg = UNIT_MASS_KG * massUnits;
+		final double effortN = massKg * tractionAccelerationMps2;
+		return new ConsistType(id, "", ConsistType.ControlMode.NOTCHED, 7, 8, maxKmh,
+			massKg, 1.0, effortN, effortN * maxKmh / 3.6,
+			massKg * serviceDecelerationMps2, massKg * 1.5,
+			0, 0, 0, 0.37, false, 0.1, 0.4, 0.15, 0.1, 0, null);
 	}
 
-	private static ConsistType wagon(String id, double mass) {
-		return new ConsistType(id, "", ConsistType.ControlMode.NOTCHED, 7, 8, 100, 0, 0.5, 1.2, 100, 0.05, 0, 0, 0.1, 0.4, 0.15, 0.1, 0, mass);
+	private static ConsistType wagon(String id, double massUnits) {
+		final double massKg = UNIT_MASS_KG * massUnits;
+		return new ConsistType(id, "", ConsistType.ControlMode.NOTCHED, 7, 8, 100,
+			massKg, 1.0, 0, 0,
+			massKg * 0.5, massKg * 1.2,
+			massKg * 0.05, 0, 0, 0.37, false, 0.1, 0.4, 0.15, 0.1, 0, null);
 	}
 
 	private static MmtrComposition freightTrain(int wagons) {
@@ -33,7 +45,7 @@ public final class MmtrCompositionTests {
 		train.couple(new MmtrComposition.Unit("w1", wagon("w1", 1)));
 		train.couple(new MmtrComposition.Unit("w2", wagon("w2", 1), false));
 		assertEquals(3, train.size());
-		assertEquals(4.0, train.massTotal(), 1e-9);
+		assertEquals(4 * UNIT_MASS_KG, train.totalEffectiveMassKg(), 1e-9);
 		assertFalse(train.unit(2).isPowered(), "w2 is a dead trailer");
 
 		final MmtrComposition tail = train.splitAfter(0);
@@ -55,7 +67,12 @@ public final class MmtrCompositionTests {
 		final MmtrComposition train = new MmtrComposition(new MmtrComposition.Unit("loco", type("loco", 100, 0.3, 0.7, 2)));
 		train.couple(new MmtrComposition.Unit("w1", wagon("w1", 1), false));
 		final DriveOutput out = train.aggregate(ControlState.zero().setThrottleNotch(7), 0);
-		assertEquals(0.2, out.getAccelerationMetersPerSecondSquared(), 1e-9, "2/3 of the standalone accel over 3 total mass");
+		/*
+		 * 0.1833（旧口径是 0.2）= 机车牵引 0.3 × 2 个单位质量 / 3 个单位质量，**再减去整列车的运行阻力**
+		 * （挂车也产生阻力）。旧代码只减"动力车自己那份"阻力，量纲上把挂车的阻力漏掉了 —— 力模型下它是
+		 * 整车的一项（notes/235）。
+		 */
+		assertEquals(0.18333333333333335, out.getAccelerationMetersPerSecondSquared(), 1e-9, "2/3 of the standalone accel over 3 total mass, minus the whole train's resistance");
 	}
 
 	@Test

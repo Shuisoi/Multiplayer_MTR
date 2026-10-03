@@ -37,7 +37,7 @@ public final class MmtrShuntAuthorityVehicleTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 	/** 25 km/h expressed in the engine's internal speed unit (m/ms). */
 	private static final double SHUNT_CAP_INTERNAL = 25.0 / 3600.0;
@@ -144,6 +144,19 @@ public final class MmtrShuntAuthorityVehicleTests {
 	}
 
 	/**
+	 * notes/233 司机优先：手动车在未授权界限上不再被"钉"在 ε 处，而是**紧急制动**把它刹停在界限之前
+	 * （紧急减速比服务减速强 ⇒ 停点比"贴界限"略靠前，方向是安全侧）。所以这一族用例的判据是
+	 * "停稳 + 还在界限这一侧的轨上 + 停在界限附近（≤ 2 m）"，而"绝不越界"这一条照旧钉住。
+	 */
+	private static void assertHeldJustBefore(Vehicle v, String railHex, double boundaryM) {
+		assertEquals(0, v.getSpeed(), 1e-9, "at rest against the boundary");
+		assertEquals(railHex, v.getMmtrMotionWalker().railHex(), "never boarded the occupied section");
+		assertTrue(v.getRailProgress() <= boundaryM + 1e-6, "never past the boundary: " + v.getRailProgress());
+		assertTrue(v.getRailProgress() >= boundaryM - 2.0, "held close to the boundary: " + v.getRailProgress());
+		assertTrue(v.isMmtrAuthorityTripped() || v.isMmtrBlockHeldFromSync(), "the boundary hold is engaged");
+	}
+
+	/**
 	 * Puts a live driver on {@code v}. {@code acknowledge} presses the AWS acknowledgement once: the
 	 * warning then latches as ACKED instead of escalating to a SPAD three seconds later, which is what
 	 * lets these tests observe the warning state itself.
@@ -173,13 +186,14 @@ public final class MmtrShuntAuthorityVehicleTests {
 		final Net n = occupiedPlatform();
 		final Vehicle v2 = n.spawn(n.siding2);
 		boardDriver(n.sim, v2, 3, true);
-		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 45.5, 4000);
-		assertEquals(46.0 - 0.001, v2.getRailProgress(), 0.02, "v2 rests epsilon short of the occupied section");
+		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 44.0, 4000);
+		assertHeldJustBefore(v2, n.ma.getHexId(), 46.0);
 		assertNull(v2.getMmtrShuntAuthority(), "no authority is live");
 		assertFalse(n.sim.mmtrShuntAuthorities.allowsCoexistence(n.pl.getHexId()), "the section is one-train-per-section");
 		assertTrue(v2.isMmtrBlockHeldFromSync(), "the occupancy block holds the train at the section entrance");
 		assertTrue(v2.isMmtrAwsWarningAcknowledged(), "AWS warned about the restriction ahead and the driver acknowledged it");
-		assertFalse(v2.isMmtrProtectionFromSync(), "an acknowledged warning is not a SPAD");
+		// notes/233：这里成立的是"司机越界那一路的紧急制动"，不是 AWS 报警超时的 SPAD。
+		assertFalse(v2.isMmtrProtectionFromSync() && !v2.isMmtrAuthorityTripped(), "an acknowledged warning is not a SPAD");
 	}
 
 	@Test
@@ -187,8 +201,8 @@ public final class MmtrShuntAuthorityVehicleTests {
 		final Net n = occupiedPlatform();
 		final Vehicle v2 = n.spawn(n.siding2);
 		boardDriver(n.sim, v2, 3, true);
-		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 45.5, 4000);
-		assertEquals(46.0 - 0.001, v2.getRailProgress(), 0.02, "v2 waits at the section entrance");
+		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 44.0, 4000);
+		assertHeldJustBefore(v2, n.ma.getHexId(), 46.0);
 		assertTrue(v2.isMmtrBlockHeldFromSync(), "the occupancy block holds v2");
 		assertTrue(v2.isMmtrAwsWarningAcknowledged(), "AWS warned before the authority was granted");
 
@@ -226,7 +240,7 @@ public final class MmtrShuntAuthorityVehicleTests {
 		final Net n = occupiedPlatform();
 		final Vehicle v2 = n.spawn(n.siding2);
 		boardDriver(n.sim, v2, 3, true);
-		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 45.5, 4000);
+		n.tickUntil(() -> v2.getSpeed() == 0 && n.ma.getHexId().equals(v2.getMmtrMotionWalker().railHex()) && v2.getRailProgress() > 44.0, 4000);
 		n.grant(v2, n.ma.getHexId(), n.pl.getHexId());
 		n.tickUntil(() -> n.pl.getHexId().equals(v2.getMmtrMotionWalker().railHex()), 4000);
 		assertEquals(n.pl.getHexId(), v2.getMmtrMotionWalker().railHex(), "v2 is inside the occupied section");

@@ -38,6 +38,12 @@
 			"type": "boolean",
 			"default": true
 		},
+		"mmtrLoadRatio": {
+			"type": "number",
+			"default": 0,
+			"minimum": 0,
+			"maximum": 1
+		},
 		"mmtrConsistTypeId": {
 			"type": "string",
 			"default": ""

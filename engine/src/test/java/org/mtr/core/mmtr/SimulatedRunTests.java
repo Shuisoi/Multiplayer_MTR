@@ -15,9 +15,9 @@ public final class SimulatedRunTests {
 	private static final String JSON = "{"
 		+ "  \"consistTypes\": ["
 		+ "    {\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "     \"maxSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5},"
+		+ "     \"maxSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000},"
 		+ "    {\"id\":\"freight\",\"controlMode\":\"AIR_BRAKE\",\"powerNotches\":8,\"brakeNotches\":3,"
-		+ "     \"maxSpeedKmh\":100,\"tractionAccelerationMps2\":0.3,\"serviceBrakeDecelerationMps2\":0.7,\"emergencyDecelerationMps2\":1.2,"
+		+ "     \"maxSpeedKmh\":100,\"massKg\":60000,\"maxTractiveEffortN\":18000,\"serviceBrakeForceN\":42000,\"emergencyBrakeForceN\":72000,"
 		+ "     \"airPipeChargeRatePerSecond\":0.12,\"airPipeDischargeRatePerSecond\":0.5,"
 		+ "     \"airBrakeApplyRatePerSecond\":0.2,\"airBrakeReleaseRatePerSecond\":0.08}"
 		+ "  ]"
@@ -110,7 +110,7 @@ public final class SimulatedRunTests {
 
 	@Test
 	public void testSteplessReachesTargetApproximately() {
-		final ConsistType lr = ConsistType.fromJson(jsonObject("STEPLESS", 80, 0.7, 1.0));
+		final ConsistType lr = ConsistType.fromJson(jsonObject("STEPLESS", 80, 42_000, 60_000));
 		final SteplessDriveController controller = new SteplessDriveController();
 		double speed = 0;
 		final ControlState full = ControlState.zero().setThrottleAxis(1.0);
@@ -122,13 +122,18 @@ public final class SimulatedRunTests {
 		assertTrue(speed <= lr.getMaxSpeedMetersPerSecond() + 1e-9, "never exceed max speed");
 	}
 
-	private static com.google.gson.JsonObject jsonObject(String mode, double maxKmh, double accel, double decel) {
+	/** 力模型口径（notes/235）：质量 60 t、λ=1，牵引/制动给**牛顿**。 */
+	private static com.google.gson.JsonObject jsonObject(String mode, double maxKmh, double tractiveEffortN, double serviceBrakeForceN) {
 		final com.google.gson.JsonObject json = new com.google.gson.JsonObject();
 		json.addProperty("id", "lr");
 		json.addProperty("controlMode", mode);
 		json.addProperty("maxSpeedKmh", maxKmh);
-		json.addProperty("tractionAccelerationMps2", accel);
-		json.addProperty("serviceBrakeDecelerationMps2", decel);
+		json.addProperty("massKg", 60_000);
+		json.addProperty("rotatingMassFactor", 1.0);
+		json.addProperty("maxTractiveEffortN", tractiveEffortN);
+		json.addProperty("maxPowerW", tractiveEffortN * maxKmh / 3.6);
+		json.addProperty("serviceBrakeForceN", serviceBrakeForceN);
+		json.addProperty("emergencyBrakeForceN", serviceBrakeForceN * 1.5);
 		return json;
 	}
 }

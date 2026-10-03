@@ -84,6 +84,46 @@ public final class MmtrHidMapping {
 		return clamp((int) Math.round((value + 1) / 2 * last), 0, last);
 	}
 
+	/**
+	 * **单手柄**：同一根 Y 轴映射到那唯一一根杆（用户口径 2026-09-25「控制器肯定是 Y 轴直接分配到单手柄上就行了呗」）。
+	 *
+	 * <p>为什么单开一条而不是复用 {@link #driveHandleFromAxis}：两者量程的**含义**不同。
+	 * 三手柄的油门是「牵引 ↔ 电阻制动」的**对称镜像**（±97，0 = 关闭），制动在另一根杆上；
+	 * 而单手柄（SAF420 的 P5+B8+EB）是**一根杆走完全程**：正 = 牵引 1..P、0 = 关闭、
+	 * 负 = 制动 1..B，**再往外一格 = 紧急位**。所以档位是按各自侧的实际档数**分段**映射的，不能按比例硬套。</p>
+	 *
+	 * <p>分段边界（{@code axis} 为 −1…+1，且假定调用方已按 {@code invertY} 归一到"推到底 = 满牵引"）：</p>
+	 * <ul>
+	 *   <li>{@code |axis| ≤ deadzone} → {@code 0}（关闭位）—— 与三手柄同样的中央吸附；</li>
+	 *   <li>{@code axis > 0} → {@code 1..P} 按 {@code axis} 分段（推到底 = P 最大牵引）；</li>
+	 *   <li>{@code axis < 0} → 中间 {@code B} 格按行程比例给 {@code −B..−1}，而**最后一段留给紧急位**
+	 *       {@code −(B+1)}，与 {@link #brakePositionFromAxis} 把两端留给"运行/EB"是同一个道理
+	 *       （紧急位必须能盲推到底）。</li>
+	 * </ul>
+	 *
+	 * <p>结果与客户端 {@code clampSingle} 的值域**逐位一致**（{@code [-(B+1), +P]}）。</p>
+	 *
+	 * @param axis         −1…+1（已按 invert 归一：+1 = 满牵引，−1 = 紧急）
+	 * @param powerNotches 牵引档数 P（≥1）
+	 * @param brakeNotches 制动档数 B（≥1）
+	 */
+	public static int singleHandleFromAxis(double axis, int powerNotches, int brakeNotches, double deadzone) {
+		final double value = clamp(axis, -1, 1);
+		if (Math.abs(value) <= Math.max(0, deadzone)) {
+			return 0;
+		}
+		final int highest = Math.max(1, powerNotches);
+		final int service = Math.max(1, brakeNotches);
+		if (value > 0) {
+			return clamp((int) Math.round(value * highest), 1, highest);
+		}
+		final double magnitude = -value;
+		if (magnitude >= 1 - Math.max(0, deadzone)) {
+			return -(service + 1);
+		}
+		return -clamp((int) Math.round(magnitude * service), 1, service);
+	}
+
 	/** 轴值是否已经离开死区（用于"这根轴在动"的判据）。 */
 	public static boolean isOutsideDeadzone(double axis, double deadzone) {
 		return Math.abs(axis) > Math.max(0, deadzone);

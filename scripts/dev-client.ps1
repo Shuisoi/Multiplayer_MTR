@@ -1,4 +1,4 @@
-# Dev game client launcher (loom runClient, logs to fabric/run/dev-client.out.log).
+﻿# Dev game client launcher (loom runClient, logs to fabric/run/dev-client.out.log).
 $ErrorActionPreference = 'Continue'
 # 工作区环境单一真源（`JAVA_HOME` 等）—— **必须**在这里取，不能靠机器上的环境变量：
 # 2026-09-15 实测，本机用户级 JAVA_HOME 指向 `C:\Program Files\Java\jre1.8.0_431`（JRE 8），

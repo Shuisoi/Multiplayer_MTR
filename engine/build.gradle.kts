@@ -107,6 +107,12 @@ tasks {
 	test {
 		useJUnitPlatform()
 		testLogging { showStandardStreams = true }
+		/*
+		 * 现场探针（Temp*Tests）里有几条要跑几分钟到几十分钟的（全天作业单、回库 N 圈扫描）。
+		 * 它们相互独立（各自一份世界副本、各自一个仿真器），串行跑是纯等 —— 用
+		 * `-Dmmtr.testForks=N`（按**测试类**分发到 N 个 JVM）就能并行。默认 1 = 与改动前完全一样。
+		 */
+		maxParallelForks = (System.getProperty("mmtr.testForks") ?: "1").toInt().coerceAtLeast(1)
 	}
 
 	javadoc {

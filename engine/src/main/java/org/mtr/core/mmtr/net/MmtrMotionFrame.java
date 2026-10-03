@@ -46,8 +46,9 @@ import java.util.List;
  * kind 0x06 PING          serverMillis(u32)                                              5 B
  * kind 0x07 SLOT          slot(u16) vehicleId(i64) flags(u16) runStopTarget(f32)
  *                         runTotalDistance(f32) blockStopM(f32)                         25 B
- * kind 0x08 LEGS          slot(u16) droppedFromTrainTail(u16) count(u8)
- *                         [hexLength(u8) hexBytes]×count                          6 + 101n B
+ * kind 0x08 LEGS          slot(u16) droppedFromTrainTail(u16) anchorM(f32) count(u8)
+ *                         [hexLength(u8) hexBytes]×count
+ *                         [entryIsOrdered1 bits, ceil(count/8) B]          6 + 4 + 101n + n/8 B
  * </pre>
  *
  * <h2>量化口径（用例钉死）</h2>
@@ -60,7 +61,14 @@ import java.util.List;
  */
 public final class MmtrMotionFrame {
 
-	public static final int VERSION = 1;
+	/**
+	 * 线格式版本。
+	 *
+	 * <p>v2（2026-10-03）：{@code LEGS} 带上**表的锚点**与**逐腿方向**，并且能表达"整表替换"。
+	 * v1 的 {@code LEGS} 只有"丢几根 + 加哪些轨"，于是**换端（整表反序）没法表达** ——
+	 * 客户端只能拿旧表硬撑，现场就是"换端开出去车不动、过一会儿瞬移"（notes/375）。</p>
+	 */
+	public static final int VERSION = 2;
 
 	public static final int KIND_MOTION = 0x01;
 	public static final int KIND_MOTION_SPEED = 0x02;
@@ -70,6 +78,16 @@ public final class MmtrMotionFrame {
 	public static final int KIND_PING = 0x06;
 	public static final int KIND_SLOT = 0x07;
 	public static final int KIND_LEGS = 0x08;
+
+	/**
+	 * {@code LEGS} 里 {@code droppedFromTrainTail} 的这个值 = **整表替换**（不是"丢 65535 根"）。
+	 *
+	 * <p>为什么需要它：增量说的是"旧表的**前缀**原封不动，后面接新的"，而换端是"同一批轨、相反顺序"
+	 * —— 那时"该丢几根"可能小于客户端手上的条数（客户端为了不丢车身底下的腿会多留几根），
+	 * 增量就会把一张反序的表当成"又接了几根"，接出来是一张**方向错的表**。换端必须能说清
+	 * "整张表换掉"。</p>
+	 */
+	public static final int LEGS_FULL_REPLACE = 0xFFFF;
 
 	/** 帧头字节数（byteCount u16 + version u8 + recordCount u8）。 */
 	public static final int HEADER_BYTES = 4;
@@ -196,28 +214,47 @@ public final class MmtrMotionFrame {
 	}
 
 	/**
-	 * **腿阴影增量**（notes/369 §4.4）：走行器新踏上一根轨时告诉客户端"车头那几根轨是什么"，
-	 * 并让它把尾巴上多余的几根丢掉。
+	 * **一条腿**（腿阴影里的一根轨）。
 	 *
-	 * <p>{@code newLegs} 是**按顺序**加在车头那一端的新腿（每项 = 那根轨的 hex id，**101 字符**：
-	 * {@code x-y-z-x-y-z} 各 16 位十六进制）。这个字符串**必须是规范化写法**（两端排序），也就是
-	 * 客户端 `railIdMap` 的键 —— 见 {@code Vehicle#getMmtrMotionLegHexIds}：用"按行驶方向"写的那一支
-	 * 会在反向走一根轨时查不到（现场表现是客户端 `缺轨=` 一直涨、阴影接不上）。**方向不在 hex 里**：
-	 * 客户端从"上一根腿的末端"推出接入端（{@code MmtrLegAppender}）。
-	 * {@code droppedFromTrainTail} = 客户端应当丢掉的条数，而且是从**它那份列表的开头**丢 ——
-	 * 列表顺序与引擎一致：**车尾 → 车头**（车头那根在末尾，新腿只追加在末尾）。
-	 * 于是客户端只做两件事：丢开头几根、末尾接上新的，然后**续算累加里程**
-	 * （从旧表最后一根的末端接着算 —— 那正是"锚定"，车头就落在它上面）。</p>
+	 * <p>{@code hexId} 是**规范化**写法（两端按坐标排序）—— 那正是客户端 {@code railIdMap} 的键
+	 * （见 {@code Vehicle#getMmtrMotionLegsForWire}：用"按行驶方向"写的那一支会在反向走一根轨时查不到，
+	 * 现场表现是客户端 {@code 缺轨=} 一直涨、阴影接不上）。</p>
 	 *
-	 * <p>一条腿 = 1 字节长度前缀 + 101 字节 ⇒ **108 字节/条新腿**，而新腿是每 25–100 m
-	 * （60 km/h 下 1.5–6 秒）才出现一次 ⇒ **18–72 B/s**；相比之下把它留在 ② 里是
-	 * "每长一条腿一份 7.4 KB 整份"。</p>
+	 * <p>{@code entryIsOrdered1} 补上 v1 缺的那一半：**这根轨在表里是从哪一端进的**。
+	 * hex 本身没有方向（两端排序过），所以 v1 的客户端只能拿"上一根腿的末端"去猜 — 猜不出就只能拒绝。
+	 * 带上这一位之后，客户端接腿是**照抄**而不是推断；而且它让"同一根轨、相反方向"成为**不同的腿**
+	 * （{@link #legDelta} 靠这一点认出换端，不会把"整表反序"当成"又在车头接了两根"）。</p>
 	 */
-	public record Legs(int slot, int droppedFromTrainTail, List<String> newLegs) implements Record {
+	public record Leg(String hexId, boolean entryIsOrdered1) {
+	}
+
+	/**
+	 * **腿阴影**（notes/369 §4.4 / notes/375）：走行器新踏上一根轨时告诉客户端车头那几根轨是什么，
+	 * 并让它把尾巴上多余的几根丢掉；**整表反序**（换端/换向）时发整张表。
+	 *
+	 * <p>{@code newLegs} 是**按顺序**加在车头那一端的新腿；{@code droppedFromTrainTail} = 客户端应当
+	 * 丢掉的条数，而且是从**它那份列表的开头**丢 —— 列表顺序与引擎一致：**车尾 → 车头**（车头那根在
+	 * 末尾，新腿只追加在末尾）。{@link #LEGS_FULL_REPLACE} = "别增量了，整张表就是 {@code newLegs}，
+	 * 里程从那根起算" —— 换端走这一支。</p>
+	 *
+	 * <p>{@code anchorM} 是**这张表在镜像里程坐标系里的起点**（= 第一根腿的 {@code startDistance}）。
+	 * 增量时它只是随行的自描述信息（客户端续算里程不靠它）；**整表替换时必须靠它** ——
+	 * 少了它，客户端重建出来的表与"镜像 railProgress"就差一个常量，那正是"车停在阴影末端不动"的来源。</p>
+	 *
+	 * <p>一条腿 = 1 字节长度前缀 + 101 字节 hex + 1/8 字节方向位 ⇒ **≈109 字节/条新腿**，而新腿是
+	 * 每 25–100 m（60 km/h 下 1.5–6 秒）才出现一次 ⇒ **18–72 B/s**；相比之下把它留在 ② 里是
+	 * "每长一条腿一份 7.4 KB 整份"。整表（6 根腿 ≈ 660 B）只在**表形变了**（换端）与**兜底**时发。</p>
+	 */
+	public record Legs(int slot, int droppedFromTrainTail, double anchorM, List<Leg> newLegs) implements Record {
 
 		@Override
 		public int kind() {
 			return KIND_LEGS;
+		}
+
+		/** 这一条是"整表替换"而不是增量。 */
+		public boolean isFullReplace() {
+			return droppedFromTrainTail == LEGS_FULL_REPLACE;
 		}
 	}
 
@@ -371,17 +408,34 @@ public final class MmtrMotionFrame {
 		}
 
 		/**
-		 * 腿阴影增量。{@code newLegs} 每项是那根轨的 hex id（ASCII）；超过 255 字符或超过 255 条时
-		 * **截断**而不是抛异常（丢一根腿最多让一节车摆错一帧，抛异常会作废整帧的所有车）。
+		 * 腿阴影（增量或整表）。{@code newLegs} 每项 = 那根轨的规范化 hex id（ASCII）+ 接入端方向位；
+		 * 超过 255 字符或超过 255 条时**截断**而不是抛异常（丢一根腿最多让一节车摆错一帧，
+		 * 抛异常会作废整帧的所有车）。
+		 *
+		 * @param droppedFromTrainTail 要从车尾端丢掉的条数；{@link #LEGS_FULL_REPLACE} = 整表替换
+		 * @param anchorM              表的起点里程（整表替换时客户端按它重建；增量时随行自描述）
 		 */
-		public Writer legs(int slot, int droppedFromTrainTail, List<String> newLegs) {
+		public Writer legs(int slot, int droppedFromTrainTail, double anchorM, List<Leg> newLegs) {
 			final int count = Math.min(newLegs.size(), 0xFF);
-			start(KIND_LEGS, 3 + count * (1 + 255));
+			start(KIND_LEGS, 5 + count * (1 + 255) + (count + 7) / 8);
 			u16(slot);
 			u16(droppedFromTrainTail);
+			f32(anchorM);
 			u8(count);
+			int directionBits = 0;
 			for (int i = 0; i < count; i++) {
-				ascii(newLegs.get(i));
+				final Leg leg = newLegs.get(i);
+				ascii(leg.hexId());
+				if (leg.entryIsOrdered1()) {
+					directionBits |= 1 << (i & 7);
+				}
+				if ((i & 7) == 7) {
+					u8(directionBits);
+					directionBits = 0;
+				}
+			}
+			if ((count & 7) != 0) {
+				u8(directionBits);
 			}
 			return this;
 		}
@@ -594,19 +648,32 @@ public final class MmtrMotionFrame {
 				case KIND_LEGS: {
 					final Integer slot = readU16();
 					final Integer droppedFromTrainTail = readU16();
+					final Double anchorM = readF32();
 					final Integer count = readU8();
-					if (slot == null || droppedFromTrainTail == null || count == null) {
+					if (slot == null || droppedFromTrainTail == null || anchorM == null || count == null) {
 						return null;
 					}
-					final List<String> newLegs = new ArrayList<>(count);
+					final List<String> hexIds = new ArrayList<>(count);
 					for (int i = 0; i < count; i++) {
 						final String hex = readAscii();
 						if (hex == null) {
 							return null;
 						}
-						newLegs.add(hex);
+						hexIds.add(hex);
 					}
-					return new Legs(slot, droppedFromTrainTail, List.copyOf(newLegs));
+					final List<Leg> newLegs = new ArrayList<>(count);
+					int directionBits = 0;
+					for (int i = 0; i < count; i++) {
+						if ((i & 7) == 0) {
+							final Integer bits = readU8();
+							if (bits == null) {
+								return null;
+							}
+							directionBits = bits;
+						}
+						newLegs.add(new Leg(hexIds.get(i), (directionBits & (1 << (i & 7))) != 0));
+					}
+					return new Legs(slot, droppedFromTrainTail, anchorM, List.copyOf(newLegs));
 				}
 				default:
 					malformed = true;
@@ -692,35 +759,54 @@ public final class MmtrMotionFrame {
 	}
 
 	/**
-	 * 腿阴影的增量（{@code LEGS} 记录的载荷）：把"上一拍发给这个客户端的列表"与"现在这一拍"比出
-	 * **从车尾端丢了几根**与**车头端新加了哪几根**。
+	 * 腿阴影的增量（{@code LEGS} 记录的载荷）：把"上一拍发给这个客户端的表"与"现在这一拍"比出
+	 * **从车尾端丢了几根**与**车头端从第几根起是新的**。
 	 *
 	 * <p>列表顺序是**车尾 → 车头**（引擎 {@code refreshMmtrMotionLegs} 的定义），于是"保留的那一段"
 	 * = 旧表的**后缀** == 新表的**前缀**。取最长的那个 k：丢掉 {@code previous.size() - k} 根、
 	 * 追加 {@code current.subList(k, size)}。腿数只有个位数（一节车长覆盖几根轨），所以这个朴素匹配
 	 * 比"记游标"更不容易错 —— 而它错了的表现是"某一节车摆到别的轨上"，很贵。</p>
 	 *
+	 * <p><b>比的是 {@link Leg}（轨 + 方向），不是 hex 字符串</b>（notes/375）：换端是"同一批轨、
+	 * 相反顺序"，只比 hex 的话旧表的尾巴会与新表的头**恰好**相等（同一根轨的反向 + 正向在
+	 * 规范化 hex 里长得一样），于是换端会被算成"丢掉 2 根、再在车头接 2 根" —— 客户端接出来的是一张
+	 * **方向错的表**（车摆到别的轨上/停在阴影末端）。带上方向位之后，换端必然是 k=0 ⇒
+	 * {@code droppedFromTrainTail == previous.size()} ⇒ 走"整表替换"那一支。</p>
+	 *
 	 * @return 没有变化时返回 {@code null}（调用方据此不发 {@code LEGS}）
 	 */
-	public static @Nullable LegDelta legDelta(List<String> previous, List<String> current) {
+	public static @Nullable LegDelta legDelta(List<Leg> previous, List<Leg> current) {
 		if (previous.equals(current)) {
 			return null;
 		}
 		final int maxOverlap = Math.min(previous.size(), current.size());
 		for (int keep = maxOverlap; keep >= 0; keep--) {
 			if (previous.subList(previous.size() - keep, previous.size()).equals(current.subList(0, keep))) {
-				return new LegDelta(previous.size() - keep, List.copyOf(current.subList(keep, current.size())));
+				return new LegDelta(previous.size() - keep, keep);
 			}
 		}
 		// 理论上到不了（keep=0 永远成立），留一条明确的退路而不是返回 null 让调用方困惑。
-		return new LegDelta(previous.size(), List.copyOf(current));
+		return new LegDelta(previous.size(), 0);
 	}
 
-	/** 见 {@link #legDelta}：{@code droppedFromTrainTail} 是客户端要从自己列表**开头**丢掉的条数。 */
-	public record LegDelta(int droppedFromTrainTail, List<String> appended) {
+	/**
+	 * 见 {@link #legDelta}。
+	 *
+	 * @param droppedFromTrainTail 客户端要从自己列表**开头**丢掉的条数（{@code >= 旧表条数} = 整表替换）
+	 * @param appendedFromIndex    新表里**从哪个下标起**是这一拍新加的腿（整表替换时为 0）
+	 */
+	public record LegDelta(int droppedFromTrainTail, int appendedFromIndex) {
 
 		public boolean isEmpty() {
-			return droppedFromTrainTail == 0 && appended.isEmpty();
+			return droppedFromTrainTail == 0 && appendedFromIndex == 0;
+		}
+
+		/**
+		 * 旧表一根都不留 ⇒ 客户端必须**整表替换**（而不是"在现有表尾巴上接几根"）：它手上多留的
+		 * 车尾腿与新表毫无关系，增量接法只会接出一张错的表。
+		 */
+		public boolean replacesWholeTable() {
+			return appendedFromIndex == 0;
 		}
 	}
 }

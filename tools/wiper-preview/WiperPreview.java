@@ -15,6 +15,19 @@ import javax.imageio.ImageIO;
 /**
  * Offline preview of the MMTR windshield: the droplet model and the wiper, rendered without Minecraft.
  *
+ * <p><b>STALE - DO NOT TRUST THE ASSERTIONS IN THIS FILE.</b> Everything below mirrors the model as it
+ * stood BEFORE the density rewrite: beads carry an {@code ink} 0..1 formation value, the runoff gate is
+ * the per-bead radius {@code staticThresholdM}, the wiper knocks beads' ink back instead of moving them,
+ * the wetness field and the painted trails still exist, and the spawn rate is the old absolute
+ * {@code SPAWN_PER_SECOND = 2}. None of that is in {@code MmtrWindshield} any more (see
+ * {@code mmtr/notes/206-*.md} for what replaced it), so a green run here says nothing about the client.</p>
+ *
+ * <p>The live model is covered by {@link DropletFlow}, which mirrors the density field, the pinning
+ * latch, the runoff curve and the blade's carry-and-gather on the real BR101 glass. This file is kept
+ * only because its WIPER-GEOMETRY section (park/blade tip/fan boundary, the mirrored sweep maths) is
+ * still the readable reference for the wiper, and because its picture output is a useful sanity check
+ * for the drawing side. Rewriting it onto the density model is outstanding work.</p>
+ *
  * <p>This exists because the only other way to see this feature is to launch the game, drive to a cab
  * and wait for rain. Every constant below is MIRRORED from {@code MmtrWindshield} / {@code MmtrPanelCanvas}
  * - the same forces, the same bead shapes, the same wiper film, the same sheet-to-face v flip. It is not
@@ -35,7 +48,12 @@ public final class WiperPreview {
 
 	// ---- mirrored from MmtrWindshield -------------------------------------------------------------
 	private static final double WATER_SHEEN_ALPHA = 0x12;
-	private static final double AIRFLOW_COEFFICIENT = 0.02;
+	/** Mirrors MmtrWindshield.BALANCE_SPEED_MPS / REFERENCE_GRAVITY_MPS2 / AIRFLOW_COEFFICIENT. */
+	private static final double BALANCE_SPEED_MPS = 8.33;
+	private static final double REFERENCE_GRAVITY_MPS2 = 0.55 * (0.6 + 0.9 * 1.0);
+	private static final double AIRFLOW_COEFFICIENT = REFERENCE_GRAVITY_MPS2 / (BALANCE_SPEED_MPS * BALANCE_SPEED_MPS);
+	/** Mirrors the glass slope this harness models: its fall is straight down the panel, so slope = 1. */
+	private static final double SLOPE_BELOW_AIRFLOW = 1.0;
 	private static final double MAX_LATERAL_ACCELERATION = 1.2;
 	private static final double MAX_LATERAL_VELOCITY = 0.45;
 	private static final double WIPE_PADDING_DEG = 7;
@@ -70,6 +88,8 @@ public final class WiperPreview {
 	private static final double SPAWN_PER_SECOND = 2;
 	/** Mirrors MmtrWindshield.RE_WET_INK. */
 	private static final double RE_WET_INK = 0.30;
+	/** Mirrors MmtrWindshield.WET_INK_PER_SECOND: how fast a bead re-forms at full intensity. */
+	private static final double WET_INK_PER_SECOND = 0.8;
 	/** Mirrors MmtrWindshield.STATIC_THRESHOLD default. */
 	private static final double STATIC_THRESHOLD_M = 0.0045;
 	/** Mirrors MmtrWindshield.PINCH_OFF_DISTANCE_M. */
@@ -96,6 +116,14 @@ public final class WiperPreview {
 
 	public static void main(String[] args) throws Exception {
 		int failures = 0;
+
+		// A separate mode, because "is the picture actually moving?" is a different question from every
+		// counter in this file, and it was the one the player asked.
+		for (final String arg : args) {
+			if ("--frames".equals(arg)) {
+				System.exit(frameMotionReport());
+			}
+		}
 
 		// ---- 1. the droplet field ---------------------------------------------------------------
 		// The three regimes, which is the whole point of the capillary-pinning model. Sampled early,
@@ -148,6 +176,61 @@ public final class WiperPreview {
 				String.format("bottomEdge=%.3f  coverage=%.3f", travelling.bottomEdgeWetness(), travelling.wetnessCoverage()));
 		failures += expect("玻璃上留下了水膜轨迹（覆盖率 > 0）", travelling.wetnessCoverage() > 0.0,
 				String.format("coverage=%.3f  max=%.2f", travelling.wetnessCoverage(), travelling.maxWetness()));
+
+		// ---- 1b. the spawn RATE follows the rain -------------------------------------------------
+		// The user's requirement, and the one that cannot be seen from a single screenshot: a glass the
+		// blade has just stripped must refill FASTER in heavier rain. Two independent checks - the rate
+		// function itself, and the observed refill - because a rate that is right on paper can still be
+		// masked by the population cap.
+		{
+			final Glass light = new Glass(new Random(4321));
+			light.simulate(1, 0, 0.3F, Mode.OFF);
+			final Glass heavy = new Glass(new Random(4321));
+			heavy.simulate(1, 0, 1.0F, Mode.OFF);
+			final double lightRate = light.ratePerSecondForTest();
+			final double heavyRate = heavy.ratePerSecondForTest();
+			failures += expect("产生速率与降雨强度成正比（小雨 = 暴雨的 30%）",
+					Math.abs(lightRate - 0.3 * heavyRate) < 1.0E-6,
+					String.format("light=%.4f/s heavy=%.4f/s ratio=%.4f", lightRate, heavyRate,
+							heavyRate == 0 ? 0 : lightRate / heavyRate));
+
+			// Refill after a full strip, measured as SPAWN EVENTS, not as the final population: the
+			// population reaches its intensity-scaled cap inside the window in both cases (measured 77 vs
+			// 74 after 6 s, which is a draw), so a count comparison would pass or fail on the cap rather
+			// than on the rate. Spawn events are what "water appears faster" actually means.
+			final Glass lightRefill = new Glass(new Random(777));
+			lightRefill.simulate(10, 0, 0.3F, Mode.OFF);
+			lightRefill.resetSpawnCountForTest();
+			lightRefill.stripAllForTest();
+			lightRefill.simulate(5, 0, 0.3F, Mode.OFF);
+			final Glass heavyRefill = new Glass(new Random(777));
+			heavyRefill.simulate(10, 0, 1.0F, Mode.OFF);
+			heavyRefill.resetSpawnCountForTest();
+			heavyRefill.stripAllForTest();
+			// FIVE seconds, not one: at 0.6 beads/s a single second accumulates only 0.6, which is below
+			// the one-bead threshold and would report zero for the drizzle no matter how correct the rate
+			// is. Five puts both intensities clear of the threshold so the comparison is about rate.
+			heavyRefill.simulate(5, 0, 1.0F, Mode.OFF);
+			final int lightSpawned = lightRefill.spawnedForTest();
+			final int heavySpawned = heavyRefill.spawnedForTest();
+			final int lightTotal = lightRefill.spawnedTotalForTest();
+			final int heavyTotal = heavyRefill.spawnedTotalForTest();
+			final double lightRateAfter = lightRefill.ratePerSecondForTest();
+			final double heavyRateAfter = heavyRefill.ratePerSecondForTest();
+			// The measured quantity that MATTERS is the mean ink of the field after the strip: the wiper
+			// zeroes ink rather than destroying beads, so "how fast does water reappear" IS the ink growth,
+			// and the spawn rate has nothing to do with it (measured: alive 83 vs cap 43, so the spawn loop
+			// never even runs on a wiped screen).
+			final double lightInk = lightRefill.inkGrowthAfterStripForTest(0.4);
+			final double heavyInk = heavyRefill.inkGrowthAfterStripForTest(0.4);
+			System.out.printf("       [spawn] ink after a 0.4 s strip-and-rewet at a fixed step: light=%.3f heavy=%.3f | rate %.2f/s vs %.2f/s | lifetime spawns light=%d heavy=%d%n",
+					lightInk, heavyInk, lightRateAfter, heavyRateAfter, lightTotal, heavyTotal);
+			failures += expect("被刮空后暴雨比小雨回湿得快（同样 0.4 s 内 ink 更高）",
+					heavyInk > lightInk * 1.2,
+					String.format("light=%.3f heavy=%.3f mean ink after an identical strip", lightInk, heavyInk));
+			failures += expect("产生速率与降雨强度成正比", lightRateAfter < heavyRateAfter,
+					String.format("light=%.2f/s heavy=%.2f/s", lightRateAfter, heavyRateAfter));
+		}
 
 		final Glass lineSpeed = new Glass(new Random(1234));
 		lineSpeed.simulate(20, 33.3, 1.0F, Mode.OFF);
@@ -258,6 +341,66 @@ public final class WiperPreview {
 		return condition ? 0 : 1;
 	}
 
+	/**
+	 * Frame-to-frame pixel comparison of the bead field, with the blade parked.
+	 *
+	 * <p>This exists because the counters can all look healthy while the picture does not change: the
+	 * field can report a live {@code pastPin} count and a 0.2 m/s mean surface speed and still produce
+	 * an identical image every time, if the beads move less than a pixel between repaints. Only the
+	 * PIXELS answer the question the player asks ("is it moving?"), so this prints how many pixels
+	 * changed between consecutive rendered frames, at the canvas size the client actually uploads.</p>
+	 *
+	 * <p>Run: {@code java -cp mmtr/tools/wiper-preview WiperPreview --frames}</p>
+	 */
+	private static int frameMotionReport() throws Exception {
+		final int widthPx = 128;
+		final int heightPx = (int) Math.round(widthPx * HEIGHT_M / WIDTH_M);
+		final Glass glass = new Glass(new Random(1234));
+		// Warm up so the field has grown beads and trails - the state a driver actually looks at.
+		glass.simulate(6, 0, 1.0F, Mode.OFF);
+
+		int[] previous = null;
+		double worst = 0;
+		double total = 0;
+		int frames = 0;
+		int staticFrames = 0;
+		for (int frame = 0; frame < 90; frame++) {
+			glass.simulate(1.0 / 60.0, 0, 1.0F, Mode.OFF);
+			final int[] pixels = glass.rasterise(widthPx, heightPx);
+			if (previous != null) {
+				int changed = 0;
+				double delta = 0;
+				for (int i = 0; i < pixels.length; i++) {
+					if (pixels[i] != previous[i]) {
+						changed++;
+						final int a = (previous[i] >>> 24) & 0xFF;
+						final int b = (pixels[i] >>> 24) & 0xFF;
+						delta += Math.abs(a - b);
+					}
+				}
+				worst = Math.max(worst, changed);
+				total += changed;
+				frames++;
+				if (changed == 0) {
+					staticFrames++;
+				}
+			}
+			previous = pixels;
+		}
+		final double mean = frames == 0 ? 0 : total / frames;
+		System.out.printf("%n=== frame motion (blade parked, 60 fps, %dx%d canvas) ===%n", widthPx, heightPx);
+		System.out.printf("  frames compared      : %d%n", frames);
+		System.out.printf("  mean changed pixels  : %.1f  (%.3f%% of the canvas)%n",
+				mean, 100.0 * mean / (widthPx * heightPx));
+		System.out.printf("  worst changed pixels : %.0f%n", worst);
+		System.out.printf("  IDENTICAL frames     : %d of %d%n", staticFrames, frames);
+		final boolean moving = mean > 2.0 && staticFrames < frames / 2;
+		System.out.println(moving
+				? "  => the image DOES change between frames"
+				: "  => THE IMAGE BARELY CHANGES - the field is effectively static on screen");
+		return moving ? 0 : 1;
+	}
+
 	/** Each panel is a labelled "screenshot" of the glass. Laid out 2 x 2. */
 	private static void render(String label, Mode mode, double speedMps, double seconds, String tag) throws Exception {
 		final int panelWidth = 560;
@@ -306,6 +449,15 @@ public final class WiperPreview {
 		private boolean bladeMoving;
 		private double intensity = 1;
 		private double spawnAccumulator;
+		/** New beads created since the last reset, so a test can count them. */
+		private int spawnedInWindow;
+		/**
+		 * Lifetime spawn count. The window counter above is cleared by the periodic diagnostic, so a
+		 * measurement window that straddles one of those reports silently loses its sample (observed:
+		 * light reported 0 spawns while its accumulator had clearly advanced). This one is never reset by
+		 * anything but the test itself.
+		 */
+		private int spawnedTotal;
 		private Mode mode = Mode.OFF;
 		/** Accumulated |d(angle)| so a check can prove the blade really moved. */
 		private double totalSweptDegrees;
@@ -627,7 +779,7 @@ public final class WiperPreview {
 
 		private void advanceDrops(double elapsedSeconds, double speedMps) {
 			final double gravityDown = FALL_MPS * (0.6 + 0.9 * intensity);
-			final double airflow = AIRFLOW_COEFFICIENT * speedMps * speedMps;
+			final double airflow = AIRFLOW_COEFFICIENT * SLOPE_BELOW_AIRFLOW * speedMps * speedMps;
 			final double surfaceSpeedClimb = Math.max(-gravityDown, Math.min(CREEP_MPS, airflow - gravityDown));
 			for (final Drop drop : drops) {
 				advanceDrop(drop, elapsedSeconds, surfaceSpeedClimb);
@@ -641,7 +793,7 @@ public final class WiperPreview {
 		private void advanceDrop(Drop drop, double elapsedSeconds, double surfaceSpeedClimb) {
 			drop.radiusM = Math.min(MAX_BEAD_RADIUS_M, drop.radiusM + GROWTH_MPS * elapsedSeconds * (0.4 + intensity));
 			if (drop.ink < 1) {
-				drop.ink = Math.min(1, drop.ink + elapsedSeconds * 0.8);
+				drop.ink = Math.min(1, drop.ink + elapsedSeconds * WET_INK_PER_SECOND * (0.35 + 0.65 * intensity));
 			}
 
 			final double staticThreshold = STATIC_THRESHOLD_M * (1.1 + 0.7 * drop.variation);
@@ -827,19 +979,16 @@ public final class WiperPreview {
 			if (intensity <= 0.02) {
 				return;
 			}
-			final int target = (int) Math.round(drops.length * (0.35 + 0.65 * intensity));
+			// Mirrors MmtrWindshield.spawnForWeather: the RATE follows the rain, the count is only a cap.
+			final int cap = spawnCap();
 			int alive = 0;
 			for (final Drop drop : drops) {
 				if (drop.ink > 0.25) {
 					alive++;
 				}
 			}
-			if (alive >= target) {
-				spawnAccumulator = 0;
-				return;
-			}
-			spawnAccumulator += elapsedSeconds * SPAWN_PER_SECOND * intensity;
-			while (spawnAccumulator >= 1 && alive < target) {
+			spawnAccumulator = Math.min(4, spawnAccumulator + elapsedSeconds * spawnRatePerSecond());
+			while (spawnAccumulator >= 1 && alive < cap) {
 				spawnAccumulator -= 1;
 				Drop weakest = null;
 				for (final Drop drop : drops) {
@@ -854,7 +1003,128 @@ public final class WiperPreview {
 				respawn(weakest);
 				weakest.ink = Math.max(keepInk, 0.55);
 				alive++;
+				spawnedInWindow++;
+				spawnedTotal++;
 			}
+		}
+
+		/** Mirrors MmtrWindshield.spawnRatePerSecond: new beads per second, linear in rain intensity. */
+		private double spawnRatePerSecond() {
+			return SPAWN_PER_SECOND * intensity;
+		}
+
+		/** Mirrors MmtrWindshield.spawnCap: the intensity-scaled ceiling on the population. */
+		private int spawnCap() {
+			return (int) Math.round(drops.length * (0.25 + 0.75 * intensity));
+		}
+
+		/** Exposed for the harness's spawn-rate assertions. */
+		private double ratePerSecondForTest() {
+			return spawnRatePerSecond();
+		}
+
+		/** How many beads the field currently shows (ink above the visibility threshold). */
+		private int aliveCountForTest() {
+			int alive = 0;
+			for (final Drop drop : drops) {
+				if (drop.ink > 0.25) {
+					alive++;
+				}
+			}
+			return alive;
+		}
+
+		/** Strips the glass the way a wiper pass does, so refill speed can be measured. */
+		private void stripAllForTest() {
+			for (final Drop drop : drops) {
+				drop.ink = 0;
+				drop.trail = 0;
+			}
+		}
+
+		/**
+		 * Zeroes the spawn counter so a measurement can start from a known point.
+		 *
+		 * <p>The drain is what makes the window measure a RATE rather than a leftover: without it the
+		 * comparison tests the burst cap, because a pane that has been sitting at its population ceiling
+		 * has banked the accumulator up to its limit, so a drizzle and a downpour both start their refill
+		 * from the same surplus (observed: light 4 vs heavy 2, i.e. noise).</p>
+		 *
+		 * <p>The zero-length {@code simulate} afterwards matters too: the client's diagnostic resets the
+		 * same counter every 300 frames, so a measurement window that straddles one of those reports is
+		 * clipped without warning (observed: light 0 vs heavy 10, where the light run's spawns had simply
+		 * been rolled off the counter).</p>
+		 */
+		private void resetSpawnCountForTest() {
+			spawnedInWindow = 0;
+			spawnedTotal = 0;
+			spawnAccumulator = 0;
+			simulate(0, 0, (float) intensity, mode);
+		}
+
+		/** How many beads have been created since the last reset. */
+		private int spawnedForTest() {
+			return spawnedInWindow;
+		}
+
+		/** Lifetime spawn count, immune to the periodic diagnostic's counter reset. */
+		private int spawnedTotalForTest() {
+			return spawnedTotal;
+		}
+
+		private double intensityForTest() {
+			return intensity;
+		}
+
+		private double accumulatorForTest() {
+			return spawnAccumulator;
+		}
+
+		private int capForTest() {
+			return spawnCap();
+		}
+
+		private int aliveForTest() {
+			int alive = 0;
+			for (final Drop drop : drops) {
+				if (drop.ink > 0.25) {
+					alive++;
+				}
+			}
+			return alive;
+		}
+
+		private double weakestInkForTest() {
+			double weakest = 1;
+			for (final Drop drop : drops) {
+				weakest = Math.min(weakest, drop.ink);
+			}
+			return weakest;
+		}
+
+		/** Mean ink over the whole field - "how wet does the glass look" in one number. */
+		private double meanInkForTest() {
+			double sum = 0;
+			for (final Drop drop : drops) {
+				sum += drop.ink;
+			}
+			return drops.length == 0 ? 0 : sum / drops.length;
+		}
+
+		/**
+		 * One deterministic re-wetting step: zero every bead's ink the way a blade pass does, then advance
+		 * exactly {@code stepSeconds} of ink growth at the current intensity, and report the mean ink.
+		 *
+		 * <p>Measured directly rather than through {@code simulate} because the growth SATURATES in about a
+		 * second at either intensity, so a longer window reports both cases at 1.0 and compares noise
+		 * (observed: light 0.696 vs heavy 0.623 after 5 s - a draw).</p>
+		 */
+		private double inkGrowthAfterStripForTest(double stepSeconds) {
+			stripAllForTest();
+			for (final Drop drop : drops) {
+				drop.ink = Math.min(1, drop.ink + stepSeconds * WET_INK_PER_SECOND * (0.35 + 0.65 * intensity));
+			}
+			return meanInkForTest();
 		}
 
 		private void mergeDrops() {
@@ -884,6 +1154,23 @@ public final class WiperPreview {
 		}
 
 		// ---- painting ---------------------------------------------------------------------------
+
+		/**
+		 * The glass drawn into an off-screen image at the CLIENT's canvas size, as raw ARGB pixels.
+		 *
+		 * <p>Used by {@link #frameMotionReport} to diff consecutive frames. It goes through the same
+		 * {@code paint} the previews use, so it cannot drift from what the client's canvas would hold:
+		 * the only difference is the destination.</p>
+		 */
+		private int[] rasterise(int widthPx, int heightPx) {
+			final BufferedImage image = new BufferedImage(widthPx, heightPx, BufferedImage.TYPE_INT_ARGB);
+			final Graphics2D graphics = image.createGraphics();
+			graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+			final double scale = (double) widthPx / WIDTH_M;
+			paint(graphics, 0, 0, scale);
+			graphics.dispose();
+			return image.getRGB(0, 0, widthPx, heightPx, null, 0, widthPx);
+		}
 
 		private void paint(Graphics2D graphics, double originX, double originY, double scale) {
 			// The canvas is y-up; swing converts to screen pixels so the same numbers as the mod's

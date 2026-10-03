@@ -33,18 +33,27 @@ public final class MmtrTaskTarget {
 	private final String railHex;
 	private final double railFraction;
 	private final String label;
+	/**
+	 * **车站名原样**（{@code "2"} —— 站台标签是"2站1台"的那种写法）。
+	 *
+	 * <p>水牌（PID，{@link MmtrPid}）要的是"开往**哪个站**"，不是"停在哪个站台"：
+	 * 显示"开往 2站1台"是错的，显示"开往 2"才对。于是这里把车站名单独留一份，
+	 * 而不是从 {@link #label()} 里反解字符串 —— 命名规则只有这一处（见类注释）。</p>
+	 */
+	private final String stationName;
 
-	private MmtrTaskTarget(Kind kind, long id, String railHex, double railFraction, String label) {
+	private MmtrTaskTarget(Kind kind, long id, String railHex, double railFraction, String label, String stationName) {
 		this.kind = kind;
 		this.id = id;
 		this.railHex = railHex == null ? "" : railHex;
 		this.railFraction = railFraction;
 		this.label = label;
+		this.stationName = stationName == null ? "" : stationName;
 	}
 
 	/** 没有目标（原地动作那类：换端、按按钮…）。 */
 	public static MmtrTaskTarget none() {
-		return new MmtrTaskTarget(Kind.NONE, 0, "", -1, "（原地）");
+		return new MmtrTaskTarget(Kind.NONE, 0, "", -1, "（原地）", "");
 	}
 
 	/**
@@ -60,24 +69,24 @@ public final class MmtrTaskTarget {
 				final String stationName = station == null || station.getName().isEmpty() ? "" : station.getName();
 				final String platformName = platform.getName().isEmpty() ? "?" : platform.getName();
 				return new MmtrTaskTarget(Kind.PLATFORM, targetId, "", -1,
-					(stationName.isEmpty() ? "站台" : stationName + "站") + platformName + "台");
+					(stationName.isEmpty() ? "站台" : stationName + "站") + platformName + "台", stationName);
 			}
 			final Siding siding = simulator.sidingIdMap.get(targetId);
 			if (siding != null) {
 				final String depotName = siding.getDepotName();
 				return new MmtrTaskTarget(Kind.SIDING, targetId, "", -1,
-					(depotName == null || depotName.isEmpty() ? "车厂" : depotName) + "股道" + siding.getName());
+					(depotName == null || depotName.isEmpty() ? "车厂" : depotName) + "股道" + siding.getName(), "");
 			}
 			final Station station = simulator.stationIdMap.get(targetId);
 			if (station != null) {
-				return new MmtrTaskTarget(Kind.STATION, targetId, "", -1, station.getName() + "站");
+				return new MmtrTaskTarget(Kind.STATION, targetId, "", -1, station.getName() + "站", station.getName());
 			}
 		}
 		if (railHex != null && !railHex.isEmpty()) {
 			final String shortHex = railHex.length() <= 8 ? railHex : railHex.substring(0, 8) + "…";
 			return new MmtrTaskTarget(Kind.RAIL, 0, railHex, railFraction,
 				"轨 " + shortHex + (railFraction >= 1 ? " 尽头" : railFraction <= 0 ? " 起点"
-					: " 的 " + Math.round(railFraction * 100) + "%"));
+					: " 的 " + Math.round(railFraction * 100) + "%"), "");
 		}
 		return none();
 	}
@@ -101,6 +110,16 @@ public final class MmtrTaskTarget {
 	/** **人话**："2站1台" / "987654股道1" / "轨 FFFF…-FF 尽头" / "（原地）"。 */
 	public String label() {
 		return label;
+	}
+
+	/**
+	 * **车站名原样**（{@code "2"}）；站台/车站以外的目标返回空串。
+	 *
+	 * <p>水牌要的是"开往哪个站"（{@link MmtrPid}），所以它读这一份而不是 {@link #label()}。
+	 * 站台名（"1台"）在这一层就被丢掉了 —— 车站名是这一层唯一知道的东西。</p>
+	 */
+	public String stationName() {
+		return stationName;
 	}
 
 	/** 有没有可指名的目标（原地动作没有）。 */

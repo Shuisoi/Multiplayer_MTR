@@ -19,6 +19,7 @@ import org.mtr.core.mmtr.DriveController;
 import org.mtr.core.mmtr.DriveOutput;
 import org.mtr.core.mmtr.MmtrComposition;
 import org.mtr.core.mmtr.MmtrDriveAccess;
+import org.mtr.core.mmtr.MmtrLightSwitch;
 import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.MmtrProtection;
 import org.mtr.core.mmtr.MmtrRegime;
@@ -27,6 +28,9 @@ import org.mtr.core.mmtr.MmtrSupport;
 import org.mtr.core.mmtr.consist.MmtrCabState;
 import org.mtr.core.mmtr.consist.MmtrConsistBody;
 import org.mtr.core.mmtr.consist.MmtrConsistWalker;
+import org.mtr.core.mmtr.physics.DynamicsEnvelope;
+import org.mtr.core.mmtr.point.MmtrPoint;
+import org.mtr.core.mmtr.point.MmtrPointRegistry;
 import org.mtr.core.mmtr.segment.MmtrMotionPosition;
 import org.mtr.core.mmtr.segment.MmtrMotionWalker;
 import org.mtr.core.mmtr.signal.MmtrSectionGeometry;
@@ -144,7 +148,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private final ObjectArrayList<PathData> mmtrMotionLegs = new ObjectArrayList<>();
 	/** Walker leg count at the last shadow refresh (detects newly boarded rails). */
 	private int mmtrMotionLegCount;
-	/**
+	/** notes/369 §8：上一拍写进镜像的那批"没有别的标脏点"的显示读数（见 {@link MmtrDisplayMirror}）。 */
+	private @Nullable MmtrDisplayMirror mmtrDisplayMirror;	/**
 	 * MMTR (L3): cumulative stop target for the current motion run (m in walker distance space);
 	 * -1 = no stop target (free run). When set, the vehicle auto service-brakes and comes to rest
 	 * exactly at the target, opens the doors if requested, and holds until a NEW control is applied.
@@ -170,21 +175,70 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private double mmtrBlockStopM = Double.MAX_VALUE;
 	/**
 	 * ①: the current block stop comes from the "block ahead ends at an unset turnout" rule, not from
-	 * occupancy. While it is set, the approach-locking window is extended to the next fork ahead (see
-	 * {@link #replenishForkRequests}): a train held at the signal before a long block would otherwise
-	 * never come within the 120 m request window of the turnout it is waiting for.
+	 * occupancy. While it is set, the approach-locking window is extended to the fork that actually
+	 * blocks this movement (see {@link #replenishForkRequests}): a train held at the signal before a
+	 * long block would otherwise never come within the 120 m request window of the turnout it waits for.
 	 */
 	private boolean mmtrSectionAuthorityHold = false;
+	/**
+	 * **① 扣住本车的那一处道岔**（{@code "x,y,z"}；空 = 不是这条规则扣的）。
+	 *
+	 * <p>为什么必须记下来（2026-09-26 全天卡死）：① 的判据是"**要进的那个区块的出口**是选不出腿的道岔"，
+	 * 而区块可以跨很多根轨（现场：下水 1 台东端的岔股进路只有 80 m，出口却在下一处道岔）。
+	 * 只按"最近一处道岔"去申请时，真正把车扣住的那一处永远收不到申请 —— 车不动，它也就永远走不进
+	 * 120 m 接近锁闭窗口，谁也不会去扳它（现场读数：一列停在 2659.23 m 一米不动，后面 15 份作业单
+	 * 全部卡在出库步）。记下节点键之后，{@link #replenishForkRequests} 能把它一起申请出去。</p>
+	 */
+	private String mmtrSectionAuthorityHoldNodeKey = "";
 	/** T3: 车被**行车许可**扣住（红灯 / 自己的进路没设好）—— 与"区间出口是未设道岔"是两种不同的等待。 */
 	private boolean mmtrSignalAuthorityHold = false;
 	private String mmtrSignalAuthorityReason = "";
+	/**
+	 * **司机优先**（用户口径 2026-09-21）：「只要司机能上车，那么什么都阻挡不了他开车」。
+	 *
+	 * <p>于是行车许可 / 占用 / 岔区这些闸门对**手动车**不再把速度钉成 0（{@code mmtrBlockedWaiting} 那一支
+	 * 直接 {@code speed = 0} 是修前的做法，见 notes/217）—— 闯过停车点只**触发紧急制动**
+	 * （{@link #mmtrProtection}），而紧急制动**可以按响应键解除**（{@link #applyMmtrControl} 收到
+	 * acknowledge 时释放）。唯一还硬停在 0 的是**道岔物理位置不允许该走向**（会脱轨，走行器拒绝推进）。</p>
+	 *
+	 * <p>{@code mmtrAuthorityReleased} = "当前这一处违界已经放行过"：手动车解除紧急制动后继续往前开，
+	 * 同一处停车点不再反复触发（否则一按解除就被立刻再刹一次，永远走不动 —— 修前 AWS SPAD 的死循环形态）。
+	 * 它在前方出现**新的**停车点时重新武装。</p>
+	 */
+	private boolean mmtrAuthorityReleased;
+	/**
+	 * 当前的 {@link #mmtrProtection} 是不是**司机越界**那一路触发的（而不是 AWS 报警超时的 SPAD）。
+	 *
+	 * <p>两者共用一个紧急制动通道，但"怎么解除"不同：AWS SPAD 有 10 s 自动解锁（既有行为，一字未改），
+	 * 而司机越界是**真车 SCR 的口径** —— 司机不按响应键就一直施加着；按了就放行这一处。
+	 * 少了这个标记，"10 s 自动解锁"会顺手把越界也标记成"已放行"，司机于是可以无视红灯一路开过去。</p>
+	 */
+	private boolean mmtrAuthorityTripped;
 
 	/** Short reason for the block-stop log line (the operator reads these in the server log). */
 	private String mmtrBlockStopReason() {
 		if (mmtrSignalAuthorityHold) {
 			return mmtrSignalAuthorityReason;
 		}
-		return mmtrSectionAuthorityHold ? "block ahead ends at an unset turnout" : "block ahead occupied";
+		if (mmtrSectionAuthorityHold) {
+			// 点名到"是哪一处道岔"：只说 "unset turnout" 时，操作者（和排查的人）无法判断是哪一处、
+			// 也不知道该看谁的持有（2026-09-26 现场就为此查了一轮）。
+			return "block ahead ends at an unset turnout"
+				+ (mmtrSectionAuthorityHoldNodeKey.isEmpty() ? "" : " at " + mmtrSectionAuthorityHoldNodeKey);
+		}
+		return "block ahead occupied";
+	}
+
+	/**
+	 * **诊断：这列车此刻被哪一道闸门按住**（空串 = 没被按住）。
+	 *
+	 * <p>四条停车规则里哪一条先说"停"是完全看不见的 —— 现场只能看到"车不动"，然后靠猜。
+	 * 这个 getter 把 {@link #mmtrBlockStopReason()} 那一句（本来就是写给操作者看的）交给诊断工具与
+	 * 联锁报告，于是"谁把谁按住"可以一条命令读出来，而不是翻日志推。文本形态仍然是给操作者的，
+	 * 不保证稳定，**不要拿它做逻辑判据**。</p>
+	 */
+	public String getMmtrBlockStopReason() {
+		return mmtrBlockedWaiting ? mmtrBlockStopReason() : "";
 	}
 
 	/**
@@ -198,8 +252,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * <p>返回空串 = 没有被按住。文本刻意短（HUD 一行）；详细理由仍在 {@code [MMTR-SIG]} 日志行里。</p>
 	 */
 	private String mmtrMotionHoldReason() {
+		if (!isClientside && getIsOnRoute() && mmtrMotionWalker == null) {
+			/*
+			 * notes/235：原版 MTR 的走行路径已删除（"档位 × 固定加减速度"那套）。任何**在路线上却没有走行器**
+			 * 的车列都是未被重编组的存量车 —— 它既没有牵引也没有制动。这必须**看得见**：否则现场只会看到
+			 * "手柄有反应、车一动不动"，而那正是 2026-09-21 报过的同一个症状。
+			 */
+			return "遗留路径（无走行器）—— 本车不会动，请用 manifest 重编组（notes/235）";
+		}
 		if (mmtrProtection) {
-			return "紧急保护（超速/闯灯）";
+			// 司机优先：越界施加的紧急制动是**司机自己能解除的**，所以这里必须把键说给他。
+			// （AWS 报警超时的 SPAD 也走这条通道，文案同样告诉他按哪个键解除。）
+			return mmtrManualOverride ? "紧急制动（越界/闯灯）—— 按响应键 R 解除" : "紧急保护（超速/闯灯）";
 		}
 		if (mmtrBlockedWaiting) {
 			final String detail = mmtrBlockStopReason() == null ? "" : mmtrBlockStopReason();
@@ -498,9 +562,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
-	 * MMTR (server): drive this train headlessly for an AUTOPILOT mission on a manual-allowed
-	 * consist, mirroring exactly what a real driver does (doors closed, manual engaged, full
-	 * throttle). Refreshing manual cooldown each tick keeps the autopilot engaged.
+	 * notes/235：**原版 ATO 自动驾驶已删除**，本方法只剩"关好门 + 刷新人工回退计时"这点副作用。
+	 *
+	 * <p>原来它给自动任务做的事是"手动缝 + 满油门"（{@code powerLevel = MAX_POWER_LEVEL}）——
+	 * 那是"档位 × 固定加减速度"模型下的无人驾驶方式。现在无人/自动运行有唯一一条路：
+	 * 走行器 + {@code autoNotch} 自臂（{@code mmtrMotionAuto} / {@code MMTR_AUTO_CRUISE}），
+	 * 由 Motion-Core 逐 tick 出力。任务侧保留这个调用点只是为了"任务一开始就把门关好"。</p>
 	 */
 	public void engageMissionAutopilot() {
 		if (isClientside || !vehicleExtraData.getIsManualAllowed()) {
@@ -508,7 +575,6 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		vehicleExtraData.closeDoors();
 		engageManualAutopilot(vehicleExtraData.getManualToAutomaticTime());
-		vehicleExtraData.setPowerLevel(MAX_POWER_LEVEL);
 	}
 
 	/** T4: 玩家执行的任务，进路是否已经发布过（它不设 auto / 停车目标，所以那两个当不了标志）。 */
@@ -853,7 +919,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			}
 			return;
 		}
-		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), stopFraction);
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), stopFraction, mission.getTargetViaNodes());
 		final MmtrConsistWalker selfArmConsistWalker = getMmtrConsistWalker();
 		if (!plan.feasible && speed <= 1e-9 && !mmtrMissionFlippedForTarget && selfArmConsistWalker != null) {
 			// C10 反向行驶: the plan could not be made in the direction the train happens to face - the
@@ -1703,6 +1769,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			plan.routeRailHexes, plan.forkOps, plan.targetRailHex, data.getCurrentMillis());
 		// T5: 把任务的**计划时刻**交给进路 —— 冲突裁决的第一档（计划早的先走）。
 		publishedRoute.setPlannedMillis(mmtrPlannedMillis());
+		// T6（2026-09-27）: 再把**服务等级 + 车号**交给进路 —— 现在它是第一档（等级踩头、同级车号小者先），
+		// 计划时刻退到第二档。两者一起进敌对进路的裁决（MmtrRouteRegistry#outranks）。
+		publishedRoute.setTrainPriority(org.mtr.core.mmtr.point.MmtrTrainPriority.of(
+			mmtrMission == null ? "" : mmtrMission.getJobId(),
+			mmtrMission == null ? "" : mmtrMission.getServiceClass()));
 		mmtrRoute = simulator.mmtrRoutes.request(publishedRoute);
 		final boolean allForksGranted = requestPendingForksAtomically(authority, owner, data.getCurrentMillis() + MMTR_POINT_REQUEST_MILLIS, mmtrPlannedMillis());
 		simulator.mmtrRoutes.refresh(getId(), authority, mmtrPendingPointOps);
@@ -1837,11 +1908,27 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (!nearestPassPerNode.add(op[0] + "," + op[1] + "," + op[2])) {
 				continue;
 			}
-			if (remainingM <= MMTR_APPROACH_LOCK_METERS || mmtrSectionAuthorityHold) {
+			/*
+			 * ① 的例外**不是"最近一处"**（2026-09-26 全天卡死修）。
+			 *
+			 * <p>原文在这里 `rebuilt.add(...)` 之后直接 {@code break}（注释 "just the next fork ahead"）。
+			 * 那等于"① 一成立就只看最近一处道岔"，而 ① 扣住车的原因是**要进的那个区块的出口道岔**：
+			 * 出口可能就在下一处道岔，也可能更远（区块能跨好几根轨）。于是真正把车扣住的那一处
+			 * 永远不会被申请 —— 现场读数（notes/328 §9）：计划里第二处岔 {@code -200,65,1806 leg 0}
+			 * 距车只有 <b>80 m</b>（早就在 120 m 接近锁闭窗口内），却因为前面那处岔先被加进集合、
+			 * 循环随即 break，而一次申请都没发出去；那一处停在位置 0（开通的是别人那条进路），
+			 * 于是"从岔股开不出去"⇒ ① 一直扣着车，车不动 ⇒ 它更不可能走进窗口（自锁）。
+			 * 后面那列车的行车许可同时报"物理道岔 -280,65,1800 被前车按在位置 1、本车需要位置 0"
+			 * —— 咽喉两处岔互相扣死，一天里 15 份作业单一份也没出库。</p>
+			 *
+			 * <p>改成两条并列：窗口内的照旧申请；**扣住本车的那一处**（{@link #mmtrSectionAuthorityHoldNodeKey}）
+			 * 无论远近都一起申请（原子组）。第①条里"车可能离它整整一个区块"那句本来就是这个意思，
+			 * 这里只是把它落成代码。窗口外、又不是扣住本车的那几处**照旧不申请** —— 接近锁闭的本意不变。</p>
+			 */
+			final boolean holdFork = mmtrSectionAuthorityHold && !mmtrSectionAuthorityHoldNodeKey.isEmpty()
+				&& mmtrSectionAuthorityHoldNodeKey.equals(op[0] + "," + op[1] + "," + op[2]);
+			if (remainingM <= MMTR_APPROACH_LOCK_METERS || holdFork) {
 				rebuilt.add(op.clone());
-			}
-			if (mmtrSectionAuthorityHold) {
-				break; // just the next fork ahead
 			}
 		}
 		mmtrPendingPointOps.clear();
@@ -1986,10 +2073,25 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrHoldReason = holdReasonNow;
 				vehicleExtraData.mmtrMarkSyncDirty();
 			}
+			/*
+			 * notes/276 片 6：**钉住**（停放 = 钉住）—— 每 tick 重算，与 holdReason 同一处。
+			 *
+			 * <p>推导而不是搬运：连挂/解挂会改车列（⇒ "整列能不能出力"变），人上车/下车与任务起止也在变
+			 * —— 三条里任何一条变了都自动跟上，不存在"标志忘了搬"那种不同步。</p>
+			 */
+			final boolean pinnedNow = mmtrComputePinned();
+			if (pinnedNow != mmtrPinned) {
+				mmtrPinned = pinnedNow;
+				vehicleExtraData.mmtrMarkSyncDirty();
+				// 状态类消息（默认可见）：谁被钉住/解钉是现场最需要看得见的一件事（notes/216/217 的教训）。
+				System.out.println("[MMTR-DRV] 车 " + id + (pinnedNow ? " 已钉住（停放）：" : " 已解钉：") + mmtrPinnedReason());
+			}
 		}
 
 		// MMTR (server): protection lock countdown after an overrun/SPAD emergency stop.
-		if (!isClientside && mmtrProtection && speed <= 0) {
+		// 司机越界那一路（mmtrAuthorityTripped）**不自动解锁**：真车 SCR 要司机按响应键才放行，
+		// 这里少一个"10 秒后自动放行"的旁路（否则司机按住油门就能无视红灯开过去）。
+		if (!isClientside && mmtrProtection && speed <= 0 && !mmtrAuthorityTripped) {
 			mmtrProtectionLockRemaining -= millisElapsed;
 			if (mmtrProtectionLockRemaining <= 0) {
 				mmtrProtection = false;
@@ -2028,27 +2130,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (mmtrMotionMode) {
 			simulateMmtrMotion(millisElapsed, vehiclePositions);
 			currentIndex = 0;
-		} else if (getIsOnRoute()) {
-			if (!mmtrMotionMirror && vehicleExtraData.getRepeatIndex2() == 0 && railProgress >= vehicleExtraData.getTotalDistance() - (vehicleExtraData.getRailLength() - vehicleExtraData.getTotalVehicleLength()) / 2) {
-				// If the route does not repeat infinitely and the vehicle is reaching the end
-				currentIndex = 0;
-				if (!isClientside) {
-					vehicleExtraData.setPowerLevel(Math.min(vehicleExtraData.getPowerLevel(), -1));
-				}
-				vehicleExtraData.passengers.forEach(ObjectArraySet::clear);
-				simulateInDepot();
-			} else {
-				// If the vehicle is on route normally
-				currentIndex = Utilities.getIndexFromConditionalList(vehicleExtraData.immutablePath, railProgress);
-				if (speed <= 0) {
-					// If the vehicle is stopped (at a platform or waiting for a signal)
-					speed = 0;
-					simulateStopped(millisElapsed, vehiclePositions, currentIndex);
-				} else {
-					// If the vehicle is moving normally
-					simulateMoving(millisElapsed, vehiclePositions, currentIndex);
-				}
-			}
+		} else if (getIsOnRoute() || (isClientside && mmtrMotionMirror)) {
+			/*
+			 * notes/235：路线上只剩两种身份 —— 服务端"没有走行器的存量车"（{@link #simulateMoving} 里
+			 * 喊一声然后停住）与客户端镜像（同一条 {@link ConsistDynamics} 积分）。
+			 * 原版的"到终点就回车场 / 停在停车点等发车"（{@code simulateStopped} + {@code startUp}）已删除。
+			 *
+			 * <p>★ {@code isClientside && mmtrMotionMirror} 这一支是 2026-10-03 的正面修正：镜像的
+			 * 积分原来挂在 {@code getIsOnRoute()} 下面，而"不在路上"在客户端是**常事**（停放、出入段、
+			 * 刚被 ② 重建过）。那时镜像既不积分也不下车场模拟（下面那支刻意跳过），位置就完全靠 ①
+			 * 每 100 ms 一个的 MOTION 写进来 —— 画面上就是**每秒十级的台阶**（用户报的"位移掉帧"）。
+			 * 是运动镜像就必须自己往前走：同一条 {@code ConsistDynamics}、同一批镜像来的手柄输入。</p>
+			 */
+			currentIndex = Utilities.getIndexFromConditionalList(vehicleExtraData.immutablePath, railProgress);
+			simulateMoving(millisElapsed, vehiclePositions, currentIndex);
 		} else {
 			currentIndex = 0;
 			// MMTR: a client mirror of a motion vehicle must NOT run the depot simulation. It would
@@ -2098,7 +2193,16 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 		if (!isClientside) {
 			if (data instanceof final Simulator simulator) {
-				// Remove entities that have dismounted
+				// Remove entities that have dismounted.
+				//
+				// The OTHER half of "a stale cab occupant cannot hold the controls for ever" lives in the
+				// session bookkeeping, not here: Simulator.removeClient drops the ride registration when a
+				// player's session ends, so a session that dies without a dismount (a crash, a killed client)
+				// cannot leave a rider - and with it an isDriver flag that keeps the occupation lock held -
+				// behind. Doing it here instead, by asking whether the rider still has a client record, was
+				// tried and is WRONG: the engine's own offline harness boards riders with no client record at
+				// all, and every driver-dependent test (47 of them) collapsed the moment their riding entity
+				// was swept away on the next tick.
 				vehicleExtraData.removeRidingEntitiesIf(vehicleRidingEntity -> !simulator.isRiding(vehicleRidingEntity.uuid, id));
 
 				// Check jam status
@@ -2120,43 +2224,23 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				engageMissionAutopilot();
 			}
 			mmtrMissionTick();
+			// 自动运行（"AI 驾驶员"）的灯光：任务在跑、钥匙是引擎的、没人接管 ⇒ 车头白灯、车尾红尾灯
+			// （用户口径 2026-10-03；判据与交还见 mmtrTickAutoLights）。
+			mmtrTickAutoLights();
 		}
 	}
 
-	public void startUp(long newDepartureIndex, long newSidingDepartureTime) {
-		if (isClientside) {
-			log.warn("Vehicle#startUp should only be called on the server side!");
-		}
+	/*
+	 * notes/235：**原版发车路径（{@code startUp}）已删除**。
+	 *
+	 * 这里原来是把车列从车场/停车点"放"到路线上的唯一入口（speed = Siding.ACCELERATION_DEFAULT +
+	 * setNextStoppingIndex() + 偏离时刻表的调速），由车场计时、站台停留与司机推油门三处调用。
+	 * 它属于被删除的"档位 × 固定加减速度"模型：速度不是发车时给一个初值再靠档位积分，
+	 * 而是力模型逐 tick 积出来的。
+	 *
+	 * 现在**没有"发车"这个动作**：车列要么在车场停着，要么被运行层/任务编成走行体由 Motion-Core 驱动。
+	 */
 
-		vehicleExtraData.closeDoors();
-		lastMovementMillis = data.getCurrentMillis();
-
-		// Ensure doors are closed before starting up
-		if (doorCooldown == 0) {
-			departureIndex = newDepartureIndex;
-			sidingDepartureTime = newSidingDepartureTime;
-			railProgress += Siding.ACCELERATION_DEFAULT;
-			elapsedDwellTime = 0;
-			speed = Siding.ACCELERATION_DEFAULT;
-			atoOverride = false;
-			vehicleExtraData.setSpeedTarget(speed);
-			setNextStoppingIndex();
-
-			// Calculate deviation speed adjustment
-			updateDeviation();
-			if (deviation > 0 && nextStoppingIndexAto < vehicleExtraData.immutablePath.size() - 1 && siding != null && siding.getDelayedVehicleSpeedIncreasePercentage() > 0) {
-				final double endRailProgress = vehicleExtraData.immutablePath.get((int) nextStoppingIndexAto).getEndDistance();
-				final double distance = endRailProgress - railProgress;
-				final double scheduledDuration = getTimeAlongRoute(endRailProgress) - getTimeAlongRoute(railProgress);
-				final double expectedDuration = Math.max(1, scheduledDuration - deviation);
-				final double averageSpeed = distance / scheduledDuration;
-				final double expectedSpeed = distance / expectedDuration;
-				deviationSpeedAdjustment = Math.min(expectedSpeed / averageSpeed, siding.getDelayedVehicleSpeedIncreasePercentage() / 100F + 1);
-			} else {
-				deviationSpeedAdjustment = 1;
-			}
-		}
-	}
 
 	public long getDepartureIndex() {
 		return departureIndex;
@@ -2260,56 +2344,173 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		departureIndex = -1;
 		sidingDepartureTime = -1;
 		vehicleExtraData.closeDoors();
-
-		if (!isClientside && isCurrentlyManual() && !mmtrProtection && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower())) {
-			startUp(-1, data.getCurrentMillis());
+		/*
+		 * notes/235：这里原来是**原版发车闸门** —— 司机推油门（或 MMTR 请求牵引）就调 {@code startUp}
+		 * 把车放到 MTR 的路线上，之后靠"档位 × 固定加减速度"积分。那条路连同 {@code startUp} 一起删除了。
+		 *
+		 * <p>但"**司机能上车就能开**"是硬规矩（notes/233）：所以这里不做别的，只把"起步"换成
+		 * Motion-Core 的**自臂** —— 车列在这一 tick 里被编成走行体，下一 tick 起由力模型驱动。
+		 * 编不出来（股道放不下车列、车列模板为空…）就**喊出来**，绝不静默把司机锁在原地。</p>
+		 */
+		if (!isClientside && isCurrentlyManual() && !mmtrProtection && mmtrMotionWalker == null
+			&& (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower())) {
+			mmtrSelfArmForDriver();
 		}
 	}
 
-	private void simulateStopped(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
-		if (isClientside) {
+	/**
+	 * **司机在车场推手柄 ⇒ 就地把车列编成 Motion-Core 走行体**（notes/235：被删除的 {@code startUp}
+	 * 发车闸门的替代品）。
+	 *
+	 * <p>顺序刻意是"先试车场、再试车自己现在的位置"：</p>
+	 * <ol>
+	 *   <li>{@link Siding#mmtrConsistWalkerFromYard} —— 车列体（双端车体 + 驾驶室），"人开着走"的正路；</li>
+	 *   <li>{@link Siding#mmtrMotionWalkerFromYard} —— 单点走行器（老车列的退化形态）；</li>
+	 *   <li>{@link #mmtrWalkerFromOwnPath} —— 车场编不出来时（例如车列比股道还长）按**车现在压在哪根轨**
+	 *       建走行器：前方每一处道岔按现场位置现场决定，与"未设道岔就跟实际位置走"的口径一致。</li>
+	 * </ol>
+	 */
+	private void mmtrSelfArmForDriver() {
+		if (isClientside || mmtrMotionWalker != null) {
 			return;
 		}
+		// 编组会释放"停车时留下的旧操纵"（engageMmtrMotionPosition），可这一次正是**司机本人**要的起步 ——
+		// 编完得把他那三根手柄原样放回去，否则"推着油门起步"会在起步的那一 tick 被自己清掉。
+		final ControlState control = mmtrActiveControl;
+		final UUID driver = mmtrDriverUuid;
+		MmtrMotionPosition walker = null;
+		String how = null;
 
-		final PathData pathData = Utilities.getElement(vehicleExtraData.immutablePath, currentIndex);
-		if (pathData == null) {
-			return;
-		}
-
-		vehicleExtraData.setStoppingPoint(railProgress);
-		stoppingCooldown = 0;
-
-		if (isCurrentlyManual()) {
-			lastMovementMillis = data.getCurrentMillis();
-			if (railProgress == pathData.getStartDistance()) {
-				// Stopped behind a node
-				final PathData currentPathData = Utilities.getElement(vehicleExtraData.immutablePath, currentIndex - 1);
-				final PathData nextPathData = Utilities.getElement(vehicleExtraData.immutablePath, vehicleExtraData.getRepeatIndex2() > 0 && currentIndex >= vehicleExtraData.getRepeatIndex2() ? vehicleExtraData.getRepeatIndex1() : currentIndex);
-				final boolean isOpposite = currentPathData != null && nextPathData != null && currentPathData.isOppositeRail(nextPathData);
-				final double nextStartDistance = nextPathData == null ? 0 : nextPathData.getStartDistance() + (isOpposite ? vehicleExtraData.getTotalVehicleLength() : 0);
-
-				if (!mmtrProtection && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, nextStartDistance, 0, vehiclePositions, true, false) < 0) {
-					if (doorCooldown == 0) {
-						railProgress = nextStartDistance;
-						if (isOpposite) {
-							reversed = !reversed;
-						}
-					}
-					startUp(departureIndex, sidingDepartureTime);
-				}
+		if (siding instanceof final Siding yard) {
+			final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker = yard.mmtrConsistWalkerFromYard(null, null, null);
+			if (consistWalker != null) {
+				walker = consistWalker;
+				how = "车列体（车场）";
 			} else {
-				// Stopped anywhere else
-				if (!mmtrProtection && (vehicleExtraData.getPowerLevel() > 0 || isMmtrRequestingPower()) && railBlockedDistance(currentIndex, railProgress, 0, vehiclePositions, true, false) < 0) {
-					startUp(departureIndex, sidingDepartureTime);
+				walker = yard.mmtrMotionWalkerFromYard(null, null, null);
+				if (walker != null) {
+					how = "单点走行器（车场）";
 				}
 			}
-		} else {
-			// MTR timetable/ATO auto driving removed (auto rebuilt on Motion/tasks): an unmanned
-			// consist stopped at a stop does not auto-dwell / open doors / auto-restart. It only resumes
-			// when a driver (ControlState / mmtrManualOverride) or a task/mission drives it.
 		}
+		if (walker == null && data instanceof final Simulator simulator) {
+			walker = mmtrWalkerFromOwnPath(simulator);
+			if (walker != null) {
+				how = "按当前位置（前方道岔按现场位置现场决定）";
+			}
+		}
+		if (walker == null) {
+			System.out.println("[MMTR-DRV] 车=" + id + " 司机在车场推手柄但**编不出走行体** —— 本车不会动。"
+				+ "（股道=" + (siding == null ? "无" : String.valueOf(siding.getId())) + "；车列可能比股道还长，或车列模板为空）");
+			return;
+		}
+		if (walker instanceof final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker) {
+			engageMmtrConsistMotion(consistWalker, MmtrCabState.Cab.CAB_A);
+		} else if (walker instanceof final MmtrMotionWalker motionWalker) {
+			engageMmtrMotion(motionWalker);
+		}
+		if (control != null) {
+			applyMmtrControl(control, driver);
+		}
+		System.out.println("[MMTR-DRV] 车=" + id + " 司机推手柄 ⇒ 已自臂为 Motion-Core 走行体（" + how + "）");
 	}
 
+	/**
+	 * 按车列**现在压在哪根轨**建走行器：身后那一端取"与上一段腿共用的节点"，车头继续朝前。
+	 *
+	 * @return 走行器；连当前轨都认不出来时返回 {@code null}
+	 */
+	private @Nullable MmtrMotionWalker mmtrWalkerFromOwnPath(Simulator simulator) {
+		final int index = Utilities.getIndexFromConditionalList(vehicleExtraData.immutablePath, railProgress);
+		final PathData leg = Utilities.getElement(vehicleExtraData.immutablePath, index);
+		if (leg == null || leg.getRail() == null) {
+			return null;
+		}
+		final Rail rail = leg.getRail();
+		// 注意：{@code Utilities.getElement} 对越界下标是**取模回绕**的（-1 会拿到最后一段腿）——
+		// 少一个边界判断，"身后的节点"就会变成"最后一腿与当前腿的共用点"，车头当场掉头。
+		final int pathSize = vehicleExtraData.immutablePath.size();
+		final PathData previous = index > 0 ? Utilities.getElement(vehicleExtraData.immutablePath, index - 1) : null;
+		final PathData next = index + 1 < pathSize ? Utilities.getElement(vehicleExtraData.immutablePath, index + 1) : null;
+		Position rear = previous == null || previous.getRail() == null ? null : sharedNode(previous.getRail(), rail);
+		if (rear == null && next != null && next.getRail() != null) {
+			final Position sharedWithNext = sharedNode(next.getRail(), rail);
+			if (sharedWithNext != null) {
+				rear = sharedWithNext.equals(rail.getPosition1()) ? rail.getPosition2() : rail.getPosition1();
+			}
+		}
+		if (rear == null) {
+			// 认不出前后（单腿路径）：按"车头朝车列 A 端"取远端，起步后再由现场道岔决定。
+			rear = reversed ? rail.getPosition1() : rail.getPosition2();
+		}
+		final double offsetM = Utilities.clampSafe(railProgress - leg.getStartDistance(), 0, rail.railMath.getLength());
+		/*
+		 * 分支意图：车列**已经带着的那条进路**就是司机/任务要走的路线（每一段腿都是当时按道岔位置选出来的）。
+		 * 走行体每过一处岔都要重新选一次，所以这里把"哪一段腿接哪一段"折成**操作位**交给它 —— 否则司机
+		 * 在岔前会被"没人给位"扣住（现场表现就是"推着油门停在岔前不动"）。道岔的物理位置闸门照样生效：
+		 * 那位只是"想要哪条腿"，开通与否仍由道岔自己说了算（{@code MmtrForkElection} 的闸门）。
+		 */
+		final MmtrPointRegistry.BranchStore intent = mmtrBranchIntentFromOwnPath(simulator);
+		return MmtrMotionWalker.startAtOffset(simulator, rail, rear, offsetM,
+			intent == null ? simulator.mmtrPointBranches : intent, null);
+	}
+
+	/**
+	 * 把车列**现有进路**折成操作位（{@code BranchStore}）：每一处"上一段腿 → 下一段腿"的岔口，
+	 * 记下下一段腿在该岔口**有序续行表**里的下标。
+	 *
+	 * @return 一条都没折出来时 {@code null}（调用方退回模拟器自己那份操作位）
+	 */
+	private MmtrPointRegistry.@Nullable BranchStore mmtrBranchIntentFromOwnPath(Simulator simulator) {
+		final MmtrPointRegistry.BranchStore store = new MmtrPointRegistry.BranchStore();
+		boolean any = false;
+		for (int i = 0; i + 1 < vehicleExtraData.immutablePath.size(); i++) {
+			final Rail from = vehicleExtraData.immutablePath.get(i).getRail();
+			final Rail to = vehicleExtraData.immutablePath.get(i + 1).getRail();
+			if (from == null || to == null) {
+				continue;
+			}
+			final Position node = sharedNode(from, to);
+			if (node == null) {
+				continue;
+			}
+			// 进岔方向：车从 from 的另一端进来，朝 node 走。
+			final Position enteredFrom = node.equals(from.getPosition1()) ? from.getPosition2() : from.getPosition1();
+			final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbors = simulator.positionsToRail.get(node);
+			if (neighbors == null) {
+				continue;
+			}
+			final ObjectArrayList<MmtrPoint.MmtrPointLeg> legs = MmtrPoint.computeOrderedLegs(
+				node, enteredFrom, from, neighbors, simulator.mmtrJunctionLegs.get(node.getX(), node.getY(), node.getZ(), from.getHexId()));
+			for (int index = 0; index < legs.size(); index++) {
+				if (legs.get(index).railHex.equals(to.getHexId())) {
+					store.set(node.getX(), node.getY(), node.getZ(), from.getHexId(), index);
+					any = true;
+					break;
+				}
+			}
+		}
+		return any ? store : null;
+	}
+
+	/** 两根轨共用的那个端节点（没有共用端点时 {@code null}）。 */
+	private static @Nullable Position sharedNode(Rail a, Rail b) {
+		if (a.getPosition1().equals(b.getPosition1()) || a.getPosition1().equals(b.getPosition2())) {
+			return a.getPosition1();
+		}
+		if (a.getPosition2().equals(b.getPosition1()) || a.getPosition2().equals(b.getPosition2())) {
+			return a.getPosition2();
+		}
+		return null;
+	}
+
+	/*
+	 * notes/235：**{@code simulateStopped}（原版停在停车点等发车）已删除**。
+	 *
+	 * 它做的两件事现在都不存在了：① 用 legacy 单手柄 powerLevel 判断"司机想走"并把车放出去（{@code startUp}）；
+	 * ② 靠 {@code stoppingPoint} / {@code railBlockedDistance} 决定"能不能起步"。停车与起步现在是 Motion-Core
+	 * 的停车锚点 + 任务自臂，闭塞由行车许可一条链管。
+	 */
 	/**
 	 * MMTR (L3): one tick of the live Motion-Core run state machine (server). The existing cab control
 	 * (a ControlState via {@link #applyMmtrControl}) drives the MMTR physics model exactly like the
@@ -2348,10 +2549,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// manual drivers regain traction.
 		mmtrBlockStopM = computeMmtrBlockStopM(vehiclePositions);
 		/*
-		 * 停车锚点校正（notes/155）：车头一进入锚点那根轨，就把"估算的停车里程"换成**量出来的** ——
-		 * 锚点在脚下这根轨上，剩余里程 = 轨长×比例 − 当前偏移，与进路怎么绕无关。
-		 * 这一步必须在**本 tick 推进之前**做，否则跨过站台那一 tick 用的还是估算值。
+		 * **司机优先**（用户口径 2026-09-21）：「只要司机能上车，那么什么都阻挡不了他开车」。
+		 *
+		 * <p>两件事在这里落地：①岔口没有人工位/授权/目标时，手动车**跟随道岔当前物理位置**走
+		 * （走行器侧，{@code setManualDrive}）；②无人编组的司机要先让编组"有头"（补一把引擎占位钥匙），
+		 * 否则走行器在物理上不接受任何推进（{@code currentRail()/railHex()} 为 null）。</p>
 		 */
+		mmtrMotionWalker.setManualDrive(overridden);
+		mmtrAdoptUnmannedConsistForDriver(overridden);
 		mmtrResolveStopAnchor();
 		// 尽头换向: while a planned dead-end flip is still pending, the dead end itself is a brake
 		// target (the train must come to rest there before changing ends); it leaves the brake set
@@ -2362,6 +2567,36 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrBlockedWaiting = false;
 			System.out.println("[MMTR-SIG] occupancy block cleared - " + (stopTargetActive ? "auto resumes to stop target " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0 + "m" : "manual control resumes"));
 		}
+		/*
+		 * **司机优先**（用户口径 2026-09-21）：手动车的停车点分两类，处置不同。
+		 *
+		 * <ul>
+		 *   <li><b>被授权的接近</b>（调车授权 / 副显示：允许贴到车钩距离）—— 仍由引擎把住：连挂必须
+		 *       在这条界限上**停稳**，车钩才咬得上（{@code MmtrAutoCoupler} / {@code MmtrCoupleSurgery}
+		 *       的判据就是"停在车钩间隙上"）。这一支保留原来的"制动包线 + 夹紧"。</li>
+		 *   <li><b>没被授权的越界</b>（红灯 / 区间被占 / 岔区未清）—— 不再把速度钉成 0，闯过去
+		 *       **触发紧急制动**，由司机按响应键解除后继续（真车 SCR/TPWS 的做法）。</li>
+		 * </ul>
+		 *
+		 * <p>自动/无人车两条都不走：{@code mmtrBlockedWaiting → speed = 0} 一个字没改。</p>
+		 */
+		final boolean driverAuthorisedApproach = overridden && getMmtrShuntAuthority() != null;
+		final boolean driverMayOverrun = overridden && !driverAuthorisedApproach;
+		if (driverAuthorisedApproach) {
+			// 授权到手（副显示放行）：越界触发的紧急制动随之解除 —— 它拦的那个理由已经不存在了。
+			mmtrReleaseAuthorityTrip("调车授权放行");
+		} else if (driverMayOverrun) {
+			mmtrBlockedWaiting = false;
+			mmtrTickDriverAuthorityTrip();
+		}
+		/*
+		 * 司机越过未授权界限时**还要不要夹紧**：要 —— 紧急制动负责把车停住（物理），夹紧负责把最后那一小段
+		 * 收口到界限上（与自动车同一套收口），否则 1 s 的积分步会把车带到界限**之外**（实测冲过 1.5 m）。
+		 * 司机一按响应键放行（mmtrAuthorityReleased）夹紧立刻撤掉 —— 那时他就能开过去（闯区间）。
+		 */
+		final boolean driverClampActive = driverAuthorisedApproach
+			|| driverMayOverrun && mmtrProtection && !mmtrAuthorityReleased;
+		final boolean clampActive = !overridden || driverClampActive;
 
 		// Stopped exactly at the armed stop target: hold there. Doors stay open when the stop asked
 		// for it; a FRESH control application (driver pushes again / task re-commands) closes the
@@ -2416,25 +2651,39 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// Service-brake envelope against the EFFECTIVE stop (armed stop target or the occupancy block
 		// stop, whichever is nearer). Occupancy braking overrides a driver's own traction but the
 		// driver's own braking (incl. emergency) stays stronger and takes over the branch below.
-		final boolean autoBraking = brakeTargetActive && !(overridden && braking) && speed > 0 && remainingToBrake > 0 && remainingToBrake < 0.5 * speed * speed / Math.max(mmtrMotionServiceDecelPerMs(), 1e-12);
+		// 司机优先（2026-09-21）：包线**不替司机刹车**（闯界由 mmtrProtection 那一支做紧急制动）；
+		// 例外是"被授权的接近"（调车授权），那一条界限就是车钩间隙，必须由包线把车停稳在那里。
+		final boolean autoBraking = brakeTargetActive && (!overridden || driverAuthorisedApproach) && !(overridden && braking) && speed > 0 && remainingToBrake > 0
+			&& remainingToBrake < DynamicsEnvelope.brakingDistance(speed, 0, mmtrMotionServiceDecelPerMs());
 
 		double integratedDistance = 0;
 		final boolean airBrakeConsist = mmtrConsistType != null && mmtrConsistType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
-		if (mmtrProtection) {
+		if (mmtrPinned) {
+			/*
+			 * notes/276 片 6：**钉住 ⇒ 位置锁死**（停放 = 钉住，决定 1/6）。
+			 *
+			 * <p>放在这一串闸门的最前面：闭塞停车与保护制动都是"这列车本来能动"的语义，而钉住是
+			 * "它根本不该动"。没有这一支，一节**被声明成无动力**的车（单节不走等效车底那条路）会被
+			 * 任务照常开走 —— 准入层只管人不任务（片 2）。</p>
+			 */
+			speed = 0;
+			integratedDistance = 0;
+		} else if (mmtrProtection) {
 			// Signal S3: motion-mode SPAD execution (unacknowledged AWS warning / overrun). Emergency
 			// brake overrides any traction; the 10 s lock countdown lives in simulate().
-			final double emergencyPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getEmergencyDecelerationMps2()) : vehicleExtraData.getDeceleration() * 2e-3;
+			final double emergencyPerMs = mmtrEmergencyDecelPerMs();
 			speed = Math.max(0, speed - emergencyPerMs * millisElapsed);
 			integratedDistance = speed * millisElapsed;
-		} else if (mmtrBlockedWaiting) {
+		} else if (mmtrBlockedWaiting && !driverMayOverrun) {
 			// Parked exactly at the occupancy stop point: traction is suppressed (never creep into
 			// the occupied rail); the flag clears at the top of a later tick once the block opens.
+			// 司机优先：这一支对"没被授权的越界"不成立（那一支走 mmtrTickDriverAuthorityTrip）。
 			speed = 0;
 		} else if (autoBraking) {
 			// Service-brake to an exact rest at the effective stop (constant-decel law; the trailing
 			// clamp below trims the last sub-tick remainder). Driver traction is overridden inside the
 			// braking envelope, like an ATO stop; the driver's own emergency brake stays stronger.
-			final double brakeDelta = Math.min(0.5 * speed * speed / Math.max(remainingToBrake, 1e-3), mmtrMotionServiceDecelPerMs()) * millisElapsed;
+			final double brakeDelta = DynamicsEnvelope.usableDecel(speed, 0, remainingToBrake, mmtrMotionServiceDecelPerMs()) * millisElapsed;
 			speed = Math.max(0, speed - brakeDelta);
 			integratedDistance = speed > 0 ? speed * millisElapsed : 0;
 		} else if (autoActive && !airBrakeConsist) {
@@ -2444,7 +2693,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// with the service-brake envelope so the train crosses the node at (about) that rail's
 			// limit instead of over-running it; residual overspeed after boarding a slower rail decays
 			// at service deceleration. (Air-brake consists keep the controller path below.)
-			final double accelPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getTractionAccelerationMps2()) : vehicleExtraData.getAcceleration() * 1e-3;
+			final double accelPerMs = MmtrSupport.siAccelerationToInternal(mmtrPhysics().tractionAccelerationMps2(1, MmtrSupport.internalSpeedToSi(speed)));
 			final double decelPerMs = mmtrMotionServiceDecelPerMs();
 			final double cruiseCap = Math.min(mmtrCurrentRailLimitPerMs(), mmtrConsistType != null ? kmhToInternal(mmtrConsistType.getMaxSpeedKmh()) : vehicleExtraData.getMaxManualSpeed());
 			final Rail nextRailForLimit = mmtrMotionWalker.peekNextRail();
@@ -2459,9 +2708,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				// Look one tick ahead: the deceleration needed to arrive at the node at the slower
 				// rail's limit AFTER this tick's travel. Engaging a tick early absorbs the
 				// cruise-to-brake discrete step so the node is crossed at (about) the slower limit.
-				final double needDecel = 0.5 * (speed * speed - nextLimitMms * nextLimitMms) / Math.max(toNodeM - speed * millisElapsed, 1e-3);
-				if (needDecel > decelPerMs * 0.98) {
-					speed = Math.max(nextLimitMms, speed - Math.min(needDecel, decelPerMs) * millisElapsed);
+				final double envelopeDistanceM = toNodeM - speed * millisElapsed;
+				if (DynamicsEnvelope.requiresBraking(speed, nextLimitMms, envelopeDistanceM, decelPerMs, 0.98)) {
+					speed = Math.max(nextLimitMms, speed - DynamicsEnvelope.usableDecel(speed, nextLimitMms, envelopeDistanceM, decelPerMs) * millisElapsed);
 				} else {
 					// Outside the envelope: cruise normally (the cap still applies below).
 					speed = Math.min(cruiseCap, speed + accelPerMs * millisElapsed);
@@ -2471,6 +2720,22 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				speed = Math.max(cruiseCap, speed - decelPerMs * millisElapsed);
 			} else {
 				speed = Math.min(cruiseCap, speed + accelPerMs * millisElapsed);
+			}
+			/*
+			 * notes/338：**零牵引的编组不许把速度积成负数**（2026-09-27 现场）。
+			 *
+			 * <p>这一支是"自动巡航"，加速度来自整列等效车底的牵引−阻力。整列牵引为 0 时它是负的，
+			 * 而这里的写法（{@code min(cruiseCap, speed + a·dt)}）**没有下限**：速度会一直往负方向涨，
+			 * 而 {@code integratedDistance = speed·dt < 0} ⇒ 下面的 {@code if (integratedDistance > 0)}
+			 * 永不成立 ⇒ 走行体一步都不前进（累计里程恒 0.0 m），同时所有闸门都报"没人拦它"。
+			 * 现场读数：库里长编组"倒着加速"（−0.04 → −0.83 m/s），位置一动不动，全链路没有一句日志。</p>
+			 *
+			 * <p>处置：负速度按 0 处理（车就是**站住不动**，不再假动作），并**说出来**是一次零牵引 ——
+			 * "车不动且看不出是谁的锅"正是这一条要消灭的形状。</p>
+			 */
+			if (speed < 0) {
+				mmtrLogZeroTractionIfNeeded();
+				speed = 0;
 			}
 			integratedDistance = speed * millisElapsed;
 		} else if (overridden && !airBrakeConsist && mmtrConsistType != null && getMmtrRegime() == MmtrRegime.LZB) {
@@ -2482,10 +2747,37 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			// train crosses the node at (about) the slower rail's limit. The driver's own braking
 			// (incl. emergency) stays stronger than the supervision. Air-brake consists keep the
 			// controller path below.
-			final double accelPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getTractionAccelerationMps2()) : vehicleExtraData.getAcceleration() * 1e-3;
-			final double decelPerMs = mmtrMotionServiceDecelPerMs();
-			final double emergencyPerMs = mmtrConsistType != null ? MmtrSupport.siAccelerationToInternal(mmtrConsistType.getEmergencyDecelerationMps2()) : vehicleExtraData.getDeceleration() * 2e-3;
+			/*
+			 * ★ **牵引力必须走控制器**（notes/264）：这一支原来把 `accelPerMs` 算成
+			 * `tractionAccelerationMps2(1, v)` —— **满牵引**，手柄只被当成"要不要走"的开关（`wantPower`）。
+			 * 于是 ≥101 km/h 的 LZB 段上，20% 与 100% 手柄的加速度**一模一样**（用户 2026-09-23 现场：
+			 * 「牵引 20% 和 100% 加速度都是 +1.6」）。同一根杆在 AWS 段给 0.33 / 1.63 m/s²、到 LZB 段却
+			 * 都是 1.63 —— 同一列车在两段按两套物理跑，这是这个现场最直接的证据。
+			 *
+			 * <p>LZB 只该管**天花板与包线**（限速、降速预告、超速回收），不该替司机决定出多少力。
+			 * 控制器里已经有"手柄比例 + AFB 只削不力 + 牵引联锁 + 驱动延迟"，所以这里**每拍调一次**它
+			 * （空气状态与延迟滤波也跟着推进），只取**牵引侧**做加速项、**制动侧**做惰行/制动项的补充；
+			 * 气制动仍由这一支自己的减速律负责（与控制器那份取大者，司机的闸只会更强）。</p>
+			 */
+			final double controllerAccelMps2 = mmtrLzbControllerAccelMps2(control, millisElapsed);
+			final double accelPerMs = MmtrSupport.siAccelerationToInternal(Math.max(0, controllerAccelMps2));
+			/** 司机自己那一份减速度（电机负侧 / 气制动）：LZB 的减速律不比它弱。 */
+			final double driverDecelPerMs = MmtrSupport.siAccelerationToInternal(Math.max(0, -controllerAccelMps2));
+			final double decelPerMs = Math.max(mmtrMotionServiceDecelPerMs(), driverDecelPerMs);
+			final double emergencyPerMs = Math.max(mmtrEmergencyDecelPerMs(), driverDecelPerMs);
 			final double lzbCeiling = Math.min(mmtrCurrentRailLimitPerMs(), kmhToInternal(mmtrConsistType.getMaxSpeedKmh()));
+			/*
+			 * **定速在这段同样是天花板**（2026-09-23 现场：定速 20、手柄 97，车在 LZB 段一路涨到 91.5 km/h
+			 * 还在涨 —— 因为这一支原来只认线路限速，压根没看定速）。
+			 *
+			 * LZB 段的手动驾驶走的是"包线 + 天花板"的简化模型（不走控制器），所以这里必须把 AFB 的设定值
+			 * 折进天花板：`ceiling = min(线路/车底限速, 定速目标)`。司机设了就不能被线路限速带着跑；
+			 * 超过天花板时按**常用制动减速度**回收（司机自己的制动仍然更强）。
+			 */
+			final double afbCeiling = control == null || control.getCruiseSpeedKmh() <= 0
+				? Double.MAX_VALUE
+				: kmhToInternal(mmtrConsistType.getHandles() == null ? control.getCruiseSpeedKmh() : mmtrConsistType.getHandles().clampCruiseKmh(control.getCruiseSpeedKmh()));
+			final double ceiling = Math.min(lzbCeiling, afbCeiling);
 			final Rail nextRailLzb = mmtrMotionWalker.peekNextRail();
 			final double nextLimitLzb = nextRailLzb == null ? -1 : nextRailLzb.getSpeedLimitMetersPerMillisecond(mmtrMotionWalker.aheadNode());
 			if (braking) {
@@ -2495,68 +2787,84 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				// One-tick look-ahead (same rule as the auto planner): engage the envelope before
 				// this tick's travel crosses the braking point so the node is crossed at the slower
 				// rail's limit instead of being overshot by the cruise-to-brake discrete step.
-				final double needDecel = 0.5 * (speed * speed - nextLimitLzb * nextLimitLzb) / Math.max(toNodeM - speed * millisElapsed, 1e-3);
-				if (needDecel > decelPerMs * 0.98) {
-					speed = Math.max(nextLimitLzb, speed - Math.min(needDecel, decelPerMs) * millisElapsed);
+				final double envelopeDistanceM = toNodeM - speed * millisElapsed;
+				if (DynamicsEnvelope.requiresBraking(speed, nextLimitLzb, envelopeDistanceM, decelPerMs, 0.98)) {
+					speed = Math.max(nextLimitLzb, speed - DynamicsEnvelope.usableDecel(speed, nextLimitLzb, envelopeDistanceM, decelPerMs) * millisElapsed);
 				} else {
-					speed = Math.min(lzbCeiling, speed + accelPerMs * millisElapsed);
+					speed = Math.min(ceiling, speed + accelPerMs * millisElapsed);
 				}
-			} else if (speed > lzbCeiling) {
-				speed = Math.max(lzbCeiling, speed - decelPerMs * millisElapsed);
+			} else if (speed > ceiling) {
+				speed = Math.max(ceiling, speed - decelPerMs * millisElapsed);
 			} else if (wantPower) {
-				speed = Math.min(lzbCeiling, speed + accelPerMs * millisElapsed);
+				speed = Math.min(ceiling, speed + accelPerMs * millisElapsed);
 			} else {
 				speed = Math.max(0, speed - decelPerMs * 0.1 * millisElapsed); // coast
 			}
 			integratedDistance = speed * millisElapsed;
-		} else if ((overridden || autoActive) && tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
-			// Driver (any consist) and auto air-brake consists run the fixed sub-step ConsistDynamics
-			// integration (auto feeds a synthesized cruise ControlState; air-brake physics stay on the
-			// per-car composition; an active cab override feeds the driver's own state).
-			final ConsistType mmtrType = mmtrConsistType;
-			final ControlState mmtrState = overridden ? control : new ControlState().setThrottleNotch(autoNotch).setReverser(1);
-			final boolean useCompositionAir = mmtrType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
-			final MmtrComposition mmtrCompositionNow = useCompositionAir ? getMmtrComposition() : null;
-			final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
-			final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) -> {
+			// 空气状态跟着控制器走（这一支原来一句都不更新它，于是 HUD 的缸压/管压在这段是冻住的）。
+			if (mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeStateful airBrakeStateful) {
+				mmtrPipePressure = airBrakeStateful.getPipePressure();
+				mmtrBrakeCylinderPressure = airBrakeStateful.getBrakeCylinderPressure();
+			}
+		} else if (overridden || autoActive) {
+			/*
+			 * notes/235：**纵向物理只剩这一条** —— {@link ConsistDynamics} + 本车的 {@link ConsistType}
+			 * （缺配置时是 {@link ConsistType#FALLBACK} 通用车，并已在解析处喊过）。
+			 *
+			 * <p>原来这里还有一条退路："没有车底类型 ⇒ 拿 {@code vehicleExtraData.getAcceleration()/getDeceleration()}
+			 * （MTR 的车场加减速度）线性积分"。它整条删除了 —— 退路一在，"手柄有反应但车不动 / 手感是另一套"
+			 * 就永远查不完（notes/216、notes/233 的现场都是这个形状）。</p>
+			 */
+			if (tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null) {
+				// Driver (any consist) and auto air-brake consists run the fixed sub-step ConsistDynamics
+				// integration (auto feeds a synthesized cruise ControlState; air-brake physics stay on the
+				// per-car composition; an active cab override feeds the driver's own state).
+				final ConsistType mmtrType = mmtrConsistType;
+				final ControlState mmtrState = overridden ? control : new ControlState().setThrottleNotch(autoNotch).setReverser(1);
+				final boolean useCompositionAir = mmtrType.getControlMode() == ConsistType.ControlMode.AIR_BRAKE;
+				final MmtrComposition mmtrCompositionNow = useCompositionAir ? getMmtrComposition() : null;
+				final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
+				final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) -> {
+					// notes/277 片 7：控制器输出先过一遍**车钩**（机车 ↔ 车列一个钩；刚性车列原样返回）——
+					// 起步时"先冲出去、间隙吃完一顿"就发生在这一层。
+					final DriveOutput mmtrStepOutput = mmtrCompositionNow != null
+						? mmtrCompositionNow.stepAir(mmtrState, siSpeed, stepMillis)
+						: mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
+					return mmtrApplyCoupler(mmtrStepOutput, siSpeed, stepMillis);
+				});
+				speed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
+				// 火车不能倒车: the walker only moves forward - any negative speed from a controller is
+				// clamped away defensively (braking/coasting already stay non-negative in ConsistDynamics).
+				speed = Math.max(0, speed);
+				integratedDistance = mmtrResult.distanceMeters;
+				mmtrLogConsistBranch(overridden, control, mmtrDriveController, mmtrResult.distanceMeters);
 				if (mmtrCompositionNow != null) {
-					return mmtrCompositionNow.stepAir(mmtrState, siSpeed, stepMillis);
+					mmtrAirState = MmtrComposition.encodeAirStates(mmtrCompositionNow);
+					mmtrPipePressure = mmtrCompositionNow.averagePipePressure();
+					mmtrBrakeCylinderPressure = mmtrCompositionNow.averageCylinderPressure();
 				}
-				return mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
-			});
-			speed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
-			// 火车不能倒车: the walker only moves forward - any negative speed from a controller is
-			// clamped away defensively (braking/coasting already stay non-negative in ConsistDynamics).
-			speed = Math.max(0, speed);
-			integratedDistance = mmtrResult.distanceMeters;
-			mmtrLogConsistBranch(overridden, control, mmtrDriveController, mmtrResult.distanceMeters);
-			if (mmtrCompositionNow != null) {
-				mmtrAirState = MmtrComposition.encodeAirStates(mmtrCompositionNow);
-				mmtrPipePressure = mmtrCompositionNow.averagePipePressure();
-				mmtrBrakeCylinderPressure = mmtrCompositionNow.averageCylinderPressure();
-			}
-		} else if (overridden) {
-			// No consist-type policy: linear legacy-style integration from the driver's ControlState
-			// notches. Stored VED values are SI (m/s^2) scaled by 1e-3; the internal per-ms rate is
-			// SI * 1e-6, so the per-tick speed change is value * 1e-3 * millisElapsed (m/ms).
-			mmtrLogLegacyBranch(control, wantPower);
-			final double accelPerMs = vehicleExtraData.getAcceleration() * 1e-3;
-			final double decelPerMs = vehicleExtraData.getDeceleration() * 1e-3;
-			if (braking) {
-				speed = Math.max(0, speed - decelPerMs * millisElapsed);
-			} else if (wantPower) {
-				speed = Math.min(vehicleExtraData.getMaxManualSpeed(), speed + accelPerMs * millisElapsed);
 			} else {
-				speed = Math.max(0, speed - decelPerMs * 0.1 * millisElapsed); // coast-down
+				// 理论上不可达（服务端一定有 FALLBACK 车底；客户端没同步到 mmtrMode 的车根本不是 motion 车）。
+				// 真到了这里就**喊出来并停住**：绝不静默变成另一套物理。
+				speed = 0;
+				integratedDistance = 0;
+				mmtrLogNoControllerIfNeeded();
 			}
-			integratedDistance = speed * millisElapsed;
 		} else if (speed > 0) {
-			// Override released mid-run: service-brake to rest (occupation safety).
-			speed = Math.max(0, speed - vehicleExtraData.getDeceleration() * 1e-3 * millisElapsed);
+			// 无人掌权又还在滑行：按**本车自己的**常用制动减速度停住（原来是 VED 里的 MTR 减速度常数）。
+			speed = Math.max(0, speed - mmtrMotionServiceDecelPerMs() * millisElapsed);
 			integratedDistance = speed * millisElapsed;
 		}
 
-		if (brakeTargetActive && !mmtrMotionStoppedAtTarget) {
+		/*
+		 * 司机优先（2026-09-21）：这一整段"把车停在有效停车点上"的**夹紧**只对自动/无人车成立。
+		 *
+		 * <p>对司机来说，夹紧比"速度归 0"更隐蔽地拦人：车头被截在停车点上，之后再怎么推手柄都过不去
+		 * （越过停车点的判据永远差一点点）。所以司机模式下这里**一条都不做**：闯过去由
+		 * {@link #mmtrTickDriverAuthorityTrip()} 触发紧急制动（可解除），停车点的"到了"由下面
+		 * "车真的停住"那一条登记。</p>
+		 */
+		if (brakeTargetActive && !mmtrMotionStoppedAtTarget && clampActive) {
 			double remaining = brakeTargetM - mmtrMotionWalker.distanceM();
 			/*
 			 * 有锚点、且车头已经在锚点那根轨上时，**以锚点为准**算"还剩多少"（notes/155）：
@@ -2589,6 +2897,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			} else if (integratedDistance > remaining) {
 				integratedDistance = remaining; // land exactly on the effective stop (target or block)
 			}
+		}
+		/*
+		 * 司机把任务给的停车点开过头了：不钉速度，但要**放掉那份过期的目标**，否则任务永远等不到到点
+		 * （放掉之后任务下一 tick 用当前位置重新自臂/重规划，与"停车里程估短了"同一处置）。
+		 */
+		if (driverMayOverrun && stopTargetActive && !mmtrMotionStoppedAtTarget && mmtrMotionStopTargetM - mmtrMotionWalker.distanceM() < -MMTR_ARRIVAL_EPS_M) {
+			mmtrDiscardStaleStopTarget(mmtrMotionStopTargetM);
 		}
 
 		// C3a: a 调车授权 movement runs at the shunt speed limit - enforced like the LZB ceiling
@@ -2628,10 +2943,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			 * 锚点轨上的硬夹紧（见下面的 remaining 计算）保证车头不会越过它。</p>
 			 */
 			final boolean reachedStop = railProgress >= mmtrMotionStopTargetM - 1e-6 || mmtrReachedStopAnchor();
-			if (stopTargetActive && reachedStop) {
+			/*
+			 * 司机优先：手动车只有在**真的停住**时才登记为"到点" —— 冲过停车点不再把速度清零
+			 * （那是修前"司机开不动"的一个来源），而由 {@link #mmtrDiscardStaleStopTarget} 放掉过期目标。
+			 */
+			if (stopTargetActive && reachedStop && (!driverMayOverrun || speed <= MMTR_SUB_TASK_STOPPED_SPEED)) {
 				speed = 0;
 				mmtrMotionArriveAtStopTarget();
-			} else if (mmtrBlockStopM < Double.MAX_VALUE / 2 && railProgress >= mmtrBlockStopM - 1e-6) {
+			} else if (!driverMayOverrun && mmtrBlockStopM < Double.MAX_VALUE / 2 && railProgress >= mmtrBlockStopM - 1e-6) {
 				/*
 				 * Arrived exactly at the occupancy stop (rail ahead occupied): rest and wait for it
 				 * to clear - not a terminal state, never opens doors, never reports a task arrival.
@@ -2680,7 +2999,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrMotionStoppedAtTarget = false;
 			} else if (stopTargetConsumed) {
 				mmtrMotionArriveAtStopTarget();
-			} else if (!mmtrBlockedWaiting) {
+			} else if (!mmtrBlockedWaiting && !driverMayOverrun) {
 				// Already resting exactly at the block stop (e.g. the advance was clamped to zero
 				// because the block point was reached inside this tick): enter the waiting state.
 				mmtrBlockedWaiting = true;
@@ -2708,8 +3027,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 		if (!isClientside) {
 			mmtrLogStuckIfNeeded(overridden, wantPower, control, brakeTargetM);
-			final int displayPower = mmtrProtection ? MmtrSupport.LEGACY_EMERGENCY_POWER_LEVEL : mmtrBlockedWaiting ? 0 : overridden ? (wantPower ? control.getThrottleNotch() : braking ? -Math.max(1, control.getBrakeNotch()) : 0) : (autoActive ? autoNotch : 0);
-			vehicleExtraData.setPowerLevel(displayPower);
+			/*
+			 * notes/235：**legacy 单手柄读数（powerLevel）不再由引擎合成**。
+			 *
+			 * <p>原来是"把三根手柄折算成一个正=牵引/负=制动的 powerLevel"给 MTR 原版仪表读
+			 * （{@code MmtrSupport.controlFromLegacyPowerLevel} / {@code mmtrLegacyPowerLevelFromControl}）。
+			 * 那套映射连同它代表的原版加减速模型一起删除了 —— 现在唯一的操纵语义就是
+			 * {@link ControlState}（三根手柄 + 定速），HUD 也直接读 {@code MmtrDriveInput}。
+			 * 镜像字段仍然保留在协议里（旧客户端会读），恒为 0 = 中性。</p>
+			 */
 			vehicleExtraData.setSpeedTarget(speed);
 			updateMmtrSyncFields();
 		}
@@ -2734,10 +3060,288 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrPlayerRoutePublished = false;
 	}
 
+	/**
+	 * **司机优先（1）：司机在"无人编组"上动车时，引擎先给编组一个头。**
+	 *
+	 * <p>编组体走行器的一切都挂在"哪个驾驶室被占用"上（{@link MmtrConsistWalker#currentRail()}、
+	 * {@link MmtrConsistWalker#railHex()}、{@code advance()} 都要求有人持钥匙）。无人时：
+	 * 走行器不接受任何推进、{@code currentRail()} 为 null ⇒ 限速读成 0 ⇒ 规划器也判不可行 ——
+	 * 于是"司机明明坐在驾驶室里推手柄，车在物理上一动不动"。</p>
+	 *
+	 * <p>这里补的是**引擎自己的占位钥匙**（与车场刷车同一把，{@code KeyHolder.SYSTEM}）：车一停稳、
+	 * 司机按 G 申领驾驶室就会被乘务员钥匙顶掉，方向也随之由他的座位决定。
+	 * 方向不会因此改变：无人时 {@code travelsToward(B)} 与 CAB_A 在岗时同为 false，所以
+	 * {@code towardB = !travelReversed} 两边一致（编组不会被这根钥匙扳个头）。</p>
+	 */
+	private void mmtrAdoptUnmannedConsistForDriver(boolean overridden) {
+		if (!overridden || speed > 1e-9 || !(mmtrMotionWalker instanceof final MmtrConsistWalker consistWalker) || consistWalker.cabs().isManned()) {
+			return;
+		}
+		if (consistWalker.insertSystemKey(MmtrCabState.Cab.CAB_A, true)) {
+			System.out.println("[MMTR-DRV] 司机在无人编组上动车：引擎补一把占位钥匙（CAB_A）让编组有头（车=" + id
+				+ "）；停稳后按 G 申领驾驶室即可换成乘务员钥匙");
+		}
+	}
+
+	/**
+	 * **司机优先（2）：越界 = 施加紧急制动（可按响应键解除），而不是把速度钉成 0。**
+	 *
+	 * <p>用户口径（2026-09-21）：「过信号闯区间等问题，触发紧急制动就行了，紧急制动也是可按响应键解除的，
+	 * 这才是正常逻辑，而不是给车直接速度归 0。只有在道岔没设置对会发生脱轨时才直接按到 0。」</p>
+	 *
+	 * <p>判据与真车一致：**紧急制动包线**（按紧急减速度算，车已经停不住的那一刻才动手）——
+	 * 于是车是"被刹车停住"的，不是"被钉住"的：车头刚好停在界限上（最后那一小段由上面的夹紧收口），
+	 * HUD 第一行说明是紧急制动并告诉司机按哪个键。</p>
+	 *
+	 * <p>解除：司机按响应键（{@link #applyMmtrControl} 的 acknowledge）⇒ 释放紧急制动，并把**这一处**
+	 * 界限记为已放行；此后同一处不再触发、也不再夹紧（司机可以照他的意思开过去 = 闯区间），
+	 * 直到前方出现**新的**停车点才重新武装。停着不动（没进包线）时**不触发** —— 在红灯前规规矩矩停住的
+	 * 司机不该看到"闯信号"。</p>
+	 */
+	private void mmtrTickDriverAuthorityTrip() {
+		if (mmtrMotionWalker == null) {
+			return;
+		}
+		if (mmtrBlockStopM >= Double.MAX_VALUE / 2) {
+			// 界限没了（前方区间空了 / 灯绿了 / 岔设好了）：越界触发的紧急制动自动解除。
+			mmtrReleaseAuthorityTrip("前方界限已解除");
+			mmtrAuthorityReleased = false; // 下一处越界重新武装
+			return;
+		}
+		final double head = mmtrMotionWalker.distanceM();
+		final double remaining = mmtrBlockStopM - head;
+		if (speed <= MMTR_SUB_TASK_STOPPED_SPEED) {
+			// 停着不动不算越界：在红灯前规规矩矩停住的司机不该看到"闯信号"，也不该被施加紧急制动。
+			// （他再起步时才重新判 —— 包线一旦不够，紧急制动立刻上来。）
+			if (remaining > MMTR_ARRIVAL_EPS_M) {
+				mmtrAuthorityReleased = false;
+			}
+			return;
+		}
+		final double emergencyPerMs = mmtrEmergencyDecelPerMs();
+		// 紧急制动包线：车还能在界限前停住就不干预；停不住（或已经越过了）才施加紧急制动。
+		final boolean pastTheLimit = remaining <= MMTR_ARRIVAL_EPS_M;
+		final boolean beyondEnvelope = remaining > 0 && DynamicsEnvelope.requiresBraking(speed, 0, remaining, emergencyPerMs, 1.0);
+		if (!pastTheLimit && !beyondEnvelope) {
+			mmtrAuthorityReleased = false; // 界限还在包线之外：重新武装（放行过的那一处已经落在身后）
+			return;
+		}
+		if (mmtrAuthorityReleased || mmtrProtection) {
+			return;
+		}
+		mmtrProtection = true;
+		mmtrAuthorityTripped = true;
+		mmtrProtectionLockRemaining = MMTR_PROTECTION_LOCK_MS;
+		System.out.println("[MMTR-DRV] 司机越过未授权界限（" + mmtrBlockStopReason() + "，车头 " + Math.round(head)
+			+ "m / 界限 " + Math.round(mmtrBlockStopM) + "m）—— 施加紧急制动；按响应键 R 解除后可继续");
+	}
+
+	/**
+	 * 解除**司机越界**那一路的紧急制动（界限消失 / 授权到手时自动解除；司机按响应键走另一条路）。
+	 * AWS 报警超时的 SPAD 不走这里 —— 它有自己的 10 s 自动解锁与状态机。
+	 */
+	private void mmtrReleaseAuthorityTrip(String why) {
+		if (!mmtrAuthorityTripped) {
+			return;
+		}
+		mmtrAuthorityTripped = false;
+		mmtrAuthorityReleased = true;
+		if (mmtrProtection) {
+			mmtrProtection = false;
+			mmtrProtectionLockRemaining = 0;
+		}
+		System.out.println("[MMTR-DRV] 越界紧急制动解除（" + why + "，车=" + id + "）");
+	}
+
+	/**
+	 * 这一拍**真正施加**的纵向净加速度（m/s²，来自积分器每一步的 {@link DriveOutput}）。
+	 *
+	 * <p>notes/250：右上角 HUD 的"电机做功"读数用它/用控制器交出的实际比例，而不是另算一套 —— HUD 与
+	 * 车辆物理必须是同一份数（"表说在出力、车却不动"是本仓最恨的一类现场）。</p>
+	 */
+	private double mmtrLastDriveAccelerationMps2;
+
+	/**
+	 * **电机当前出力**（N，牵引为正、电阻制动为负）—— 右上角 HUD 的"电机做功"（notes/250）。
+	 *
+	 * <p>三手柄车底：用控制器交出的**实际施加**比例反算轮周力（含黏着截断、含建力延迟，即"现在真在出多少力"），
+	 * 电阻制动按负值计入。其它操纵模式没有单独的比例可读，用这一拍的净加速度 × 惯性质量折算
+	 * （含阻力/制动，符号与量级都对）。</p>
+	 */
+	public double getMmtrMotorForceN() {
+		/*
+		 * 客户端**读服务端快照**（notes/259）：现场日志证明
+		 *   ① 服务端每拍都算对（手柄 41% ⇒ 牵引比 44% ⇒ 122 kN；手柄 63% ⇒ 198 kN）；
+		 *   ② 客户端**不跑** `simulateMoving`（我在那条路上加的诊断日志一行都没出现）⇒ 本机控制器的
+		 *      `lastTractionRatio` 不会被推进 ⇒ 本机算会**卡住**（用户口径"牵引力卡住的状态"）。
+		 * ⇒ 读数只能取快照值；它现在挂在 `VehicleSyncPatch.DYNAMIC_KEYS` 里（notes/257），每拍随补丁到客户端。
+		 */
+		return isClientside ? vehicleExtraData.getMmtrMotorForceN() : mmtrLiveMotorForceN();
+	}
+
+
+	/** 按**本机**这一刻的控制器比例与速度活算的电机出力（诊断/服务端权威值用）。 */
+	private double mmtrLiveMotorForceN() {
+		final ConsistType type = mmtrConsistType;
+		if (type == null) {
+			return 0;
+		}
+		final double speedSi = MmtrSupport.internalSpeedToSi(speed);
+		if (mmtrDriveController instanceof final org.mtr.core.mmtr.ThreeHandleDriveController threeHandle) {
+			final org.mtr.core.mmtr.ThreeHandleSpec spec = type.getHandles();
+			if (spec != null) {
+				final double tractionForceN = type.getPhysics().tractiveEffortN(threeHandle.getLastTractionRatio(), speedSi);
+				// notes/266：电制动改走三段式（低速淡出 + 高速恒功率），与控制器里施加的那份力同源。
+				final double rheostaticForceN = (spec.getBrakes() == null
+					? spec.getRheostaticBrakeForceN() * spec.rheostaticFade(speedSi)
+					: spec.rheostaticEffortN(speedSi)) * threeHandle.getLastRheostaticRatio();
+				return tractionForceN - rheostaticForceN;
+			}
+		}
+		return mmtrLastDriveAccelerationMps2 * type.getPhysics().effectiveMassKg();
+	}
+
+	/** **电机做功**（W）：牵引为正、电阻制动为负（再生/电阻耗能都是电机在过功）＝ 出力 × 速度。 */
+	public double getMmtrMotorPowerW() {
+		return getMmtrMotorForceN() * MmtrSupport.internalSpeedToSi(speed);
+	}
+
+	/**
+	 * **列车管压力**（bar）—— 右上角 HUD 的"管压"（notes/266）。
+	 *
+	 * <p>{@code mmtrPipePressure} 是 0..1 的归一化读数（1 = 充风稳定值），这里按车底的气压规格折成 bar；
+	 * 没有气压规格的车底（legacy 模式）按出厂满量程折算 —— 那种口径本来就把"满格"当定压。
+	 * 服务端与客户端读的是同一份镜像字段，所以两边的读数不会各说各话。</p>
+	 */
+	public double getMmtrPipeBar() {
+		return mmtrPipePressure * mmtrBarScale(true);
+	}
+
+	/** **制动缸压力**（bar）—— 右上角 HUD 的"缸压"（notes/266）。 */
+	public double getMmtrCylinderBar() {
+		return mmtrBrakeCylinderPressure * mmtrBarScale(false);
+	}
+
+	/** 归一化读数 → bar 的满量程：有气压规格就用它，没有就用出厂口径。 */
+	private double mmtrBarScale(boolean pipe) {
+		final org.mtr.core.mmtr.physics.PneumaticBrakeSpec air = mmtrPneumaticBrakeSpec();
+		final org.mtr.core.mmtr.physics.PneumaticBrakeSpec scale = air == null
+			? org.mtr.core.mmtr.physics.PneumaticBrakeSpec.defaults() : air;
+		return pipe ? scale.getChargedBar() : scale.getCylinderMaxBar();
+	}
+
+	/** 这份车底的气压规格；{@code null} = 旧归一化模型（legacy 模式）。 */
+	private org.mtr.core.mmtr.physics.PneumaticBrakeSpec mmtrPneumaticBrakeSpec() {
+		return mmtrConsistType == null || mmtrConsistType.getHandles() == null ? null : mmtrConsistType.getHandles().getBrakes();
+	}
+
+	/**
+	 * **这一拍作用在轮周上的气制动力**（N，正值 = 在刹车）—— HUD 的"制动力"里"气"的那一份（notes/266/269）。
+	 *
+	 * <p>服务端算**整列**的数：三手柄车底逐车求和（含逐车管压与电空混合削掉的那部分），
+	 * legacy 车底按缸压比例线性折算。**客户端读镜像**（`mmtrPneumaticBrakeForceN`）——
+	 * 逐车管压＋混合之后"车头缸压 × 帧"反算不再等于整列气制动力（车头可能被 EP 阀削到 0，
+	 * 而拖车还在刹），现场就是"制动力只显示电制动的"那个 bug。</p>
+	 */
+	public double getMmtrPneumaticBrakeForceN() {
+		if (isClientside) {
+			return vehicleExtraData.getMmtrPneumaticBrakeForceN();
+		}
+		// notes/270：**任何操纵方式**只要在跑气压口径，气制动力都由制动模型逐车求和给出
+		// （有级/无级/三手柄同一份读数；legacy 车底不接管 ⇒ 落到下面的按缸压折算）
+		if (mmtrDriveController instanceof final org.mtr.core.mmtr.BrakeCarrier carrier && carrier.getBrakeModel().isPneumatic()) {
+			return carrier.getBrakeModel().getPneumaticForceN();
+		}
+		if (mmtrDriveController instanceof final org.mtr.core.mmtr.ThreeHandleDriveController threeHandle) {
+			return threeHandle.getLastPneumaticBrakeForceN();
+		}
+		final ConsistType type = mmtrConsistType;
+		return type == null ? 0 : type.getBrake().serviceForceN(mmtrBrakeCylinderPressure);
+	}
+
+	/** **这一拍的电制动力**（N，正值 = 在制动）＝ 电机出力的负侧（与"电机"行走同一个读数）。 */
+	public double getMmtrElectricBrakeForceN() {
+		return Math.max(0, -getMmtrMotorForceN());
+	}
+
+	/**
+	 * **制动力合计**（N，正值 = 在刹车）＝ 气 + 电，再经**黏着截断**（notes/267，规格模块四）。
+	 *
+	 * <p>轮轨能传下去的就那么多：干轨/湿轨对 BR101 的常用制动都不成问题，**落叶/油污**才真的截；
+	 * 无 WSP 时断崖到动摩擦。legacy 车底（没有气压规格）不做截断 —— 与那些控制器自己的口径一致。</p>
+	 *
+	 * <p>注：客户端镜像的黏着按**干轨**走（`createMirrorConsistTypeFromSync` 里那两个字段还没进 schema，
+	 * 是 S3 的遗留项）⇒ 湿轨/落叶下的截断只有服务端权威值知道，客户端 HUD 会偏乐观。</p>
+	 */
+	public double getMmtrBrakeForceN() {
+		final double rawN = getMmtrPneumaticBrakeForceN() + getMmtrElectricBrakeForceN();
+		final ConsistType type = mmtrConsistType;
+		final org.mtr.core.mmtr.physics.PneumaticBrakeSpec air = mmtrPneumaticBrakeSpec();
+		if (type == null || air == null) {
+			return rawN;
+		}
+		return type.getPhysics().adhesionLimitedBrakingForceN(rawN, 0, MmtrSupport.internalSpeedToSi(speed),
+			air.isWspEnabled(), air.getWheelSlipMu());
+	}
+
+	/** 这一拍的**制动力黏着上限**（N）—— HUD 用它标"黏着截断"。 */
+	public double getMmtrBrakingAdhesionLimitN() {
+		final ConsistType type = mmtrConsistType;
+		return type == null ? 0 : type.getPhysics().brakingAdhesionLimitN(MmtrSupport.internalSpeedToSi(speed));
+	}
+
+	/** 这一拍制动力是不是**被黏着截断**了（notes/267）。 */
+	public boolean isMmtrBrakingAdhesionLimited() {
+		final ConsistType type = mmtrConsistType;
+		if (type == null || mmtrPneumaticBrakeSpec() == null) {
+			return false;
+		}
+		final double rawN = getMmtrPneumaticBrakeForceN() + getMmtrElectricBrakeForceN();
+		return rawN > type.getPhysics().brakingAdhesionLimitN(MmtrSupport.internalSpeedToSi(speed)) + 1;
+	}
+
+	/**
+	 * **手柄诉求的轮周力**（N）：{@code 手柄比例 × 牵引曲线}（含黏着上限），不含 AFB 的削减。
+	 *
+	 * <p>notes/255：用户 2026-09-23「杆在 20，游戏里显示 20，牵引力不是 300×0.2 = 60 kN」——
+	 * 那时车已经在设定速度上，**AFB 把这一份力削到了 ~0**（这正是用户口径"AFB 根据速度来削减"）。
+	 * 两个数并排显示，才不会再把"手柄诉求"与"实际出力"当成一回事。</p>
+	 *
+	 * @param driveHandle 手柄位置（客户端传本地值：司机刚推的那一下要立刻看见，不等包）
+	 */
+	public double getMmtrHandleDemandForceN(int driveHandle) {
+		final ConsistType type = mmtrConsistType;
+		final org.mtr.core.mmtr.ThreeHandleSpec spec = type == null ? null : type.getHandles();
+		if (spec == null) {
+			return 0;
+		}
+		return type.getPhysics().tractiveEffortN(spec.tractionRatio(spec.clampDriveHandle(driveHandle)), MmtrSupport.internalSpeedToSi(speed));
+	}
+
 	/** "推着油门却一动不动"的自白节流。 */
 	private long mmtrStuckLogMillis;
+	/** notes/252：镜像"电机出力"读数诊断的节流（2 s）。 */
+	private long mmtrMirrorDiagMillis;
 	/** 走哪一条物理分支的自白节流（有级/遗留 vs 车底类型）。 */
 	private long mmtrBranchLogMillis;
+
+	/**
+	 * LZB 段（Signal S4）**这一拍的控制器加速度**（m/s²，牵引为正、制动为负）。
+	 *
+	 * <p>notes/264：LZB 只管天花板，出力必须由控制器决定（手柄比例 + AFB 只削不力 + 牵引联锁 + 驱动延迟）。
+	 * 这一支每拍只调一次控制器 —— 于是控制器内部的空气状态与延迟滤波在 LZB 段也照常推进（原来这一支
+	 * 根本不碰控制器），{@code mmtrLiveMotorForceN()} 报的力也才与真正施加的力一致
+	 * （否则 HUD 会出现"车在 1.6 m/s² 加速、电机却显示 -31 kN"这种自相矛盾的行）。</p>
+	 *
+	 * <p>控制器拿不到（配置坏了）时退回满牵引并保持这一支原来的行为 —— 绝不静默变成"车不动"。</p>
+	 */
+	private double mmtrLzbControllerAccelMps2(ControlState control, long millisElapsed) {
+		if (mmtrDriveController == null || mmtrConsistType == null) {
+			return mmtrPhysics().tractionAccelerationMps2(1, MmtrSupport.internalSpeedToSi(speed));
+		}
+		return mmtrDriveController.compute(control, mmtrConsistType, MmtrSupport.internalSpeedToSi(speed), millisElapsed)
+			.getAccelerationMetersPerSecondSquared();
+	}
 
 	/**
 	 * **走了车底类型分支**（ConsistDynamics + 控制器）：把手柄、控制器算出的比例与本次距离打出来。
@@ -2747,7 +3351,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * 这一条只在**真的走了这一支**时打，两者立刻分开。</p>
 	 */
 	private void mmtrLogConsistBranch(boolean overridden, @Nullable ControlState control, @Nullable DriveController controller, double distanceM) {
-		if (!overridden || control == null || control.getDriveHandle() == 0 || isClientside) {
+		// 手柄在关闭位但**定速挂着**时也要打：AFB 自己出力，这正是"定速到底给没给牵引"要看的现场
+		// （2026-09-23：只设定速、手柄关闭的那一轮日志里一行都没有，白跑一趟）。
+		if (!overridden || control == null || control.getDriveHandle() == 0 && control.getCruiseSpeedKmh() <= 0 || isClientside) {
 			return;
 		}
 		final long now = data.getCurrentMillis();
@@ -2756,31 +3362,84 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		mmtrBranchLogMillis = now;
 		final String traction = controller instanceof final org.mtr.core.mmtr.ThreeHandleDriveController threeHandle
-			? Math.round(threeHandle.getLastTractionRatio() * 100) + "%"
+			? Math.round(threeHandle.getLastTractionRatio() * 100) + "%/电阻" + Math.round(threeHandle.getLastRheostaticRatio() * 100) + "% AFB=" + threeHandle.isAfbActive()
 			: controller == null ? "无控制器" : controller.getClass().getSimpleName();
-		System.out.println("[MMTR-CONSIST] 车底类型分支：手柄=" + control.getDriveHandle()
+		/*
+		 * notes/247：**必须把"这列车在按什么物理跑"打出来**。
+		 *
+		 * <p>为什么：现场"BR101+2×p1 被当成三台机车"（牵引 3×900 kN、起步 ~3 m/s²）时，日志里
+		 * 只有手柄与牵引比，看不出质量/牵引上限 —— 只能靠速度序列反推，代价很大。质量、牵引上限、功率、
+		 * 常用制动这四项一打，"借车底把牵引也借来了""挂车质量没进物理"这类问题一眼可见。</p>
+		 */
+		final org.mtr.core.mmtr.ConsistType physicsType = mmtrConsistType;
+		final String physicsText = physicsType == null ? "" : " 质量=" + Math.round(physicsType.getMassKg() / 100) / 10.0 + "t"
+			+ " λ=" + Math.round(physicsType.getRotatingMassFactor() * 100) / 100.0
+			+ " 牵引=" + Math.round(physicsType.getTraction().getMaxTractiveEffortN() / 100) / 10.0 + "kN"
+			+ " 功率=" + Math.round(physicsType.getTraction().getMaxPowerW() / 10000) / 100.0 + "MW"
+			+ " 常用制动=" + Math.round(physicsType.getBrake().getServiceForceN() / 100) / 10.0 + "kN"
+			+ " 车底=" + physicsType.getId();
+		System.out.println("[MMTR-CONSIST] 车底类型分支：车=" + id
+			+ " 手柄=" + control.getDriveHandle()
 			+ " 制动=" + control.getBrakeNotch() + " 换向=" + control.getReverser()
+			+ " 定速=" + control.getCruiseSpeedKmh()
 			+ " 控制器=" + (controller == null ? "null" : controller.getClass().getSimpleName())
-			+ " 牵引比=" + traction + " 速度=" + speed + " 本次距离=" + Math.round(distanceM * 1000) / 1000.0 + "m");
+			+ " 牵引比=" + traction + " 速度=" + speed + " 本次距离=" + Math.round(distanceM * 1000) / 1000.0 + "m"
+			// notes/248：把"为什么不走"所需的现场状态一起打出来（缸压/管压/LZB 上限/走行状态）。
+			// 上一轮只能靠速度序列反推加速度、靠猜分辨"联锁按住牵引"还是"根本没走控制器"，代价太大。
+			+ " 缸压=" + Math.round(mmtrBrakeCylinderPressure * 1000) / 1000.0
+			+ " 管压=" + Math.round(mmtrPipePressure * 1000) / 1000.0
+			// notes/252：电机出力（活算）+ 写进镜像的那份，两者不一致就是同步问题。
+			+ " 电机=" + Math.round(mmtrLiveMotorForceN() / 1000) + "kN"
+			+ " 镜像=" + Math.round(vehicleExtraData.getMmtrMotorForceN() / 1000) + "kN"
+			// notes/269：整列气制动力（逐车求和）—— HUD 的「制动力（气）」，不是"管压折算"。
+			+ " 气制动=" + Math.round(getMmtrPneumaticBrakeForceN() / 1000) + "kN"
+			+ " LZB上限=" + getMmtrLzbCeilingKmh()
+			+ " 状态=" + getMmtrRegime()
+			+ physicsText);
 	}
 
-	/** **走了遗留（无车底类型）分支** —— 三手柄车掉进这里就是"油门没反应"的真因。 */
-	private void mmtrLogLegacyBranch(@Nullable ControlState control, boolean wantPower) {
-		if (isClientside) {
+	/**
+	 * **连兜底车底都拿不到**（理论上不可达）⇒ 喊出来并停住。
+	 *
+	 * <p>notes/235 删掉了"没有车底类型 ⇒ 退回 MTR 加减速常数"的退路，服务端一律会解析到
+	 * {@link ConsistType#FALLBACK}（通用车），所以走到这里说明客户端的镜像同步出了问题
+	 * （{@code mmtrMode} 为空却当成了 motion 车）。这种情形**绝不能静默**：静默就是"手柄没反应"。</p>
+	 */
+	private void mmtrLogNoControllerIfNeeded() {
+		if (isClientside && mmtrNoControllerLogged) {
+			return;
+		}
+		mmtrNoControllerLogged = true;
+		System.out.println("[MMTR-CFG] 车=" + id + " 连兜底车底都没有（mmtrMode=" + (mmtrMode == null ? "null" : "'" + mmtrMode + "'")
+			+ "，控制器=" + (mmtrDriveController == null ? "null" : mmtrDriveController.getClass().getSimpleName())
+			+ "）—— 本车已被钉在 0 速，不会静默换一套物理。请检查镜像快照里的 mmtrMode / mmtrMassKg 等字段");
+	}
+
+	/** {@link #mmtrLogNoControllerIfNeeded()} 只报一次的闩。 */
+	private boolean mmtrNoControllerLogged;
+
+	/** "服务端收到的操纵"这条日志的限频（与 [MMTR-CONSIST] 同一节奏：2 s）。 */
+	private long mmtrControlReceivedLogMillis;
+
+	/**
+	 * **服务端到底收到了什么**（限频 2 s）——客户端发→服务端收→控制器算，这条链的中间一环。
+	 *
+	 * <p>为什么要有它（用户 2026-09-23：「应该从操作是否从客户端来到服务端来检查」）：
+	 * "手柄/定速在 HUD 上看得见"与"服务端拿到的是同一个值"是两件事（HID 轴覆盖、座位丢失后
+	 * {@code neutraliseHandles()} 清零、包被拒……都会让两边不一致），而现场只能靠日志分清。</p>
+	 */
+	private void mmtrLogControlReceived(@Nullable UUID driverUuid) {
+		if (isClientside || mmtrActiveControl == null) {
 			return;
 		}
 		final long now = data.getCurrentMillis();
-		if (now - mmtrBranchLogMillis < 2000) {
+		if (now - mmtrControlReceivedLogMillis < 2000) {
 			return;
 		}
-		mmtrBranchLogMillis = now;
-		System.out.println("[MMTR-LEGACY] 走了**遗留线性分支**（车底类型="
-			+ (mmtrConsistType == null ? "null" : mmtrConsistType.getId())
-			+ " 控制器=" + (mmtrDriveController == null ? "null" : mmtrDriveController.getClass().getSimpleName())
-			+ "）：手柄=" + (control == null ? "?" : control.getDriveHandle())
-			+ " 有级油门=" + (control == null ? "?" : control.getThrottleNotch())
-			+ " wantPower=" + wantPower
-			+ " —— 三手柄车掉进这一支就意味着牵引完全没被按手柄算");
+		mmtrControlReceivedLogMillis = now;
+		System.out.println("[MMTR-DRV] 收到操纵：车=" + id + " 油门=" + mmtrActiveControl.getDriveHandle()
+			+ " 制动=" + mmtrActiveControl.getBrakeNotch() + " 定速=" + mmtrActiveControl.getCruiseSpeedKmh()
+			+ " 换向=" + mmtrActiveControl.getReverser() + " 司机=" + (driverUuid == null ? "（无身份）" : driverUuid));
 	}
 
 	/**
@@ -2815,7 +3474,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		final double anchorRemaining = mmtrRemainingToStopAnchor();
 		final String gate = mmtrMotionHoldReason();
 		final String traction = mmtrDriveController instanceof final org.mtr.core.mmtr.ThreeHandleDriveController threeHandle
-			? Math.round(threeHandle.getLastTractionRatio() * 100) + "%（电阻制动 " + Math.round(threeHandle.getLastRheostaticRatio() * 100) + "%）"
+			? Math.round(threeHandle.getLastTractionRatio() * 100) + "%（电阻制动 " + Math.round(threeHandle.getLastRheostaticRatio() * 100)
+				+ "% AFB=" + threeHandle.isAfbActive() + "）"
 			: "n/a";
 		System.out.println("[MMTR-STUCK] 推着油门却不动："
 			+ "司机手柄[油门=" + (control == null ? "?" : control.getDriveHandle())
@@ -2846,38 +3506,84 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		System.out.println("[MMTR-DRV] motion arrived at stop target " + Math.round(mmtrMotionStopTargetM * 100.0) / 100.0 + "m (doors " + (mmtrMotionStopOpenDoors ? "open" : "closed") + ")");
 	}
 
-	/** Service deceleration in internal units (m/ms per ms); falls back to the VED value scaled to SI. */
-	private double mmtrMotionServiceDecelPerMs() {
-		final double siMps2 = mmtrConsistType != null ? mmtrConsistType.getServiceBrakeDecelerationMps2() : vehicleExtraData.getDeceleration() * 1000.0;
-		return siMps2 * 1e-6;
+	/**
+	 * **本车的纵向力学**（正向半的唯一入口）。
+	 *
+	 * <p>没有解析出车底类型时退回 {@link ConsistType#FALLBACK_PHYSICS}（MMTR 的一节通用车，
+	 * **不是**旧的 MTR 加减速常数 —— 那套已按 notes/235 删除），并且**说出来**：
+	 * "按旧文档配的车底"或"carTypeIds 没配"必须看得见，而不是静默变成另一套手感。</p>
+	 */
+	private org.mtr.core.mmtr.physics.TrainPhysics mmtrPhysics() {
+		if (mmtrConsistType != null) {
+			return mmtrConsistType.getPhysics();
+		}
+		if (!mmtrFallbackPhysicsLogged) {
+			mmtrFallbackPhysicsLogged = true;
+			System.out.println("[MMTR-DRV] 车=" + id + " 没有车底类型（consist-types 里既没匹配到车型、也没配 defaultConsistTypeId）"
+				+ " —— 暂用通用车力学（60 t / 100 kN / 600 kW），请修配置");
+		}
+		return ConsistType.FALLBACK_PHYSICS;
 	}
 
+	/** 还没解析出车底时，只报一次的闩。 */
+	private boolean mmtrFallbackPhysicsLogged;
+
+	/** 零牵引（整列没有任何一节能出力）已经报过一次的闩（notes/338）。 */
+	private boolean mmtrZeroTractionLogged;
+
 	/**
-	 * 把司机控制状态折算成 **legacy 单手柄读数**（`powerLevel`）：MTR 自带的仪表与部分 HUD 仍读它，
-	 * 三手柄机车必须给出等价的"正=牵引 / 负=制动"，否则仪表永远显示 N。
+	 * notes/338：**整列零牵引**只报一次，但必须报。
 	 *
-	 * <p>优先权与控制器的合成顺序一致：紧急 &gt; 气制动位置 &gt; 油门手柄（牵引 / 电阻制动）。
-	 * 非三手柄车底沿用原来的档位折算，一个字节不改。</p>
+	 * <p>现场：世界里没装 {@code mmtr-consist-types.json} ⇒ 每节车的车底都解析不出来，全列借缺省车底；
+	 * 缺省车底只给**一节**保留牵引，而编组的头车是显式无动力的控制车（Tc–M–M–T…），于是
+	 * {@code MmtrComposition.toConsistType} 求和后整列牵引 = 0 —— 车按阻力倒着加速、位置不动、
+	 * 任何闸门都不报原因。这一句把"谁的锅"直接说出来（改法就是给车型配上 {@code consistTypeId}／
+	 * 把 {@code mmtr-consist-types.json} 放进维度目录）。</p>
 	 */
-	private int mmtrLegacyPowerLevelFromControl(ControlState control) {
-		final org.mtr.core.mmtr.ThreeHandleSpec handles = mmtrConsistType == null ? null : mmtrConsistType.getHandles();
-		if (handles == null) {
-			return control.getThrottleNotch() > 0 ? control.getThrottleNotch() : control.getBrakeNotch() > 0 ? -control.getBrakeNotch() : 0;
+	private void mmtrLogZeroTractionIfNeeded() {
+		if (mmtrZeroTractionLogged) {
+			return;
 		}
-		final int brakePosition = handles.clampBrakePosition(control.getBrakeNotch());
-		if (control.isEmergency() || handles.isEmergencyPosition(brakePosition)) {
-			return -MAX_POWER_LEVEL - 1;
+		mmtrZeroTractionLogged = true;
+		final StringBuilder powered = new StringBuilder();
+		for (int i = 0; i < vehicleExtraData.immutableVehicleCars.size(); i++) {
+			powered.append(i == 0 ? "" : ",").append(vehicleExtraData.immutableVehicleCars.get(i).getMmtrPowered() ? "M" : "T");
 		}
-		if (brakePosition > org.mtr.core.mmtr.ThreeHandleSpec.runningPosition()) {
-			return -Math.max(1, Math.min(MAX_POWER_LEVEL, brakePosition));
+		System.out.println("[MMTR-DRV] 车=" + id + " **整列零牵引**（车节 "
+			+ vehicleExtraData.immutableVehicleCars.size() + " 节 [" + powered + "]"
+			+ "，车底=" + (mmtrConsistType == null ? "（无）" : mmtrConsistType.getId()) + "）"
+			+ " —— 自动巡航只能按阻力积分，车停在原地不动。"
+			+ "原因通常是世界目录里没有 mmtr-consist-types.json（每节车都解析不出车底、全列借缺省车底，"
+			+ "而借来的那一节必须自己有动力），或者整列全是拖车；notes/338");
+	}
+
+	/** 遗留路径上的存量车：只报一次的闩（notes/235）。 */
+	private boolean mmtrLegacyOnRouteLogged;
+
+	/**
+	 * 这辆车还在 MTR 遗留路径上（在路线上却没有走行器）⇒ 它没有牵引也没有制动。
+	 *
+	 * <p>notes/235：原版走行路径删除之后，这种情况只可能是"世界里还没被重编组的存量车"。
+	 * 只报一次，但**必须报** —— 静默不动正是现场最难查的那种故障。HUD 那边由
+	 * {@link #mmtrMotionHoldReason()} 给出同一句话。</p>
+	 */
+	private void mmtrLogLegacyOnRouteIfNeeded() {
+		if (mmtrLegacyOnRouteLogged) {
+			return;
 		}
-		final int driveHandle = handles.clampDriveHandle(control.getDriveHandle());
-		final double tractionRatio = handles.tractionRatio(driveHandle);
-		if (tractionRatio > 0) {
-			return Math.max(1, (int) Math.round(tractionRatio * MAX_POWER_LEVEL));
-		}
-		final double rheostaticRatio = handles.rheostaticRatio(driveHandle);
-		return rheostaticRatio > 0 ? -Math.max(1, (int) Math.round(rheostaticRatio * MAX_POWER_LEVEL)) : 0;
+		mmtrLegacyOnRouteLogged = true;
+		System.out.println("[MMTR-DRV] 车=" + id + " 在 MTR 遗留路径上、没有走行器 —— 原版走行路径已按 notes/235 删除，本车不会动。"
+			+ "请重新编组：query depots → manifest add <depotId> <sidingId> <车型…> → vehicle remove --depot=<id> → manifest replay");
+	}
+
+	/** 当前速度下的**紧急制动减速度**（内部单位 m/ms²）。 */
+	private double mmtrEmergencyDecelPerMs() {
+		return MmtrSupport.siAccelerationToInternal(mmtrPhysics().emergencyDecelerationMps2(MmtrSupport.internalSpeedToSi(speed)));
+	}
+
+	/** Service deceleration in internal units (m/ms per ms)：全常用制动 + 运行阻力折成的减速度。 */
+	private double mmtrMotionServiceDecelPerMs() {
+		return MmtrSupport.siAccelerationToInternal(mmtrPhysics().serviceBrakeDecelerationMps2(1, MmtrSupport.internalSpeedToSi(speed)));
 	}
 
 	/** Enables/disables the MMTR explicit control path (used by the future input layer). */
@@ -2905,6 +3611,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrActiveControl = controlState.copy();
 		// Server-authoritative input guard: clamp whatever the client sent before storing/mirroring.
 		MmtrDriveAccess.sanitize(mmtrActiveControl);
+		// 灯光开关（notes/352/353）：控制包里带的是"司机所在驾驶室那一端"的档位，端由引擎的占用状态决定。
+		// **只在这个来源真的扳动了开关时才生效**（边沿语义）—— 否则两个控制来源会以 tick 频率互相覆盖。
+		applyMmtrLightSwitch(mmtrActiveControl.getLightSwitch(), driverUuid);
 		// REV 换向器: on a consist-body train the reverser SELECTS the direction of travel (tail-first
 		// while the same cab stays manned). The change takes effect at a stand; while rolling it is held
 		// as pending and traction is cut until the consist stops, so the motion never teleports. A
@@ -2931,14 +3640,256 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			if (mmtrAwsState == MMTR_AWS_WARN) {
 				mmtrAwsAckQueued = true;
 			}
+			/*
+			 * **响应键也是"解除紧急制动"的键**（司机优先，用户口径 2026-09-21）：手动车闯过信号/占用
+			 * 触发的紧急制动，由司机自己按键解除后继续开 —— 这正是真车 SCR/TPWS 的做法，而不是
+			 * 把车速钉成 0 让他推不动。解除后同一处停车点不再反复触发（见 mmtrAuthorityReleased）。
+			 */
+			if (mmtrProtection) {
+				mmtrProtection = false;
+				mmtrProtectionLockRemaining = 0;
+				if (mmtrAuthorityTripped) {
+					// 司机越界那一路：放行**这一处**界限，此后不再触发也不再夹紧（他可以开过去）。
+					mmtrAuthorityReleased = true;
+					mmtrAuthorityTripped = false;
+				}
+				System.out.println("[MMTR-DRV] 紧急制动已由响应键解除（车=" + id + "）—— 司机可继续开车");
+			}
 			mmtrActiveControl.setAcknowledge(false);
 		}
 		if (!wasOverride && driverUuid != null) {
 			System.out.println("[MMTR-DRV] driver=" + driverUuid + " engaged override T" + controlState.getThrottleNotch() + " B" + controlState.getBrakeNotch() + " R" + controlState.getReverser()
 				+ " 三手柄[油门=" + mmtrActiveControl.getDriveHandle() + " 制动=" + mmtrActiveControl.getBrakeNotch() + " 定速=" + mmtrActiveControl.getCruiseSpeedKmh() + "]");
 		}
+		mmtrLogControlReceived(driverUuid);
 		mmtrLogHandleMismatch(mmtrActiveControl);
+		/*
+		 * 序号在**每一次**控制应用时推进 = "司机又动了一次手柄"（既有契约，用例与客户端都依赖它：
+		 * 停在停车点上时再推一次手柄即可发车）。客户端每秒的补发也会推进它 —— 那是**已知的遗留**
+		 * 现象（停在停车点时手柄若还留在牵引位，补发包会让车在下一次补发时起步），
+		 * 与"司机优先"这一轮无关，见 notes/233 §遗留。
+		 */
 		mmtrControlApplySeq++;
+	}
+
+	/**
+	 * 司机推上来的灯光开关档位落到**被占用那一端**（另一端不动）。
+	 *
+	 * <p>端由引擎的占用状态决定、不是客户端说了算 —— 于是"改别人那一端的灯"在协议上不存在。
+	 * 档位再按车底能力钳一次（动车组收到"关闭" ⇒ 尾灯），见 {@link MmtrLightSwitch#sanitize}。</p>
+	 *
+	 * <h2>⚠️ 这是**边沿型**输入，不能每拍应用一次（2026-10-01 实机）</h2>
+	 *
+	 * <p>控制包每拍都在发（里面是一个**绝对量**），而灯光开关在真车上、在这套设计里都是**保持型开关**：
+	 * "谁扳动了开关谁说话"。一列车上同时存在两个控制来源时（自动运行的 SYSTEM + 坐进驾驶室的玩家），
+	 * 按"每拍把当前活动控制状态的档位写一遍"就会让两边的值以 tick 频率互相覆盖。实机现场：</p>
+	 *
+	 * <pre>
+	 * [MMTR-LIGHT] 车=… 灯光开关：A端 = 尾灯
+	 * [MMTR-LIGHT] 车=… 灯光开关：A端 = 远光
+	 * [MMTR-LIGHT] 车=… 灯光开关：A端 = 尾灯      ← 每秒**正好 20 条**（= 20 TPS，一拍翻一次）
+	 * …</pre>
+	 *
+	 * <p>所以这里记住**每个来源最后一次请求的档位**，只有它变了才真的去扳开关：自动运行那边的档位一直是
+	 * 出厂值（尾灯），于是它只在第一次生效；玩家每按一次 L 才产生一次真正的扳动。用户口径"按 L 会连续
+	 * 切换灯光档位"就是这条。</p>
+	 *
+	 * @param driverUuid 这一拍的请求来自谁（{@code null} = 引擎内部/自动运行）
+	 */
+	private void applyMmtrLightSwitch(int requested, @Nullable UUID driverUuid) {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		if (consistWalker == null || !consistWalker.cabs().isManned()) {
+			return;
+		}
+		final String source = driverUuid == null ? "" : driverUuid.toString();
+		final Integer previous = mmtrLightSwitchRequests.get(source);
+		if (previous != null && previous == requested) {
+			return;
+		}
+		mmtrLightSwitchRequests.put(source, requested);
+		final boolean hasOff = mmtrConsistType != null && mmtrConsistType.hasMmtrLightOffPosition();
+		setMmtrLightSwitch(getMmtrActiveCab() == MmtrCabState.Cab.CAB_B ? MmtrLightSwitch.END_B : MmtrLightSwitch.END_A,
+			MmtrLightSwitch.sanitize(requested, hasOff));
+	}
+
+	/**
+	 * 每个控制来源最后一次"扳动"的档位（见 {@link #applyMmtrLightSwitch}）。
+	 *
+	 * <p>刻意**不在司机离开时清空**：清空会让"客户端还记着旧档位、隔一拍又发一次同样的值"变成一次新的
+	 * 扳动，把 {@code releaseMmtrLightSwitch} 刚落回的尾灯又点亮。客户端的档位跟着镜像走
+	 * （{@code MmtrDriveInput.adoptLightCapability}），所以它下一次发来的值本来就是引擎这边的新值。</p>
+	 */
+	private final java.util.HashMap<String, Integer> mmtrLightSwitchRequests = new java.util.HashMap<>();
+
+	/**
+	 * 直接设某一端的灯光开关（{@link MmtrLightSwitch#END_A} / {@link MmtrLightSwitch#END_B}）。
+	 *
+	 * <p>给引擎内部（司机输入、司机离开时的回落）与将来的**连挂逻辑**用：连挂只需把被挂那一端设成
+	 * {@link MmtrLightSwitch#OFF}，那一端的尾灯就真的灭了 —— 那一步不必再改判据（notes/352）。</p>
+	 *
+	 * @return 真的改了吗（没变就不标脏、不打日志）
+	 */
+	public boolean setMmtrLightSwitch(int end, int state) {
+		final boolean hasOff = mmtrConsistType != null && mmtrConsistType.hasMmtrLightOffPosition();
+		final int sanitised = MmtrLightSwitch.sanitize(state, hasOff);
+		if (end == MmtrLightSwitch.END_B) {
+			if ((int) mmtrLightB == sanitised) {
+				return false;
+			}
+			mmtrLightB = sanitised;
+		} else {
+			if ((int) mmtrLightA == sanitised) {
+				return false;
+			}
+			mmtrLightA = sanitised;
+		}
+		vehicleExtraData.mmtrMarkSyncDirty();
+		System.out.println("[MMTR-LIGHT] 车=" + id + " 灯光开关：" + (end == MmtrLightSwitch.END_B ? "B" : "A") + "端 = "
+			+ MmtrLightSwitch.label(sanitised) + "（" + MmtrLightSwitch.describe((int) mmtrLightA, (int) mmtrLightB, (int) mmtrReverser, hasOff) + "）");
+		return true;
+	}
+
+	/**
+	 * 司机离开（占用锁释放）时把**白灯**落回尾灯（notes/352）。
+	 *
+	 * <p>开关是保持型的（真车也是），但"没人照看的车两端亮着白前照灯"既不真实、也会一直亮在世界上。
+	 * 所以只回落<b>近光/远光</b> ⇒ 尾灯；{@link MmtrLightSwitch#TAIL} 与 {@link MmtrLightSwitch#OFF}
+	 * （机车的关闭档 = 连挂灭尾灯）原样保留 —— 换端时那一步也正好把"对面那端原本的白灯"清掉。</p>
+	 */
+	private void releaseMmtrLightSwitch() {
+		if (MmtrLightSwitch.isHeadlight((int) mmtrLightA)) {
+			mmtrLightA = MmtrLightSwitch.TAIL;
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
+		if (MmtrLightSwitch.isHeadlight((int) mmtrLightB)) {
+			mmtrLightB = MmtrLightSwitch.TAIL;
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
+	}
+
+	/*
+	 * ---------------------------------------------------------------------------------------------
+	 * **自动运行（"AI 驾驶员"）的灯光**：车头白灯、车尾红尾灯（用户口径 2026-10-03
+	 * 「AI驾驶员也需要控制车灯开关，并且尾部车灯需要变红」）。
+	 *
+	 * <p>为什么需要一条引擎侧的规则，而不是"等客户端画的时候猜"：灯光开关是**引擎权威**的
+	 * （notes/352：每端一个档位 → 镜像 {@code mmtrLightA}/{@code mmtrLightB} → 所有客户端照着画），
+	 * 而拨开关的人只有一个 —— 坐在驾驶室里按 L 的司机。无人那趟车（{@code KeyHolder.SYSTEM}
+	 * 的占位钥匙 + AUTOPILOT 任务）没有这个人，于是：
+	 * <ul>
+	 *   <li>车头一路是暗的（两端都停在出厂值 {@link MmtrLightSwitch#TAIL}）；</li>
+	 *   <li>更要紧的是**车尾那一端**：上一次人工驾驶按过 L 的那一端，白灯留在镜像里没人收
+	 *       （{@code releaseMmtrLightSwitch} 只在占用锁释放那一刻跑一次，漏了就一直漏）。</li>
+	 * </ul>
+	 * 于是这里按"AI 也是司机"来办：任务在跑、钥匙是引擎的、没人接管 ⇒ 车头 = 世界时决定的
+	 * 近光/远光前照灯，车尾 = 尾灯（**两端都写死**，陈旧的白灯因此每次都会被收掉）。
+	 *
+	 * <p><b>司机优先</b>：有乘务员钥匙（有人在驾驶室里）时这条规则**一条都不动** —— 灯归他；
+	 * 他下车（占用锁释放）之后自动运行若还在，下一 tick 这条规则再把车头点亮。
+	 *
+	 * <p><b>交还</b>：任务收工 / AI 不再持钥匙时，白灯落回尾灯（"无人照看的车两端都是红标志灯"，
+	 * notes/352 的不变量 2）。
+	 * ---------------------------------------------------------------------------------------------
+	 */
+
+	/** 自动灯光策略上一次真正写下去的**车头端**（{@code 0} = 还没写过 / 已经交还）。 */
+	private int mmtrAutoLightFrontEnd;
+	/** 自动灯光策略上一次写下去的车头档位（{@link MmtrLightSwitch#LOW} / {@link MmtrLightSwitch#HIGH}）。 */
+	private int mmtrAutoLightState;
+	/** 自动灯光策略上一次写下去时的行驶方向（REV 一翻，车头/车尾就互换了）。 */
+	private boolean mmtrAutoLightReversed;
+
+	/**
+	 * 每 tick 判一次"这趟车现在该不该由引擎拨灯、该拨成什么"（服务端；见上面那段注释）。
+	 *
+	 * <p>边沿型：只有"车头端 / 档位 / 方向"三者之一变了才写镜像（每 tick 都写会让
+	 * {@code setMmtrLightSwitch} 的日志与稀疏补丁失去意义）。</p>
+	 */
+	private void mmtrTickAutoLights() {
+		final MmtrConsistWalker consistWalker = getMmtrConsistWalker();
+		if (consistWalker == null) {
+			return;
+		}
+		final MmtrMission mission = mmtrMission;
+		/*
+		 * "AI 在开"的判据（三条都要）：① 车上挂着一个**没结束**的任务，执行者是 AUTOPILOT/AI；
+		 * ② 钥匙是引擎那把占位钥匙（没人接手）；③ 没有人工接管（司机推了手柄就没收）。
+		 *
+		 * 为什么不用 `mmtrMotionAuto`：它在**每次停车点重规划/换向翻转**时都会被清掉再自臂
+		 * （现场就是"到站停稳 → 下一段自臂"），拿它当判据会让车头灯每到一站闪一下。
+		 */
+		final boolean aiDriving = mission != null && !mission.isTerminal()
+			&& (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT || mission.getExecutor() == MmtrMission.Executor.AI)
+			&& consistWalker.cabs().isSystemKey() && !mmtrManualOverride;
+		if (!aiDriving) {
+			final boolean wasMine = mmtrAutoLightFrontEnd != 0;
+			mmtrAutoLightFrontEnd = 0;
+			// **有乘务员钥匙 ⇒ 灯归他**：引擎这条规则一条都不动（司机优先）。
+			if (consistWalker.cabs().isCrewKey()) {
+				return;
+			}
+			/*
+			 * **有人在开（人工接管）也不许动他的灯**：钥匙可能还是引擎那把 SYSTEM 占位钥匙
+			 * （现场：司机在无人编组上推手柄，引擎补一把钥匙让编组有头，见
+			 * {@link #mmtrAdoptUnmannedConsistForDriver}），而他刚按 L 拨的档位就是他要的答案。
+			 */
+			if (mmtrManualOverride) {
+				return;
+			}
+			/*
+			 * 无人照看（没有 AI 任务 / 钥匙不在 / 没人接管）⇒ **白灯落回尾灯**（notes/352 的不变量 2
+			 * "无人照看的车两端都是红标志灯"）。
+			 *
+			 * <p>为什么这里每 tick 都判一次、而不是只在"AI 交还"那一刻做：人工驾驶那一次的回落
+			 * （{@code releaseMmtrManualOverride} → {@code releaseMmtrLightSwitch}）只要漏一次，
+			 * 那盏白灯就**永远**留在镜像里 —— 现场表现正是用户报的"AI 开的车尾灯不红"。
+			 * 这条兜底幂等（只有真有白灯时才写字），于是那种陈旧值最多活一 tick。</p>
+			 */
+			if (wasMine || MmtrLightSwitch.isHeadlight((int) mmtrLightA) || MmtrLightSwitch.isHeadlight((int) mmtrLightB)) {
+				final String before = MmtrLightSwitch.describe((int) mmtrLightA, (int) mmtrLightB, (int) mmtrReverser, mmtrLightLoco);
+				releaseMmtrLightSwitch();
+				System.out.println("[MMTR-LIGHT] 车=" + id + (wasMine ? " 自动运行灯光交还" : " 无人照看：收掉陈旧白灯")
+					+ "：两端落回尾灯（原 " + before + "，AI 不再执行任务 / 不再持钥匙）");
+			}
+			return;
+		}
+		final int frontEnd = MmtrLightSwitch.autoLeadingEnd(consistWalker.travelsTowardB());
+		// 世界时（引擎手上那份来自游戏端 SetTime 的钟）：负值 = 还不知道 ⇒ 按远光那一档（最亮）。
+		final int gameHour = data instanceof final Simulator simulator ? simulator.getGameHour() : -1;
+		final int state = MmtrLightSwitch.autoHeadlightState(gameHour);
+		final boolean reversed = consistWalker.travelReversed();
+		if (frontEnd == mmtrAutoLightFrontEnd && state == mmtrAutoLightState && reversed == mmtrAutoLightReversed) {
+			return;
+		}
+		mmtrAutoLightFrontEnd = frontEnd;
+		mmtrAutoLightState = state;
+		mmtrAutoLightReversed = reversed;
+		final int rearEnd = MmtrLightSwitch.otherEnd(frontEnd);
+		/*
+		 * 镜像换向器：自动运行**在档**，**先于两端开关写**。两个理由：
+		 *  ① 判据上：客户端 {@code lampState} 的"换向 N ⇒ 固定红"读的就是它，不先写在档，
+		 *     接下来那两条 {@code setMmtrLightSwitch} 的日志里会印出"（换向N：固定红）"这种自相矛盾的读数；
+		 *  ② 语义上：自动车从没被 applyMmtrControl 写过这个字段，镜像里恒为 N —— 不写它，
+		 *     就算车头开关拨到远光，客户端也照样画成红的。
+		 */
+		final int reverser = MmtrLightSwitch.autoReverser(reversed);
+		if ((int) mmtrReverser != reverser) {
+			mmtrReverser = reverser;
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
+		/*
+		 * 两端都写：车尾先写（先生效）。车尾那一端的陈旧白灯（上一次人工驾驶留下的）就是这样被收掉的 ——
+		 * 用户看到的就是"AI 开的车尾灯不红"。
+		 */
+		setMmtrLightSwitch(rearEnd, MmtrLightSwitch.TAIL);
+		setMmtrLightSwitch(frontEnd, state);
+		System.out.println("[MMTR-LIGHT] 车=" + id + " 自动运行灯光：车头=" + endLabel(frontEnd) + "端 " + MmtrLightSwitch.label(state)
+			+ "（世界时 " + gameHour + " 时）· 车尾=" + endLabel(rearEnd) + "端 " + MmtrLightSwitch.label(MmtrLightSwitch.TAIL)
+			+ " · 换向=" + (reversed ? "REV（车尾在前）" : "前进"));
+	}
+
+	private static String endLabel(int end) {
+		return end == MmtrLightSwitch.END_B ? "B" : "A";
 	}
 
 	/** Releases the MMTR explicit override (occupation lock) and neutralises the legacy HUD power. */	public void releaseMmtrManualOverride() {
@@ -2950,6 +3901,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrManualOverride = false;
 		mmtrDriverUuid = null;
 		mmtrActive = false;
+		releaseMmtrLightSwitch();
 		mmtrMode = "";
 		mmtrDriver = "";
 		vehicleExtraData.setPowerLevel(0);
@@ -3314,7 +4266,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return currentTowardB;
 		}
 		final double stopFraction = mmtrMission != null && mmtrMission.hasTargetRail() ? mmtrMission.getTargetRailFraction() : 1.0;
-		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), stopFraction);
+		// 经由点也带上：判断"该朝哪端跑"用的是**这条进路**能不能成立，忽略经由点会按另一条引入线给出反的结论。
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(simulator, this, targetRail.getHexId(), stopFraction,
+			mmtrMission == null ? null : mmtrMission.getTargetViaNodes());
 		return plan.feasible ? currentTowardB : !currentTowardB;
 	}
 
@@ -3595,6 +4549,103 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	}
 
 	/**
+	 * notes/276 片 6：这一列车现在是不是被**钉住**（停放 = 钉住，决定 1/6）。
+	 *
+	 * <p>{@code true} ⇒ 位置锁死：本车的推进被跳过（{@code simulate} 的闸门链最前面那一支），
+	 * 任何外部推进也进不来（任务要动它得先有任务，而"有任务"本身就不满足钉住）。</p>
+	 */
+	public boolean isMmtrPinned() {
+		return mmtrPinned;
+	}
+
+	/** 现在该不该钉住（三条判据见 {@link MmtrDriveAccess#shouldPin}）。 */
+	private boolean mmtrComputePinned() {
+		if (isClientside) {
+			return false;
+		}
+		final boolean anyDriver = mmtrManualOverride || mmtrAnyDriverRiding();
+		final boolean hasLiveTask = mmtrMission != null && !mmtrMission.isTerminal();
+		final boolean canPull = data instanceof final Simulator simulator && simulator.mmtrConsistTypes != null
+			&& org.mtr.core.mmtr.MmtrCarTypeResolver.anyCarCanPull(vehicleExtraData.immutableVehicleCars, simulator.mmtrConsistTypes,
+				simulator.mmtrDefaultConsistTypeId == null ? null : simulator.mmtrConsistTypes.get(simulator.mmtrDefaultConsistTypeId));
+		return MmtrDriveAccess.shouldPin(anyDriver, hasLiveTask, canPull);
+	}
+
+	/** 有没有人坐在（任何一节车的）司机位上 —— 与 {@code mmtrControlRefusalReason} 里那条同一判据。 */
+	private boolean mmtrAnyDriverRiding() {
+		final boolean[] anyDriverRiding = {false};
+		vehicleExtraData.iterateRidingEntities(vehicleRidingEntity -> {
+			if (vehicleRidingEntity.isDriver()) {
+				anyDriverRiding[0] = true;
+			}
+		});
+		return anyDriverRiding[0];
+	}
+
+	/** 钉住/解钉那句话的理由（日志与诊断用）。 */
+	/**
+	 * 片 7（notes/277）：**把控制器输出按车钩折一下**（机车 ↔ 车列一个钩，折中版）。
+	 *
+	 * <p>刚性车列（车底没写车钩键、或编组只有一节）**原样返回** —— 逐位等于片 7 之前。
+	 * 有钩时返回的加速度是**车头那节车真正感受到的**：起步时它先按自己的质量冲出去（间隙没吃完），
+	 * 间隙吃完那一下掉到刚体值之下（顿），这就是"冲动"。</p>
+	 *
+	 * <p><b>只在服务端算</b>：车钩口径不在镜像串里（客户端不知道钩的参数），镜像那份仍按刚体积分，
+	 * 由权威快照每 tick 校正速度。这是折中版的已知边界，写进 notes/277。</p>
+	 */
+	private DriveOutput mmtrApplyCoupler(DriveOutput output, double speedMetersPerSecond, long stepMillis) {
+		if (isClientside || output == null || mmtrConsistType == null) {
+			return output;
+		}
+		final org.mtr.core.mmtr.physics.CouplerSpec spec = mmtrConsistType.getCoupler();
+		final double rakeEffectiveMassKg = spec == null ? 0 : mmtrRakeEffectiveMassKg();
+		if (spec == null || rakeEffectiveMassKg <= 0) {
+			mmtrCouplerDynamics = null;
+			return output;
+		}
+		if (mmtrCouplerDynamics == null || mmtrCouplerDynamics.getSpec() != spec) {
+			mmtrCouplerDynamics = new org.mtr.core.mmtr.physics.CouplerDynamics(spec);
+			mmtrCouplerDynamics.reset(speedMetersPerSecond);
+		}
+		final double acceleration = mmtrCouplerDynamics.step(speedMetersPerSecond, Math.max(1, stepMillis) / 1000.0,
+			mmtrLeadEffectiveMassKg(), rakeEffectiveMassKg, output.getAccelerationMetersPerSecondSquared());
+		return new DriveOutput(acceleration, output.isBrakeLamp(), output.isEmergencyBrake(),
+			output.getTrainPipePressure(), output.getBrakeCylinderPressure());
+	}
+
+	/** 车头那一节的惯性质量 {@code λ·m}（含载重）；解析不出编组时退回整列等效车底。 */
+	private double mmtrLeadEffectiveMassKg() {
+		final MmtrComposition composition = getMmtrComposition();
+		if (composition != null && composition.size() > 0) {
+			return composition.unit(0).loadedType().getPhysics().effectiveMassKg();
+		}
+		return mmtrConsistType == null ? 0 : mmtrConsistType.getPhysics().effectiveMassKg();
+	}
+
+	/** 后面那串车列的惯性质量 {@code λ·m}（含载重）= 整列 − 车头那一节。 */
+	private double mmtrRakeEffectiveMassKg() {
+		final MmtrComposition composition = getMmtrComposition();
+		if (composition == null || composition.size() < 2) {
+			return 0;
+		}
+		return Math.max(0, composition.totalEffectiveMassKg() - mmtrLeadEffectiveMassKg());
+	}
+
+	/** 钉住/解钉那句话的理由（日志与诊断用）。 */
+	private String mmtrPinnedReason() {
+		if (!(data instanceof final Simulator simulator) || simulator.mmtrConsistTypes == null) {
+			return "（没有车底注册表：按「拉不动」处理）";
+		}
+		final int cars = vehicleExtraData.immutableVehicleCars.size();
+		final boolean canPull = org.mtr.core.mmtr.MmtrCarTypeResolver.anyCarCanPull(vehicleExtraData.immutableVehicleCars,
+			simulator.mmtrConsistTypes,
+			simulator.mmtrDefaultConsistTypeId == null ? null : simulator.mmtrConsistTypes.get(simulator.mmtrDefaultConsistTypeId));
+		return "车节数=" + cars + " 司机=" + (mmtrManualOverride || mmtrAnyDriverRiding())
+			+ " 任务=" + (mmtrMission != null && !mmtrMission.isTerminal())
+			+ " 整列能出力=" + canPull + "（不被连上就钉死在地里，notes/276）";
+	}
+
+	/**
 	 * 服务端：这次操纵请求**为什么**被拒（空串 = 允许）。
 	 *
 	 * <p>与 {@link #canTakeMmtrControl} 同源（后者就是"理由为空"），但把理由说出来。
@@ -3602,6 +4653,21 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * 都是"按了没反应"，而现场只能靠日志区分（notes/216：用户报"车不动"，先花了一轮才发现是别的原因）。</p>
 	 */
 	public String mmtrControlRefusalReason(@Nullable UUID uuid) {
+		/*
+		 * notes/271 片 2：**整列车列没有任何能出力的车底 ⇒ 拒绝掌权**（挂车不是车头）。
+		 *
+		 * <p>判据与物理层同源（{@code MmtrCarTypeResolver.anyCarCanPull}，同一套 powered 三态规则）：
+		 * 单节车不走"按车求和"的等效车底，所以只靠物理层拦不住"一节被声明成无动力的车"仍按它自己的
+		 * 车底跑 —— 准入层这一条才是"挂车不能开"的落点。</p>
+		 */
+		if (!isClientside && data instanceof final Simulator simulatorForPull && simulatorForPull.mmtrConsistTypes != null) {
+			final org.mtr.core.mmtr.ConsistType defaultType = simulatorForPull.mmtrDefaultConsistTypeId == null ? null
+				: simulatorForPull.mmtrConsistTypes.get(simulatorForPull.mmtrDefaultConsistTypeId);
+			if (!org.mtr.core.mmtr.MmtrCarTypeResolver.anyCarCanPull(vehicleExtraData.immutableVehicleCars,
+				simulatorForPull.mmtrConsistTypes, defaultType)) {
+				return "整列车列没有任何能出力的车底（挂车 / 被挂车列）—— 挂车不能开（notes/271 片 2）";
+			}
+		}
 		// T4 准入闸门：无任务不得操纵（策略开关；默认关，见 MmtrDriveAccess.taskAdmitsDriving）。
 		if (!MmtrDriveAccess.taskAdmitsDriving(data instanceof final Simulator simulator && simulator.mmtrRequireTaskToDrive,
 			mmtrMission != null && !mmtrMission.isTerminal())) {
@@ -3683,9 +4749,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return found[0];
 	}
 
-	/** True when explicit MMTR control requests traction (used to allow departing from a stop). */
+	/**
+	 * True when explicit MMTR control requests traction (used to allow departing from a stop).
+	 *
+	 * <p>2026-09-23：**定速挂上也算"要牵引"** —— AFB 会自己出力，所以"停在车场、只设了定速"的车必须
+	 * 能被自臂放出去（否则司机设了定速、手柄不动，车永远停在原地，看起来就是"定速不会动"）。</p>
+	 */
 	public boolean isMmtrRequestingPower() {
-		return mmtrManualOverride && mmtrActiveControl != null && mmtrActiveControl.getThrottleNotch() > 0;
+		// 三手柄车底油门在 driveHandle 上（客户端 throttleNotch 恒为 0，见 MmtrDriveInput），
+		// 少了后半句，三手柄车在"起步闸门"与被仪表读的功率里就恒等于"没要牵引"。
+		return mmtrManualOverride && mmtrActiveControl != null
+			&& (mmtrActiveControl.getThrottleNotch() > 0 || mmtrActiveControl.getDriveHandle() > 0
+				|| mmtrActiveControl.getCruiseSpeedKmh() > 0);
 	}
 
 	/**
@@ -3698,6 +4773,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * </ul>
 	 * Returns true when MMTR control is active (never for DEFAULT mode).
 	 */
+	/**
+	 * 片 7 的**车钩动力学**（机车 ↔ 车列一个钩，折中版，notes/277）：车列换人/换编组时作废重建。
+	 * {@code null} = 刚性车列（车底没写车钩键，或编组只有一节）。
+	 */
+	private org.mtr.core.mmtr.physics.CouplerDynamics mmtrCouplerDynamics;
+
 	private boolean tryInitMmtrController() {
 		// 车底是**按车**解析的（车型映射 / 车厢声明，见 MmtrCarTypeResolver），不是按维度：
 		// 连挂或解挂改了车列 ⇒ "说话的车"可能换了 ⇒ 返回 true 并作废缓存的控制器。
@@ -3707,6 +4788,28 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		if (isClientside) {
 			mmtrConsistType = createMirrorConsistTypeFromSync();
+		} else if (mmtrConsistType == null) {
+			/*
+			 * notes/235 §4：服务端**永远**要有一份可用的车底 —— 解析不到就用通用车兜底，
+			 * 并且已经在 {@link #mmtrRefreshConsistTypeFromCars()} 里喊过（包括"整个维度根本没配
+			 * consist-types"这种情形，那时它连注册表都没有、上面那个方法会直接返回）。
+			 * 少了这一句，缺配置的车会在下面走到"没有控制器"那一支被钉在 0 速。
+			 */
+			mmtrConsistType = ConsistType.FALLBACK;
+		}
+		/*
+		 * notes/243 S1：**多节编组 ⇒ 用"按车求和"的等效车底**。
+		 *
+		 * <p>三个控制器（三手柄/有级/无级）都只拿一个 ConsistType 去算，而解析出来的只是"说话的那节车"。
+		 * BR101 + 2×p1 于是按 82 t 算（真实 162 t）：起步/制动都灵一倍、AFB 的补气量也偏小。
+		 * 这里把整列折成一份等效车底（质量/λ/牵引/制动/阻力按车求和，操纵语义仍沿用说话那节车），
+		 * 于是"多挂一节车"这件事真的改变加速度 —— 车钩多体（S5）之前的过渡形态。</p>
+		 */
+		if (!isClientside && mmtrConsistType != null && vehicleExtraData.immutableVehicleCars.size() > 1) {
+			final MmtrComposition mmtrCompositionForConsist = getMmtrComposition();
+			if (mmtrCompositionForConsist != null && mmtrCompositionForConsist.size() > 1) {
+				mmtrConsistType = mmtrCompositionForConsist.toConsistType("consist:" + (mmtrResolvedCarTypeKey == null ? "?" : mmtrResolvedCarTypeKey));
+			}
 		}
 		if (mmtrConsistType != null) {
 			mmtrDriveController = switch (mmtrConsistType.getControlMode()) {
@@ -3716,6 +4819,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				case THREE_HANDLE -> new org.mtr.core.mmtr.ThreeHandleDriveController();
 				default -> null;
 			};
+			/*
+			 * notes/268/270（P5 逐车管压 + 连挂形式）：多节编组时把**逐车制动描述**交给三手柄控制器，
+		 * 它才做"压力沿车列往后传"；这一串就是连挂接口的载体（单机/机车+客车/重联/货车都只是不同的列表）。
+			 * 服务端独占：客户端镜像没有注册表（每节车解析出的车底是借来的），逐车锚会算错 ——
+			 * 客户端 HUD 读的是镜像回来的车头读数（notes/259 的同一套口径）。
+			 */
+			if (!isClientside && mmtrDriveController instanceof final org.mtr.core.mmtr.BrakeCarrier brakeCarrier) {
+				final MmtrComposition composition = getMmtrComposition();
+				if (composition != null && composition.size() > 1) {
+					brakeCarrier.getBrakeModel().setCars(composition.brakeCars());
+				}
+				/*
+				 * notes/270：控制器重建（换端/车列变动/存档载入）时把上一帧的气路状态灌回新模型，
+				 * 否则解挂切分留下的那段"半充气"的车列会在重建瞬间被当作满管 —— 连挂接口的闭环。
+				 * （没配 bar 键的车底：模型不接管，这一句是空操作。）
+				 */
+				if (mmtrAirState != null && !mmtrAirState.isEmpty()) {
+					brakeCarrier.getBrakeModel().applyState(mmtrAirState);
+				}
+			}
 			// 车型一确定就把手柄规格写进镜像：否则"还没人开过"的车客户端拿不到位置表
 			// （客户端没有 consist-types.json，只能靠这条字符串知道自己有几档油门、制动几位）。
 			if (!isClientside) {
@@ -3759,14 +4882,35 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			return false;
 		}
 		mmtrResolvedCarTypeKey = resolution.key();
-		mmtrConsistType = resolution.consistTypeId() == null ? null : simulator.mmtrConsistTypes.get(resolution.consistTypeId());
+		/*
+		 * notes/235 §4：解析不到车底**不再退回 MTR 的加减速常数**（那条退路已删除），改用
+		 * {@link ConsistType#FALLBACK}（一节通用车，能开、但不是真车）——并且必须**说出来**：
+		 * 静默用另一套力学正是本仓最恨的一类现场。
+		 */
+		mmtrConsistType = resolution.consistTypeId() == null ? ConsistType.FALLBACK : simulator.mmtrConsistTypes.get(resolution.consistTypeId());
+		if (mmtrConsistType == null) {
+			mmtrConsistType = ConsistType.FALLBACK;
+		}
+		/*
+		 * notes/274 片 4：**单节编组也要让载重进物理**。
+		 *
+		 * <p>多节那条路在 {@code MmtrComposition.toConsistType} 里逐车折载重；单节不走等效车底
+		 * （notes/243 S1），所以这里把这一节自己的载重折进它的车底 —— 否则"一节重车"会按整备质量跑。</p>
+		 */
+		if (vehicleExtraData.immutableVehicleCars.size() == 1) {
+			mmtrConsistType = mmtrConsistType.withLoad(vehicleExtraData.immutableVehicleCars.get(0).getMmtrLoadRatio());
+		}
 		// 车底解析结果是一条**状态类**消息（决定这台车用哪套操纵语义）：默认可见，否则"三手柄键位不驱动它"
 		// 这类问题只能靠猜（notes/216）。
 		System.out.println("[MMTR-DRV] 车底解析：车=" + id + " 说话的车=" + (resolution.key().isEmpty() ? "（谁都没配）" : resolution.key())
-			+ " → " + (mmtrConsistType == null ? "无（维度缺省也没配）" : mmtrConsistType.getId() + "/" + mmtrConsistType.getControlMode()));
+			+ " → " + (mmtrConsistType.isFallback()
+				? "**缺配置**：既没匹配到车型、也没配 defaultConsistTypeId —— 本车用通用车力学（60 t / 100 kN / 600 kW），请修 mmtr-consist-types.json"
+				: mmtrConsistType.getId() + "/" + mmtrConsistType.getControlMode()));
 		// 说话的车换了 ⇒ 控制器（含气制动状态）与编组视图都要重建，否则会拿旧参数继续跑。
 		mmtrDriveController = null;
 		mmtrComposition = null;
+		// notes/277 片 7：车列变了，车钩那个"车列等效速度"也就没意义了 —— 一并作废。
+		mmtrCouplerDynamics = null;
 		return true;
 	}
 
@@ -3787,13 +4931,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		return new ConsistType(
 			"mirror", "", mode,
 			(int) mmtrPowerNotches, (int) mmtrBrakeNotches,
-			mmtrMaxSpeedKmh, mmtrTractionAccelerationMps2, mmtrServiceBrakeDecelerationMps2,
-			mmtrEmergencyDecelerationMps2, mmtrTractionBreakpointKmh, mmtrResistanceA, mmtrResistanceB, mmtrResistanceC,
+			mmtrMaxSpeedKmh,
+			// 力模型的镜像（notes/235）：客户端用这些数跑**同一份**物理。
+			mmtrMassKg, mmtrRotatingMassFactor,
+			mmtrMaxTractiveEffortN, mmtrMaxPowerW, mmtrServiceBrakeForceN, mmtrEmergencyBrakeForceN,
+			mmtrResistanceAN, mmtrResistanceBN, mmtrResistanceCN,
+			// 黏着：镜像里还没有这两个字段（schema 待加）⇒ 客户端镜像先按干轨走；湿轨/撒砂的镜像同步
+			// 是 S3 的遗留项（见 notes/245）。
+			0.37, false,
 			mmtrAirPipeChargeRatePerSecond, mmtrAirPipeDischargeRatePerSecond,
 			mmtrAirBrakeApplyRatePerSecond, mmtrAirBrakeReleaseRatePerSecond, mmtrManualMaxSpeedKmh,
-			mmtrMassRatio,
 			// 三手柄规格走紧凑字符串镜像（位置表是数组，逐帧传不划算；只有车型变化时它才变）。
-			org.mtr.core.mmtr.ThreeHandleSpec.decode(mmtrHandleSpec)
+			org.mtr.core.mmtr.ThreeHandleSpec.decode(mmtrHandleSpec),
+			// 灯光开关档数（notes/352）：客户端没有 consist-types.json，靠 mmtrLightLoco 知道本车几档。
+			mmtrLightLoco
 		);
 	}
 
@@ -3801,6 +4952,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	private ControlState createMirrorControlStateFromSync() {
 		return new ControlState()
 			.setThrottleNotch((int) mmtrThrottleNotch).setBrakeNotch((int) mmtrBrakeNotch).setReverser((int) mmtrReverser)
+			// 灯光开关（notes/352）：镜像里两端各一份，"我在哪一端"由 mmtrCabEnd 定 —— 客户端据此显示与循环。
+			.setLightSwitch(MmtrLightSwitch.switchOfEnd((int) mmtrLightA, (int) mmtrLightB, "B".equals(mmtrCabEnd) ? MmtrLightSwitch.END_B : MmtrLightSwitch.END_A))
 			.setDriveHandle((int) mmtrDriveHandle).setCruiseSpeedKmh((int) mmtrCruiseKmh)
 			.setThrottleAxis(mmtrThrottleAxis).setBrakeAxis(mmtrBrakeAxis).setEmergency(mmtrEmergency);
 	}
@@ -3862,6 +5015,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * state of the two halves).
 	 */
 	public void mmtrApplyAirStateString(String airState) {
+		final org.mtr.core.mmtr.brake.BrakeModel model = mmtrBarBrakeModel();
+		if (model != null) {
+			// notes/270：气路状态的权威位置随控制模式而变 —— 配了 bar 键的车底在**制动模型**里（逐车），
+			// 其它车底仍在 MmtrComposition 上。两条路走同一个字符串格式，所以这里按"有没有模型"分派，
+			// 与具体是哪种操纵方式无关（三手柄 / 有级 / 无级 / 将来的 ATO 都一样）。
+			model.applyState(airState);
+			final String state = model.encodeState();
+			if (!state.isEmpty()) {
+				mmtrAirState = state;
+				mmtrPipePressure = model.getPipePressure();
+				mmtrBrakeCylinderPressure = model.getBrakeCylinderPressure();
+			}
+			return;
+		}
 		final MmtrComposition composition = getMmtrComposition();
 		if (composition != null && airState != null && !airState.isEmpty()) {
 			composition.applyAirStateString(airState);
@@ -3869,8 +5036,29 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 	}
 
+	/**
+	 * 本车这一拍的**制动模型**（bar 口径的气路状态持有者）。
+	 *
+	 * <p>{@code null} = 这份车底没配气压口径（{@code consist-types.json} 里没有 bar 键）或控制器还没建
+	 * ⇒ 调用方走旧的 {@link MmtrComposition} 归一化气路。判据用**车底**而不是"模型里有没有系统"：
+	 * 后者要跑过一拍才成立，而连挂手术常常发生在"新车还没人开"的那一拍。</p>
+	 */
+	private org.mtr.core.mmtr.brake.BrakeModel mmtrBarBrakeModel() {
+		if (mmtrConsistType == null || mmtrConsistType.getBrakes() == null) {
+			return null;
+		}
+		return mmtrDriveController instanceof final org.mtr.core.mmtr.BrakeCarrier carrier ? carrier.getBrakeModel() : null;
+	}
+
 	/** C4b: the current per-unit air state string ({@code pipe,cyl;...}); empty when no composition. */
 	public String mmtrAirStateSnapshot() {
+		final org.mtr.core.mmtr.brake.BrakeModel model = mmtrBarBrakeModel();
+		if (model != null) {
+			final String state = model.encodeState();
+			if (!state.isEmpty()) {
+				return state;
+			}
+		}
 		final MmtrComposition composition = getMmtrComposition();
 		return composition == null ? (mmtrAirState == null ? "" : mmtrAirState) : MmtrComposition.encodeAirStates(composition);
 	}
@@ -3884,6 +5072,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * @param firstAddedUnitIndex index of the first unit that came from the coupled-on train
 	 */
 	public void mmtrSeedAirStateAfterCoupling(int firstAddedUnitIndex) {
+		final org.mtr.core.mmtr.brake.BrakeModel model = mmtrBarBrakeModel();
+		if (model != null) {
+			model.seedAfterCoupling(firstAddedUnitIndex);
+			mmtrAirState = model.encodeState();
+			return;
+		}
 		final MmtrComposition composition = getMmtrComposition();
 		if (composition == null) {
 			return;
@@ -3970,23 +5164,57 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			mmtrEmergency = mmtrActiveControl.isEmergency();
 		}
 		if (mmtrConsistType != null) {
+			final org.mtr.core.mmtr.physics.TrainPhysics physics = mmtrConsistType.getPhysics();
 			mmtrPowerNotches = mmtrConsistType.getPowerNotches();
 			mmtrBrakeNotches = mmtrConsistType.getBrakeNotches();
 			mmtrHandleSpec = mmtrConsistType.getHandles() == null ? "" : mmtrConsistType.getHandles().encode();
+			/*
+			 * 灯光开关的档数（notes/352）：机车的开关多一档"关闭"（连挂时用来灭掉被挂那一端的尾灯）。
+			 * 车底换了（编组/拖车兜底）也要跟着变，顺手把不再合法的档位钳回来（动车组不能停在"关闭"）。
+			 */
+			mmtrLightLoco = mmtrConsistType.hasMmtrLightOffPosition();
+			mmtrLightA = MmtrLightSwitch.sanitize((int) mmtrLightA, mmtrLightLoco);
+			mmtrLightB = MmtrLightSwitch.sanitize((int) mmtrLightB, mmtrLightLoco);
 			mmtrMaxSpeedKmh = mmtrConsistType.getMaxSpeedKmh();
 			mmtrManualMaxSpeedKmh = mmtrConsistType.getManualMaxSpeedMetersPerSecond() * 3.6;
-			mmtrTractionAccelerationMps2 = mmtrConsistType.getTractionAccelerationMps2();
-			mmtrServiceBrakeDecelerationMps2 = mmtrConsistType.getServiceBrakeDecelerationMps2();
-			mmtrEmergencyDecelerationMps2 = mmtrConsistType.getEmergencyDecelerationMps2();
-			mmtrTractionBreakpointKmh = mmtrConsistType.getTractionBreakpointKmh();
-			mmtrResistanceA = mmtrConsistType.getResistanceA();
-			mmtrResistanceB = mmtrConsistType.getResistanceB();
-			mmtrResistanceC = mmtrConsistType.getResistanceC();
+			// 力模型的镜像（notes/235）：客户端拿这几个数跑**同一份**物理。
+			mmtrMassKg = physics.getMassKg();
+			mmtrRotatingMassFactor = physics.getRotatingMassFactor();
+			mmtrMaxTractiveEffortN = physics.getTraction().getMaxTractiveEffortN();
+			mmtrMaxPowerW = physics.getTraction().getMaxPowerW();
+			mmtrServiceBrakeForceN = physics.getBrake().getServiceForceN();
+			mmtrEmergencyBrakeForceN = physics.getBrake().getEmergencyForceN();
+			mmtrResistanceAN = physics.getResistance().getAN();
+			mmtrResistanceBN = physics.getResistance().getBN();
+			mmtrResistanceCN = physics.getResistance().getCN();
 			mmtrAirPipeChargeRatePerSecond = mmtrConsistType.getAirPipeChargeRatePerSecond();
 			mmtrAirPipeDischargeRatePerSecond = mmtrConsistType.getAirPipeDischargeRatePerSecond();
 			mmtrAirBrakeApplyRatePerSecond = mmtrConsistType.getAirBrakeApplyRatePerSecond();
 			mmtrAirBrakeReleaseRatePerSecond = mmtrConsistType.getAirBrakeReleaseRatePerSecond();
-			mmtrMassRatio = mmtrConsistType.getMassRatio();
+			/*
+			 * notes/235：镜像里的 acceleration / deceleration 换成**本车力模型的真实能力**（SI，m/s²）。
+			 * 原来它们是从车场配置抄来的原版常数（所有车一个值）；现在客户端拿它们做信号预留足迹
+			 * （padding）与电机音调时，用的就是这列车真正能做到的加减速。
+			 */
+			final double mirrorSpeedSi = MmtrSupport.internalSpeedToSi(speed);
+			vehicleExtraData.setMmtrAccelerationSi(physics.tractionAccelerationMps2(1, mirrorSpeedSi));
+			vehicleExtraData.setMmtrDecelerationSi(physics.serviceBrakeDecelerationMps2(1, mirrorSpeedSi));
+			// notes/250/257：把"电机现在真的在出多少力"发下去（右上角 HUD 的读数）。在服务端算，客户端读快照 ——
+			// 客户端镜像每帧重建、控制器状态留不住，自算会乱跳（现场已复现）。
+			//
+			// 走**稀疏补丁**（`VehicleSyncPatch.DYNAMIC_KEYS` 里有它）⇒ 每 tick 都能到达客户端，不必标脏发整份；
+			// 标脏会强制整份快照、把镜像整个重建一遍（那正是"读数乱跳/不实时"的老根）。
+			vehicleExtraData.setMmtrMotorForceN(getMmtrMotorForceN());
+			/*
+			 * notes/269：**整列气制动力**也要发下去 —— 「制动力 xx kN（气 · 电）」那一行的"气"。
+			 *
+			 * <p>为什么不能像以前那样由客户端拿"车头缸压 × 制动锚"反算：逐车管压（notes/268）＋电空混合
+			 * （notes/267）之后，**车头那一节的缸压可能被 EP 阀削到 0**（电制动替掉了机车自己那份），
+			 * 而拖车仍在气制动 —— 现场表现就是用户报的"制动力只显示电制动的"。
+			 * 服务端算的是逐车求和（`ThreeHandleDriveController.getLastPneumaticBrakeForceN()`），
+			 * 客户端读这一份，两边同一个数（notes/250/257/259 的同一套口径）。</p>
+			 */
+			vehicleExtraData.setMmtrPneumaticBrakeForceN(getMmtrPneumaticBrakeForceN());
 		}
 		if (mmtrDriveController instanceof final org.mtr.core.mmtr.AirBrakeStateful airBrakeStateful) {
 			mmtrPipePressure = airBrakeStateful.getPipePressure();
@@ -3996,7 +5224,7 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		// directional speed limit follow the live internal state into the mirror payload.
 		mmtrAwsWarningPending = mmtrAwsState == MMTR_AWS_WARN;
 		mmtrAwsWarningAcknowledged = mmtrAwsState == MMTR_AWS_ACKED;
-		mmtrBlockHeld = mmtrBlockedWaiting;
+		mmtrBlockHeld = mmtrBlockedWaiting || mmtrAuthorityTripped;
 		mmtrSpeedLimitKmh = Math.round(mmtrCurrentRailLimitPerMs() * 3600.0);
 		// Signal S4 (LZB) cab display: supervision band flag, enforced ceiling, cab target speed
 		// (0 = stop target ahead) and distance to that target, mirrored from the same values the
@@ -4005,6 +5233,19 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		mmtrLzbCeilingKmh = getMmtrLzbCeilingKmh();
 		mmtrLzbTargetKmh = getMmtrLzbTargetKmh();
 		mmtrLzbTargetDistanceM = getMmtrLzbTargetDistanceM();
+		/*
+		 * notes/369 §8：这批显示读数（停留理由 / 限速 / LZB / 闭塞扣车 / 调车授权倒计时）
+		 * **没有别的标脏点** —— 而它们恰好在"车稳稳停着"的那几秒里变（司机盯着 HUD 想知道为什么不动），
+		 * 那时速度、门、任务全不变 ⇒ 没有脏拍 ⇒ 字停在旧值。
+		 *
+		 * <p>逐字段比一遍（十几条指令）比"每隔几秒白扔一份 7.4 KB 整份"便宜得多，
+		 * 也比"每个写入点都记得标脏"可靠（推导而不是搬运，与本类 {@code mmtrPinned} 那段同一个口径）。</p>
+		 */
+		final MmtrDisplayMirror displayMirrorNow = MmtrDisplayMirror.of(this);
+		if (!displayMirrorNow.equals(mmtrDisplayMirror)) {
+			mmtrDisplayMirror = displayMirrorNow;
+			vehicleExtraData.mmtrMarkSyncDirty();
+		}
 	}
 
 	/** Server-side: (re)evaluate overrun/SPAD protection ahead of the {@code stoppingPoint}. */
@@ -4020,8 +5261,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (authority != null && !authority.enforcesProtection()) {
 			return false;
 		}
-		// Same emergency envelope as the legacy path (Siding.MAX_ACCELERATION * 2, m/ms^2).
-		if (MmtrProtection.requiresProtection(speed, stoppingPoint - railProgress, Siding.MAX_ACCELERATION * 2)) {
+		// notes/235：判据里的减速度改成**本车自己的紧急制动能力**（原来是原版的 Siding.MAX_ACCELERATION*2
+		// 这个与车无关的常数）—— 空车与重车、单机与长大货物列的可用包线本来就不一样。
+		if (MmtrProtection.requiresProtection(speed, stoppingPoint - railProgress, mmtrEmergencyDecelPerMs())) {
 			mmtrProtection = true;
 			mmtrProtectionLockRemaining = MmtrProtection.LOCK_MILLIS;
 			System.out.println("[MMTR-DRV] overrun protection engaged (past stopping point or cannot stop in time)");
@@ -4032,6 +5274,11 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 	/** Public getters for the client HUD / mirror overlay (values from the last snapshot). */
 	public boolean isMmtrActiveFromSync() { return mmtrActive; }
+	/**
+	 * 当前的紧急制动是不是**司机越界**那一路触发的（而不是 AWS 报警超时的 SPAD）。
+	 * 给诊断/测试用：两者共用紧急制动通道，但"是谁触发的"决定了它会不会 10 s 自动解锁。
+	 */
+	public boolean isMmtrAuthorityTripped() { return mmtrAuthorityTripped; }
 	public String getMmtrModeFromSync() { return mmtrMode == null ? "" : mmtrMode; }
 	public String getMmtrDriverFromSync() { return mmtrDriver == null ? "" : mmtrDriver; }
 	public int getMmtrThrottleFromSync() { return (int) mmtrThrottleNotch; }
@@ -4090,7 +5337,66 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 	/** 客户端已确认的次数（0 = 还没确认过任何一条）。 */
 	public int getMmtrSubTaskAcksFromSync() { return (int) mmtrSubTaskAcks; }
+
+	/**
+	 * **水牌 / PID**（notes/354）：班次号 / 本趟终点 / 下一站。
+	 *
+	 * <p>三项都是作业调度器每 tick 从**作业单**算好写进镜像的（{@code org.mtr.core.mmtr.MmtrPid}）——
+	 * 客户端没有作业单，也没有站台对象，只能读这份算好的原话（与任务提示同一个规矩）。
+	 * 车不挂在任何在跑的作业单上时三项为空（车场里停着的车不该挂水牌）。</p>
+	 */
+	public String getMmtrPidServiceFromSync() { return mmtrPidService == null ? "" : mmtrPidService; }
+
+	/** 本趟终点站名（空 = 本趟不停站台，例如最后的回库趟）。 */
+	public String getMmtrPidTerminusFromSync() { return mmtrPidTerminus == null ? "" : mmtrPidTerminus; }
+
+	/** 前方下一个停站的车站名（空 = 后面不再有站台作业）。 */
+	public String getMmtrPidNextFromSync() { return mmtrPidNext == null ? "" : mmtrPidNext; }
+
+	/**
+	 * 服务端：把水牌三项写给这辆车（作业调度器每 tick 调一次，见 {@code MmtrJobScheduler.tick}）。
+	 *
+	 * <p><b>三项都没变时什么都不做</b> —— 于是"调度器每 tick 都写"不会变成"每 tick 都推一份补丁"：
+	 * 只有真的换了一趟（过一次换端）或过了一站（下一站变了）才写镜像并标脏。
+	 * 这条不变量是本类唯一需要守的东西，用例直接钉它（同名再写一次 ⇒ 不脏）。</p>
+	 */
+	public void setMmtrPid(org.mtr.core.mmtr.MmtrPid pid) {
+		final org.mtr.core.mmtr.MmtrPid value = pid == null ? org.mtr.core.mmtr.MmtrPid.UNKNOWN : pid;
+		if (value.serviceNumber().equals(getMmtrPidServiceFromSync())
+			&& value.terminus().equals(getMmtrPidTerminusFromSync())
+			&& value.nextStation().equals(getMmtrPidNextFromSync())) {
+			return;
+		}
+		mmtrPidService = value.serviceNumber();
+		mmtrPidTerminus = value.terminus();
+		mmtrPidNext = value.nextStation();
+		vehicleExtraData.mmtrMarkSyncDirty();
+	}
+
+	/** 服务端：把这辆车的水牌清掉（不再挂在任何在跑的作业单上）。 */
+	public void clearMmtrPid() {
+		setMmtrPid(null);
+	}
 	public int getMmtrReverserFromSync() { return (int) mmtrReverser; }
+
+	/**
+	 * 灯光开关：**A 端**那一端驾驶室的档位（{@code MmtrLightSwitch} 的 0/1/2/3 = 关/尾/日/夜）。
+	 *
+	 * <p>每个驾驶室各一个开关，所以两端各一份；哪一盏灯属于哪一端由**几何**决定
+	 * （{@code MmtrVehicleAnchors.engineEndOfSeat}：车体局部 +Z = 引擎的 B 端），渲染侧不再猜行进方向。</p>
+	 */
+	public int getMmtrLightAFromSync() { return (int) mmtrLightA; }
+
+	/** 灯光开关：**B 端**那一端驾驶室的档位，见 {@link #getMmtrLightAFromSync()}。 */
+	public int getMmtrLightBFromSync() { return (int) mmtrLightB; }
+
+	/**
+	 * 本车的灯光开关有没有"关闭"这一档（机车 = true，动车组 = false）。
+	 *
+	 * <p>来自车底配置 {@code lightSwitch: "LOCO"|"MU"}；客户端没有 consist-types.json，
+	 * 所以它必须跟 A/B 两端一起镜像下去 —— 否则客户端 HUD 的档位循环与引擎的判据会不一致。</p>
+	 */
+	public boolean isMmtrLightLocoFromSync() { return mmtrLightLoco; }
 	public boolean isMmtrProtectionFromSync() { return mmtrProtection; }
 	public boolean isMmtrEmergencyFromSync() { return mmtrEmergency; }
 	/** Signal S3 (AWS): an unacknowledged point warning is mirrored (client HUD). */
@@ -4125,6 +5431,134 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public String getMmtrCabNameFromSync() {
 		return getMmtrCabCarIndexFromSync() == 0 || getMmtrCabEndFromSync().isEmpty() ? "" : getMmtrCabCarIndexFromSync() + getMmtrCabEndFromSync();
 	}
+
+	/*
+	 * --------------------------------------------------------------------------------------------
+	 * **运动流（notes/369 ①）的只读出口**
+	 *
+	 * <p>mod 侧的逐 tick 组帧器（`MmtrVehicleMotionSync`）只从这几个方法读引擎状态 ——
+	 * 于是"线格式要什么"在引擎侧有一个明确、可搜索的边界，而不是让 mod 到处掏 private 字段
+	 * （那样线格式一改就要在几个包里找调用点）。这些都是**读**：谁写状态仍然只有引擎自己。</p>
+	 * --------------------------------------------------------------------------------------------
+	 */
+
+	/** 这辆车是不是"运动镜像"（走行器驱动的车；客户端据此知道自己要不要按腿阴影摆车）。 */
+	public boolean isMmtrMotionMirrorFromSync() { return mmtrMotionMirror; }
+
+	/** 本次运行的停车目标（m，走行器距离空间；{@code < 0} = 没有目标）。 */
+	public double getMmtrRunStopTargetFromSync() { return mmtrRunStopTarget; }
+
+	/** 本次运行的总里程（m，同一坐标空间；{@code <= 0} = 没有路线）。 */
+	public double getMmtrRunTotalDistanceFromSync() { return mmtrRunTotalDistance; }
+
+	/** 闭塞/占用停车点（m，同一坐标空间；{@code Double.MAX_VALUE} = 本拍没有扣车）。 */
+	public double getMmtrBlockStopM() { return mmtrBlockStopM; }
+
+	/** 停放钉住（"没有司机也没有任务"的防盗位）：镜像字段，司机 HUD 读它。 */
+	public boolean isMmtrPinnedFromSync() { return mmtrPinned; }
+
+	/** 门是不是"人工在操作"（B7.6h：司机用 Y/U 自己开门，跳过站台邻近判定）。 */
+	public boolean isMmtrDoorManualFromSync() { return vehicleExtraData.isMmtrDoorManual(); }
+
+	/** 任一扇门开着（镜像字段；逐侧的在 {@code VehicleExtraData} 上）。 */
+	public boolean isMmtrDoorsOpenFromSync() { return vehicleExtraData.mmtrDoorsOpen(); }
+
+	/** 现在是"手动"（司机在开）还是自动。 */
+	public boolean isMmtrCurrentlyManualFromSync() { return vehicleExtraData.getIsCurrentlyManual(); }
+
+	/**
+	 * **腿表上线格式**：规范化 hex id + **接入端方向位**（notes/375）。
+	 *
+	 * <p>v1 只发 hex（没有方向），客户端只能拿"上一根腿的末端"去推接入端；而换端会让整张表反序，
+	 * 那时推不出来 —— 客户端只能拒绝，于是阴影停止延长、车被渲染夹在阴影末端不动（用户报的
+	 * 「换端从另一边出发，直接不动并瞬移」）。方向位在线上只花 1 bit/腿，换来的是客户端**照抄**：
+	 * 而且它让"同一根轨、相反方向"成为**不同的腿**，换端于是必然被 {@code MmtrMotionFrame#legDelta}
+	 * 认成"整表替换"而不是"又接了两根"。</p>
+	 *
+	 * <p>为什么每项是**规范化** hex（两端按 {@link Position#compareTo} 排序）：那是 {@code Data#railIdMap}
+	 * 的键，客户端就是拿它查本地轨表的。**不能**用 {@code PathData#getHexId(false)}：那是"按行驶方向"
+	 * 写的，反向走一根轨时会与轨表的键不同（现场表现是客户端 {@code 缺轨=} 一直涨、阴影接不上）。
+	 * 方向由 {@code entryIsOrdered1} 单独带 —— 规范化 hex 里没有方向。</p>
+	 *
+	 * <p>{@code entryIsOrdered1} = {@code PathData#reversePositions} 取反：规范化顺序里的第一端
+	 * （hex 的前半段）就是接入端 ⇔ 这根腿不是反着写的。</p>
+	 */
+	public java.util.List<org.mtr.core.mmtr.net.MmtrMotionFrame.Leg> getMmtrMotionLegsForWire() {
+		final java.util.List<org.mtr.core.mmtr.net.MmtrMotionFrame.Leg> legs = new java.util.ArrayList<>(mmtrMotionLegs.size());
+		mmtrMotionLegs.forEach(pathData -> legs.add(new org.mtr.core.mmtr.net.MmtrMotionFrame.Leg(
+			TwoPositionsBase.getHexIdRaw(pathData.getOrderedPosition1(), pathData.getOrderedPosition2()),
+			!pathData.reversePositions)));
+		return legs;
+	}
+
+	/**
+	 * 腿表在镜像里程坐标系里的起点（= 第一根腿的 {@code startDistance}），随 {@code LEGS} 一起发。
+	 * 换端时客户端靠它把整张表重建到同一坐标系（见 {@code MmtrMotionPosition#mirrorPathAnchorM}）。
+	 */
+	public double getMmtrMotionPathAnchorM() {
+		return mmtrMotionWalker == null ? 0 : mmtrMotionWalker.mirrorPathAnchorM();
+	}
+
+	/*
+	 * --------------------------------------------------------------------------------------------
+	 * **运动流（notes/369 ①）落到镜像**：这三支只在客户端调用（服务端是权威本身，写的是同一批字段，
+	 * 但走的是它自己的状态机）。于是"① 谁写哪些字段"这件事在引擎侧也有唯一一处实现。
+	 *
+	 * <p><b>所有权（谁说话算）</b>：① 写<b>运动类</b>字段 —— 位置/速度、手柄三元组、紧急、
+	 * `mmtrActive`/`mmtrMotionMirror`/`reversed`/`mmtrPinned`/`mmtrProtection`/`mmtrBlockHeld`/
+	 * `mmtrAuthorityTripped`、三个夹紧量（停车目标/总里程/闭塞停车点）；② 继续拥有<b>门</b>（三面旗 +
+	 * `doorTarget`）、`isCurrentlyManual`、AWS 两旗、灯光两端、驾驶室/钥匙、以及全部 HUD 文本与静态块。</p>
+	 *
+	 * <p>为什么门不搬进 ①：门的状态变化本来就低频（每站一次），而 ② 的整份快照在客户端那条路上
+	 * 还负责重建 `HIDDEN_PLAYERS` 与乘客插值 —— 让 ① 也去写门，只会多出一个"两边都能改同一格"的口子。</p>
+	 * --------------------------------------------------------------------------------------------
+	 */
+
+	/** 客户端侧：把一帧的位置（+可选速度）写进镜像。{@code speed} 为 {@code null} = 这一帧不带速度。 */
+	public void mmtrApplySyncMotion(double newRailProgress, @Nullable Double newSpeed) {
+		if (!isClientside) {
+			return;
+		}
+		railProgress = newRailProgress;
+		if (newSpeed != null) {
+			speed = newSpeed.doubleValue();
+		}
+	}
+
+	/** 客户端侧：把一帧的手柄位域写进镜像（位域定义见 {@code MmtrMotionFrame#packControl}）。 */
+	public void mmtrApplySyncControl(int packedControl) {
+		if (!isClientside) {
+			return;
+		}
+		mmtrThrottleNotch = org.mtr.core.mmtr.net.MmtrMotionFrame.controlThrottleNotch(packedControl);
+		mmtrBrakeNotch = org.mtr.core.mmtr.net.MmtrMotionFrame.controlBrakeNotch(packedControl);
+		mmtrDriveHandle = org.mtr.core.mmtr.net.MmtrMotionFrame.controlDriveHandle(packedControl);
+		mmtrCruiseKmh = org.mtr.core.mmtr.net.MmtrMotionFrame.controlCruiseKmh(packedControl);
+		mmtrReverser = org.mtr.core.mmtr.net.MmtrMotionFrame.controlReverser(packedControl);
+		mmtrEmergency = org.mtr.core.mmtr.net.MmtrMotionFrame.controlEmergency(packedControl);
+	}
+
+	/**
+	 * 客户端侧：把一帧的旗标与三个夹紧量写进镜像。
+	 *
+	 * <p>刻意**不写**门那三面旗与 `isCurrentlyManual`（见上面那段所有权说明）：它们仍由 ② 权威携带，
+	 * ① 里那几个位留着只是为了格式完整 —— 于是"两边都能改同一格"的口子不存在。</p>
+	 */
+	public void mmtrApplySyncState(int flags, double runStopTarget, double runTotalDistance, double blockStopM) {
+		if (!isClientside) {
+			return;
+		}
+		mmtrActive = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_MMTR_ACTIVE) != 0;
+		mmtrMotionMirror = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_MOTION_MIRROR) != 0;
+		reversed = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_REVERSED) != 0;
+		mmtrPinned = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_PINNED) != 0;
+		mmtrProtection = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_PROTECTION) != 0;
+		mmtrBlockHeld = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_BLOCK_HELD) != 0;
+		mmtrAuthorityTripped = (flags & org.mtr.core.mmtr.net.MmtrMotionFrame.FLAG_AUTHORITY_TRIPPED) != 0;
+		mmtrRunStopTarget = runStopTarget;
+		mmtrRunTotalDistance = runTotalDistance;
+		mmtrBlockStopM = blockStopM;
+	}
 	/** C3a: the subsidiary-aspect authority from the last snapshot ("" / "SUBSIDIARY_SHUNT" / "CALLING_ON"). */
 	public String getMmtrShuntAuthorityFromSync() { return mmtrShuntAuthority == null ? "" : mmtrShuntAuthority; }
 	/** C3a: the authorised movement's speed limit in km/h (mirrored); 0 = no authority. */
@@ -4133,101 +5567,49 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	public double getMmtrShuntRemainingSFromSync() { return mmtrShuntRemainingS; }
 
 	private void simulateMoving(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions, int currentIndex) {
-		// Tracks the distance
-		final double stoppingPoint;
-		// Tracks the speed
-		final double speedTarget;
-		// Tracks the acceleration
-		final int powerLevel;
-
-		if (isClientside) {
-			stoppingPoint = vehicleExtraData.getStoppingPoint();
-			speedTarget = vehicleExtraData.getSpeedTarget();
-			powerLevel = vehicleExtraData.getPowerLevel();
-		} else {
-			lastMovementMillis = data.getCurrentMillis();
-			final double safeStoppingDistance = 0.5 * speed * speed / vehicleExtraData.getDeceleration() * (isCurrentlyManual() ? POWER_LEVEL_RATIO : 1); // when on manual mode, check for blocked rails on the lowest deceleration (B1)
-			final double hardStoppingDistance = 0.5 * speed * speed / (Siding.MAX_ACCELERATION * 2);
-
-			// Set the stopping point
-			if (transportMode.continuousMovement) {
-				stoppingPoint = Double.MAX_VALUE;
-				if (vehicleExtraData.immutablePath.get(currentIndex).getDwellTime() > 0) {
-					vehicleExtraData.openDoors();
-				} else {
-					vehicleExtraData.closeDoors();
-				}
-			} else {
-				final double pathStoppingPoint = getPathStoppingPoint();
-				if (stoppingCooldown > 0) {
-					stoppingPoint = Math.min(vehicleExtraData.getStoppingPoint(), pathStoppingPoint);
-				} else {
-					final double railBlockedDistance = railBlockedDistance(currentIndex, railProgress, safeStoppingDistance, vehiclePositions, true, false);
-					if (railBlockedDistance < 0) {
-						stoppingPoint = pathStoppingPoint;
-					} else {
-						// Set the stopping point to the blocked position
-						stoppingPoint = Math.min(railBlockedDistance + railProgress, pathStoppingPoint);
-						stoppingCooldown = 1000;
-					}
-				}
-			}
-
-			// Set the power level and speed target
-			if (stoppingPoint - railProgress < (isCurrentlyManual() ? hardStoppingDistance : safeStoppingDistance)) {
-				// If blocked ahead, slow down (using normal deceleration for automatic and emergency brake for manual)
-				speedTarget = -1;
-				powerLevel = Math.min(vehicleExtraData.getPowerLevel(), isCurrentlyManual() && hardStoppingDistance > 2 ? -MAX_POWER_LEVEL - 1 : -POWER_LEVEL_RATIO);
-				atoOverride = true;
-			} else {
-				if (isCurrentlyManual()) {
-					if (speed > vehicleExtraData.getMaxManualSpeed()) {
-						// Slow down if above the max manual speed
-						speedTarget = vehicleExtraData.getMaxManualSpeed();
-						powerLevel = -POWER_LEVEL_RATIO;
-					} else {
-						powerLevel = vehicleExtraData.getPowerLevel();
-						speedTarget = powerLevel > 0 ? vehicleExtraData.getMaxManualSpeed() : (powerLevel < 0 ? 0 : speed);
-					}
-				} else {
-					final double upcomingSlowerSpeed = Siding.getUpcomingSlowerSpeed(vehicleExtraData.immutablePath, currentIndex, railProgress, speed, vehicleExtraData.getDeceleration());
-					if (upcomingSlowerSpeed >= 0 && upcomingSlowerSpeed < speed) {
-						speedTarget = upcomingSlowerSpeed * deviationSpeedAdjustment;
-						powerLevel = -POWER_LEVEL_RATIO;
-					} else {
-						speedTarget = vehicleExtraData.immutablePath.get(currentIndex).getSpeedLimitMetersPerMillisecond() * deviationSpeedAdjustment;
-						powerLevel = Double.compare(speedTarget, speed) * POWER_LEVEL_RATIO;
-					}
-				}
-			}
-
-			// Sync to the client
-			vehicleExtraData.setStoppingPoint(stoppingPoint);
-			vehicleExtraData.setSpeedTarget(speedTarget);
-			vehicleExtraData.setPowerLevel(powerLevel);
+		/*
+		 * notes/235：**原版 MTR 的走行路径已删除** —— `speedTarget` / `powerLevel` / `stoppingPoint`
+		 * 那一整套（连同"档位 × 固定加减速度"的积分）不再存在。服务端走到这里只可能是"还在遗留路径上的
+		 * 存量车"：它不动，并且由 {@link #mmtrMotionHoldReason()} 与日志**说出来**。
+		 *
+		 * <p>客户端镜像只剩一条物理：与服务端逐点相同的 {@link ConsistDynamics} + 本车的
+		 * {@link ConsistType}，输入是快照里的 ControlState 与气制动状态。不是有源车的镜像跟着服务端一起停。</p>
+		 */
+		if (!isClientside) {
+			speed = 0;
+			mmtrLogLegacyOnRouteIfNeeded();
+			return;
+		}
+		if (!(tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null && (mmtrMotionMirror || mmtrActive))) {
+			/*
+			 * ★ `mmtrMotionMirror || mmtrActive`（2026-10-03 的正面修正）。
+			 *
+			 * <p>`mmtrActive` 是**服务端**的口径："有司机握着把手"（{@code updateMmtrSyncFields}：
+			 * {@code mmtrActive = mmtrManualOverride && ...}）—— 于是**AI/ATO 驾驶的车永远是 false**，
+			 * 而这条判据原来只认它。结果是 AI 车的客户端镜像**根本不积分**：位置完全由 ① 每 100 ms
+			 * 一个的 MOTION 抬着走，画面上就是"位移掉帧、出站进站不平滑"（用户 2026-10-03 的原话），
+			 * 诊断那一行的 {@code 硬对齐} 会一直≈帧数（实测 10~11/秒，就是这条）。
+			 *
+			 * <p>"这辆车是运动镜像"（① 的 FLAG_MOTION_MIRROR，随 SLOT/STATE 一起到达）才是镜像该不该
+			 * 自己往前走的正确口径：是镜像 ⇒ 用同一条 {@link ConsistDynamics}、同一批镜像来的手柄输入
+			 * 积分；不是镜像（遗留烘焙路径的车）⇒ 保持原样不动。手柄输入本来就是服务端每拍算好的
+			 * （{@code createMirrorControlStateFromSync} 只用镜像字段），所以 AI 车同样能积分。</p>
+			 */
+			speed = 0;
+			return;
 		}
 
-		// Distance covered inside the MMTR sub-stepped integration (set when the mmtr branch runs).
+		// Distance covered inside the MMTR sub-stepped integration.
 		double mmtrDistanceTravelled = -1;
 
-		// Set speed
-		if (speedTarget < 0) {
-			final double stoppingDistance = stoppingPoint - railProgress;
-			speed = stoppingDistance <= 0 ? Siding.ACCELERATION_DEFAULT : Math.max(speed - (0.5 * speed * speed / stoppingDistance) * millisElapsed, Siding.ACCELERATION_DEFAULT);
-		} else if (tryInitMmtrController() && mmtrConsistType != null && mmtrDriveController != null && (!isClientside ? mmtrManualOverride && isCurrentlyManual() : mmtrActive)) {
+		{
 			// MMTR explicit control model: drive from the separated ControlState sent by the input
 			// layer (throttle notch 0..N, brake notch, axes). No legacy single-handle mapping.
-			// Mirrored client-side too (same controller, same authoritative ControlState + seeded
-			// air-brake state from the snapshot) so every client simulates identical physics.
+			// Mirrored client-side from the snapshot so every client simulates identical physics.
 			final boolean mmtrProtectionNow;
 			final ControlState mmtrControl;
-			if (!isClientside) {
-				mmtrProtectionNow = evaluateMmtrProtection(stoppingPoint);
-				mmtrControl = mmtrActiveControl == null ? new ControlState() : mmtrActiveControl;
-			} else {
-				mmtrProtectionNow = mmtrProtection;
-				mmtrControl = createMirrorControlStateFromSync();
-			}
+			mmtrProtectionNow = mmtrProtection;
+			mmtrControl = createMirrorControlStateFromSync();
 			// Fixed sub-step integration shared verbatim by the server and mirrored clients, so
 			// the physics stay identical (and stiff dynamics stable) regardless of dt. During
 			// overrun/SPAD protection the provider always requests emergency braking.
@@ -4246,13 +5628,18 @@ public class Vehicle extends VehicleSchema implements Utilities {
 			final double mmtrStartSpeedSi = MmtrSupport.internalSpeedToSi(speed);
 			final MmtrComposition compForIntegration = mmtrCompositionNow;
 			final ConsistDynamics.SpeedDistance mmtrResult = ConsistDynamics.advance(mmtrStartSpeedSi, mmtrType, millisElapsed, MMTR_INTEGRATION_SUB_STEP_MS, (siSpeed, stepMillis) -> {
+				final DriveOutput mmtrStepOutput;
 				if (mmtrProtectionActive && siSpeed > 0) {
-					return new DriveOutput(-mmtrType.getEmergencyDecelerationMps2(), true, true, 0, 1);
+					mmtrStepOutput = new DriveOutput(-mmtrType.getPhysics().emergencyDecelerationMps2(siSpeed), true, true, 0, 1);
+				} else if (compForIntegration != null) {
+					mmtrStepOutput = compForIntegration.stepAir(mmtrState, siSpeed, stepMillis);
+				} else {
+					mmtrStepOutput = mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
 				}
-				if (compForIntegration != null) {
-					return compForIntegration.stepAir(mmtrState, siSpeed, stepMillis);
-				}
-				return mmtrDriveController.compute(mmtrState, mmtrType, siSpeed, stepMillis);
+				// notes/250：右上角 HUD 的"电机做功"要读**这一拍真正算出来的**力，不许另外再算一套
+				// （另算就会变成"HUD 说在牵引、车却没动"那种最费解的组合）。
+				mmtrLastDriveAccelerationMps2 = mmtrStepOutput.getAccelerationMetersPerSecondSquared();
+				return mmtrStepOutput;
 			});
 			final double mmtrSpeed = MmtrSupport.siSpeedToInternal(mmtrResult.speedMetersPerSecond);
 			mmtrDistanceTravelled = mmtrResult.distanceMeters;
@@ -4262,44 +5649,34 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrPipePressure = compForIntegration.averagePipePressure();
 				mmtrBrakeCylinderPressure = compForIntegration.averageCylinderPressure();
 			}
-			if (!isClientside) {
-				// Keep the legacy HUD in sync: show throttle positive, brake negative, coast at zero
-				// (emergency during protection). Also refresh the mirrored snapshot fields.
-				if (mmtrProtectionNow) {
-					vehicleExtraData.setPowerLevel(-MAX_POWER_LEVEL - 1);
-				} else {
-					vehicleExtraData.setPowerLevel(mmtrLegacyPowerLevelFromControl(mmtrControl));
-				}
-				updateMmtrSyncFields();
-				if (speed != mmtrSpeed || mmtrDistanceTravelled > 0) {
-					org.mtr.core.mmtr.MmtrTrace.log("[MMTR-DRV] mode=" + mmtrConsistType.getControlMode() + " throttle=" + mmtrControl.getThrottleNotch() + " brake=" + mmtrControl.getBrakeNotch() + " drive=" + mmtrControl.getDriveHandle() + " afb=" + mmtrControl.getCruiseSpeedKmh() + " speed=" + speed + "->" + mmtrSpeed + " dist=" + mmtrResult.distanceMeters + " prot=" + mmtrProtectionNow);
-				}
-			}
 			speed = mmtrSpeed;
-		} else {
-			if (powerLevel > 0) {
-				speed = Math.min(speed + vehicleExtraData.getAcceleration() * powerLevel / POWER_LEVEL_RATIO * millisElapsed, speedTarget);
-			} else if (powerLevel < 0) {
-				speed = Math.max(speed + (powerLevel < -MAX_POWER_LEVEL ? -Siding.MAX_ACCELERATION * 2 : vehicleExtraData.getDeceleration() * powerLevel / POWER_LEVEL_RATIO) * millisElapsed, speedTarget);
-			} else {
-				speed = speedTarget;
+			/*
+			 * notes/252：**镜像读数诊断**（用户 2026-09-23「牵引力永远是 300 kN」）。
+			 *
+			 * <p>"读数不对"有四种可能，光看 HUD 分不出来：① 服务端算错（速度没进去 / 车底没功率）；
+			 * ② 快照没送到；③ 客户端车底（镜像 ConsistType）缺功率上限；④ HUD 读的那台车不是这台。
+			 * 这一行把**本机活算值 / 快照值 / 车底上限 / 速度**并排打出来，一次就能定位。
+			 * 只在司机在出力时打（2 s 一次），`-Dmmtr.trace=true` 才输出。</p>
+			 */
+			if (org.mtr.core.mmtr.MmtrTrace.isEnabled() && (mmtrState.getDriveHandle() != 0 || mmtrState.getCruiseSpeedKmh() > 0)) {
+				final long nowMillis = data.getCurrentMillis();
+				if (nowMillis - mmtrMirrorDiagMillis >= 2000) {
+					mmtrMirrorDiagMillis = nowMillis;
+					org.mtr.core.mmtr.MmtrTrace.log("[MMTR-CL] 电机诊断：车=" + id
+						+ " 速度SI=" + Math.round(MmtrSupport.internalSpeedToSi(speed) * 100) / 100.0
+						+ " 本机活算=" + Math.round(mmtrLiveMotorForceN() / 1000) + "kN"
+						+ " 快照值=" + Math.round(vehicleExtraData.getMmtrMotorForceN() / 1000) + "kN"
+						+ " 车底Fmax=" + Math.round(mmtrType.getTraction().getMaxTractiveEffortN() / 1000) + "kN"
+						+ " 车底P=" + Math.round(mmtrType.getTraction().getMaxPowerW() / 10000) / 100.0 + "MW"
+						+ " 质量=" + Math.round(mmtrType.getMassKg() / 100) / 10.0 + "t");
+				}
 			}
 		}
 
-		// Set rail progress (mmtr branch carries its own sub-stepped trapezoidal distance)
+		// 客户端镜像沿同步来的腿阴影推进。notes/235：原来这里还有"到 stoppingPoint 就钉死在停车点"
+		// 那一套（以及 MTR 的重复进路回绕）—— 停车点已经不存在；到点/到尽头由 simulate() 里的
+		// mmtrRunStopTarget / mmtrRunTotalDistance 夹紧。
 		railProgress += mmtrDistanceTravelled >= 0 ? mmtrDistanceTravelled : speed * millisElapsed;
-		if (railProgress >= stoppingPoint) {
-			railProgress = stoppingPoint;
-			speed = 0;
-			vehicleExtraData.setSpeedTarget(0);
-			updateDeviation();
-			if (!isClientside) {
-				atoOverride = false;
-				vehicleExtraData.setPowerLevel(Math.min(vehicleExtraData.getPowerLevel(), -1));
-			}
-		} else if (vehicleExtraData.getRepeatIndex2() > 0 && railProgress >= vehicleExtraData.getTotalDistance()) {
-			railProgress = vehicleExtraData.immutablePath.get(vehicleExtraData.getRepeatIndex1()).getStartDistance() + railProgress - vehicleExtraData.getTotalDistance();
-		}
 	}
 
 	/**
@@ -4646,7 +6023,29 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 		final JsonObject current = new JsonObject();
 		current.add("vehicle", Utilities.getJsonObjectFromData(this));
-		current.add("data", Utilities.getJsonObjectFromData(vehicleExtraData.copy(pathUpdateIndex)));
+		final JsonObject dataJson = Utilities.getJsonObjectFromData(vehicleExtraData.copy(pathUpdateIndex));
+		/*
+		 * ★ **运动车的腿表不进 ②**（notes/375）。
+		 *
+		 * 走行体（`mmtrMotionWalker != null`）每"踏上一根新轨 / 掉一根尾轨"就重写一次这份 path，
+		 * 而它不是 `DYNAMIC_KEYS` 里的键 —— 于是那一拍被判成"**静态字段变了**"：
+		 *
+		 * <ul>
+		 *   <li>修 `Client#update` 之前：这些整份对"已经持有镜像的客户端"**根本没发出去**
+		 *       （notes/375 §2.4），客户端的几何从此停在旧值 —— 就是"换端后车不动再瞬移"；</li>
+		 *   <li>修了之后（2026-10-03 17:0x 实测）：它们**真的发出去了** —— 每 1.5–6 秒一次 7.6 KB 整份，
+		 *       客户端重建镜像 ⇒ ① 再重新锚定腿表。8 辆车在场时实测 ~30 KB/s，纯属白花。</li>
+		 * </ul>
+		 *
+		 * <p>而运动车的几何**只有 ① 一个来源**（腿表 + 锚点 + 逐腿方向，见 notes/375）：
+		 * 镜像刚建起来那一拍，① 会在**同一个 tick**（`END_SERVER_TICK`，包在 ② 之后）把整表送来
+		 * （`Client#tookFullVehicleUpdate`），所以 ② 一个字节的 path 都不必带。
+		 * 非运动车（遗留烘焙路径）照旧：它们的 path 是静态数据，靠整份快照送。</p>
+		 */
+		if (mmtrMotionWalker != null) {
+			dataJson.remove("path");
+		}
+		current.add("data", dataJson);
 		final JsonObject patch = org.mtr.core.operation.VehicleSyncPatch.patchOf(mmtrSyncLastSent, current);
 		mmtrSyncLastSent = current;
 		if (patch == null) {
@@ -4934,7 +6333,13 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		final boolean awsBand = getMmtrRegime() == MmtrRegime.AWS;
 		final boolean liveManual = mmtrManualOverride && speed > 1e-9;
-		if (!awsBand || !mmtrManualOverride || mmtrProtection) {
+		/*
+		 * 司机越界那一路的紧急制动（mmtrAuthorityTripped）**不冻结 AWS 状态机**：那两件事互不相干 ——
+		 * 灯该跟着信号走（限制还在 ⇒ 保持已确认；限制消失 ⇒ 灭灯）。修前这里只认 mmtrProtection，
+		 * 于是"司机在界限上踩着紧急制动"会让 AWS 灯永远停在已确认（绿信号也灭不掉）。
+		 * AWS 报警超时的 SPAD 仍然冻结状态机（既有行为，一字未改）。
+		 */
+		if (!awsBand || !mmtrManualOverride || mmtrProtection && !mmtrAuthorityTripped) {
 			if (mmtrAwsState != MMTR_AWS_NONE && !mmtrProtection) {
 				mmtrAwsState = MMTR_AWS_NONE;
 				mmtrAwsWarnElapsedMillis = 0;
@@ -4991,9 +6396,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				mmtrAwsState = MMTR_AWS_ACKED;
 				System.out.println("[MMTR-AWS] acknowledged");
 			}
-		} else if (mmtrAwsState == MMTR_AWS_WARN) {
+		} else if (mmtrAwsState == MMTR_AWS_WARN && liveManual) {
+			/*
+			 * 确认窗口**只在车还在动的时候计时**（这本来就是这段文档写的口径："
+			 * once parked (occupancy wait) the warning holds without re-timing - no punishment
+			 * for an already-safe stand"）。修前它按 tick 无条件累加，只靠 liveManual 拦 SPAD ——
+			 * 于是"在红灯前停过一会儿再起步"会在**起步的第一拍**直接吃到 SPAD（累加值早就超窗了）。
+			 */
 			mmtrAwsWarnElapsedMillis += millisElapsed;
-			if (mmtrAwsWarnElapsedMillis >= MMTR_AWS_ACK_WINDOW_MILLIS && liveManual) {
+			if (mmtrAwsWarnElapsedMillis >= MMTR_AWS_ACK_WINDOW_MILLIS) {
 				// Unacknowledged and still moving: SPAD through the existing emergency channel.
 				mmtrProtection = true;
 				mmtrProtectionLockRemaining = MMTR_PROTECTION_LOCK_MS;
@@ -5210,6 +6621,9 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * behaviour (it draws up to the points and waits there) - the signal it passed is behind it.</p>
 	 */
 	private @Nullable Double nextSectionAuthorityStopM() {
+		// 每次重算都先清掉：这一处扣不扣、扣在哪一处道岔，只由这次判定说了算（陈旧键会让
+		// replenishForkRequests 去申请一处早就无关的道岔）。
+		mmtrSectionAuthorityHoldNodeKey = "";
 		if (mmtrMotionWalker == null || mmtrMotionLegs.isEmpty() || !(data instanceof final Simulator simulator)) {
 			return null;
 		}
@@ -5262,8 +6676,37 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		if (!entrySectionEndsAtRailEnd || !mmtrMotionWalker.wouldHaltAtForkOn(entryRail)) {
 			return null;
 		}
+		/*
+		 * **扣住本车的是哪一处道岔**（{@link #mmtrSectionAuthorityHoldNodeKey}）：`wouldHaltAtForkOn`
+		 * 判的就是"进这条路走到它的**远端**会不会被岔挡住"，所以那一处 = 这条路远端的那个节点。
+		 * 与 {@code MmtrMotionWalker#wouldHaltAtForkOn} 同一套口径（那边同样是"目标就是当前轨时用来向、
+		 * 否则用前方节点"），否则记下来的键会指向另一处，申请发错地方。
+		 */
+		final boolean onCurrentRail = entryRail.getHexId().equals(rail.getHexId());
+		final Position haltEntry = onCurrentRail ? mmtrMotionWalker.enteredFromPosition() : mmtrMotionWalker.aheadNode();
+		final Position haltFar = haltEntry == null ? null : otherEndOfRail(simulator, haltEntry, entryRail);
+		mmtrSectionAuthorityHoldNodeKey = haltFar == null ? "" : haltFar.getX() + "," + haltFar.getY() + "," + haltFar.getZ();
 		final double toBoundary = towardHigherArc ? current.arcToM - headArc : headArc - current.arcFromM;
 		return mmtrMotionWalker.distanceM() + Math.max(0, toBoundary - MMTR_BLOCK_NODE_EPS_M);
+	}
+
+	/**
+	 * 图上"轨 {@code rail} 在节点 {@code at} 的另一端"（查不到 = null）。
+	 *
+	 * <p>与 {@code MmtrRunPlanner#otherEndOf}、{@code MmtrMotionWalker#otherEnd} 同义；本类需要它来把
+	 * ① 的"出口道岔"写成节点键（那两处一个是 private，一个在别的类里）。</p>
+	 */
+	private static @Nullable Position otherEndOfRail(Simulator simulator, Position at, Rail rail) {
+		final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap<Position, Rail> neighbours = simulator.positionsToRail.get(at);
+		if (neighbours == null) {
+			return null;
+		}
+		for (final it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap.Entry<Position, Rail> entry : neighbours.object2ObjectEntrySet()) {
+			if (entry.getValue() == rail && !entry.getKey().equals(at)) {
+				return entry.getKey();
+			}
+		}
+		return null;
 	}
 
 	/**

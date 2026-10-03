@@ -39,7 +39,7 @@ public final class DevYardMotionE2ETests {
 
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 	private static final Path DEV_MTR_ROOT = Paths.get("C:/Users/30354/Desktop/Shuisoi DEV/MC/mmtr/game/fabric/run/saves/新的世界/mtr");
 	private static final long NX = -96, NY = -60, NZ = 76;
@@ -250,12 +250,13 @@ public final class DevYardMotionE2ETests {
 		Assumptions.assumeTrue(vehicle != null, "yard seam could not dispatch on the chosen siding (yard not idle?)");
 		assertTrue(vehicle.isMmtrMotion(), "vehicle runs in live Motion-Core mode from the real yard");
 
-		final UUID driver = UUID.randomUUID();
-		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
-		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
-		vehicle.updateRidingEntities(entities);
-		new MmtrDriveControl(vehicle.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(sim);
-		assertTrue(vehicle.isMmtrManualOverride(), "drive command must hold the override");
+		/*
+		 * notes/233 司机优先：手动车**跟随道岔物理位置**（用户口径 2026-09-21），所以"按计划的路由在
+		 * 未设岔前等"这条合同改由**无人自动车**钉住 —— 自动车仍然停在未设好的岔前、等人工扳通才续行，
+		 * 而且走的是道岔**开通**的那条轨（下面那一段正是这个意思）。
+		 */
+		vehicle.setMmtrMotionAuto(true);
+		vehicle.setMmtrMotionStopTarget(1_000_000, false);
 
 		// Drive out of the yard to the -96 fork (" + Math.round(chosen.route.distanceM) + " m planned).
 		boolean arrived = false;

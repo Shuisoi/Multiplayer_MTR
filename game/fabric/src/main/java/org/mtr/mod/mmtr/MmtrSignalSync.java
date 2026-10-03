@@ -44,8 +44,10 @@ import java.util.Set;
  *   <li><b>灯被敲掉</b>（{@link PlayerBlockBreakEvents#AFTER}）：玩家敲掉的那一格（以及它上下相邻格）
  *       如果登记表里有条目，立刻删 —— 这是"敲掉就马上生效"的那条路，不用等轮转扫到。</li>
  *   <li><b>常态轮转</b>：每秒挑几个已加载区块重新核对一遍。这是**兜底**：爆炸、活塞、方块自己消失、
- *       或者别的模组动的世界，事件收不到的那种改动由它收敛；灯被放下的那种情况也主要靠它（放灯没有
- *       对应的事件钩子，而放下的灯所在区块早就加载好了，不会触发第 1 条）。</li>
+ *       或者别的模组动的世界，事件收不到的那种改动由它收敛。</li>
+ *   <li><b>放灯</b>（notes/284）：方块自己的 {@code onPlaced} 立刻登记那一盏。**这条是本轮补的** ——
+ *       原来放灯只能靠轮转扫到，而轮转是"一分钟走完一圈"，实测新放的灯最慢 25–60 秒才进登记表；
+ *       灯是区间的切点，于是那几十秒里区间（以及拿信号灯时看的那层区间带）看不见刚放的那盏灯。</li>
  * </ol>
  *
  * <h3>删除的安全边界（不能放宽）</h3>
@@ -149,7 +151,53 @@ public final class MmtrSignalSync {
 		}
 	}
 
+	/**
+	 * 放灯**立刻**登记（notes/284）：方块被放下时，只核对这一盏。
+	 *
+	 * <h3>为什么必须有这一条</h3>
+	 * <p>登记表原来只有三条路：区块加载、敲灯事件、每分钟一圈的轮转。而**放灯没有事件钩子**
+	 * （它所在区块早就加载好了，也不会触发"区块加载"那条），于是新放的灯要等轮转扫到才进登记表。
+	 * 现场实测（2026-09-25 服务端日志）：</p>
+	 *
+	 * <pre>
+	 *   [14:16:27] 自动刷新：灯被敲掉，删除登记 -2,64,-179     ← 敲掉是立刻的
+	 *   [14:16:55] 自动刷新：轮转核对 新增 1 盏 [-2,64,-179]   ← 重新放上同一盏，28 秒后才登记
+	 *   [14:17:50] 自动刷新：轮转核对 新增 2 盏 [-25,63,-74, -29,63,-74]
+	 * </pre>
+	 *
+	 * <p>灯是区间的**切点**，所以这几十秒里区间不会变 —— 用户看到的现象就是"轨道上的区间不会立马刷新，
+	 * 要等一会"。这条路只核对**这一盏灯**（不扫整个区块）：放灯是低频动作，代价可以忽略；
+	 * 轮转仍留着当兜底（别的模组放灯、结构生成、{@code /setblock} 那些没有 {@code onPlaced} 的路径）。</p>
+	 *
+	 * <p>写登记用的是 {@link Simulator#mmtrSignalRefresh}（= 区块核对用的同一个入口）：只改世界告诉我们的
+	 * 朝向与灯位数，人工绑定（{@code mode}/{@code target}/{@code rails}）一律不动，且只在**新增**时落盘。</p>
+	 */
+	public static void onSignalPlaced(org.mtr.mapping.holder.ServerWorld serverWorld, org.mtr.mapping.holder.BlockPos pos) {
+		final Simulator simulator = simulatorOf(serverWorld.data);
+		if (simulator == null) {
+			return;
+		}
+		final World world = new World(serverWorld.data);
+		final BlockState blockState = world.getBlockState(pos);
+		final Object block = blockState.getBlock().data;
+		if (!MmtrSignalBlocks.isSignalLight(block)) {
+			return;
+		}
+		if (simulator.mmtrSignalRefresh(pos.getX(), pos.getY(), pos.getZ(), BlockSignalBase.getAngle(blockState), MmtrSignalBlocks.aspectsOf(block))) {
+			logLine("[MMTR-SIG] 放灯即登记 " + pos.getX() + "," + pos.getY() + "," + pos.getZ());
+		}
+	}
+
 	private static void tick(MinecraftServer minecraftServer) {
+		final long probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+		try {
+			tickMeasured(minecraftServer);
+		} finally {
+			org.mtr.core.mmtr.probe.MmtrProbe.end("server.signalSync", probeT);
+		}
+	}
+
+	private static void tickMeasured(MinecraftServer minecraftServer) {
 		for (final ServerWorld serverWorld : minecraftServer.getWorlds()) {
 			final Simulator simulator = simulatorOf(serverWorld);
 			if (simulator == null) {
@@ -228,6 +276,22 @@ public final class MmtrSignalSync {
 	 * 否则"手动扫出来的结果"和"自动收敛的结果"会不一样，那就没法用它来解释任何事。</p>
 	 */
 	public static Result syncChunk(Simulator simulator, ServerWorld serverWorld, WorldChunk chunk) {
+		/*
+		 * 逐区块计时（notes/337）：这条路是"每 tick 都在花一点"的典型 ——
+		 * 排队区区块按预算核对、每 20 tick 再轮转扫一批。它的总耗时不一定大，
+		 * 但它是**每 tick 固定成本**，而用户看到的卡顿恰恰常常是"稳态就慢"而不是尖峰。
+		 * `signalSync.chunks` 与 `signalSync.syncChunk` 的比就是"平均一个区块多贵"。
+		 */
+		final long probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+		org.mtr.core.mmtr.probe.MmtrProbe.hit("signalSync.chunks");
+		try {
+			return syncChunkMeasured(simulator, serverWorld, chunk);
+		} finally {
+			org.mtr.core.mmtr.probe.MmtrProbe.end("signalSync.syncChunk", probeT);
+		}
+	}
+
+	private static Result syncChunkMeasured(Simulator simulator, ServerWorld serverWorld, WorldChunk chunk) {
 		final Result result = new Result();
 		final long chunkKey = chunkKey(chunk.getPos().x, chunk.getPos().z);
 		final World world = new World(serverWorld);

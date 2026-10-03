@@ -28,6 +28,16 @@ public class Client extends ClientSchema {
 	private final LongAVLTreeSet keepVehicleIds = new LongAVLTreeSet();
 	private final Long2ObjectAVLTreeMap<VehicleUpdate> vehicleUpdates = new Long2ObjectAVLTreeMap<>();
 	/**
+	 * 上一拍 {@link #sendUpdates} **整份快照**发出去的那些车（notes/375）。
+	 *
+	 * <p>为什么 ① 需要知道这件事：整份快照会让客户端**重建镜像**（新的 `VehicleExtension` /
+	 * `VehicleExtraData`），连带把腿表换成 ② 那一刻序列化出去的那一份；而 ① 记的"上次发出去的腿表"
+	 * 是另一条路（自己的 {@code SentState.legs}）。两者只要差一点，之后每一个增量都会"接不上"
+	 * 而被客户端原子地拒绝 —— 几何就停在旧值上（车被夹在阴影末端）。所以 ① 每拍问一句
+	 * "这个客户端这一拍刚被整份重建过吗"，是的话就把腿表**重新锚定**（发整表）。</p>
+	 */
+	private final LongAVLTreeSet lastFullUpdateVehicleIds = new LongAVLTreeSet();
+	/**
 	 * 这一拍要发的**稀疏补丁**（notes/174）：车辆 id → 只含变化字段的那段 JSON。
 	 *
 	 * <p>与 {@link #vehicleUpdates} 是同一件事的两档：整份快照只在"客户端第一次看到这辆车"或
@@ -129,6 +139,10 @@ public class Client extends ClientSchema {
 	 * 加起来"决定 —— 少算了任何一路，客户端就会把还在视野里的车删掉（一亮一灭）。</p>
 	 */
 	private boolean processVehicles(DynamicDataResponse dynamicDataResponse) {
+		// 记下"这一拍整份重建了哪些车的镜像"（① 的腿表据此重新锚定，见 lastFullUpdateVehicleIds）。
+		lastFullUpdateVehicleIds.clear();
+		lastFullUpdateVehicleIds.addAll(vehicleUpdates.keySet());
+
 		vehicleUpdates.forEach((vehicleId, vehicleUpdate) -> {
 			dynamicDataResponse.addVehicleToUpdate(vehicleUpdate);
 			existingVehicleIds.remove(vehicleId);
@@ -181,7 +195,24 @@ public class Client extends ClientSchema {
 		final long vehicleId = vehicle.getId();
 		if (needsUpdate || !existingVehicleIds.contains(vehicleId)) {
 			final boolean clientAlreadyHasIt = existingVehicleIds.contains(vehicleId);
-			if (patch != null && patch.size() > 0 && clientAlreadyHasIt) {
+			if (patch == null) {
+				/*
+				 * ★ **静态字段变了（或到了兜底时刻）⇒ 必须是整份快照**（notes/375 修的那条）。
+				 *
+				 * <p>{@code VehicleSyncPatch#patchOf} 的契约是：{@code null} = "这一份与上次差的不只是
+				 * 动态字段"（换交路、改编组、**path 换了**）或"到了 30 秒强制兜底"，两种都要求客户端
+				 * **重建镜像**。而这里原来只在"客户端还没有这辆车"时才走整份 —— 于是
+				 * {@code patch == null} + 客户端已持有 ⇒ 掉进下面那支"标脏了但一份都不差"的保活，
+				 * **一个字节都不发**：客户端的镜像（含腿阴影）会一直停在旧值，
+				 * 唯一能修好它的只剩"车出视距被删、再进来重建"（现场：换端后车不动 ~50 秒，
+				 * 等它出了更新半径又进来才瞬移到位）。</p>
+				 *
+				 * <p>空补丁（{@code size() == 0}）仍然是"没东西要发" —— 那是另一件事，见下面那支。</p>
+				 */
+				vehicleUpdates.put(vehicleId, new VehicleUpdate(vehicle, vehicle.vehicleExtraData.copy(pathUpdateIndex)));
+				vehiclePatches.remove(vehicleId);
+				keepVehicleIds.remove(vehicleId);
+			} else if (patch.size() > 0 && clientAlreadyHasIt) {
 				// 客户端已经持有这辆车、而这一拍只有动态字段变了 ⇒ 发补丁（原地合并）
 				vehiclePatches.put(vehicleId, patch);
 				vehicleUpdates.remove(vehicleId);
@@ -222,6 +253,17 @@ public class Client extends ClientSchema {
 	@Deprecated
 	public void update(Vehicle vehicle, boolean needsUpdate, int pathUpdateIndex) {
 		update(vehicle, needsUpdate, pathUpdateIndex, null);
+	}
+
+	/**
+	 * 上一拍 {@link #sendUpdates} 是否**整份**发过这辆车（= 客户端那一拍重建了镜像）。
+	 *
+	 * <p>运动流（①）每拍问这一句：整份重建之后客户端手上的腿表是 ② 序列化出去的那一份，
+	 * 与 ① 记的基准可能不同源 —— 于是 ① 立刻重新锚定（发整表 + 锚点），而不是继续发增量。
+	 * 这就是"腿表唯一来源"的最后一块：**谁让客户端的镜像重建，谁就让 ① 重新对齐。**</p>
+	 */
+	public boolean tookFullVehicleUpdate(long vehicleId) {
+		return lastFullUpdateVehicleIds.contains(vehicleId);
 	}
 
 	/**

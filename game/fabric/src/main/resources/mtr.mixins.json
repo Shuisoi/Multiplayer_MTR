@@ -8,10 +8,19 @@
 		"PlayerTeleportationStateAccessor"
 	],
 	"client": [
+		"BatchManagerRenderCallMixin",
+		"ClientInputDecoupleMixin",
+		"ClientPlayNetworkHandlerLightMixin",
 		"ClientWorldRenderingMixin",
+		"DummyClassMixin",
+		"GameOptionsWriteMixin",
 		"HeldItemRendererMixin",
 		"InGameHudMixin",
-		"PlayerRendererOffsetMixin"
+		"MaterialPropertiesMixin",
+		"PatchingResourceProviderMixin",
+		"PlayerRendererOffsetMixin",
+		"ShaderManagerMixin",
+		"VertexAttributeStateMixin"
 	],
 	"server": [],
 	"injectors": {

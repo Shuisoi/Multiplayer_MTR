@@ -1,5 +1,7 @@
 package org.mtr.core.mmtr;
 
+import org.mtr.core.mmtr.physics.DynamicsEnvelope;
+
 /**
  * Overrun/SPAD protection decision (SCR/TPWS-style), kept pure so it can be unit-tested and
  * mirrored identically by clients.
@@ -34,7 +36,7 @@ public final class MmtrProtection {
 		if (remainingDistance <= 0) {
 			return true;
 		}
-		final double requiredDecel = 0.5 * speedInternal * speedInternal / remainingDistance;
-		return requiredDecel > emergencyDecelInternal * MARGIN;
+		// 包线数学只有一份（notes/234）：所需减速度是否已超过紧急包线的 MARGIN 倍。
+		return DynamicsEnvelope.requiresBraking(speedInternal, 0, remainingDistance, emergencyDecelInternal, MARGIN);
 	}
 }

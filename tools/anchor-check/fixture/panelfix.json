@@ -1,0 +1,34 @@
+{
+  "id": "panelfix",
+  "name": "Client-frame panel fixture (anchors only - see make_panelfix.js)",
+  "color": "7FA8CC",
+  "transportMode": "TRAIN",
+  "carLengthBlocks": 32.3729,
+  "carWidthBlocks": 5,
+  "carIndex": 0,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -9.2797,
+  "bogie2OffsetBlocks": 9.2797,
+  "couplingPadding1": 0,
+  "couplingPadding2": 0,
+  "sourceObj": "${MC_ROOT}/mmtr/tools/anchor-check/fixture/foldfix.obj",
+  "textureDir": "${MC_ROOT}/mmtr/tools/anchor-check/fixture",
+  "rotationDegY": 0,
+  "recenter": false,
+  "flipTextureV": true,
+  "groupMap": {
+    "body": [
+      "body"
+    ],
+    "interior": [],
+    "anchor": [
+      "mmtr_"
+    ]
+  },
+  "doorAnimationType": "STANDARD",
+  "doorSlidePx": 14,
+  "outputPackName": "panelfix_v1",
+  "outputDir": "${MC_ROOT}/mmtr/tools/anchor-check/fixture/out",
+  "stagingDir": "${MC_ROOT}/mmtr/tools/anchor-check/fixture/stage-panelfix",
+  "packFormat": 18
+}

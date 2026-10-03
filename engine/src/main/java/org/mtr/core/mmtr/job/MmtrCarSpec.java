@@ -1,5 +1,6 @@
 package org.mtr.core.mmtr.job;
 
+import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.VehicleCar;
 import org.mtr.core.mmtr.consist.MmtrUnitCar;
 import org.mtr.core.serializer.ReaderBase;
@@ -36,7 +37,20 @@ public final class MmtrCarSpec implements SerializedDataBase {
 	public double couplingPadding1;
 	public double couplingPadding2;
 	public boolean powered = true;
+	/**
+	 * 三态（notes/271 片 1）：{@code powered} 这个键在作者数据里**到底写没写**。
+	 *
+	 * <p>{@code null} = 没写 ⇒ 沿用"借车底、最多一节借牵引"的老兜底；非 {@code null} = 这是一次
+	 * **显式声明**（{@code false} 就永远不借牵引）。光看 {@code powered} 分不出这两件事，而"一列
+	 * 全无动力的挂车"必须能被说出来（notes/247 的现场就是从这儿漏出去的）。</p>
+	 */
+	public @Nullable Boolean poweredDeclared;
 	public String consistTypeId = "";
+	/**
+	 * 载重比例 0..1（用户口径 2026-09-26）：逐车质量 = 整备质量 + {@code loadRatio × 车底的载重能力}。
+	 * 空车写 0；载重只影响质量（惯性、黏着法向力、制动重率），不动分配阀的两段动作。
+	 */
+	public double loadRatio;
 	/**
 	 * Whether a COUPLER sits between this car and the next one — i.e. whether this boundary is a legal
 	 * uncoupling seam. {@code false} (default) keeps the previous behaviour: the cars form one fixed
@@ -70,7 +84,10 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		couplingPadding1 = readerBase.getDouble("couplingPadding1", 0);
 		couplingPadding2 = readerBase.getDouble("couplingPadding2", 0);
 		powered = readerBase.getBoolean("powered", true);
+		poweredDeclared = null;
+		readerBase.unpackBoolean("powered", value -> poweredDeclared = value);
 		consistTypeId = readerBase.getString("consistTypeId", "");
+		loadRatio = readerBase.getDouble("loadRatio", 0);
 		mmtrCouplerAfter = readerBase.getBoolean("mmtrCouplerAfter", false);
 		mmtrAutoCoupler = readerBase.getBoolean("mmtrAutoCoupler", true);
 	}
@@ -87,6 +104,7 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		writerBase.writeDouble("couplingPadding2", couplingPadding2);
 		writerBase.writeBoolean("powered", powered);
 		writerBase.writeString("consistTypeId", consistTypeId);
+		writerBase.writeDouble("loadRatio", loadRatio);
 		writerBase.writeBoolean("mmtrCouplerAfter", mmtrCouplerAfter);
 		writerBase.writeBoolean("mmtrAutoCoupler", mmtrAutoCoupler);
 	}
@@ -96,6 +114,9 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		final VehicleCar car = new VehicleCar(vehicleId, length, width, capacity, bogie1Position, bogie2Position, couplingPadding1, couplingPadding2, powered, consistTypeId);
 		car.setMmtrCouplerAfter(mmtrCouplerAfter);
 		car.setMmtrAutoCoupler(mmtrAutoCoupler);
+		// 片 1：三态与载重一路带到运行时车卡上（否则"显式无动力"和"零载重"出了作者层就没了）。
+		car.setMmtrPoweredDeclared(poweredDeclared != null);
+		car.setMmtrLoadRatio(loadRatio);
 		return car;
 	}
 
@@ -120,7 +141,10 @@ public final class MmtrCarSpec implements SerializedDataBase {
 		spec.couplingPadding1 = car.getCouplingPadding1();
 		spec.couplingPadding2 = car.getCouplingPadding2();
 		spec.powered = car.getMmtrPowered();
+		// 三态照着运行时车卡回填：只有"当时确实写了这个键"的车才带着声明往前走。
+		spec.poweredDeclared = car.isMmtrPoweredDeclared() ? car.getMmtrPowered() : null;
 		spec.consistTypeId = car.getMmtrConsistTypeId();
+		spec.loadRatio = car.getMmtrLoadRatio();
 		spec.mmtrCouplerAfter = car.getMmtrCouplerAfter();
 		spec.mmtrAutoCoupler = car.getMmtrAutoCoupler();
 		return spec;

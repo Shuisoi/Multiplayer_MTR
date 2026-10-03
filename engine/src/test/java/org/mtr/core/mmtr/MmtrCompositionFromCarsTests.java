@@ -26,8 +26,8 @@ public final class MmtrCompositionFromCarsTests {
 
 	private static ConsistTypeRegistry registry() {
 		return ConsistTypeRegistry.parse("{\"consistTypes\":["
-			+ "{\"id\":\"loco\",\"tractionAccelerationMps2\":0.3,\"serviceBrakeDecelerationMps2\":0.7,\"massRatio\":2},"
-			+ "{\"id\":\"wagon\",\"tractionAccelerationMps2\":0,\"serviceBrakeDecelerationMps2\":0.5,\"massRatio\":1}]}");
+			+ "{\"id\":\"loco\",\"massKg\":120000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":84000,\"emergencyBrakeForceN\":126000},"
+			+ "{\"id\":\"wagon\",\"massKg\":60000,\"maxTractiveEffortN\":0,\"serviceBrakeForceN\":30000,\"emergencyBrakeForceN\":45000}]}");
 	}
 
 	@Test
@@ -42,7 +42,7 @@ public final class MmtrCompositionFromCarsTests {
 		assertTrue(train.unit(0).isPowered(), "the locomotive pulls");
 		assertFalse(train.unit(1).isPowered(), "a hauled wagon contributes no traction");
 		assertFalse(train.unit(2).isPowered());
-		assertEquals(4.0, train.massTotal(), 1e-9, "loco mass 2 + two wagons of mass 1");
+		assertEquals(240_000, train.totalEffectiveMassKg(), 1e-9, "loco 120 t + two wagons of 60 t（λ=1）");
 		final DriveOutput out = train.aggregate(ControlState.zero().setThrottleNotch(7), 0);
 		assertEquals(0.15, out.getAccelerationMetersPerSecondSquared(), 1e-9, "0.3 accel from the loco (mass 2 of 4) spread over the whole train");
 	}

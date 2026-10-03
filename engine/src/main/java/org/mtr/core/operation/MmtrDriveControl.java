@@ -29,6 +29,14 @@ public final class MmtrDriveControl implements SerializedDataBase {
 	/** 三手柄机车的定速巡航设定值（km/h，0 = 关闭，步长 5）。 */
 	private int cruiseSpeedKmh;
 	private int reverser;
+	/**
+	 * 灯光开关档位（{@code MmtrLightSwitch} 的 OFF/TAIL/LOW/HIGH = 关闭/尾灯/近光/远光），描述**司机所在驾驶室那一端**的开关。
+	 *
+	 * <p>{@code -1} = <b>这一包没带灯光开关</b>（旧客户端）：那时 {@code apply} 不动它，
+	 * {@link ControlState} 保持自己的缺省（尾灯）—— 于是"旧客户端开车"逐位等于本特性之前的行为
+	 * （两端尾灯），不会因为读到 0（= 关闭）而把车灯关掉。</p>
+	 */
+	private int lightSwitch = -1;
 	private double throttleAxis;
 	private double brakeAxis;
 	private boolean emergency;
@@ -46,6 +54,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		this.driveHandle = state.getDriveHandle();
 		this.cruiseSpeedKmh = state.getCruiseSpeedKmh();
 		this.reverser = state.getReverser();
+		this.lightSwitch = state.getLightSwitch();
 		this.throttleAxis = state.getThrottleAxis();
 		this.brakeAxis = state.getBrakeAxis();
 		this.emergency = state.isEmergency();
@@ -65,6 +74,8 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		driveHandle = readerBase.getInt("driveHandle", 0);
 		cruiseSpeedKmh = readerBase.getInt("cruiseSpeedKmh", 0);
 		reverser = readerBase.getInt("reverser", 0);
+		// 缺省 -1 = 旧客户端没带这个字段（见字段注释）；引擎据此"不动开关"，而不是把它读成关闭档。
+		lightSwitch = readerBase.getInt("lightSwitch", -1);
 		throttleAxis = readerBase.getDouble("throttleAxis", 0);
 		brakeAxis = readerBase.getDouble("brakeAxis", 0);
 		emergency = readerBase.getBoolean("emergency", false);
@@ -78,6 +89,10 @@ public final class MmtrDriveControl implements SerializedDataBase {
 			.setThrottleNotch(throttleNotch).setBrakeNotch(brakeNotch).setDriveHandle(driveHandle)
 			.setCruiseSpeedKmh(cruiseSpeedKmh).setReverser(reverser)
 			.setThrottleAxis(throttleAxis).setBrakeAxis(brakeAxis).setEmergency(emergency).setAcknowledge(acknowledge);
+		if (lightSwitch >= 0) {
+			// 只有**带了这个字段**的包才动灯光开关（旧客户端不受影响，见字段注释）。
+			state.setLightSwitch(lightSwitch);
+		}
 		simulator.sidings.forEach(siding -> siding.iterateVehicles(vehicle -> {
 			if (vehicle.getId() == vehicleId) {
 				if (vehicle.canTakeMmtrControl(driverUuid)) {
@@ -99,6 +114,7 @@ public final class MmtrDriveControl implements SerializedDataBase {
 		writerBase.writeInt("driveHandle", driveHandle);
 		writerBase.writeInt("cruiseSpeedKmh", cruiseSpeedKmh);
 		writerBase.writeInt("reverser", reverser);
+		writerBase.writeInt("lightSwitch", lightSwitch);
 		writerBase.writeDouble("throttleAxis", throttleAxis);
 		writerBase.writeDouble("brakeAxis", brakeAxis);
 		writerBase.writeBoolean("emergency", emergency);

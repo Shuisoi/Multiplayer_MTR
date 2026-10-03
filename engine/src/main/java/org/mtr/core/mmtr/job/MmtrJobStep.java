@@ -11,7 +11,8 @@ import org.mtr.core.serializer.WriterBase;
  *   <li>MOVE_TO - run the consist to {@code targetId} (a platform or siding); the step completes
  *       when the consist arrives (dueTimeOfDayMs = latest allowed arrival). 也可以改用**轨目标**
  *       {@link #targetRailHex}（一根正规轨道 + {@link #targetRailFraction}）：折返/换端点用它表达，
- *       不必把某条线路定义成股道。</li>
+ *       不必把某条线路定义成股道。还可以给**经由点** {@link #viaNodes}：进路必须先穿过这些节点
+ *       （"回库车必须走哪条引入线"这类线路知识就写在这里）。</li>
  *   <li>SERVE - passenger work at the current platform/siding: open doors, dwell, close doors;
  *       completes when doors are closed (dueTimeOfDayMs = latest departure).</li>
  *   <li>COUPLE - attach the consist with id {@code targetId} standing on the current siding.</li>
@@ -48,6 +49,20 @@ public final class MmtrJobStep implements SerializedDataBase {
 	 * 默认 1.0 = "一直开到这根轨的尽头"，正好是折返换端想要的落点。
 	 */
 	public double targetRailFraction = 1.0;
+	/**
+	 * **经由点（路径点）**：这一步的进路必须**依次穿过**这些图节点，写成世界坐标 {@code "x,y,z"}。
+	 *
+	 * <h3>为什么作业单需要它（2026-09-27 用户现场口径）</h3>
+	 * <p>"在库与正线连接的那个立交上，列车不能在线上逆行……所有回库列车都需要经过 {@code 106,65,1600} 点。"</p>
+	 *
+	 * <p>进路规划是**按跳数最短**的前向 BFS，它不知道"这条引入线是上行还是下行"：咽喉处两条平行引入线
+	 * 都能到库房，BFS 就挑先够着的那条 —— 回库车于是顺着**出库方向**那条线逆向开进去（逆行），
+	 * 在咽喉里与出库车互堵。经由点把"必须走哪条"这条**线路知识**交回作业单：先到经由点、再从经由点去目标。</p>
+	 *
+	 * <p>已经越过的经由点不再要求（节点是车所在轨的端点即视为已达成）—— 否则车一过它，下一次自臂就会失败。
+	 * 详见 {@code MmtrRunPlanner.planToRail(…, viaNodeKeys)}。</p>
+	 */
+	public final it.unimi.dsi.fastutil.objects.ObjectArrayList<String> viaNodes = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
 	/** For UNCOUPLE: car index to cut after. */
 	public int targetIndex = -1;
 	/** Latest allowed completion time, milliseconds after in-game midnight. */
@@ -91,6 +106,7 @@ public final class MmtrJobStep implements SerializedDataBase {
 		}
 		targetIndex = readerBase.getInt("targetIndex", -1);
 		targetRailFraction = readerBase.getDouble("targetRailFraction", 1.0);
+		readerBase.iterateStringArray("viaNodes", viaNodes::clear, viaNodes::add);
 		dueTimeOfDayMs = readerBase.getLong("dueTimeOfDayMs", 0);
 		final String noteString = readerBase.getString("note", "");
 		note = noteString.isEmpty() ? null : noteString;
@@ -111,6 +127,12 @@ public final class MmtrJobStep implements SerializedDataBase {
 		if (targetRailHex != null && !targetRailHex.isEmpty()) {
 			writerBase.writeString("targetRailHex", targetRailHex);
 			writerBase.writeDouble("targetRailFraction", targetRailFraction);
+		}
+		if (!viaNodes.isEmpty()) {
+			final WriterBase.Array viaArray = writerBase.writeArray("viaNodes");
+			for (final String viaNode : viaNodes) {
+				viaArray.writeString(viaNode);
+			}
 		}
 		writerBase.writeLong("dueTimeOfDayMs", dueTimeOfDayMs);
 		if (note != null && !note.isEmpty()) {

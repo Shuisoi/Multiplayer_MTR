@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -27,7 +28,7 @@ public final class MmtrRunPlannerTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
@@ -305,9 +306,169 @@ public final class MmtrRunPlannerTests {
 		assertFalse(v.isMmtrManualOverride(), "planner-driven run needed no driver");
 	}
 
+	/**
+	 * **经由点（路径点）网**：咽喉处两条引入线，短的先够着、长的才从经由点 V 过。
+	 *
+	 * <pre>
+	 * 库股 -32 ──→ 口 -20 ─┬─ rShort（1 跳）─────────────→ 汇 J 60 ── rTarget ──→ 140
+	 *                       └─ rVia1 ──→ V(20,0,20) ── rVia2 ──↑
+	 * </pre>
+	 *
+	 * <p>现实对应（本图现场）：回库车的两条引入线都能到库，前向 BFS 挑**跳数少**的那条（= 出库方向那条），
+	 * 于是逆向开进咽喉、与出库车互堵。经由点 V 就是"必须走这条"的写法。</p>
+	 */
+	private static final class ViaNet {
+		final Simulator sim = new Simulator("test", new String[]{"test"}, Paths.get("build/mmtr-run-planner-via"), false);
+		final Position yardBack = new Position(-32, 0, 0);
+		final Position mouth = new Position(-20, 0, 0);
+		final Position via = new Position(20, 0, 20);
+		final Position junction = new Position(60, 0, 0);
+		final Rail yardRail = Rail.newSidingRail(yardBack, Angle.fromAngle(0), mouth, Angle.fromAngle(0), Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Rail rShort = through(mouth, junction);
+		final Rail rVia1 = through(mouth, via);
+		final Rail rVia2 = through(via, junction);
+		final Rail rTarget = through(junction, new Position(140, 0, 0));
+		final Depot depot = new Depot(TransportMode.TRAIN, sim);
+		final Siding siding = new Siding(yardBack, mouth, 12, TransportMode.TRAIN, sim);
+		final BranchStore store = new BranchStore();
+
+		ViaNet() {
+			depot.setName("Yard");
+			depot.setCorners(new Position(-40, -5, -5), new Position(-10, 5, 5));
+			sim.rails.add(yardRail);
+			sim.rails.add(rShort);
+			sim.rails.add(rVia1);
+			sim.rails.add(rVia2);
+			sim.rails.add(rTarget);
+			sim.depots.add(depot);
+			sim.sidings.add(siding);
+			final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
+			cars.add(new VehicleCar("probe", 2, 1, 10, 0, 1, 0.1, 0.1));
+			siding.setVehicleCars(cars);
+			sim.mmtrConsistTypes = ConsistTypeRegistry.parse(CONSIST_JSON);
+			sim.mmtrDefaultConsistTypeId = "emu";
+			sim.sync();
+			assertTrue(depot.savedRails.contains(siding), "siding must attach to the depot yard");
+			siding.tick();
+		}
+
+		Vehicle spawn() {
+			final MmtrMotionWalker walker = siding.mmtrMotionWalkerFromYard(null, store, null);
+			assertNotNull(walker, "yard walker must resolve");
+			final Vehicle vehicle = siding.spawnMmtrMotionVehicle(walker);
+			assertNotNull(vehicle, "motion vehicle must spawn");
+			return vehicle;
+		}
+	}
+
+	private static ObjectArrayList<String> vias(String... nodeKeys) {
+		final ObjectArrayList<String> out = new ObjectArrayList<>();
+		java.util.Collections.addAll(out, nodeKeys);
+		return out;
+	}
+
+	/**
+	 * 不带经由点时照旧走最短那条（**回归闸门**：加了经由点这条路，不能顺手改了老行为）。
+	 * 带经由点时，进路必须真的穿过那个节点 —— 而且不是停在它上面（"穿过"，不是"到站"）。
+	 */
 	@Test
-	public void plannerReportsInfeasibleCases() {
-		final Net n = new Net();
+	public void plannerRoutesThroughTheViaNodeOnlyWhenTheStepAsksForIt() {
+		final ViaNet n = new ViaNet();
+		final Vehicle v = n.spawn();
+
+		final MmtrRunPlanner.Plan plain = MmtrRunPlanner.planToRail(n.sim, v, n.rTarget.getHexId(), 0.5);
+		assertTrue(plain.feasible, "plain plan must still be feasible: " + plain.reason);
+		assertFalse(plain.nodes.contains(n.via), "without a via the short corridor is planned (老行为不变)");
+		assertTrue(plain.viaNodes.isEmpty(), "plain plan reports no via");
+
+		final MmtrRunPlanner.Plan viaPlan = MmtrRunPlanner.planToRail(n.sim, v, n.rTarget.getHexId(), 0.5, vias("20,0,20"));
+		assertTrue(viaPlan.feasible, "via plan must be feasible: " + viaPlan.reason);
+		assertTrue(viaPlan.nodes.contains(n.via), "the planned node chain must contain the via node");
+		assertEquals(1, viaPlan.viaNodes.size(), "the plan reports the via it passes");
+		assertTrue(viaPlan.routeRailHexes.contains(n.rVia1.getHexId()) && viaPlan.routeRailHexes.contains(n.rVia2.getHexId()),
+			"the via corridor rails are on the route, in order: " + viaPlan.routeRailHexes);
+		// 咽喉那处岔：两条进路给出**不同的腿**——这就是"走哪条引入线"在岔位层的样子。
+		assertNotEquals(plain.forkOps.get(0)[4], viaPlan.forkOps.get(0)[4], "the mouth fork is thrown to the other leg for the via route");
+		// 停车点仍在目标轨上：经由点是"穿过"，不是"停下来"。
+		assertEquals(n.rTarget.getHexId(), viaPlan.stopRailHex, "the stop stays on the target rail, not on the via");
+		assertEquals(0.5, viaPlan.stopFraction, 1e-9, "stop fraction is unchanged by the via");
+		assertEquals(plain.stopCumulativeM + n.rVia1.railMath.getLength() + n.rVia2.railMath.getLength() - n.rShort.railMath.getLength(),
+			viaPlan.stopCumulativeM, 1e-6, "the via detour is counted once in walker space");
+	}
+
+	/** 经由点不只是画在计划上：把计划自臂出去，车真的会从那条引入线开到目标轨上。 */
+	@Test
+	public void plannerDrivesTheAutoRunThroughTheViaNode() {
+		final ViaNet n = new ViaNet();
+		final Vehicle v = n.spawn();
+
+		final MmtrRunPlanner.Plan plan = MmtrRunPlanner.planToRail(n.sim, v, n.rTarget.getHexId(), 0.5, vias("20,0,20"));
+		assertTrue(plan.feasible, "via plan must be feasible: " + plan.reason);
+
+		MmtrRunPlanner.applyForkOps(plan, n.store);
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(plan.stopCumulativeM, false);
+		tickUntil(n.siding, v::isMmtrMotionStoppedAtTarget, 4000);
+		assertEquals(plan.stopCumulativeM, v.getRailProgress(), 0.05, "auto run stopped exactly at the planned stop");
+		assertEquals(n.rTarget.getHexId(), v.getMmtrMotionWalker().railHex(), "the run reached the target rail along the via corridor");
+	}
+
+	/**
+	 * **已经越过的不再要求**：车辆自臂是每 tick 按当前位置重规划的，若经由点被当成"永远在前方"，
+	 * 车一过它就会规划失败。判据是"它还是不是前方的事"——车所在的轨以它为端点就算已达成。
+	 */
+	@Test
+	public void plannerDropsAViaTheTrainIsAlreadyOn() {
+		final ViaNet n = new ViaNet();
+		final Vehicle v = n.spawn();
+
+		// 先不带经由点地把车开到**以经由点为端点的那根轨**上（现实中：车已经进了那条引入线）。
+		final MmtrRunPlanner.Plan toCorridor = MmtrRunPlanner.planToRail(n.sim, v, n.rVia2.getHexId(), 0.5);
+		assertTrue(toCorridor.feasible, "run onto the corridor rail: " + toCorridor.reason);
+		MmtrRunPlanner.applyForkOps(toCorridor, n.store);
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(toCorridor.stopCumulativeM, false);
+		tickUntil(n.siding, v::isMmtrMotionStoppedAtTarget, 4000);
+		assertEquals(n.rVia2.getHexId(), v.getMmtrMotionWalker().railHex(), "the train now rides the rail that ends at the via node");
+
+		final MmtrRunPlanner.Plan after = MmtrRunPlanner.planToRail(n.sim, v, n.rTarget.getHexId(), 0.5, vias("20,0,20"));
+		assertTrue(after.feasible, "re-planning after the via must not fail: " + after.reason);
+		assertTrue(after.viaNodes.isEmpty(), "a via the train already reached is no longer required");
+	}
+
+	/**
+	 * **经由点被甩在目标之后时不绕圈**：从经由点找目标，只会找到被它甩在身后的那一端 ——
+	 * 于是 BFS 绕全网一圈再回来。前向进路不许折返，绕圈必然要掉头，所以判不可行并说清原因
+	 * （"宁可这一步失败"：现场那 25 分钟互堵正是"看着能走、其实走不通"的进路放出去的结果）。
+	 */
+	@Test
+	public void plannerRefusesAViaThatLiesBehindTheTarget() {
+		final ViaNet n = new ViaNet();
+		final Vehicle v = n.spawn();
+
+		// 目标就是经由点自己所在的那根轨：车已经在口上，目标是"往这条路里开到头"，
+		// 于是"必须经过 V"只剩下绕一圈回来这一种解释。
+		final MmtrRunPlanner.Plan loop = MmtrRunPlanner.planToRail(n.sim, v, n.rVia1.getHexId(), 1.0, vias("20,0,20"));
+		assertFalse(loop.feasible, "a via behind the target must not be planned as a lap of the whole network");
+		assertTrue(loop.reason.contains("经由点"), "reason names the via: " + loop.reason);
+	}
+
+	/** 图上定位不到的经由点：**报错**，绝不悄悄降级成"不带经由点"（那等于把逆行放回去）。 */
+	@Test
+	public void plannerRefusesAnUnknownViaNode() {
+		final ViaNet n = new ViaNet();
+		final Vehicle v = n.spawn();
+
+		final MmtrRunPlanner.Plan unknown = MmtrRunPlanner.planToRail(n.sim, v, n.rTarget.getHexId(), 0.5, vias("999,0,999"));
+		assertFalse(unknown.feasible, "an unknown via must be infeasible, never silently ignored");
+		assertTrue(unknown.reason.contains("经由点"), "reason names the via problem: " + unknown.reason);
+
+		final MmtrRunPlanner.Plan malformed = MmtrRunPlanner.planToRail(n.sim, v, n.rTarget.getHexId(), 0.5, vias("20,0"));
+		assertFalse(malformed.feasible, "a malformed via must be infeasible too");
+	}
+
+	@Test
+	public void plannerReportsInfeasibleCases() {		final Net n = new Net();
 		final Vehicle v = n.spawn();
 
 		final MmtrRunPlanner.Plan missing = MmtrRunPlanner.planToRail(n.sim, v, "deadbeef", 0.5);

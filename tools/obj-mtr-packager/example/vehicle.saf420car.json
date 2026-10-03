@@ -1,0 +1,84 @@
+{
+  "id": "saf420car",
+  "name": "SAF420 拖车",
+  "color": "7FA8CC",
+  "transportMode": "TRAIN",
+  "carLengthBlocks": 16.95,
+  "carWidthBlocks": 2.95,
+  "carIndex": 0,
+  "bogieCount": 2,
+  "bogieOffsetBlocks": -5.5,
+  "bogie2OffsetBlocks": 5.5,
+  "couplingPadding1": 0.525,
+  "couplingPadding2": 0.525,
+  "sourceObj": "${MC_ROOT}/assets/models/blender/saf420car/saf420car.obj",
+  "textureDir": "${MC_ROOT}/assets/models/blender/saf420car",
+  "rotationDegY": 0,
+  "recenter": true,
+  "flipTextureV": true,
+  "untexturedUv": [0.125, 0.5],
+  "_untexturedUvNote": "Inside the khaki stripe of saf420.png: the packager's auto-generated floor/doorway boxes have no UV of their own, and (0,0) must stay opaque or they vanish (docs §5, notes/194).",
+  "groupMap": {
+    "body": [
+      "cab_body",
+      "bogies"
+    ],
+    "interior": [
+      "interior"
+    ],
+    "door_l": [
+      "door_l"
+    ],
+    "door_r": [
+      "door_r"
+    ],
+    "glass": [
+      "glass"
+    ],
+    "anchor": [
+      "mmtr_"
+    ]
+  },
+  "partSpecs": {
+    "glass": [
+      {
+        "renderStage": "INTERIOR_TRANSLUCENT"
+      }
+    ]
+  },
+  "_syncNote": "★ 2026-10-02：这份离线自检配置与 `consist/saf420.json` 的 saf420car 段**逐字对齐**（groupMap 补上 glass/anchor、补 pid 段）—— 之前这里没有 `anchor`，`mmtr_pid_*` 只在发货配置里才被认成锚点，离线自检就测不到它。",
+  "_pidNote": "★★★★ 2026-10-02：拖车也挂车身侧面水牌 4 块（mmtr_pid_1_2/_1_3 车头端两侧、_1_4/_1_5 车尾端两侧；拖车没有驾驶室 ⇒ 没有车头正脸那块 mmtr_pid_1）。判据 verify_pid.js。",
+  "pid": {
+    "background": "#FF101418",
+    "textColor": "#FFF2F4F6",
+    "rows": [
+      {
+        "field": "service",
+        "x": 0.03,
+        "y": 0.5,
+        "size": 0.46,
+        "align": "left",
+        "color": "#FF9FB3C8"
+      },
+      {
+        "field": "terminus",
+        "x": 0.97,
+        "y": 0.5,
+        "size": 0.62,
+        "align": "right",
+        "prefix": "开往 "
+      }
+    ]
+  },
+  "doorAnimationType": "STANDARD",
+  "doorSlidePx": 14,
+  "_doorSlideNote": "Same two-leaves-per-doorway fix as the control car; kept here so the trailer has a standalone config whose staging dir is stable (verify_mtr_obj.js reads the packed obj from it).",
+  "doorSlideByGroup": {
+    "door_l_1": -14, "door_l_2": 14, "door_l_3": -14, "door_l_4": 14, "door_l_5": -14, "door_l_6": 14,
+    "door_r_1": -14, "door_r_2": 14, "door_r_3": -14, "door_r_4": 14, "door_r_5": -14, "door_r_6": 14
+  },
+  "outputPackName": "saf420car_v1",
+  "outputDir": "${MC_ROOT}/assets/models/blender/saf420car",
+  "stagingDir": "${MC_ROOT}/assets/models/blender/saf420car/.pack_stage_saf420car",
+  "packFormat": 18
+}

@@ -38,10 +38,14 @@ public final class MmtrForkElection {
 	 * Elect the continuation rail when the train stands at {@code node} having arrived on
 	 * {@code viaRail} from {@code enteredFrom}.
 	 *
+	 * @param manualDrive 司机正在手动开车（用户口径 2026-09-21：司机一上车，除了"会脱轨"以外没有东西能拦他）。
+	 *                    为真时，前四条都选不出腿就**跟随道岔当前物理位置**：有物理道岔模型走它开通的那条腿，
+	 *                    没有模型（度 4 交叉 / 三岔口）走最直的一条腿。这条兜底**不绕过**下面的物理闸门 ——
+	 *                    道岔位置不允许的组合仍然返回 {@code null}（车停在岔前 = 防脱轨），那正是唯一允许拦车的理由。
 	 * @return the elected rail, or {@code null} when the train must halt (unset fork / no
 	 * continuation at all)
 	 */
-	public static @Nullable Rail elect(Data data, BranchStore branches, @Nullable MmtrPointAuthority pointAuthority, @Nullable String pointAuthorityOwner, @Nullable String targetRailHex, Position node, Position enteredFrom, Rail viaRail) {
+	public static @Nullable Rail elect(Data data, BranchStore branches, @Nullable MmtrPointAuthority pointAuthority, @Nullable String pointAuthorityOwner, @Nullable String targetRailHex, Position node, Position enteredFrom, Rail viaRail, boolean manualDrive) {
 		final Object2ObjectOpenHashMap<Position, Rail> neighbors = data.positionsToRail.get(node);
 		if (neighbors == null) {
 			return null;
@@ -125,6 +129,26 @@ public final class MmtrForkElection {
 			}
 		}
 		if (chosen == null && legs.size() == 1) {
+			chosen = findRailByHex(forwardRails, legs.get(0).railHex);
+		}
+		if (chosen == null && manualDrive && turnout != null) {
+			/*
+			 * **手动开车：跟随道岔当前物理位置**（用户 2026-09-21 的选择）。
+			 *
+			 * <p>没有人工位、没有进路授权、任务也不指向这里 —— 自动车会停在岔前等，而**司机**不该被这样拦住：
+			 * 道岔开通哪条他就走哪条（真车现场就是"司机看着道岔开过去"）。这里只做"读打开的腿"，
+			 * 绝不替司机扳岔（扳岔仍是联锁/操作员的事），所以不会把道岔从别人要的位置上抢走。</p>
+			 *
+			 * <p>读不到开通的腿（例如从岔股往正线远端走，而道岔位置 0 只开通正线）⇒ 返回 null：
+			 * 那一支正是"会发生脱轨"的组合，由调用方硬停在岔前 —— 这是司机模式下**唯一**还被允许拦车的东西。</p>
+			 */
+			final String allowed = turnout.continuationFrom(viaHex, turnoutPosition);
+			if (allowed != null) {
+				chosen = findRailByHex(forwardRails, allowed);
+			}
+		}
+		if (chosen == null && manualDrive && turnout == null) {
+			// 没有物理道岔模型（度 4 交叉、三岔口…）：没有"会脱轨"的组合可判，走最直的一条腿。
 			chosen = findRailByHex(forwardRails, legs.get(0).railHex);
 		}
 		if (chosen != null && turnout != null) {

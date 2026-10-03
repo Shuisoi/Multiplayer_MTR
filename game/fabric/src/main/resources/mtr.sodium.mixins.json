@@ -1,0 +1,16 @@
+{
+	"required": false,
+	"minVersion": "0.8",
+	"package": "org.mtr.mixin.sodium",
+	"compatibilityLevel": "JAVA_8",
+	"refmap": "mtr.refmap.json",
+	"mixins": [],
+	"client": [
+		"SodiumGlProgramMixin",
+		"SodiumShaderLoaderMixin"
+	],
+	"server": [],
+	"injectors": {
+		"defaultRequire": 0
+	}
+}

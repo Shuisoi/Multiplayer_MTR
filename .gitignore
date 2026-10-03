@@ -33,12 +33,26 @@ game/libs/Transport-Simulation-Core-0.0.1.jar
 engine/website/.angular/
 engine/website/dist/
 engine/website/node_modules/
+# game/website 那一套（Angular）：2026-10-03 才补上 —— 原来只忽略了 engine 那份，
+# 于是 `git add -A` 会把 27k 个依赖文件塞进暂存区（node_modules 是依赖产物，不属于仓库）。
+game/website/node_modules/
+game/website/dist/
+game/website/.angular/
 
 # 验证脚本的截图/快照属于证据，不落仓库：脚本已改写 logs\<yyyy-MM>\（见 tools/reload-map.ps1、
 # tools/diag-web-aspect.ps1）。这里再兜一层，防止将来手跑又落回仓库根。
 /map-refresh.png
 /web-signals.png
 /signals-current.txt
+
+# loom 的依赖预处理缓存：它会把 vendor 的 mods 解包重打包成 processedMods\*.jar（6 MB 级的产物）
+.fabric/
+**/.fabric/
+
+# 事故残件与手工备份：notes/212 记过"打包器被按行删除写坏"，现场留下的 .broken-* / .bak-*
+# 是取证用的，不属于仓库内容（2026-10-03 全量提交前扫出来这两类共 3 个文件）。
+*.broken-*
+*.bak-*
 
 # 说明：apps/creator-studio 是独立 Gradle build，它的 .gradle/ build/ run/ 已被上面的全局规则忽略。
 # 工作区级的 env/ vendor/ assets/ artifacts/ logs/ instances/ sandbox/ 都在仓库之外，本文件不涉及。

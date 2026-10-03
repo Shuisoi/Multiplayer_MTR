@@ -33,7 +33,7 @@ public final class MmtrYardMotionDepartureTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
@@ -135,12 +135,9 @@ public final class MmtrYardMotionDepartureTests {
 		// A driver boards and throttles through the operation layer; the vehicle departs out of the
 		// yard, across the yard mouth node (single continuation, no authority needed) and halts at the
 		// unset fork (~32 m from the yard back).
-		final UUID driver = UUID.randomUUID();
-		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
-		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
-		spawned.updateRidingEntities(entities);
-		new MmtrDriveControl(spawned.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
-		assertTrue(spawned.isMmtrManualOverride(), "drive command must hold the MMTR override");
+		// notes/233 司机优先：岔口路由合同改用**无人自动车**钉住（手动车跟随道岔物理位置，见下条用例）。
+		spawned.setMmtrMotionAuto(true);
+		spawned.setMmtrMotionStopTarget(1_000_000, false);
 
 		double maxAfterDrive = spawned.getRailProgress();
 		for (int i = 0; i < 300; i++) {
@@ -172,11 +169,9 @@ public final class MmtrYardMotionDepartureTests {
 		final Vehicle spawned = n.siding.spawnMmtrMotionVehicle(n.siding.mmtrMotionWalkerFromYard(null, store, null));
 		assertNotNull(spawned, "motion dispatch seam must spawn the yard vehicle");
 
-		final UUID driver = UUID.randomUUID();
-		final ObjectArrayList<VehicleRidingEntity> entities = new ObjectArrayList<>();
-		entities.add(new VehicleRidingEntity(driver, 0, 0, 0, 0, false, true, true, false, false, false, false));
-		spawned.updateRidingEntities(entities);
-		new MmtrDriveControl(spawned.getId(), new ControlState().setThrottleNotch(3).setReverser(1), driver).apply(n.sim);
+		// notes/233 司机优先：岔口路由合同改用**无人自动车**钉住（手动车跟随道岔物理位置，见下条用例）。
+		spawned.setMmtrMotionAuto(true);
+		spawned.setMmtrMotionStopTarget(1_000_000, false);
 
 		double max = spawned.getRailProgress();
 		for (int i = 0; i < 300; i++) {

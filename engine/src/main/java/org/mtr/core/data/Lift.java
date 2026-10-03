@@ -26,6 +26,14 @@ public class Lift extends LiftSchema implements Utilities {
 	private final boolean isClientside;
 
 	private static final float MAX_SPEED = 10F / MILLIS_PER_SECOND; // 10 m/s
+	/**
+	 * 电梯自己的加/减速度（m/ms²，= 4 m/s² ≈ 0.4 g，真梯量级）。
+	 *
+	 * <p>notes/235：原来它借用的是 {@code ACCELERATION} —— 那个"车场加减速度"常量
+	 * 已经随原版加减速模型删除。电梯是另一套运输方式（{@code TransportMode} 里的连续运动），
+	 * 与列车力模型无关，所以这里给它一个**自己的**常数，而不是继续蹭列车的。</p>
+	 */
+	private static final double ACCELERATION = 1D / 250000;
 	private static final int DOOR_OPEN_TIME = 2000;
 	private static final int DOOR_MOVE_TIME = Vehicle.DOOR_MOVE_TIME / 2;
 	private static final int DOOR_DELAY = 500;
@@ -66,14 +74,14 @@ public class Lift extends LiftSchema implements Utilities {
 			}
 		} else {
 			if (instructions.isEmpty()) {
-				speed = Math.max(Math.abs(speed) - Siding.ACCELERATION_DEFAULT * millisElapsed, 0) * Math.signum(speed);
+				speed = Math.max(Math.abs(speed) - ACCELERATION * millisElapsed, 0) * Math.signum(speed);
 			} else {
 				final long nextInstructionProgress = getProgress(instructions.getFirst().getFloor());
 
-				if (speed * speed / 2 / Siding.ACCELERATION_DEFAULT > Math.abs(nextInstructionProgress - railProgress)) {
-					speed = Math.max(Math.abs(speed) - Siding.ACCELERATION_DEFAULT * millisElapsed, Siding.ACCELERATION_DEFAULT) * Math.signum(speed);
+				if (speed * speed / 2 / ACCELERATION > Math.abs(nextInstructionProgress - railProgress)) {
+					speed = Math.max(Math.abs(speed) - ACCELERATION * millisElapsed, ACCELERATION) * Math.signum(speed);
 				} else {
-					speed = Utilities.clampSafe(speed + Siding.ACCELERATION_DEFAULT * millisElapsed * Math.signum(nextInstructionProgress - railProgress), -MAX_SPEED, MAX_SPEED);
+					speed = Utilities.clampSafe(speed + ACCELERATION * millisElapsed * Math.signum(nextInstructionProgress - railProgress), -MAX_SPEED, MAX_SPEED);
 				}
 
 				if (Math.abs(railProgress - nextInstructionProgress) <= Math.abs(speed * millisElapsed)) {
@@ -120,7 +128,7 @@ public class Lift extends LiftSchema implements Utilities {
 		final LiftDirection buttonDirection = liftInstruction.getDirection();
 		// Track the lift direction, progress, and distance covered when iterating through the existing instructions
 		LiftDirection tempDirection = getDirection();
-		double tempProgress = railProgress + speed * speed / 2 / Siding.ACCELERATION_DEFAULT * Math.signum(speed);
+		double tempProgress = railProgress + speed * speed / 2 / ACCELERATION * Math.signum(speed);
 		double distance = 0;
 
 		for (int i = 0; i < instructions.size(); i++) {

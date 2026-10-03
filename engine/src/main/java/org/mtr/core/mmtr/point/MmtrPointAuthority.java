@@ -20,6 +20,12 @@ import java.util.function.LongSupplier;
  * use and queues auto requests until unlocked, and a grant dies with its window so stale holders
  * cannot wedge the network. The walker releases the holder when the train actually crosses the
  * point (or a terminal mission releases all its points); nothing here ever moves a train itself.
+ *
+ * <p><b>裁决链</b>（同时抢一处道岔时谁先走）：**服务等级/车号**（{@link MmtrTrainPriority}，
+ * 用户 2026-09-27 的运营规则：高铁踩通勤的头、同级车号小者先）→ **计划时刻**（notes/151 T5，
+ * 计划早者先）→ **入队序**（FIFO）→ owner id（保证判断不对称）→ 防饿死档（等够 5 分钟不再排在新来者
+ * 后面）。三处都读同一条链：逐进向队列挑头（{@link #pickNext}）、物理位置队列挑头
+ * （{@link #pickNextPhysical}）、以及"该不该让位/能不能收回位置"（{@link #outranks}）。</p>
  */
 public final class MmtrPointAuthority {
 
@@ -137,6 +143,39 @@ public final class MmtrPointAuthority {
 	}
 
 	private @Nullable ActualPositionLookup actualPositionLookup;
+
+	/**
+	 * **这列车属于哪个服务等级、车号多少**（用户 2026-09-27：抢同一处道岔时的优先级）。
+	 *
+	 * <p>权限层只认 owner 字符串（{@code "v<车辆id>"}），不认识作业单 —— "车 → 任务 → 作业单号 +
+	 * 服务等级"那一段由 {@code Simulator} 喂进来（与净空闸/占用查询同一种接法）。</p>
+	 *
+	 * <p>不挂 = 谁都没有优先级，裁决逐位退回老口径（计划时刻 → 入队序 → owner id）；
+	 * 测试夹具就是这样，所以基线不动。</p>
+	 */
+	public interface OwnerPriority {
+		@Nullable MmtrTrainPriority priorityOf(String owner);
+	}
+
+	/** 挂上"服务等级 + 车号"的查询（唯一实现是 {@code Simulator}）。 */
+	public MmtrPointAuthority withOwnerPriority(@Nullable OwnerPriority priority) {
+		this.ownerPriority = priority;
+		return this;
+	}
+
+	private @Nullable OwnerPriority ownerPriority;
+
+	/** 现问一次优先权（不缓存：作业单换了、车换单了，下一次裁决就按新的算）。 */
+	private @Nullable MmtrTrainPriority priorityOf(String owner) {
+		return ownerPriority == null ? null : ownerPriority.priorityOf(owner);
+	}
+
+	/** 日志里的人话：谁的**服务等级/车号** + 计划时刻（问不出优先级时就只写计划）。 */
+	private String describeWaiter(String owner, long priorityMillis) {
+		final MmtrTrainPriority priority = priorityOf(owner);
+		final String plan = priorityMillis == Long.MAX_VALUE ? "无计划" : "计划 " + priorityMillis;
+		return priority == null ? owner + "（" + plan + "）" : owner + "（" + priority.describe() + "，" + plan + "）";
+	}
 
 	private int actualPosition(long x, long y, long z) {
 		return actualPositionLookup == null ? NO_PHYSICAL_HOLDER : actualPositionLookup.position(x, y, z);
@@ -391,17 +430,20 @@ public final class MmtrPointAuthority {
 			return Result.GRANTED;
 		}
 		/*
-		 * **早班车可以收回晚班车按着的位置**（notes/151，用户裁定的通行优先权）。
+		 * **优先级更高的车可以收回别人按着的位置**（notes/151 计划时刻；2026-09-27 加上服务等级/车号）。
 		 *
-		 * 六台车去同一个车站、计划到达 00:05 / 00:07 / … 时，位置该给 00:05 那台：
-		 *   - 只有**计划更早**（priority 更小）才谈得上收回 —— 否则就是位置来回翻（ping-pong 的来源）；
+		 * 六台车去同一个车站、计划到达 00:05 / 00:07 / … 时，位置该给 00:05 那台；等级不同时按运营规则
+		 * "高铁踩通勤的头"、同级车号小的先：
+		 *   - 只有**更该先走**（{@link #outranks}：等级/车号 → 计划更早）才谈得上收回 ——
+		 *     否则就是位置来回翻（ping-pong 的来源）；
 		 *   - 而且要过**净空闸**：晚班车压在岔区里就不许从它脚下改位（那是把道岔抽走）；
 		 *   - 收回之后晚班车排队等（它的进向行还在，位置不在它手里），等它自己再申请时会按优先权排队。
 		 */
-		if (priorityMillis < holder.priorityMillis && positionChangeBlockedReason(x, y, z, demand, owner) == null
+		if (outranks(priorityMillis, owner, holder.priorityMillis, holder.owner)
+			&& positionChangeBlockedReason(x, y, z, demand, owner) == null
 			&& !holderStillOnNodeRails(nk, holder)) {
-			System.out.println("[MMTR-PT] 优先权：把道岔 " + nk + " 的位置从 " + holder.owner + "（计划 " + holder.priorityMillis
-				+ "）交给更早的 " + owner + "（计划 " + priorityMillis + "）");
+			System.out.println("[MMTR-PT] 优先权：把道岔 " + nk + " 的位置从 " + describeWaiter(holder.owner, holder.priorityMillis)
+				+ " 交给更该先走的 " + describeWaiter(owner, priorityMillis));
 			physicalHolders.put(nk, new Physical(owner, demand, untilMillis, priorityMillis));
 			dropPhysicalQueued(nk, owner);
 			return Result.GRANTED;
@@ -864,8 +906,9 @@ public final class MmtrPointAuthority {
 	 *
 	 * <p>为什么第三条是必须的（notes/155 §13 现场）：只按时间判会让**领先车也把自己刚拿到的位置放掉** ——
 	 * 后车于是拿到位置、前车再申请、再让 —— 现场每 20 秒一轮的"让位"日志就是这么来的，
-	 * 几台车谁也走不了。道岔只有一个位置，解环要让**该让的那一方**退：谁的计划时刻更早谁先走
-	 * （与 {@code priorityMillis} 的通行优先权同一口径），而不是"谁等得久谁退"。</p>
+	 * 几台车谁也走不了。道岔只有一个位置，解环要让**该让的那一方**退：**服务等级高、车号小的先走**
+	 * （用户 2026-09-27），同级再看计划时刻更早（与 {@code priorityMillis} 的通行优先权同一口径），
+	 * 而不是"谁等得久谁退"。</p>
 	 *
 	 * <p>同优先权（现场常见：两台车都还没算出计划时刻）时按持有者 id 定序 —— 关键是**判断必须不对称**，
 	 * 保证同一时刻只有一方认为自己该让（两边同时让位等于回到振荡）。</p>
@@ -920,11 +963,35 @@ public final class MmtrPointAuthority {
 		return false;
 	}
 
-	/** {@code other} 是不是比 {@code mine} 更该先走：计划时刻更早；同优先权按持有者 id 定序（判断不对称）。 */
-	private static boolean outranks(long otherPriority, String otherOwner, long minePriority, String mineOwner) {
+	/** {@code other} 是不是比 {@code mine} 更该先走：**服务等级/车号 → 计划时刻 → owner id**。 */
+	private boolean outranks(long otherPriority, String otherOwner, long minePriority, String mineOwner) {
+		/*
+		 * 第一档：服务等级 + 车号（{@link MmtrTrainPriority}，用户 2026-09-27）。
+		 *
+		 * <p>这是**运营规则**："高铁踩通勤的头、同级车号小者先"。有作业单的车（问得出优先级）一律排在
+		 * 问不出优先级的车（玩家车、无单调车）前面 —— 系统里的车有它的位置，散车没有。
+		 * 两边等级与车号都相同、或都没有作业单 ⇒ 这一档说不出先后，落到下面的计划时刻。</p>
+		 */
+		final MmtrTrainPriority other = priorityOf(otherOwner);
+		final MmtrTrainPriority mine = priorityOf(mineOwner);
+		if (other != null || mine != null) {
+			if (other == null) {
+				return false;
+			}
+			if (mine == null) {
+				return true;
+			}
+			if (other.outranks(mine)) {
+				return true;
+			}
+			if (mine.outranks(other)) {
+				return false;
+			}
+		}
 		if (otherPriority != minePriority) {
 			return otherPriority < minePriority;
 		}
+		// 同优先权时按持有者 id 定序，保证**判断不对称**（两边同时让位等于回到振荡）
 		return otherOwner.compareTo(mineOwner) < 0;
 	}
 
@@ -1440,13 +1507,8 @@ public final class MmtrPointAuthority {
 		boolean bestStarved = false;
 		for (final PhysicalReq r : q) {
 			final boolean starved = now - r.enqueuedAtMillis >= MMTR_STARVATION_MILLIS;
-			if (best == null
-				|| starved && !bestStarved
-				|| starved == bestStarved && (starved
-					? r.enqueuedAtMillis < best.enqueuedAtMillis
-					: r.priorityMillis != best.priorityMillis
-						? r.priorityMillis < best.priorityMillis
-						: r.enqueuedAtMillis < best.enqueuedAtMillis)) {
+			if (best == null || starved && !bestStarved || starved == bestStarved
+				&& better(r.owner, r.priorityMillis, r.enqueuedAtMillis, best.owner, best.priorityMillis, best.enqueuedAtMillis, starved)) {
 				best = r;
 				bestStarved = starved;
 			}
@@ -1515,7 +1577,8 @@ public final class MmtrPointAuthority {
 		boolean bestStarved = false;
 		for (final Req r : q) {
 			final boolean starved = now - r.enqueuedAtMillis >= MMTR_STARVATION_MILLIS;
-			if (best == null || starved && !bestStarved || starved == bestStarved && better(r, best, starved)) {
+			if (best == null || starved && !bestStarved || starved == bestStarved
+				&& better(r.owner, r.priorityMillis, r.enqueuedAtMillis, best.owner, best.priorityMillis, best.enqueuedAtMillis, starved)) {
 				best = r;
 				bestStarved = starved;
 			}
@@ -1523,12 +1586,37 @@ public final class MmtrPointAuthority {
 		return best;
 	}
 
-	private static boolean better(Req a, Req b, boolean starved) {
+	/**
+	 * 队列挑头的比较键（**与 {@link #outranks} 同一条链**，只有末档不同：挑头是"在一堆等待者里选一个"，
+	 * 入队序才是它该有的末档；让位是"两边互判"，末档必须是 owner id 才保证不对称）。
+	 *
+	 * <p>服务等级/车号在这一层同样说了算（用户 2026-09-27）：咽喉里排着 00101 与 00103 时，
+	 * **00101 先拿**，不因为 00103 早到半秒就翻过来。等太久的（防饿死档，{@link #MMTR_STARVATION_MILLIS}）
+	 * 仍按等待时长排 —— 优先级在这一档里不参与，否则一个高等级的老等者会把它后面的饿者一直压住。</p>
+	 */
+	private boolean better(String ownerA, long priorityA, long enqueuedA, String ownerB, long priorityB, long enqueuedB, boolean starved) {
 		if (starved) {
-			return a.enqueuedAtMillis < b.enqueuedAtMillis;
+			return enqueuedA < enqueuedB;
 		}
-		return a.priorityMillis != b.priorityMillis
-			? a.priorityMillis < b.priorityMillis
-			: a.enqueuedAtMillis < b.enqueuedAtMillis;
+		final MmtrTrainPriority a = priorityOf(ownerA);
+		final MmtrTrainPriority b = priorityOf(ownerB);
+		if (a != null || b != null) {
+			if (a == null) {
+				return false;
+			}
+			if (b == null) {
+				return true;
+			}
+			if (a.outranks(b)) {
+				return true;
+			}
+			if (b.outranks(a)) {
+				return false;
+			}
+		}
+		if (priorityA != priorityB) {
+			return priorityA < priorityB;
+		}
+		return enqueuedA < enqueuedB;
 	}
 }

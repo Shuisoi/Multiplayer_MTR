@@ -1,6 +1,5 @@
 package org.mtr.mod.sound;
 
-import org.mtr.core.data.Siding;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.mapper.SoundHelper;
@@ -27,6 +26,16 @@ public class LegacyVehicleSound extends VehicleSoundBase {
 	private static final String SOUND_DOOR_OPEN = "_door_open";
 	private static final String SOUND_DOOR_CLOSE = "_door_close";
 
+	/**
+	 * 声音**分档的参考加速度**（m/ms²，= 4 m/s²）。
+	 *
+	 * <p>notes/235：原来这里读的是 {@code Siding.ACCELERATION_DEFAULT}（车场那个"加减速度"参数）。
+	 * 那个参数已随原版加减速模型删除，而资源包里的 `_acceleration_/deceleration_` 音效**本来就是按
+	 * 这个参考值分档**做出来的 —— 所以这个数必须留着，只是它现在属于**声音**，不属于车辆物理。
+	 * 车辆的加速度仍然照旧从 {@code acceleration} 参数进来（资源包勾了"恒定播放速度"时用）。</p>
+	 */
+	private static final double REFERENCE_ACCELERATION = 1D / 250000;
+
 	public LegacyVehicleSound(@Nullable String legacySpeedSoundBaseResource, int legacySpeedSoundCount, boolean legacyUseAccelerationSoundsWhenCoasting, boolean legacyConstantPlaybackSpeed, String legacyDoorSoundBaseResource, double legacyDoorCloseSoundTime) {
 		this.legacySpeedSoundBaseResource = legacySpeedSoundBaseResource;
 		this.legacySpeedSoundCount = legacySpeedSoundCount;
@@ -43,7 +52,7 @@ public class LegacyVehicleSound extends VehicleSoundBase {
 		}
 
 		if (legacySpeedSoundCount > 0 && legacySpeedSoundBaseResource != null) {
-			final double referenceAcceleration = legacyConstantPlaybackSpeed ? acceleration : Siding.ACCELERATION_DEFAULT;
+			final double referenceAcceleration = legacyConstantPlaybackSpeed ? acceleration : REFERENCE_ACCELERATION;
 			final int floorSpeed = (int) Math.floor(speed / referenceAcceleration / InitClient.MILLIS_PER_SPEED_SOUND);
 			if (floorSpeed > 0) {
 				final Random random = new Random();

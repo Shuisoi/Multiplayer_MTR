@@ -20,6 +20,7 @@ import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.generated.resource.ModelPropertiesPartSchema;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.MmtrDoorSides;
+import org.mtr.mod.render.light.MmtrHeadlights;
 import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.StoredMatrixTransformations;
@@ -434,6 +435,11 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				final String vehicleResourceId = vehicle == null ? null : vehicleIdFor(vehicle, carNumber);
 				final int modelCar = vehicle == null ? carNumber : MmtrVehicleAnchors.modelCarIndex(vehicle, carNumber);
 				final boolean wiperMoved = vehicleResourceId != null && MmtrWindshield.pushPartTransform(graphicsHolder, names, vehicleResourceId, carNumber, modelCar);
+				if (condition == PartCondition.MMTR_LAMP) {
+					// 诊断（notes/374）：传统路画了灯罩 —— 这条路没有颜色参数，画出来一定是白的，
+					// 所以"尾灯不红"的答案就在这个计数器上（见 MmtrHeadlights.statLegacyLampDraws）。
+					MmtrHeadlights.noteLegacyLampDraw();
+				}
 				partDetails.modelParts.forEach(modelPart -> modelPart.render(graphicsHolder, x, y, z, partDetails.flipped ? (float) Math.PI : 0, renderProperties.rightInt(), OverlayTexture.getDefaultUvMapped()));
 				// On the OBJ path `modelParts` is always empty and the geometry lives in the part's own
 				// wrapper (the same one doors use). Without this the draw above is a no-op, which is why the

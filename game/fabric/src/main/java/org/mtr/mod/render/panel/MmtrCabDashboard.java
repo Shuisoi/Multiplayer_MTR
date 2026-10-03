@@ -86,7 +86,7 @@ public final class MmtrCabDashboard {
 		// C6: draw one panel per dashboard anchor of this car. A double-ended locomotive carries two
 		// dashboards in one car (mmtr_hud_1 / mmtr_hud_2) and each belongs to its own cab, so looking
 		// up a single anchor would leave the second cab's panel blank.
-		final ObjectArrayList<Anchor> huds = MmtrVehicleAnchors.findHuds(anchors, modelCarIndex(vehicle, carNumber));
+		final ObjectArrayList<Anchor> huds = MmtrVehicleAnchors.findHuds(anchors, MmtrVehicleAnchors.modelCarIndex(vehicle, carNumber));
 		if (huds.isEmpty()) {
 			return;
 		}
@@ -134,19 +134,5 @@ public final class MmtrCabDashboard {
 				+ "|canvas" + hud.canvasWidthM + "x" + hud.canvasHeightM + "|facets" + hud.facets.size();
 	}
 
-	/** Index of a consist car inside its own model (a model can be used several times). */
-	private static int modelCarIndex(VehicleExtension vehicle, int carNumber) {
-		final var cars = vehicle.getVehicleCarsAndPositions();
-		if (carNumber < 0 || carNumber >= cars.size()) {
-			return 0;
-		}
-		final String vehicleId = cars.get(carNumber).left().getVehicleId();
-		int index = 0;
-		for (int i = 0; i < carNumber; i++) {
-			if (cars.get(i).left().getVehicleId().equals(vehicleId)) {
-				index++;
-			}
-		}
-		return index;
-	}
+	/** Index of a consist car inside its own model - see {@link MmtrVehicleAnchors#modelCarIndex}. */
 }

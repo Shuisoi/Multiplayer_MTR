@@ -112,7 +112,15 @@ public final class MmtrMovementAuthority {
 			return new MmtrMovementAuthority(MmtrSignalAspect.Aspect.RED, railHex == null ? "" : railHex, toSignalM, 0, false,
 				"进路未设好，停在出发信号前：" + route.getStateReason());
 		}
-		return forApproach(simulator, railHex, entryNode, vehicleId, toSignalM);
+		/*
+		 * **进路已 SET ⇒ 只按这条进路判前方闭塞**（用户 2026-09-27 现场）。
+		 *
+		 * <p>岔口的后继是所有分支，没有进路时只能保守地"任何一支被占都算被占"（灯显那条路就是这样）。
+		 * 但行车许可是**这一趟**的：进路里没有的支（别人的股道、邻线）占不占与它无关 ——
+		 * 少了这一条，库里第一台车停好之后，后面每一台去别的股道的车都被它扣成红灯（实测五台车僵死在库内）。</p>
+		 */
+		final java.util.function.Predicate<String> allowedRails = route == null ? null : route::coversRail;
+		return forApproach(simulator, railHex, entryNode, vehicleId, toSignalM, allowedRails);
 	}
 
 	/**
@@ -125,10 +133,16 @@ public final class MmtrMovementAuthority {
 	 */
 	public static MmtrMovementAuthority forApproach(Simulator simulator, @Nullable String signalRailHex, @Nullable Position entryNode,
 			long vehicleId, double toSignalM) {
+		return forApproach(simulator, signalRailHex, entryNode, vehicleId, toSignalM, null);
+	}
+
+	/** 同上，并可指定**这一趟实际会走的轨**（见 {@link #forVehicle} 里那段说明）。 */
+	public static MmtrMovementAuthority forApproach(Simulator simulator, @Nullable String signalRailHex, @Nullable Position entryNode,
+			long vehicleId, double toSignalM, java.util.function.@Nullable Predicate<String> allowedRails) {
 		if (signalRailHex == null || signalRailHex.isEmpty()) {
 			return none(MmtrSignalAspect.Aspect.GREEN, "轨位置解不出来");
 		}
-		final MmtrSignalAspect.Aspect aspect = simulator.mmtrSignalAspectView().aspectFrom(signalRailHex, entryNode, vehicleId);
+		final MmtrSignalAspect.Aspect aspect = simulator.mmtrSignalAspectView().aspectFrom(signalRailHex, entryNode, vehicleId, allowedRails);
 		return of(aspect, signalRailHex, toSignalM);
 	}
 

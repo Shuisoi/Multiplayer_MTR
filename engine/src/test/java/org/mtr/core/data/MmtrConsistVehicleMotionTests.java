@@ -5,6 +5,8 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
 import org.mtr.core.mmtr.ConsistTypeRegistry;
 import org.mtr.core.mmtr.ControlState;
+import org.mtr.core.mmtr.MmtrLightSwitch;
+import org.mtr.core.mmtr.MmtrMission;
 import org.mtr.core.mmtr.MmtrMotionSnapshot;
 import org.mtr.core.mmtr.consist.MmtrCabState;
 import org.mtr.core.mmtr.consist.MmtrConsistBody;
@@ -17,6 +19,7 @@ import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -31,17 +34,15 @@ public final class MmtrConsistVehicleMotionTests {
 	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
 	private static final String CONSIST_JSON = "{"
 		+ "\"consistTypes\":[{\"id\":\"emu\",\"controlMode\":\"NOTCHED\",\"powerNotches\":7,\"brakeNotches\":8,"
-		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"tractionAccelerationMps2\":0.6,\"serviceBrakeDecelerationMps2\":0.9,\"emergencyDecelerationMps2\":1.5}]"
+		+ "\"maxSpeedKmh\":120,\"maxManualSpeedKmh\":120,\"massKg\":60000,\"maxTractiveEffortN\":36000,\"serviceBrakeForceN\":54000,\"emergencyBrakeForceN\":90000}]"
 		+ "}";
 
 	private static Rail through(Position p1, Position p2) {
-		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(p1, Angle.fromAngle(0), p2, Angle.fromAngle(180), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	private static Rail diverge(Position node, Position far) {
-		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES,
-			80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		return Rail.newRail(node, Angle.fromAngle(45), far, Angle.fromAngle(225), Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
 	}
 
 	/** A straight 3-rail line: nA -r0- nB -r1- nC -r2- nD. */
@@ -92,7 +93,7 @@ public final class MmtrConsistVehicleMotionTests {
 
 	/** A consist-body vehicle standing with its A end {@code aEndOffsetM} into {@code startRail}. */
 	private static Vehicle consistVehicle(Simulator sim, Rail startRail, Position startEntry, double aEndOffsetM, BranchStore store) {
-		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 6, probeCars(), new ObjectArrayList<>(), 0.0004, 0.0004, true, 120, 30000L);
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 6, probeCars(), new ObjectArrayList<>(), true, 120, 30000L);
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(sim, store, startRail, startEntry, aEndOffsetM, new double[]{ved.getTotalVehicleLength()}, null);
 		assertNotNull(walker, "the consist must fit on the placement rail");
@@ -115,7 +116,7 @@ public final class MmtrConsistVehicleMotionTests {
 		final ObjectArrayList<VehicleCar> cars = probeCars2();
 		final double[] carLengthsM = {cars.get(0).getTotalLength(true, false), cars.get(1).getTotalLength(false, true)};
 		final boolean[] couplerAfter = {cars.get(0).getMmtrCouplerAfter(), cars.get(1).getMmtrCouplerAfter()};
-		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, cars, new ObjectArrayList<>(), 0.0004, 0.0004, true, 120, 30000L);
+		final VehicleExtraData ved = VehicleExtraData.createWithLegs(1L, 0L, 8, cars, new ObjectArrayList<>(), true, 120, 30000L);
 		final Vehicle v = new Vehicle(ved, null, TransportMode.TRAIN, sim);
 		final MmtrConsistWalker walker = MmtrConsistWalker.place(sim, store, startRail, startEntry, aEndOffsetM, carLengthsM, null,
 				MmtrConsistBody.seamArcMsFrom(aEndOffsetM, carLengthsM, couplerAfter),
@@ -259,12 +260,34 @@ public final class MmtrConsistVehicleMotionTests {
 		assertEquals(1, walker.occupancy().size(), "a short consist on one rail occupies one segment");
 	}
 
+	/**
+	 * notes/233 司机优先（用户口径 2026-09-21：「只要司机能上车，什么都阻挡不了他开车」）。
+	 *
+	 * <p>编组体列车在**没有人工位/进路授权/任务目标**的岔口上，手动司机不再被停在岔前：
+	 * 走行器**跟随道岔当前物理位置**（位置 0 = 正线/直行那条腿）继续走；司机在物理上会脱轨的组合
+	 * （道岔没开通他要走的那条）仍然停在岔前 —— 那是唯一还允许拦车的理由（见 {@code MmtrForkElection}）。</p>
+	 */
 	@Test
-	public void consistVehicleHaltsAtAnUnsetForkAndContinuesAfterTheBranchIsSet() {
+	public void consistVehicleFollowsTheTurnoutsPhysicalPositionUnderCabControl() {
 		final Fork fork = new Fork();
 		final BranchStore store = new BranchStore();
 		final Vehicle v = consistVehicle(fork.sim, fork.rIn, fork.nIn, fork.rIn.railMath.getLength() - 8, store);
 		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vp = positions();
+		final double firstMax = driveTicks(v, 300, vp);
+		assertTrue(firstMax > fork.rIn.railMath.getLength(), "must run through the unset fork, got " + firstMax);
+		assertFalse(v.getMmtrConsistWalker().haltedAtAuthority(), "a cab driver is not held at an unset fork");
+		assertEquals(fork.rStraight.getHexId(), v.getMmtrConsistWalker().currentRailHex(), "follows the physically open (straight) leg");
+	}
+
+	/** 自动车**仍然**停在未设好的岔前（司机优先只改手动那一支）。 */
+	@Test
+	public void autoRunStillHaltsAtAnUnsetForkAndContinuesAfterTheBranchIsSet() {
+		final Fork fork = new Fork();
+		final BranchStore store = new BranchStore();
+		final Vehicle v = consistVehicle(fork.sim, fork.rIn, fork.nIn, fork.rIn.railMath.getLength() - 8, store);
+		v.setMmtrMotionAuto(true);
+		v.setMmtrMotionStopTarget(1_000_000, false);
 		final ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vp = positions();
 		final double firstMax = driveTicks(v, 300, vp);
 		assertTrue(firstMax < fork.rIn.railMath.getLength(), "must halt before an unset fork, got " + firstMax);
@@ -548,5 +571,94 @@ public final class MmtrConsistVehicleMotionTests {
 		assertEquals(0, v.getSpeed(), 1e-9);
 		assertTrue(walker.travelReversed(), "the requested direction applies once at a stand");
 		assertTrue(walker.distanceM() >= progressWhileRolling, "I3: distance never decreases");
+	}
+
+	/**
+	 * 自动运行（"AI 驾驶员"）的灯光：**车头白、车尾红**（用户口径 2026-10-03「AI驾驶员也需要控制车灯开关，
+	 * 并且尾部车灯需要变红」）。
+	 *
+	 * <p>钉四件事：
+	 * <ol>
+	 *   <li>没有任务的车（车场停放）**不动**灯 —— 两端仍是出厂值尾灯（"无人照看的车两端都是红标志灯"）；</li>
+	 *   <li>任务挂上（钥匙是引擎的、没人接管）⇒ 车头 = 世界时决定的近光/远光前照灯、车尾 = 尾灯，
+	 *       <b>上一次人工驾驶留在另一端的那盏白灯就是这样被收掉的</b>；</li>
+	 *   <li>镜像换向器被写成"在档"：不写它，客户端判据的"换向 N ⇒ 固定红"会把刚点亮的车头也判成红的；</li>
+	 *   <li>有乘务员钥匙时这条规则**一条都不动**（司机优先），换向 / 收工后按方向重排、白灯落回尾灯。</li>
+	 * </ol>
+	 */
+	@Test
+	public void autoRunLightsTheLeadingEndAndKeepsTheTailRed() {
+		final Line line = new Line();
+		line.sim.setGameTime(12 * 50_000L, 1_200_000L, false); // 世界时 = 正午
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+
+		// ① 停放（还没有任务）：两端都是红标志灯。
+		driveTicks(v, 1, positions());
+		assertEquals(MmtrLightSwitch.TAIL, v.getMmtrLightAFromSync(), "没有任务 ⇒ A 端不动（红标志灯）");
+		assertEquals(MmtrLightSwitch.TAIL, v.getMmtrLightBFromSync(), "没有任务 ⇒ B 端不动（红标志灯）");
+
+		// ② 上一次人工驾驶留在 A 端的一盏白灯（等价于"司机按过 L、下车时那一次回落漏了"）。
+		v.setMmtrLightSwitch(MmtrLightSwitch.END_A, MmtrLightSwitch.HIGH);
+
+		// ③ 自动任务挂上（原地换端：不需要规划进路，且顺带把车头/车尾翻一次）。
+		final MmtrMission mission = new MmtrMission(v.getId(), MmtrMission.Kind.MANEUVER, 7L, 7L, 0L);
+		mission.attachTask(new org.mtr.core.mmtr.task.ChangeEndsTask("t-auto-lights", 0L));
+		assertTrue(v.setMmtrMission(mission), "自动任务挂上");
+		driveTicks(v, 1, positions());
+		assertFalse(mission.isTerminal(), "原地任务不会自己结束（状态 " + mission.getState() + "）");
+
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		final int front = MmtrLightSwitch.autoLeadingEnd(walker.travelsTowardB());
+		final int rear = MmtrLightSwitch.otherEnd(front);
+		assertEquals(MmtrLightSwitch.LOW, MmtrLightSwitch.switchOfEnd(v.getMmtrLightAFromSync(), v.getMmtrLightBFromSync(), front),
+			"车头 = 近光档（世界时正午）");
+		assertEquals(MmtrLightSwitch.TAIL, MmtrLightSwitch.switchOfEnd(v.getMmtrLightAFromSync(), v.getMmtrLightBFromSync(), rear),
+			"车尾 = 红尾灯（陈旧的白灯被收掉）");
+		assertNotEquals(0, v.getMmtrReverserFromSync(), "自动运行的镜像换向器在档：0（N）会让客户端把两端都画成红");
+
+		// ④ 天黑 ⇒ 车头自动翻到更亮的远光档（同一趟车、同一个方向，只有世界时变了）。
+		line.sim.setGameTime(22 * 50_000L, 1_200_000L, false);
+		driveTicks(v, 1, positions());
+		assertEquals(MmtrLightSwitch.HIGH, MmtrLightSwitch.switchOfEnd(v.getMmtrLightAFromSync(), v.getMmtrLightBFromSync(), front),
+			"22 时 ⇒ 车头远光档");
+		assertEquals(MmtrLightSwitch.TAIL, MmtrLightSwitch.switchOfEnd(v.getMmtrLightAFromSync(), v.getMmtrLightBFromSync(), rear), "车尾始终红");
+
+		// ⑤ 乘务员接管驾驶室：灯归他 —— 引擎这条规则一条都不动。
+		assertTrue(v.enterMmtrCab(MmtrCabState.Cab.CAB_A), "乘务员接管 A 端驾驶室");
+		v.setMmtrLightSwitch(MmtrLightSwitch.END_A, MmtrLightSwitch.TAIL);
+		v.setMmtrLightSwitch(MmtrLightSwitch.END_B, MmtrLightSwitch.HIGH);
+		driveTicks(v, 3, positions());
+		assertEquals(MmtrLightSwitch.TAIL, v.getMmtrLightAFromSync(), "有乘务员钥匙 ⇒ 引擎不碰灯（司机优先）");
+		assertEquals(MmtrLightSwitch.HIGH, v.getMmtrLightBFromSync(), "有乘务员钥匙 ⇒ 引擎不碰灯（司机优先）");
+
+		// ⑥ 司机走了（钥匙拔掉、没人接手）⇒ 交还：白灯落回尾灯。
+		assertTrue(v.leaveMmtrCab(), "乘务员拔钥匙");
+		driveTicks(v, 1, positions());
+		assertEquals(MmtrLightSwitch.TAIL, v.getMmtrLightAFromSync(), "AI 不再持钥匙 ⇒ 白灯落回尾灯");
+		assertEquals(MmtrLightSwitch.TAIL, v.getMmtrLightBFromSync());
+	}
+
+	/**
+	 * "无人照看 ⇒ 收掉陈旧白灯"这条兜底**不许碰有司机在场的车** —— 哪怕钥匙还是引擎那把 SYSTEM
+	 * 占位钥匙（现场：司机在无人编组上推手柄，引擎补一把钥匙让编组有头，见
+	 * {@code Vehicle#mmtrAdoptUnmannedConsistForDriver}），他刚按 L 拨的档位就是他要的答案。
+	 */
+	@Test
+	public void unattendedLightFallbackNeverTouchesALightTheDriverJustSet() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		final int mannedEnd = walker.cabs().activeCab() == MmtrCabState.Cab.CAB_B ? MmtrLightSwitch.END_B : MmtrLightSwitch.END_A;
+
+		// 司机推手柄 ⇒ 人工接管（钥匙仍是引擎的占位钥匙）。
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1));
+		driveTicks(v, 1, positions());
+		assertTrue(v.isMmtrManualOverride(), "司机推了手柄 ⇒ 人工接管");
+
+		// 他按 L 拨到远光 ⇒ 这条灯是他的；兜底与自动灯光规则都不许把它收掉。
+		v.applyMmtrControl(new ControlState().setThrottleNotch(3).setReverser(1).setLightSwitch(MmtrLightSwitch.HIGH));
+		driveTicks(v, 3, positions());
+		assertEquals(MmtrLightSwitch.HIGH, MmtrLightSwitch.switchOfEnd(v.getMmtrLightAFromSync(), v.getMmtrLightBFromSync(), mannedEnd),
+			"有司机在场 ⇒ 引擎不碰他自己拨的那盏灯");
 	}
 }
