@@ -136,6 +136,7 @@ public class VehicleRidingMovement {
 		} else {
 			// Nothing is moving the player: end the ride. This is the timer that catches "the ride was
 			// established but movePlayer never ran for it" - the likeliest way a cab entry dies silently.
+			mmtrRideDiag("计时器到期：连续 " + ridingVehicleCooldown + " 拍没有 movePlayer");
 			leaveRide("计时器：movePlayer 没再推动玩家（没上车 / 车节号不匹配 / 车没了）");
 		}
 
@@ -179,6 +180,11 @@ public class VehicleRidingMovement {
 		}
 		for (final Box floorOrDoorway : openFloorsAndDoorways) {
 			if (RenderVehicleHelper.boxContains(floorOrDoorway, x, y, z)) {
+				if (mmtrCabVehicleId == vehicleId && ridingVehicleCarNumber != carNumber) {
+					// 上车路径每秒都在跑：它一旦改掉"我在第几节"，握着驾驶室的人就会被 movePlayer 永久跳过
+					// （手上的车节 ≠ 走到的那一节）⇒ 冷却到期 ⇒ 结束骑乘。所以这次覆盖必须留痕。
+					org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 上车覆盖车节：{} → {}（车={}，人坐在驾驶室里）", ridingVehicleCarNumber, carNumber, vehicleId);
+				}
 				ridingSidingId = sidingId;
 				ridingVehicleId = vehicleId;
 				ridingVehicleCarNumber = carNumber;
@@ -217,10 +223,29 @@ public class VehicleRidingMovement {
 			return;
 		}
 		if (!isRiding(vehicleId) || ridingVehicleCarNumber != carNumber) {
+			// 手上握着驾驶室、而渲染循环正走到**那个驾驶室所在的车节**却对不上号 —— 只有这一种情形
+			// 值得一提（见 mmtrRideDiag）；遍历别的车节时对不上号是正常的，不该留痕。
+			if (mmtrCabVehicleId != 0 && carNumber == mmtrCabCarNumber) {
+				mmtrRideDiag(isRiding(vehicleId)
+						? "车节不匹配：手上=" + ridingVehicleCarNumber + " 走到的是=" + carNumber
+						: "不是骑乘的那辆车：走到的是=" + vehicleId);
+			}
 			return;
 		}
 
 		ridingVehicleCooldown = 0;
+		/*
+		 * 这一帧这一节车有没有地板/门洞盒：没有就是"模型还在加载"的起点时间戳（宽限期见下面 offsets 为空那一段）。
+		 * 有盒子就清零 —— 下一次再空（换车/换节）会重新计时。
+		 */
+		if (floorsAndDoorways.isEmpty()) {
+			if (floorsNotReadySinceMillis == 0) {
+				floorsNotReadySinceMillis = System.currentTimeMillis();
+				mmtrRideDiag("这一节车的模型/地板盒还没来 ⇒ 先挂在车上等（不再立刻请人下车）");
+			}
+		} else {
+			floorsNotReadySinceMillis = 0;
+		}
 		final double entityYawOld = EntityHelper.getYaw(new org.mtr.mapping.holder.Entity(clientPlayerEntity.data));
 		// In a cab the driver does not walk: the same key that took the cab gives it back. This is the
 		// cab lock, and it is a MULTIPLIER rather than an early return on purpose - the rest of this
@@ -264,32 +289,54 @@ public class VehicleRidingMovement {
 			clampPosition(floorsAndDoorways, ridingVehicleX + movementX - RenderVehicleHelper.HALF_PLAYER_WIDTH, ridingVehicleZ + movementZ + RenderVehicleHelper.HALF_PLAYER_WIDTH, offsets);
 
 			if (offsets.isEmpty()) {
-				// Not standing on any floor any more: out of the vehicle. If this fires on the FIRST frame
-				// after a cab entry, the seat point is not over a floor box and the entry is being undone
-				// here - so report the clamp's own inputs, which is the only way to tell "no boxes at all"
-				// apart from "boxes exist but the point/Y misses them".
-				leaveRide("四个角都没有地板（点 x=" + Math.round(ridingVehicleX * 100) / 100.0
-						+ " z=" + Math.round(ridingVehicleZ * 100) / 100.0
-						+ " y=" + Math.round(ridingVehicleY * 1000) / 1000.0
-						+ "；" + describeBoxes(floorsAndDoorways) + "）");
-				return;
-			}
+				/*
+				 * **一个盒都没有 = 这一节车的模型还没加载完，不是"人走出了车外"。**
+				 *
+				 * 2026-10-03 实机（编组尾车驾驶室：saf420 10 节编组的第 10 节 saf420cab_b）：
+				 * 人坐进去 0.25–3 s 就被请出车外，日志是
+				 * `骑手停滞：车节不匹配：手上=9 走到的是=0…8` 紧接
+				 * `结束骑乘（四个角都没有地板（… 这次一个盒都没有 …））`。
+				 * 真因是**这一帧的地板盒列表是空的**：{@code VehicleResource.getCachedVehicleResource}
+				 * 在"这节车的模型还在加载"时返回 null（{@code VehicleResource:423-428}），于是
+				 * `RenderVehicles` 既没加地板也没加门洞 —— 而 OBJ 车的地板盒本来就要等模型加载完才合成
+				 * （notes/199）。头车永远先被画到（所以 1A 一直没事），**尾车只有等你坐进去才开始加载**。
+				 *
+				 * 所以：盒列表为空时先挂在车上等（模型一两秒就绪），只有"盒存在但点/Y 都够不着"
+				 * 才是真的掉出车外。等待有上限，超时仍然如实下车（不能因为一个永远加载不出来的包把人扣住）。
+				 */
+				if (!(floorsAndDoorways.isEmpty() && floorsNotReadySinceMillis != 0
+						&& System.currentTimeMillis() - floorsNotReadySinceMillis < FLOORS_NOT_READY_GRACE_MILLIS)) {
+					// Not standing on any floor any more: out of the vehicle. If this fires on the FIRST frame
+					// after a cab entry, the seat point is not over a floor box and the entry is being undone
+					// here - so report the clamp's own inputs, which is the only way to tell "no boxes at all"
+					// apart from "boxes exist but the point/Y misses them".
+					leaveRide("四个角都没有地板（点 x=" + Math.round(ridingVehicleX * 100) / 100.0
+							+ " z=" + Math.round(ridingVehicleZ * 100) / 100.0
+							+ " y=" + Math.round(ridingVehicleY * 1000) / 1000.0
+							+ "；" + describeBoxes(floorsAndDoorways) + "）");
+					return;
+				}
+				// 模型还在加载：这一帧没有盒子可钳，但**刻意不 return** —— 下面的收尾照样按车体局部坐标
+				// 把人钉在这一节车上（车在动时才不会把人落在原地），模型一到就恢复正常钳制。
+			} else {
+				floorsNotReadySinceMillis = 0;
 
-			double clampX = 0;
-			double maxY = -Double.MAX_VALUE;
-			double clampZ = 0;
-			for (final Vector3d offset : offsets) {
-				if (Math.abs(offset.getXMapped()) > Math.abs(clampX)) {
-					clampX = offset.getXMapped();
+				double clampX = 0;
+				double maxY = -Double.MAX_VALUE;
+				double clampZ = 0;
+				for (final Vector3d offset : offsets) {
+					if (Math.abs(offset.getXMapped()) > Math.abs(clampX)) {
+						clampX = offset.getXMapped();
+					}
+					maxY = Math.max(maxY, offset.getYMapped());
+					if (Math.abs(offset.getZMapped()) > Math.abs(clampZ)) {
+						clampZ = offset.getZMapped();
+					}
 				}
-				maxY = Math.max(maxY, offset.getYMapped());
-				if (Math.abs(offset.getZMapped()) > Math.abs(clampZ)) {
-					clampZ = offset.getZMapped();
-				}
+				ridingVehicleX += movementX + clampX;
+				ridingVehicleY = maxY;
+				ridingVehicleZ += movementZ + clampZ;
 			}
-			ridingVehicleX += movementX + clampX;
-			ridingVehicleY = maxY;
-			ridingVehicleZ += movementZ + clampZ;
 		}
 
 		ridingPositionCache = new Vector3d(ridingVehicleX, ridingVehicleY, ridingVehicleZ);
@@ -343,7 +390,10 @@ public class VehicleRidingMovement {
 		// 坐进座椅就是司机（引擎侧"谁能操纵"的判据只认这个），是否被引擎接受由它自己的闸门决定
 		// （停稳、一个驾驶室只有一把钥匙）—— 不再等钥匙确认才敢上报（用户口径 2026-09-19）。
 		mmtrCabConfirmed = false;
+		floorsNotReadySinceMillis = 0;
 		refreshDriverFlag();
+		org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 进舱：车={} 车节={} 驾驶室={} 座位=({}, {}, {}) 镜像车数={}",
+				vehicleId, carNumber, cab, Math.round(carLocalX * 100) / 100.0, Math.round(carLocalY * 100) / 100.0, Math.round(carLocalZ * 100) / 100.0, mmtrMirrorCarCount());
 		final ClientPlayerEntity clientPlayerEntity = MinecraftClient.getInstance().getPlayerMapped();
 		if (clientPlayerEntity != null) {
 			EntityHelper.setYaw(new org.mtr.mapping.holder.Entity(clientPlayerEntity.data), playerYawDeg);
@@ -478,7 +528,15 @@ public class VehicleRidingMovement {
 			org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 结束骑乘（{}）车={} 车节={} 驾驶室={} 已确认={}",
 					reason, ridingVehicleId, ridingVehicleCarNumber, mmtrCabNumber, mmtrCabConfirmed);
 		}
+		// THE LAST PACKET MUST SAY "I AM NOT THE DRIVER", and it has to be cleared BEFORE the packet is built:
+		// the server keeps whatever flag the last ride packet carried (Vehicle.updateRidingEntities), so a
+		// dismount that still says isDriver=true leaves the consist's occupation lock held by a player who is
+		// walking away from it - and because the engine's release test is "is the holder still sitting in a
+		// driver seat", a cab claimed once could never be claimed again. Measured: every drive request
+		// rejected with "另一名司机正持有操纵权（占用锁；持有者仍在司机位上）".
+		isDriverReported = false;
 		sendUpdate(true);
+		floorsNotReadySinceMillis = 0;
 		ridingSidingId = 0;
 		ridingVehicleId = 0;
 		ridingVehicleCarNumber = 0;
@@ -494,7 +552,6 @@ public class VehicleRidingMovement {
 		mmtrCabCarNumber = -1;
 		mmtrCabNumber = -1;
 		mmtrCabConfirmed = false;
-		isDriverReported = false;
 	}
 
 	private static void sendUpdate(boolean dismount) {
@@ -677,6 +734,53 @@ public class VehicleRidingMovement {
 	 * {@link #mmtrGetAndResetMovePlayerCalls()}; reported by {@code MmtrPlayerMotionTrace}.
 	 */
 	private static int mmtrMovePlayerCalls;
+
+	/**
+	 * **骑手停滞诊断**：这一拍为什么没有把玩家钉在车上。
+	 *
+	 * <p>为什么需要它：{@link #tick()} 用"连续 {@link #RIDING_COOLDOWN} 拍没有人推动玩家"来结束骑乘，
+	 * 而"没被推动"只说明 {@code movePlayer} 没跑到那节车上 —— 可能是车不在客户端镜像里、车节号对不上、
+	 * 或者没被渲染循环走到。那三种情形**在日志里长得一模一样**，而现场（编组尾车驾驶室：人坐进去两三秒
+	 * 就被请出车外）分不清就没法修。这里把骑乘状态与镜像车数一起打出来（同一理由 1 s 一行）。</p>
+	 */
+	static void mmtrRideDiag(String reason) {
+		final long now = System.currentTimeMillis();
+		if (reason.equals(mmtrRideDiagReason) && now - mmtrRideDiagMillis < 1000) {
+			return;
+		}
+		mmtrRideDiagReason = reason;
+		mmtrRideDiagMillis = now;
+		org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 骑手停滞：{}（骑乘车={} 车节={} 车节缓存={} 驾驶室车节={} 驾驶室={} 镜像车数={} 冷却={}/{}）",
+				reason, ridingVehicleId, ridingVehicleCarNumber, ridingVehicleCarNumberCacheOld, mmtrCabCarNumber, mmtrCabNumber, mmtrMirrorCarCount(), ridingVehicleCooldown, RIDING_COOLDOWN);
+	}
+
+	/** 诊断用：骑乘的那辆车在客户端镜像里有几节车（−1 = 那辆车已经不在镜像里）。 */
+	private static int mmtrMirrorCarCount() {
+		for (final org.mtr.mod.data.VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
+			if (vehicle.getId() == ridingVehicleId) {
+				return vehicle.getVehicleCarsAndPositions().size();
+			}
+		}
+		return -1;
+	}
+
+	private static long mmtrRideDiagMillis;
+	private static String mmtrRideDiagReason = "";
+
+	/**
+	 * **"这一节车的地板盒还没来"的宽限期**（毫秒）。
+	 *
+	 * <p>见 {@code movePlayer} 里 "offsets 为空" 那一段：骑乘的资源缓存要等这一节车的模型加载完才建出来，
+	 * 而**编组尾车只有人坐进去时才开始加载** —— 头车永远先被画到，所以"1A 一直能开、10B 坐进去就被请出来"。
+	 * 这段时间里盒子为空是**正常的中间状态**，不是"人走出了车外"。</p>
+	 *
+	 * <p>上限存在的理由：真有一个永远加载不出来的包（或车节真的没有地板盒）时，
+	 * 不能因为这条宽限把人永远扣在车上 —— 到点仍然如实下车。</p>
+	 */
+	private static final long FLOORS_NOT_READY_GRACE_MILLIS = 15000;
+
+	/** 这一节车的地板盒从什么时候开始缺（0 = 不缺）。见 {@link #FLOORS_NOT_READY_GRACE_MILLIS}。 */
+	private static long floorsNotReadySinceMillis;
 
 	public static boolean showShiftProgressBar() {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
