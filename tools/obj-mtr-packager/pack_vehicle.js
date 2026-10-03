@@ -85,7 +85,10 @@ const groupMap=params.groupMap||{};
   // anchor prefix "mmtr_" (5), so it silently stops being an anchor: no error, two missing anchors,
   // and no wipers in game. Patterns like "BlockEntities" cannot do this, because no anchor is named
   // "mmtr_BlockEntities" - so they are not reported.
-  const ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','wipersweep','door'];
+  // NOTE: keep this list in step with RESERVED_ANCHOR_KINDS below and with the <kind> alternation in
+  // the structured-name regex further down. It exists to WARN about a role pattern swallowing an anchor
+  // kind; a kind missing here gets no warning (the anchor just silently becomes a visible part).
+  const ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','wipersweep','light','door','pid','next','face'];
   const patterns=[];
   for(const role of Object.keys(groupMap)) for(const pat of (groupMap[role]||[])) patterns.push({role:role,pat:String(pat)});
   for(const other of patterns){
@@ -109,7 +112,28 @@ const groupMap=params.groupMap||{};
 // mmtr_ anchor prefix, and a reversed cab car needs its anchors moved to the other cab). Renaming
 // here keeps groupMap and every downstream name (parts, doorways, anchors) consistent.
 const groupRename=params.groupRename||{};
-function renameGroup(name){ return groupRename[name]||name; }
+// Wildcards in groupRename: a key containing "*" matches any run of characters, and the "*" in the
+// VALUE is replaced with whatever the key's "*" matched.
+//
+// WHY (2026-09-28, the headlights): the B-end control car is the SAME obj baked with rotationDegY 180,
+// so every indexed anchor group has to be renumbered 1 -> 2, and the lamps are named
+// mmtr_light_<cab>_<n> - one per lamp, a count that grows whenever someone models another lamp. An
+// explicit table silently misses the next one: that car then carries an anchor whose cab number
+// contradicts every other anchor on it, and nothing fails. One rule covers any count:
+//   "mmtr_light_1_*": "mmtr_light_2_*"
+const wildcardRenames=Object.keys(groupRename)
+  .filter(key=>key.indexOf('*')>=0)
+  .map(key=>{ const i=key.indexOf('*'); return {head:key.slice(0,i), tail:key.slice(i+1), to:String(groupRename[key])}; })
+  .sort((a,b)=>(b.head.length+b.tail.length)-(a.head.length+a.tail.length));   // more specific wins
+function renameGroup(name){
+  const exact=groupRename[name];
+  if(exact!==undefined) return exact;
+  for(const rule of wildcardRenames){
+    if(name.length<rule.head.length+rule.tail.length||!name.startsWith(rule.head)||!name.endsWith(rule.tail)) continue;
+    return rule.to.replace('*', name.slice(rule.head.length, name.length-rule.tail.length));
+  }
+  return name;
+}
 function roleOf(name){ let best=null,bestLen=-1; for(const role of Object.keys(groupMap)) for(const pat of groupMap[role]) if(name.indexOf(pat)>=0 && pat.length>bestLen){ best=role; bestLen=pat.length; } return best; }
 const used={};
 function canonical(name){ const r=roleOf(name); if(r){used[r]=1; return r;} return null; }
@@ -120,7 +144,7 @@ function canonical(name){ const r=roleOf(name); if(r){used[r]=1; return r;} retu
 //
 // "door" is DELIBERATELY absent from this list: models in this repo name passenger doors
 // mmtr_door_l_1 (HST_B, p1) and rely on the longer "door_l" pattern beating the anchor prefix.
-const RESERVED_ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','wipersweep'];
+const RESERVED_ANCHOR_KINDS=['hud','seat','cabdoor','ack','windshield','wipersweep','light','pid','next','face'];
 const anchorPrefixes=(groupMap.anchor||[]).map(String);
 function isReservedAnchorName(name){
   for(const prefix of anchorPrefixes){
@@ -143,6 +167,17 @@ const cabDoorParts=[];
 // part per object so each can be rotated about its own pivot, and collected here so their geometry can
 // be fitted into the mechanism (see fitWiperMechanism).
 const wiperGroups=[];
+/**
+ * The name of ONE solid wiper part: {@code <prefix>_<cab>_<pane>[_<wiper>]}.
+ *
+ * <p>The optional THIRD index is which wiper of that glass it is, and it is omitted for the first one -
+ * so every part named before multi-wiper existed keeps its exact name ({@code wiper_1_1},
+ * {@code wiperarm_1_1}, ...) and nothing already in a pack moves. A glass that carries TWO wipers (a
+ * wide screen with a pair on the scuttle, or a bus-style pantograph pair) names them
+ * {@code wiper_1_1} and {@code wiper_1_1_2}, each with its own {@code mmtr_wipersweep_1_1} /
+ * {@code mmtr_wipersweep_1_1_2} fan and its own pivot and park direction. See docs §1.4②/④.</p>
+ */
+function wiperPartName(prefix,cab,pane,wiper){ return prefix+'_'+cab+'_'+(pane||1)+((wiper||1)>1?'_'+wiper:''); }
 const partFaces=[]; let currentPart=null;
 let vi=0;
 // Data-only anchor geometry is dropped entirely: faces stripped AND vertices removed, because an OBJ
@@ -191,7 +226,7 @@ for(const line of raw.split('\n')){
     // can be rotated about its own pivot later): wiper_ = the blade, wiperarm_ = the arm, wiperrod_ =
     // the control rod of a parallel linkage. Recognised by name, so no groupMap entry is needed - and
     // a generic role would both merge them into one part and steal names from mmtr_wipersweep_*.
-    else if(/^wiper(arm|rod)?_\d+_\d+$/i.test(raw2)){
+    else if(/^wiper(arm|rod)?_\d+_\d+(?:_\d+)?$/i.test(raw2)){
       if(!wiperGroups.includes(raw2)) wiperGroups.push(raw2);
       currentPart={name:raw2,faces:[]};
       partFaces.push(currentPart);
@@ -489,7 +524,12 @@ function buildFacets(g,ctx){
  * Filled while the anchors are built, consumed by the wipersweep fit.
  */
 const DOMAINS=new Map();
-/** Glass anchor name -> the fields fitted from its mmtr_wipersweep fan. */
+/**
+ * SWEEP ANCHOR name -> the fields fitted from that fan. Keyed by the SWEEP's own name and not by the
+ * glass, because one glass may carry several wipers: {@code wipersweep_1_1} and {@code wipersweep_1_1_2}
+ * are two fans over the same {@code windshield_1_1}, and keying by glass would silently keep only the
+ * last one (the other wiper would then sweep the first one's sector).
+ */
 const SWEEP_FITS=new Map();
 
 /**
@@ -753,9 +793,10 @@ function circleCircle(a,pivot,radiusA,radiusB){
   ];
 }
 
-function fitWiperMechanism(sweepFit, glass, domain){
+function fitWiperMechanism(sweepFit, glass, domain, wiper){
   const pane=glass.pane||1;
-  const blade=partFaces.find(p=>p.name.toLowerCase()==='wiper_'+glass.cab+'_'+pane&&p.faces.length);
+  const w=wiper||1;
+  const blade=partFaces.find(p=>p.name.toLowerCase()===wiperPartName('wiper',glass.cab,pane,w)&&p.faces.length);
   if(!blade) return null;
   if(!domain){ console.warn('WARNING: '+blade.name+' cannot be fitted - its glass has no 2D domain.'); return null; }
 
@@ -775,8 +816,8 @@ function fitWiperMechanism(sweepFit, glass, domain){
     }
     return min;
   };
-  const rod=partFaces.find(p=>p.name.toLowerCase()==='wiperrod_'+glass.cab+'_'+pane&&p.faces.length);
-  const arm=partFaces.find(p=>p.name.toLowerCase()==='wiperarm_'+glass.cab+'_'+pane&&p.faces.length);
+  const rod=partFaces.find(p=>p.name.toLowerCase()===wiperPartName('wiperrod',glass.cab,pane,w)&&p.faces.length);
+  const arm=partFaces.find(p=>p.name.toLowerCase()===wiperPartName('wiperarm',glass.cab,pane,w)&&p.faces.length);
 
   // ---- the SPINDLE -------------------------------------------------------------------------------
   // The fan is the region the BLADE sweeps, so its apex is the region's VIRTUAL centre - the point where
@@ -795,7 +836,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
     armTip=near0<=near1 ? armEnds[0] : armEnds[1];
     p1=near0<=near1 ? armEnds[1] : armEnds[0];
   } else if(rod){
-    console.warn('WARNING: '+glass.name+' has a parallel linkage but no wiperarm_'+glass.cab+'_'+pane+
+    console.warn('WARNING: '+glass.name+' has a parallel linkage but no '+wiperPartName('wiperarm',glass.cab,pane,w)+
       ' - the spindle can only come from the arm (the fan apex is the SWEPT REGION\'s virtual centre, not the spindle). Falling back, so the stroke is probably wrong.');
   }
 
@@ -930,6 +971,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
   // would have swept the wrong way in game. The verifier has always taken the global minimum; the packager
   // must agree with it, and with the client, which rotates by (angle-park)*sweepSign.
   let best=null;
+  const matches=[];
   for(const edge of edges){
     // Do NOT exclude an edge just because its DIRECTION is close to park: in a real linkage the far blade
     // is only a couple of degrees away from the parked one - that is exactly what "slight fan" means - so
@@ -949,16 +991,35 @@ function fitWiperMechanism(sweepFit, glass, domain){
       const on=Math.max(distanceToSegment(aAt,edge.a,edge.b), distanceToSegment(bAt,edge.a,edge.b));
       if(on<onEdge){ onEdge=on; candidate=phi; }
     }
-
-    // |phi| near zero means this edge IS the parked blade, not the far one.
-    // The residual bar is 30 mm, not 5: it asks "is the blade lying on this rim edge", and the blade's modelled
-    // position sits a few mm INSIDE the region (the region is drawn with a small margin so no sliver is left
-    // unwiped). On the real BR101 that margin is ~6 mm, which was just over a 5 mm bar - so cab 2's two panes
-    // silently gave up and fell back to reading the region as an angular sector (298.96 deg / 0.30 deg of
-    // nonsense written into the pack), while cab 1's two panes, a hair tighter, solved exactly. A WRONG edge
-    // is off by the whole stroke - hundreds of mm - so 30 mm loses nothing.
-    if(candidate===null||onEdge>0.03||Math.abs(candidate)<0.2) continue;
-    if(best===null||onEdge<best.onEdge) best={onEdge, candidate, edge};
+    if(candidate===null||onEdge>0.03) continue;
+    matches.push({onEdge, candidate, edge});
+  }
+  /*
+   * THE PARK CAP IS EXCLUDED BY IDENTITY, NOT BY A phi THRESHOLD.
+   *
+   * The parked blade LIES ON the park cap, so a tiny rotation of it still lands within a few millimetres
+   * of that same edge: measured on the SAF420 control car (notes/279 follow-up) the 30 mm bar admitted
+   * phi = 0.25 deg with a 4.7 mm residual, which beat the real far cap's 26 mm at phi = 90.00 deg. The
+   * packager happened to survive that fan (it wrote 88.80 deg, 1.2 deg short of the modelled 90.000), but
+   * the same leak is what once wrote "298.96 deg / 0.30 deg" into the BR101 pack, and the independent
+   * verifier DID fall for it on this model. So: find the match nearest phi = 0 - that is the park cap -
+   * and drop it before choosing. What survives is a genuinely different blade position.
+   */
+  if(matches.length){
+    const parkCap=matches.reduce((a,b)=>Math.abs(a.candidate)<=Math.abs(b.candidate)?a:b);
+    const pole=Math.abs(parkCap.candidate);
+    const usable=matches.filter(m=>m!==parkCap&&Math.abs(m.candidate)>Math.max(2, pole+1));
+    if(usable.length===0){
+      console.warn('WARNING: '+glass.name+' has no fan edge but the parked blade\'s own - the fan must '+
+        'include the blade at BOTH ends of the stroke, so its far cap is missing (or the blade does not '+
+        'move). Falling back to the region read as an angular sector.');
+    } else {
+      best=usable.reduce((a,b)=>a.onEdge<=b.onEdge?a:b);
+    }
+    if(best){
+      console.log('wiper mechanism: '+glass.name+' park cap = the edge at phi='+parkCap.candidate.toFixed(2)+
+        ' deg ('+(parkCap.onEdge*1000).toFixed(1)+' mm from the parked blade), dropped from the solve');
+    }
   }
   if(best!==null){
     strokeDeg=Math.abs(best.candidate);
@@ -970,7 +1031,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
       'the blade is within '+(best.onEdge*1000).toFixed(1)+' mm of that edge');
   }
   if(!solved){
-    console.warn('WARNING: '+glass.name+' could not recover a stroke from '+mmtr_sweepLabel(glass)+
+    console.warn('WARNING: '+glass.name+' could not recover a stroke from '+mmtr_sweepLabel(glass,w)+
       '. The fan must be the region the BLADE SWEEPS: its rim has to include the blade at BOTH ends of the stroke (so its boundary edges are the two blade positions, not the arm\'s own swing).');
   }
   // The blade's OWN rotation over the stroke, now that the stroke is known: this is the fan's opening, and
@@ -1023,7 +1084,7 @@ function fitWiperMechanism(sweepFit, glass, domain){
     const bladeGap=offBladeBody(armTip);
     if(bladeGap>0.05){
       console.warn('WARNING: '+arm.name+' is '+bladeGap.toFixed(3)+' m off the blade geometry; check the arm against '+
-        mmtr_sweepLabel(glass)+'.');
+        mmtr_sweepLabel(glass,w)+'.');
     }
   }
 
@@ -1082,8 +1143,83 @@ function fitWiperMechanism(sweepFit, glass, domain){
   return fields;
 }
 
-function mmtr_sweepLabel(glass){
-  return 'mmtr_wipersweep_'+glass.cab+'_'+(glass.pane||1);
+function mmtr_sweepLabel(glass, wiper){
+  return wiperPartName('mmtr_wipersweep',glass.cab,glass.pane||1,wiper||1);
+}
+
+/**
+ * THE LAST TRANSFORM, AND THE ONE MTR ACTUALLY DEPENDS ON: un-weld + triangulate into the index-locked
+ * layout ObjModelLoader reads (notes/194).
+ *
+ * MTR welds the i-th vertex to the i-th uv and the i-th normal and then reads only the first three
+ * corners of a face. It never looks at the `v/vt/vn` triple a face writes. So a stock Blender export
+ * (shared vertices, separate vt/vn index spaces, quads) is read as: every vertex past #vt samples uv
+ * (0,0) - the WRONG texel, so the part turns invisible or samples another part of the atlas - and every
+ * quad silently loses its fourth corner. Neither is an error message; the symptom is "part of the model
+ * does not appear".
+ *
+ * What it does:
+ *   · every face corner (v, vt, vn) becomes ONE output index, so the three pools stay the same length and
+ *     `f i/i/i` is true by construction;
+ *   · identical triples are de-duplicated, so the pools stay as small as the model really is;
+ *   · polygons are fanned into triangles (v0,vi,vi+1), which is exactly the area-preserving triangulation
+ *     the L3 check in verify_mtr_obj.js measures;
+ *   · the POOL TEXT IS COPIED VERBATIM - only the numbering changes. That is why a packed file can carry
+ *     `vn 1.000000 0.000000 0.000000` and `vn 0 0 1` side by side: the numbers are whatever the assembly
+ *     above wrote, and re-formatting them here would be a second, silent edit of the geometry.
+ *
+ * Layout: any leading non-geometry line (mtllib), then all v, then all vt, then all vn, then the groups,
+ * materials and faces in their original order.
+ */
+function toMtrObj(text){
+  const lines=text.split('\n');
+  const poolText={v:[],vt:[],vn:[]};          // payload after the keyword, verbatim
+  const body=[];                               // {kind:'line'|'face'} in source order
+  const ids=new Map();                         // "vi/vti/vni" -> output index (1-based)
+  for(const raw of lines){
+    const line=raw.replace(/\r$/,'');
+    if(!line) continue;
+    const sp=line.indexOf(' ');
+    const head=sp>=0?line.slice(0,sp):line;
+    if(head==='v'||head==='vt'||head==='vn'){ poolText[head].push(line.slice(sp+1).trim()); continue; }
+    body.push({kind:head==='f'?'face':'line',text:line});
+  }
+  const outV=[], outVt=[], outVn=[];
+  const NO_UV=(params.untexturedUv||[0,0]).join(' ');
+  const NO_NORMAL=[0,0,1].join(' ');
+  const idOf=(ref)=>{
+    const key=ref[0]+'/'+ref[1]+'/'+ref[2];
+    let id=ids.get(key);
+    if(id!==undefined) return id;
+    id=outV.length+1;
+    ids.set(key,id);
+    outV.push(poolText.v[ref[0]-1]!==undefined?poolText.v[ref[0]-1]:'0 0 0');
+    outVt.push(ref[1]&&poolText.vt[ref[1]-1]!==undefined?poolText.vt[ref[1]-1]:NO_UV);
+    outVn.push(ref[2]&&poolText.vn[ref[2]-1]!==undefined?poolText.vn[ref[2]-1]:NO_NORMAL);
+    return id;
+  };
+  // Resolve every face into triangles of OUTPUT ids, in file order, before serialising anything: the
+  // pools have to be written ahead of the faces, so the numbering must be settled first.
+  const faces=body.filter(e=>e.kind==='face').map(entry=>{
+    const refs=entry.text.trim().split(/\s+/).slice(1).map(r=>{
+      const p=r.split('/');
+      return [parseInt(p[0],10)||0, p[1]?parseInt(p[1],10)||0:0, p[2]?parseInt(p[2],10)||0:0];
+    });
+    const tris=[];
+    for(let i=1;i+1<refs.length;i++) tris.push([refs[0],refs[i],refs[i+1]].map(idOf));
+    return tris;
+  });
+  const out=[];
+  for(const entry of body) if(entry.kind==='line'&&/^mtllib\s/.test(entry.text)) out.push(entry.text);
+  for(const t of outV) out.push('v '+t);
+  for(const t of outVt) out.push('vt '+t);
+  for(const t of outVn) out.push('vn '+t);
+  let next=0;
+  for(const entry of body){
+    if(entry.kind==='line'){ if(!/^mtllib\s/.test(entry.text)) out.push(entry.text); continue; }
+    for(const tri of faces[next++]) out.push('f '+tri.map(i=>i+'/'+i+'/'+i).join(' '));
+  }
+  return out.join('\n')+'\n';
 }
 
 function buildAnchors(){
@@ -1105,7 +1241,25 @@ function buildAnchors(){
       const area=Math.hypot(nx,ny,nz)/2;
       if(area>bestArea){ bestArea=area; f0=f; }
     }
-    let n=nz(cr(sub(rc(f0[1]),c), sub(rc(f0[2]),c)));
+    // The anchor's normal is the REFERENCE FACE's own normal (docs §1.3⑨: "法线只取面积最大那个面").
+    //
+    // It used to be a three-vertex cross about the GROUP's centroid, which is only the reference face's
+    // normal while the group is flat. On a folded group the centroid sits off the reference plane, so
+    // that cross points somewhere else entirely - measured on BR101's three-panel dashboard it was
+    // 49.3 degrees off the reference face. Three things then went wrong at once, all silently:
+    //   · the anchor's normal/up/right were wrong (up is orthogonalised against the normal, so a 49
+    //     degree error dragged the written `up` from (0, 0.98, -0.20) to (-0.22, 0.50, -0.84));
+    //   · buildFacets' winding-consistency guard compares the reference facet's normal against this
+    //     one and bailed out, so the folded dashboard got NO facet data and fell back to the single
+    //     misaligned quad the facet path exists to replace;
+    //   · the 2D domain of every windshield was built on the same tilted normal (5.8 degrees on
+    //     BR101), so the packager's wiper fit and the independent verifier disagreed by 3-27 mm.
+    // The Newell normal of the reference face about its OWN centroid has none of those problems, and
+    // on a flat group it is the same direction to within rounding (so flat anchors do not move).
+    const refFaceInfo=faceNormalArea(f0.map(rc));
+    // (a degenerate reference face makes faceNormalArea fall back to +Z; keep the old three-vertex
+    //  cross there so such a group behaves exactly as it did before)
+    let n=refFaceInfo.area>1e-12 ? refFaceInfo.n : nz(cr(sub(rc(f0[1]),c), sub(rc(f0[2]),c)));
     // Blender face winding decides the normal. Flip it globally with flipAnchorNormal, or per anchor
     // with flipAnchorNormalByGroup: ["mmtr_hud", ...] (matches the object name or the anchor name).
     const rawNameForFlip=(g.name||'').replace(/\.\d+$/,'');
@@ -1115,6 +1269,11 @@ function buildAnchors(){
     if(flipThis) n=n.map(x=>-x);
     // up = the quad edge most aligned with world +Y, orthogonalised against the normal;
     // right = up x normal (right-handed frame: right = HUD 右, up = HUD 上, normal = HUD 朝向)
+    //
+    // ONLY THE NORMAL IS ORIENTED; up IS LEFT ALONE. Flipping up as well would flip right twice (right =
+    // up x normal) and flipping up alone would flip right once, so the two panes of a cab would end up on
+    // opposite handednesses - measured: that alone put the verifier 20 checks out (pivotU, parkAngle,
+    // sweepSign and the blade ends all swapped between the two panes of each cab).
     const e1=sub(rc(f0[1]), rc(f0[0]));
     const e2=sub(rc(f0[2]), rc(f0[1]));
     let upRaw=Math.abs(e1[1])>=Math.abs(e2[1]) ? e1 : e2;
@@ -1126,7 +1285,21 @@ function buildAnchors(){
     // Structured naming (user convention): <kind>[_<cab>][_<index>]
     //   cabdoor_1_2  = 驾驶室1 的第2扇门   hud_2 = 驾驶室2 的仪表   seat_1 = 驾驶室1 座位
     //   cab 1 = A 端 (CAB_A), cab 2 = B 端 (CAB_B); no cab = single-cab model (defaults to 1)
-    const m=/^(hud|seat|cabdoor|ack)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
+    // mmtr_light_<cab>_<n> - 驾驶室 <cab> 的第 <n> 盏灯（车灯锚点，纯数据：面被剥掉、不进几何）。
+    //   mmtr_light_1_1 = 驾驶室1 的主前照灯；_2/_3 = 标志灯/近照灯。
+    // 法线 = 灯射出的方向（由顶点绕序决定），面中心 = 灯罩中心，面尺寸 = 灯罩大小。
+    // mmtr_pid_<cab>[_<n>] - 水牌（PID：车次/班次号 + 本趟终点站）。面中心 = 牌面中心，
+    //   法线朝**车外**（旅客站在站台上要看得见），面尺寸 = 牌面大小，up = 文字的上方向。
+    //   同一端可以有多块（mmtr_pid_1_1 / mmtr_pid_1_2 = 两侧各一块），内容由客户端按端决定。
+    // mmtr_next_<cab>[_<n>] - 下一站牌（车内显示屏：写"下一站 X"）。约定与 mmtr_pid_* 相同，
+    //   只是显示的字段不同；两族都是纯数据锚点（面被剥掉，牌底与文字由客户端画）。
+    //   为什么不合成一族："写什么"是模型的意图，写进名字里比再加一层配置可读；
+    //   只有 pid 没有 next 的车（或反过来）都是合法的。
+    // mmtr_face_<cab>[_<n>] - **动态面**（notes/359）：一块"画什么由锚点 JSON 的 faces 段说"的屏。
+    //   与水牌同一套约定（面中心 = 屏幕中心、法线朝读它的人、面尺寸 = 屏幕大小、up = 文字上方向），
+    //   但内容不再是"写死的那两行"，而是 faces 段里的一段文档（元素 / 条件 / 模板）。
+    //   ★ 面文档的键就是这里的锚点名（face_1 / face_1_2 / …）—— 见 docs 的《车辆动态面-作者指南》。
+    const m=/^(hud|seat|cabdoor|ack|light|pid|next|face)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
     // mmtr_windshield[_<cab>][_<pane>] - the rain/wiper glass, and mmtr_wipersweep_<cab>_<pane> - the
     // sector that glass's wiper sweeps (see docs §1.4).
     //
@@ -1137,18 +1310,34 @@ function buildAnchors(){
     // Reading a lone index as a pane instead would silently turn SAF101v2's two screens (one per cab)
     // into "two panes of cab 1" - no error, wrong glass. The pane defaults to 1 either way.
     const wsm=/^windshield(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
-    const swm=/^wipersweep(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
+    // mmtr_wipersweep_<cab>_<pane>[_<wiper>] - the sector ONE wiper sweeps. The third index says WHICH
+    // wiper of that glass it is and is absent (= 1) for a glass with a single wiper, so every existing
+    // model parses exactly as before. Two wipers on one screen is therefore
+    //   mmtr_windshield_1_1  +  mmtr_wipersweep_1_1  +  mmtr_wipersweep_1_1_2
+    // (one glass, two fans, two pivots) rather than two glasses - see docs §1.4②.
+    const swm=/^wipersweep(?:_(\d+))?(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
     const kind=wsm?'windshield':(swm?'wipersweep':(m?m[1]:rawName));
     const cab=wsm?(wsm[1]?+wsm[1]:1):(swm?(swm[1]?+swm[1]:1):(m&&m[2]?+m[2]:null));
     const pane=(wsm||swm)?((wsm?wsm[2]:swm[2])?+(wsm?wsm[2]:swm[2]):1):null;
+    // Which wiper of that glass this fan belongs to. Windshield anchors have no wiper index.
+    const wiper=swm?(swm[3]?+swm[3]:1):null;
     const door=(wsm||swm)?null:(m&&m[3]?+m[3]:null);
     const anchor={name:rawName,kind:kind,cab:cab,door:door,car:params.carIndex||0,
       x:+c[0].toFixed(5), y:+c[1].toFixed(5), z:+c[2].toFixed(5),
       normal:n.map(x=>+x.toFixed(6)), up:up.map(x=>+x.toFixed(6)), right:right.map(x=>+x.toFixed(6)),
       widthM:+(wMax-wMin).toFixed(4), heightM:+(hMax-hMin).toFixed(4)};
+    // WHICH lamp of the cab this is: 1 = main headlight, 2+ = marker / near lamp.
+    // Written under its own name (the `door` field happens to hold the same number, but its meaning is
+    // door-specific); absent means 1, so a single-lamp-per-cab model keeps the old reading.
+    // The pid/next boards use it the same way: the ORDINAL of the board on that cab (both sides of a
+    // cab are separate boards showing the same text), and the client keys its texture by anchor name.
+    if(kind==='light'||kind==='pid'||kind==='next'||kind==='face') anchor.index=(door===null?1:door);
     // The pane number is written ONLY when it is not 1, so a single-pane glass (which is what every
     // model built before multi-pane existed has) keeps a byte-identical anchor entry. Absent = pane 1.
     if(pane!==null && pane!==1) anchor.pane=pane;
+    // Same rule for the wiper index: written ONLY when it is not 1, so a single-wiper glass keeps a
+    // byte-identical anchor entry.
+    if(wiper!==null && wiper!==1) anchor.wiper=wiper;
     // A folded dashboard/glass adds canvasWidthM/canvasHeightM + one entry per face. The fields above
     // keep their old meaning, so a client that does not know about facets still draws the old quad.
     const facetResult=buildFacets(g,{kind:kind,refFace:f0,refNormal:n,refUp:up,refRight:right,groupCentroid:c,flip:flipThis,rawName:rawName});
@@ -1159,6 +1348,80 @@ function buildAnchors(){
       canvasWidthM:anchor.widthM, canvasHeightM:anchor.heightM,
       toRightUp: p => { const d=sub(p,c); return [dot(d,right), dot(d,up)]; }
     });
+    // ---- SAG PROFILE: how far the modelled surface departs from this anchor's plane ----------------
+    //
+    // The anchor's frame comes from ONE face (the largest), which is exact while the group is flat and
+    // silently wrong when it is not: a CURVED mmtr_windshield (V25 subdivided it into 33 faces) is then
+    // treated as the plane of whichever patch happened to be biggest, and the client draws the whole rain
+    // layer on it. Measured on BR101 V25: the real glass sits -55.2 .. +112.1 mm from that plane, against
+    // a water layer offset of 50 mm and a glass thickness of 23 mm - the drops float a hand's width off
+    // the screen, and NOTHING says so (both anchor verifiers PASS, because neither has a notion of
+    // "curved").
+    //
+    // A windscreen is usually a CYLINDER, and a cylinder unrolls flat with NO distortion - so the whole
+    // 2-D rain model (density, wipe test, transport, wiper kinematics) stays exact and only the
+    // (u,v) -> 3-D mapping needs the correction.
+    //
+    // Emitted ONLY when the surface is measurably non-planar, so every flat model's anchor stays
+    // byte-identical (docs §1.3: flat anchors must not move).
+    if(kind==='windshield'){
+      // A 2-D GRID RATHER THAN A 1-D PROFILE. A windscreen is usually a cylinder, which a profile along
+      // up would capture exactly - but only against a frame whose normal is perpendicular to the
+      // cylinder's axis, and nothing guarantees that: measured on BR101 V25, even with the surface's own
+      // area-weighted normal a 17-sample profile still leaves 18.3 mm, because part of the departure is
+      // linear across the WIDTH. Fitting the frame until the surface happens to come out one-dimensional
+      // would break the next time the model changes; a coarse grid assumes nothing and reproduces a
+      // smooth surface to well under a millimetre at this resolution.
+      const SAG_NX=17, SAG_NY=17, SAG_FLAT_MM=1.0, SAG_WARN_MM=2.0;
+      // NODE VALUES, NOT BIN MEANS. Sampling each bin's average and reading it back bilinearly loses half
+      // a cell of slope at the edges of the face, and the sag changes by 23 mm across one cell at its
+      // steep end: measured on BR101 V25, a vertex on the bottom edge reads 51.9 mm while its own bin
+      // averages 29 mm. So each NODE takes an inverse-distance-weighted value from the surface's own
+      // vertices - exact where a node lands on a vertex, and for the ruled strip this windscreen actually
+      // is (68 vertices, all of them on the two side edges, nothing in between) it reproduces the straight
+      // line between those edges, which is what the surface is.
+      const uSpan=Math.max(1e-9,wMax-wMin), vSpan=Math.max(1e-9,hMax-hMin);
+      const pts=[];
+      for(const v of p){
+        const d=sub(v,c);
+        pts.push([dot(d,right), dot(d,up), dot(d,n)]);
+      }
+      const grid=new Array(SAG_NX*SAG_NY).fill(0);
+      const NEAREST=6;
+      const best=new Array(NEAREST), bestD=new Array(NEAREST);
+      for(let iy=0;iy<SAG_NY;iy++){
+        const nodeV=hMin+vSpan*iy/(SAG_NY-1);
+        for(let ix=0;ix<SAG_NX;ix++){
+          const nodeU=wMin+uSpan*ix/(SAG_NX-1);
+          for(let k=0;k<NEAREST;k++){ best[k]=null; bestD[k]=Infinity; }
+          for(const q of pts){
+            const dd=(q[0]-nodeU)*(q[0]-nodeU)+(q[1]-nodeV)*(q[1]-nodeV);
+            for(let k=0;k<NEAREST;k++){
+              if(dd<bestD[k]){ for(let m=NEAREST-1;m>k;m--){ bestD[m]=bestD[m-1]; best[m]=best[m-1]; } bestD[k]=dd; best[k]=q; break; }
+            }
+          }
+          let num=0, den=0;
+          for(let k=0;k<NEAREST;k++){
+            if(!best[k]) continue;
+            const w=1/(bestD[k]+1e-12);
+            num+=w*best[k][2]; den+=w;
+          }
+          grid[iy*SAG_NX+ix]=den>0?num/den:0;
+        }
+      }
+      let sagLo=Infinity, sagHi=-Infinity;
+      for(const x of grid){ sagLo=Math.min(sagLo,x); sagHi=Math.max(sagHi,x); }
+      const sagSpanMm=(sagHi-sagLo)*1000;
+      if(sagSpanMm>SAG_FLAT_MM){
+        anchor.sagGridM=grid.map(x=>+x.toFixed(6));
+        anchor.sagUMinM=+wMin.toFixed(6); anchor.sagUMaxM=+wMax.toFixed(6);
+        anchor.sagVMinM=+hMin.toFixed(6); anchor.sagVMaxM=+hMax.toFixed(6);
+        // Never silent: a curved glass changes where the rain is drawn, so it is reported either way.
+        console.log('  curved glass: '+(g.name||'')+' departs from its anchor plane by '+sagSpanMm.toFixed(1)+' mm'+
+          (sagSpanMm>SAG_WARN_MM?' (sagGridM '+SAG_NX+'x'+SAG_NY+' over right '+(wMax-wMin).toFixed(3)+' m x up '+
+           (hMax-hMin).toFixed(3)+' m)':''));
+      }
+    }
     anchors.push(anchor);
   }
 
@@ -1186,10 +1449,17 @@ function buildAnchors(){
     if(fit){
       // The modelled parts say whether the blade RIDES the arm (one pivot) or is carried by a
       // parallelogram linkage (two pivots). This is what makes a train's pantograph wiper work with the
-      // same client code as a car's - see fitWiperMechanism.
-      const mechanism=fitWiperMechanism(fit, glass, DOMAINS.get(glass.name));
+      // same client code as a car's - see fitWiperMechanism. The wiper index picks WHICH of the glass's
+      // wiper part sets belongs to this fan.
+      const mechanism=fitWiperMechanism(fit, glass, DOMAINS.get(glass.name), sweep.wiper||1);
       if(mechanism) for(const key of Object.keys(mechanism)) fit[key]=mechanism[key];
-      SWEEP_FITS.set(glass.name, fit);
+      // Two fans claiming the same wiper of the same glass is an authoring error and would be silent
+      // otherwise: the second fit would overwrite the first and one wiper would sweep the other's sector.
+      if(SWEEP_FITS.has(sweep.name)){
+        console.warn('WARNING: two fans are named for wiper '+(sweep.wiper||1)+' of '+glass.name+
+          ' - '+sweep.name+' replaces the earlier one. Name the second wiper '+sweep.name+'_2.');
+      }
+      SWEEP_FITS.set(sweep.name, fit);
     }
   }
   return anchors;
@@ -1206,24 +1476,53 @@ const anchors=buildAnchors();
 //       "windshield": [ { "anchor": "mmtr_windshield_1", ... }, { "index": 2, ... } ]
 // Every field the client reads is listed below; an unknown field is dropped rather than silently ignored.
 //
-// KEEP THIS IN STEP WITH MmtrWindshield.WindshieldConfig. A field the client reads but this list omits is
-// DROPPED AT PACK TIME and the config looks like it was ignored in game - that was the real cause of the
-// "sweepSign has no effect" bug (notes/179 §9.4 #3), and the "droplet physics has no effect" repeat of it.
-const WINDSHIELD_FIELDS=['raindrops','fallMps','maxStreakM','wiper','drawBlade','dualWiper','armM','parkAngleDeg',
-                         'sweepDeg','sweepSign','periodS','pivotU','pivotV','bladeWidthM','colour','armColour','snow','twoSided',
-                         'pivot2U','pivot2V','bladeAU','bladeAV','bladeBU','bladeBV','pinAU','pinAV','pinBU','pinBV',
-                         'creepMps','jitterMps','minBeadRadiusM','maxBeadRadiusM','growthMps','spawnPerSecond'];
+// KEEP THIS IN STEP WITH MmtrWindshield.WindshieldConfig / WiperConfig. A field the client reads but this
+// list omits is DROPPED AT PACK TIME and the config looks like it was ignored in game - that was the real
+// cause of the "sweepSign has no effect" bug (notes/179 §9.4 #3), and the "droplet physics has no effect"
+// repeat of it.
+//
+// THE FIELDS ARE SPLIT IN TWO, and the split is what makes several wipers on ONE glass expressible:
+//
+//   PER_WIPER_FIELDS - the blade and its mechanism. One set per wiper, so two wipers on one screen can
+//     have different pivots, park directions, strokes and speeds. A glass with ONE wiper keeps writing
+//     these FLAT (byte-identical to every pack made before multi-wiper existed); a glass with two or more
+//     writes them inside "wipers": [ {..}, {..} ] with an explicit "wiperIndex" on each entry.
+//   GLASS_FIELDS - the weather and the water. There is exactly ONE bead field per glass, so these are
+//     shared by every wiper on it: two blades clear the same rain.
+const PER_WIPER_FIELDS=['wiper','drawBlade','dualWiper','armM','parkAngleDeg','sweepDeg','sweepSign','periodS',
+                         'pivotU','pivotV','bladeWidthM','colour','armColour',
+                         'pivot2U','pivot2V','bladeAU','bladeAV','bladeBU','bladeBV','pinAU','pinAV','pinBU','pinBV'];
+const GLASS_FIELDS=['raindrops','fallMps','maxStreakM','snow','waterOffsetM','minVisibleRadiusM','maxVisibleRadiusM',
+                    'creepMps','jitterMps','minBeadRadiusM','maxBeadRadiusM','growthMps','spawnPopulationPerSecond',
+                    'staticThresholdM','densityCellM','densityThresholdPerM2','runoffMps','pushM','mergeDistanceM',
+                    'collectZoneM'];
+const WINDSHIELD_FIELDS=PER_WIPER_FIELDS.concat(GLASS_FIELDS);
 function buildWindshieldConfig(){
   const byAnchor={};
+  /** Glass anchor name -> the AUTHORED per-wiper override list ("wipers": [...]) of that glass. */
+  const authoredWipers={};
+  const warnUnknown=(key,entry,allowed,where)=>{
+    for(const field of Object.keys(entry||{})){
+      if(field==='anchor'||field==='index'||field==='wipers') continue;
+      if(!allowed.includes(field)){
+        console.warn(`windshield["${key}"]${where}: unknown field "${field}" will NOT reach the client - add it to WINDSHIELD_FIELDS/PER_WIPER_FIELDS if it is meant to do something`);
+      }
+    }
+  };
   const put=(key,entry)=>{
     const values={};
     for(const field of WINDSHIELD_FIELDS){
       if(entry&&entry[field]!==undefined) values[field]=entry[field];
     }
     // Name anything that is about to be dropped, so the next new field is caught here instead of in game.
-    for(const field of Object.keys(entry||{})){
-      if(field!=='anchor'&&field!=='index'&&!WINDSHIELD_FIELDS.includes(field)){
-        console.warn(`windshield["${key}"]: unknown field "${field}" will NOT reach the client - add it to WINDSHIELD_FIELDS if it is meant to do something`);
+    warnUnknown(key,entry,WINDSHIELD_FIELDS,'');
+    if(entry&&entry.wipers!==undefined){
+      if(Array.isArray(entry.wipers)){
+        // Validated element-wise: a typo inside a per-wiper block would otherwise be dropped in silence,
+        // which is the exact failure this list exists to prevent.
+        authoredWipers[key]=entry.wipers.map((one,index)=>{ warnUnknown(key,one,PER_WIPER_FIELDS,'.wipers['+index+']'); return one||{}; });
+      } else {
+        console.warn(`windshield["${key}"].wipers is not an array, ignored`);
       }
     }
     byAnchor[key]=values;
@@ -1261,20 +1560,67 @@ function buildWindshieldConfig(){
   for(const anchor of anchors){
     if(anchor.kind!=='windshield') continue;
     const values=byAnchor[anchor.name]||(byAnchor[anchor.name]={});
-    const fit=SWEEP_FITS.get(anchor.name);
-    if(fit){
+    // Every fan over THIS glass, by wiper index. A fan belongs to the glass whose cab AND pane match, and
+    // its own third index says which wiper of that glass it is (absent = 1).
+    const fits=[];
+    for(const sweep of anchors){
+      if(sweep.kind!=='wipersweep') continue;
+      if(sweep.cab!==anchor.cab||(sweep.pane||1)!==(anchor.pane||1)) continue;
+      const fit=SWEEP_FITS.get(sweep.name);
+      if(fit) fits.push({wiper:sweep.wiper||1, fit:fit});
+    }
+    fits.sort((a,b)=>a.wiper-b.wiper);
+
+    if(fits.length===1&&fits[0].wiper===1){
+      // ---- ONE wiper: the flat block, byte-identical to every pack made before multi-wiper existed ----
       // The modelled sector fills in whatever the config did not state outright, so an explicit
       // parkAngleDeg in the pack config still wins (that is the escape hatch for tuning).
       // Only real config fields are copied: the fit also carries internal values (the fan's boundary
       // lines) that have no business in the pack.
-      for(const field of Object.keys(fit)) if(WINDSHIELD_FIELDS.includes(field)&&values[field]===undefined) values[field]=fit[field];
+      for(const field of Object.keys(fits[0].fit)) if(WINDSHIELD_FIELDS.includes(field)&&values[field]===undefined) values[field]=fits[0].fit[field];
+      // A modelled SOLID wiper replaces the drawn blade. It must NOT switch the wiper off: the glass
+      // still has to be wiped, and the modelled arm is what the animation is meant to move.
+      // This is the ONLY case in which a client default is overridden, which is what keeps every model
+      // packed before solid wipers existed drawing exactly what it drew before.
+      if(wiperGroups.includes(wiperPartName('wiper',anchor.cab,anchor.pane||1,1))&&values.drawBlade===undefined) values.drawBlade=false;
+      continue;
     }
-    // A modelled SOLID wiper replaces the drawn blade. It must NOT switch the wiper off: the glass
-    // still has to be wiped, and the modelled arm is what the animation is meant to move (that part is
-    // still to come - see docs §1.4④). Only the mod's own blade geometry is suppressed.
-    // This is the ONLY case in which a client default is overridden, which is what keeps every model
-    // packed before solid wipers existed drawing exactly what it drew before.
-    if(wiperGroups.includes('wiper_'+anchor.cab+'_'+(anchor.pane||1))&&values.drawBlade===undefined) values.drawBlade=false;
+
+    if(fits.length===0){
+      // No fan at all: whatever the author wrote stands, including the blade decision keyed on wiper 1.
+      if(wiperGroups.includes(wiperPartName('wiper',anchor.cab,anchor.pane||1,1))&&values.drawBlade===undefined) values.drawBlade=false;
+      continue;
+    }
+
+    // ---- TWO OR MORE wipers on one glass ------------------------------------------------------------
+    // The per-wiper fields MOVE into "wipers"; the glass-level ones (the weather and the water) stay
+    // where they are, because there is one bead field per glass and every blade clears that same rain.
+    // Whatever the author wrote flat is a DEFAULT for every wiper (so parkAngleDeg can be set once), and
+    // an authored "wipers": [..] overrides the i-th wiper. An explicit wiperIndex travels with each entry
+    // so a non-contiguous set (say wiper 1 and wiper 3) can never be silently renumbered.
+    const defaults={};
+    for(const field of PER_WIPER_FIELDS){
+      if(values[field]!==undefined){ defaults[field]=values[field]; delete values[field]; }
+    }
+    const authored=authoredWipers[anchor.name]||[];
+    if(authored.length&&authored.length!==fits.length){
+      console.warn('WARNING: '+anchor.name+' has '+fits.length+' modelled wipers but '+authored.length+
+        ' authored "wipers" entries; the model wins and the extra authored entries are ignored.');
+    }
+    values.wipers=fits.map((entry,index)=>{
+      const one={wiperIndex:entry.wiper};
+      for(const field of PER_WIPER_FIELDS) if(defaults[field]!==undefined) one[field]=defaults[field];
+      const override=authored[index];
+      if(override) for(const field of PER_WIPER_FIELDS) if(override[field]!==undefined) one[field]=override[field];
+      for(const field of Object.keys(entry.fit)) if(PER_WIPER_FIELDS.includes(field)&&one[field]===undefined) one[field]=entry.fit[field];
+      if(one.wiper===undefined) one.wiper=true;
+      // Each wiper decides for ITSELF whether the drawn blade is suppressed: only the one the model
+      // actually carries a solid blade for.
+      if(wiperGroups.includes(wiperPartName('wiper',anchor.cab,anchor.pane||1,entry.wiper))&&one.drawBlade===undefined) one.drawBlade=false;
+      return one;
+    });
+    console.log('windshield '+anchor.name+': '+values.wipers.length+' wipers on one glass (wipers '+
+      values.wipers.map(w=>w.wiperIndex).join(', ')+')');
   }
   return byAnchor;
 }
@@ -1300,9 +1646,12 @@ if(fs.existsSync(extraAnchorsPath)){
     up=uLen<1e-6?[0,1,0]:[up[0]/uLen,up[1]/uLen,up[2]/uLen];
     const right=[up[1]*n[2]-up[2]*n[1], up[2]*n[0]-up[0]*n[2], up[0]*n[1]-up[1]*n[0]];
     const rawName=(a.name||'anchor').replace(/^mmtr_/,'')||'anchor';
-    const m=/^(hud|seat|cabdoor|ack)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
+    // ⚠ 这个正则必须与主路径的那个（buildAnchors 里的 `m`）保持一致：sidecar 与 OBJ 两条路
+    // 各写一份，漏改一边的后果是"同一个名字，从这边进来 kind 对、从那边进来 kind 是整串"
+    // （客户端只认字面量 "pid"/"next"/"face"，整串会静默变成 OTHER）。
+    const m=/^(hud|seat|cabdoor|ack|light|pid|next|face)(?:_(\d+))?(?:_(\d+))?$/.exec(rawName);
     const wsm=/^windshield(?:_(\d+))?$/.exec(rawName);
-    anchors.push({name:rawName,kind:a.kind||(wsm?'windshield':(m?m[1]:rawName)),cab:a.cab!==undefined?a.cab:(wsm?(wsm[1]?+wsm[1]:1):(m&&m[2]?+m[2]:null)),door:a.door!==undefined?a.door:(wsm?null:(m&&m[3]?+m[3]:null)),car:params.carIndex||0,
+    anchors.push({name:rawName,kind:a.kind||(wsm?'windshield':(m?m[1]:rawName)),cab:a.cab!==undefined?a.cab:(wsm?(wsm[1]?+wsm[1]:1):(m&&m[2]?+m[2]:null)),door:a.door!==undefined?a.door:(wsm?null:(m&&m[3]?+m[3]:null)),index:a.index!==undefined?a.index:(m&&m[3]?+m[3]:1),car:params.carIndex||0,
       x:+px.toFixed(5), y:+(a.y||0).toFixed(5), z:+pz.toFixed(5),
       normal:n.map(x=>+x.toFixed(6)), up:up.map(x=>+x.toFixed(6)), right:right.map(x=>+x.toFixed(6)),
       widthM:+(a.widthM||0).toFixed(4), heightM:+(a.heightM||0).toFixed(4)});
@@ -1313,7 +1662,12 @@ if(fs.existsSync(extraAnchorsPath)){
 // A locomotive has no passenger doors - only cab doors - so the config can name extra parts that must
 // still get a doorway (params.extraDoorways), otherwise the crew could never board it.
 const extraDoorwayNames=new Set((params.extraDoorways||[]).map(n=>String(n)));
-function isDoorwaySource(name){ return name.startsWith('door_l')||name.startsWith('door_r')||extraDoorwayNames.has(name); }
+function isDoorwaySource(name){
+  // ★ 2026-09-30：门的**玻璃伴随组** `<门叶>_glass` 不是门叶 —— 它跟着门叶滑（见下面的部件表），
+  //   但不需要再多一个门洞薄片（多出来的薄片和门叶那块完全重合，只会让 D4 检查与部件表变乱）。
+  if(name.endsWith('_glass')) return false;
+  return name.startsWith('door_l')||name.startsWith('door_r')||extraDoorwayNames.has(name);
+}
 function doorBBoxes(){
   const res={}; const vv=[]; let cur=null;
   for(const l of out){ const t=l.trim();
@@ -1356,6 +1710,9 @@ if(Object.keys(dbs).length&&slabNeeded){
 // the doorway slabs and can never walk to the cab door. The sill height comes from the door leaves,
 // and the slab is inset so players cannot walk through the side walls. FLOOR parts are never rendered.
 // floor:true forces the floor even when the model has no passenger doors (a pure locomotive).
+// floorTopY records the slab's TOP surface (the plane a rider's feet belong on) for the rider-offset
+// computation below, which has to tell MTR where the synthetic floor is.
+let floorTopY=null;
 const floorNeeded=params.floor!==false;
 const forceFloor=params.floor===true;
 if(floorNeeded&&(Object.keys(dbs).length||forceFloor)){
@@ -1371,8 +1728,12 @@ if(floorNeeded&&(Object.keys(dbs).length||forceFloor)){
   vi2+=8;
   extraGeom.push(s.join('\n'));
   hasFloor=true;
+  floorTopY=fy+th;
 }
-const objFinal=extraGeom.length?objMain+'\n'+extraGeom.join('\n'):objMain;
+const objRaw=extraGeom.length?objMain+'\n'+extraGeom.join('\n'):objMain;
+// LAST STEP, and the one MTR actually depends on: un-weld + triangulate into the index-locked layout
+// MTR's ObjModelLoader requires (#v == #vt == #vn, `f i/i/i`, triangles only). See toMtrObj's doc.
+const objFinal=toMtrObj(objRaw);
 fs.writeFileSync(path.join(sub,srcBase), objFinal, 'utf8');
 // mtl: copy from textureDir, rewrite relative; copy pngs
 const texDir=params.textureDir||base;
@@ -1431,22 +1792,65 @@ if(soundBase){
     if(name&&available.has(name)) soundNames[soundBase+'_'+name]='mtr:'+soundBase+'/'+name;
   }
 }
+// MTR builds NO floor boxes for OBJ models.
+//
+// VehicleResource.writeFloorsAndDoorways collects FLOOR/DOORWAY boxes only on the Blockbench path
+// (ModelPropertiesPart.writeCache(BlockbenchModel...) handles NORMAL/FLOOR/DOORWAY); the OBJ overload
+// only handles NORMAL. So an OBJ vehicle always ends up with floors.isEmpty() and MTR substitutes a
+// SYNTHETIC slab:  y = 1 + legacyRiderOffset, spanning the declared car width/length
+// (VehicleResource.java: "No floors or doorways found in vehicle models" in the log is this firing).
+//
+// That slab is what VehicleRidingMovement clamps the rider onto. Its Y has to land where this model's
+// rider actually is, otherwise the clamp finds no box under the cab and throws the ride away the moment
+// it is taken - which is exactly how cab entry failed on the BR101 (synthetic floor at y=1.0, cab at
+// y=2.32, and the clamp's nearest-box fallback only tolerates 1 m).
+//
+// Aim the CAMERA at the modelled eye point: the rider's entity origin (their feet) sits the player's eye
+// height below mmtr_seat, so a seated cab lands the eyes on the anchor instead of under the desk. Falls
+// back to the generated floor's top, then to MTR's own default.
+const EYE_HEIGHT_M=1.62;
+const seatAnchor=anchors.find(a=>a.kind==='seat');
+const riderFeetY=seatAnchor?seatAnchor.y-EYE_HEIGHT_M:(floorTopY!==null?floorTopY:null);
+const legacyRiderOffset=params.legacyRiderOffset!==undefined?params.legacyRiderOffset:(riderFeetY===null?0:riderFeetY-1);
+console.log('rider offset: legacyRiderOffset='+legacyRiderOffset.toFixed(4)
+  +(seatAnchor?' (mmtr_seat '+seatAnchor.name+' eye '+seatAnchor.y.toFixed(3)+' - eye height '+EYE_HEIGHT_M+')':' (no seat anchor; using floor top '+(floorTopY===null?'default':floorTopY.toFixed(3))+')')
+  +' -> MTR synthetic floor y='+(1+legacyRiderOffset).toFixed(3));
 // json entry
 const length=params.carLengthBlocks||15, width=params.carWidthBlocks||5;
 const bc=params.bogieCount||2;
 let b1=params.bogieOffsetBlocks, b2=params.bogie2OffsetBlocks;
 if(b1===undefined&&bc===2){ b1=-length/2+1.5; b2=length/2-1.5; } if(b1===undefined)b1=0; if(b2===undefined)b2=0;
-const custom={vehicles:[{id:id,name:params.name||id,color:params.color||'7FA8CC',transportMode:params.transportMode||'TRAIN',length:length,width:width,bogie1Position:b1,bogie2Position:b2,couplingPadding1:params.couplingPadding1||0,couplingPadding2:params.couplingPadding2||0,bveSoundBaseResource:soundBase||undefined,models:[{modelResource:'mtr:'+id+'/'+srcBase,textureResource:'minecraft:textures/misc/white.png',modelPropertiesResource:'mtr:properties_'+id+'.json',positionDefinitionsResource:'mtr:definition_'+id+'.json',flipTextureV:params.flipTextureV!==false}]}],signs:[],rails:[],objects:[],lifts:[]};
+const custom={vehicles:[{id:id,name:params.name||id,color:params.color||'7FA8CC',transportMode:params.transportMode||'TRAIN',length:length,width:width,bogie1Position:b1,bogie2Position:b2,couplingPadding1:params.couplingPadding1||0,couplingPadding2:params.couplingPadding2||0,legacyRiderOffset:legacyRiderOffset,bveSoundBaseResource:soundBase||undefined,models:[{modelResource:'mtr:'+id+'/'+srcBase,textureResource:'minecraft:textures/misc/white.png',modelPropertiesResource:'mtr:properties_'+id+'.json',positionDefinitionsResource:'mtr:definition_'+id+'.json',flipTextureV:params.flipTextureV!==false}]}],signs:[],rails:[],objects:[],lifts:[]};
 const parts=[]; const slide=params.doorSlidePx!==undefined?params.doorSlidePx:14;
 if(used.body) parts.push({names:['body'],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
-if(used.interior) parts.push({names:['interior'],positionDefinitions:['p0'],renderStage:'INTERIOR_TRANSLUCENT',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
+// params.interiorRenderStage —— 内装默认走 INTERIOR_TRANSLUCENT（半透明内装玻璃那一档，底层
+// getEntityTranslucentCull = **有背面剔除**）。MTR 官方车的内装是 INTERIOR（**不透明** CUTOUT_BRIGHT），
+// 窗户就是**什么都不放的洞**。若模型把内装（座椅/墙板/操纵台）放进 interior 组、窗口另外单独做玻璃，
+// 就该显式写 "interiorRenderStage": "INTERIOR"，否则内装会被当半透明件画（见 notes/345 §7.9/§7.11）。
+if(used.interior) parts.push({names:['interior'],positionDefinitions:['p0'],renderStage:params.interiorRenderStage||'INTERIOR_TRANSLUCENT',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
 // One part per door group: each numbered door slides on its own. Direction defaults to +slide on the
 // left / -slide on the right; override per door with params.doorSlideByGroup: {"door_l_2": -14, ...}.
-for(const g of doorGroups){
+// ★ 2026-09-30 门的玻璃（用户口径："游戏内玻璃不会跟着门一起打开"）：
+//   MTR 的动画单位是**部件**，而部件由 OBJ 组名决定。玻璃原来在独立的 `glass` 部件里
+//   （doorZMultiplier 0）⇒ 门开了玻璃不动。把玻璃并进门叶部件也不行：一个部件只能有一个
+//   renderStage，而门叶是写死的 EXTERIOR，INTERIOR 系列是 CUTOUT_BRIGHT（全亮）⇒ 整扇门不受光。
+//   所以：玻璃**单独成件**，但用**同一个 doorZMultiplier** ⇒ 与门叶同步滑、又保住
+//   INTERIOR_TRANSLUCENT（半透明玻璃）。
+//   命名约定：`<门叶组名>_glass`（滑向自动继承门叶在 doorSlideByGroup 里的值 ⇒ 配置不用改）。
+const doorGlassSet=new Set();
+for(const g of doorGroups) if(doorGroups.includes(g+'_glass')) doorGlassSet.add(g+'_glass');
+const leafGroups=doorGroups.filter(g=>!doorGlassSet.has(g));
+for(const g of leafGroups){
   const isLeft=g.startsWith('door_l');
   const ov=params.doorSlideByGroup&&params.doorSlideByGroup[g]!==undefined?params.doorSlideByGroup[g]:undefined;
-  parts.push({names:[g],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:ov!==undefined?ov:(isLeft?slide:-slide),doorAnimationType:params.doorAnimationType||'STANDARD'});
+  const mult=ov!==undefined?ov:(isLeft?slide:-slide);
+  parts.push({names:[g],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:mult,doorAnimationType:params.doorAnimationType||'STANDARD'});
+  const gg=g+'_glass';
+  if(doorGlassSet.has(gg)){
+    parts.push({names:[gg],positionDefinitions:['p0'],renderStage:'INTERIOR_TRANSLUCENT',doorXMultiplier:0,doorZMultiplier:mult,doorAnimationType:params.doorAnimationType||'STANDARD'});
+  }
 }
+if(doorGlassSet.size) console.log('door glass companions: '+[...doorGlassSet].join(', ')+' (sliding with their leaves)');
 for(const g of doorwayGroups) parts.push({names:[g],positionDefinitions:['p0'],type:'DOORWAY'});
 if(hasFloor) parts.push({names:['floor'],positionDefinitions:['p0'],type:'FLOOR'});
 // The cab door(s) are rendered as plain EXTERIOR parts (they are anchors too, see mmtr_anchors_*.json).
@@ -1461,8 +1865,53 @@ for(const g of cabDoorParts){
 for(const g of wiperGroups){
   parts.push({names:[g],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:params.doorAnimationType||'STANDARD'});
 }
-// extras (matched groups beyond known) as EXTERIOR - "anchor" is data, never rendered
-for(const r of Object.keys(used)) if(!['body','interior','door_l','door_r','anchor'].includes(r)) parts.push({names:[r],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
+// ---- per-role render stage / condition (车灯、随状态显隐的部件) ------------------------
+// MTR decides TWO separate things about a part (source: resource/ModelPropertiesPart.java):
+//   condition   -> whether the part is DRAWN AT ALL (`render()` returns early when it is false;
+//                  it is not "hidden", the geometry is never submitted)
+//   renderStage -> which shader + queued render layer + LIGHT VALUE it gets when it is drawn
+//                  (RenderStage.java: LIGHT=CUTOUT_GLOWING/LIGHT, ALWAYS_ON_LIGHT=TRANSLUCENT_GLOWING
+//                  /LIGHT_2, INTERIOR=CUTOUT_BRIGHT/INTERIOR, ... ; both light stages pass
+//                  getDefaultLight() = 0xF000F0, i.e. NO world light and NO directional shading)
+// A group can only ever be ONE renderStage, so anything that must glow (or must switch off when the
+// car runs the other way) has to be its OWN OBJ group - mapping a lamp into "body" can only ever
+// produce an EXTERIOR part that is always drawn and never lights up.
+//   "partSpecs": {
+//     "headlights":  [ {"renderStage":"ALWAYS_ON_LIGHT","condition":"MMTR_LAMP"} ],
+//     "tail_lights": [ {"renderStage":"ALWAYS_ON_LIGHT","condition":"ON_ROUTE_BACKWARDS"},
+//                      {"renderStage":"ALWAYS_ON_LIGHT","condition":"AT_DEPOT"} ]
+//   }
+// SEVERAL entries for one role = several parts for the SAME group name, which is exactly how stock
+// MTR writes "tail lights when running backwards OR parked" (properties/vehicle/s_train_head_1.json).
+//
+// ★ MMTR_LAMP（2026-10-03，notes/374）：**MMTR 自己的条件值** —— "这一组几何是车灯灯罩"。
+//   它一直是画的，颜色由客户端逐 draw 给（端 + 档位 = 近光/远光白、尾灯红、关闭暗，
+//   见 MmtrHeadlights.lampColor）。想要 MMTR 那种"同一块灯罩既当近光远光、也当红尾灯"的车，
+//   就写这个值；写 ON_ROUTE_FORWARDS/BACKWARDS 是上游 MTR 的"两个罩子配对"口径，MMTR 的灯不这么用。
+const RENDER_STAGES=['EXTERIOR','LIGHT','ALWAYS_ON_LIGHT','INTERIOR','INTERIOR_TRANSLUCENT'];
+const PART_CONDITIONS=['NORMAL','AT_DEPOT','ON_ROUTE_FORWARDS','ON_ROUTE_BACKWARDS','DOORS_CLOSED','DOORS_OPENED','CHRISTMAS_LIGHT_RED','CHRISTMAS_LIGHT_YELLOW','CHRISTMAS_LIGHT_GREEN','CHRISTMAS_LIGHT_BLUE','MMTR_LAMP'];
+const partSpecs=params.partSpecs||{};
+const stagedParts=[];
+for(const role of Object.keys(partSpecs)){
+  if(!used[role]){
+    // The part would name a group the OBJ does not contain -> MTR draws nothing, silently.
+    console.warn('WARNING: partSpecs names role "'+role+'" but no OBJ group maps to it - the part will be empty and the lights will simply not exist.');
+  }
+  const list=Array.isArray(partSpecs[role])?partSpecs[role]:[partSpecs[role]];
+  for(const spec of list){
+    const rs=spec.renderStage||'EXTERIOR', cd=spec.condition===undefined||spec.condition===null||spec.condition===''?null:spec.condition;
+    if(RENDER_STAGES.indexOf(rs)<0) throw new Error('partSpecs["'+role+'"].renderStage "'+rs+'" is not one of '+RENDER_STAGES.join('/'));
+    if(cd!==null&&PART_CONDITIONS.indexOf(cd)<0) throw new Error('partSpecs["'+role+'"].condition "'+cd+'" is not one of '+PART_CONDITIONS.join('/'));
+    const part={names:[role],positionDefinitions:['p0'],renderStage:rs,doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'};
+    if(cd!==null) part.condition=cd;
+    parts.push(part);
+    stagedParts.push(role+'='+rs+(cd?'/'+cd:''));
+  }
+}
+if(stagedParts.length) console.log('staged parts: '+stagedParts.join(', '));
+// extras (matched groups beyond known) as EXTERIOR - "anchor" is data, never rendered.
+// Roles written above via partSpecs are skipped here, otherwise they would ALSO get an EXTERIOR part.
+for(const r of Object.keys(used)) if(!['body','interior','door_l','door_r','anchor'].includes(r)&&!partSpecs[r]) parts.push({names:[r],positionDefinitions:['p0'],renderStage:'EXTERIOR',doorXMultiplier:0,doorZMultiplier:0,doorAnimationType:'STANDARD'});
 const props={modelYOffset:0,parts:parts};
 const defs={positionDefinitions:[{name:'p0',positions:[{}],positionsFlipped:[]}]};
 fs.writeFileSync(path.join(aMtr,'mtr_custom_resources.json'), JSON.stringify(custom));
@@ -1488,10 +1937,141 @@ if(!hudLayout&&hudLayoutPath){
   const parsed=JSON.parse(fs.readFileSync(hudLayoutPath,'utf8'));
   hudLayout=parsed.hud||parsed;
 }
+// ---- 玻璃：完全由 Blender 导出的 OBJ 与它的贴图决定（notes/345 §7.17）------------------
+// MTR 的 OBJ 优化路径实际只做 cutout（α>0.1 实心、α<0.1 丢弃），所以【模型自己的玻璃材质】拿不到
+// 半透明。这里把 `glass` 组的几何 + 该组材质的贴图导出给客户端，由客户端走**真混合**的层来画 ——
+// 于是玻璃的观感（alpha/渐变/图案）完全由作者在 Blender 里画的贴图决定，mod 只提供通道。
+//
+// 两个必须守住的点：
+//  ① UV 必须取 **staged（去焊接后）** 的那一份：MTR 采样是"第 i 个顶点配第 i 个 vt"，
+//     原始 OBJ 的共享顶点 + 独立 vt 索引空间在这里会错位（notes/338 §7.3①）。
+//  ② V 要按 flipTextureV 转成 MC 口径（OBJ v 向上、MC v 向下）。
+function buildGlassPanes(){
+  const objPath=path.join(sub,srcBase);
+  if(!fs.existsSync(objPath)) return null;
+  const positions=[],uvs=[],panes=[];let currentGroup=null,currentMaterial=null;const materials=new Set();
+  const lines=fs.readFileSync(objPath,'utf8').split(/\r?\n/);
+  for(const raw of lines){
+    const t=raw.trim();
+    if(t.startsWith('v ')){const p=t.split(/\s+/);positions.push([+p[1],+p[2],+p[3]]);}
+    else if(t.startsWith('vt ')){const p=t.split(/\s+/);uvs.push([+p[1],+p[2]]);}
+    else if(t.startsWith('usemtl '))currentMaterial=t.slice(7).trim();
+    else if(t.startsWith('o ')||t.startsWith('g '))currentGroup=t.slice(2).trim();
+    else if(t.startsWith('f ')&&currentGroup==='glass'){
+      const face=[];
+      for(const ref of t.split(/\s+/).slice(1)){
+        const parts=ref.split('/');
+        const vi=+parts[0]-1;
+        const ti=parts.length>1&&parts[1]!==''?+parts[1]-1:-1;
+        if(vi<0||vi>=positions.length)continue;
+        const uv=ti>=0&&ti<uvs.length?uvs[ti]:[0.5,0.5];
+        face.push({p:positions[vi],uv:uv});
+      }
+      if(face.length>=3){panes.push(face);if(currentMaterial)materials.add(currentMaterial);}
+    }
+  }
+  if(!panes.length)return null;
+  // staged OBJ 已三角化，而客户端只有"矩形 UV 贴到四边形"的绘制 API（IDrawing.drawTexture 无逐顶点 UV，
+  // 见 notes/345 §7.17）⇒ 把相邻两个三角形重新配成四边形，并要求四角 UV 构成**轴对齐矩形**：
+  // 这时矩形映射与逐顶点映射**完全等价**，图案不会走形。配不成（例如 41 边圆角窗）就跳过并报数。
+  const quads=[];let skipped=0;
+  for(let i=0;i+1<panes.length;i+=2){
+    const a=panes[i], b=panes[i+1];
+    if(a.length!==3||b.length!==3){skipped++;continue;}
+    const key=e=>e.p.map(v=>v.toFixed(5)).join(',');
+    const shared=a.filter(ea=>b.some(eb=>key(ea)===key(eb))).length;
+    if(shared!==2){skipped++;i-=1;continue;}   // 不共享一条边 => 这两片不是同一个四边形的两半
+    const uniq=[];
+    for(const e of a.concat(b)) if(!uniq.some(u=>key(u)===key(e))) uniq.push(e);
+    if(uniq.length!==4){skipped++;continue;}
+    const us=uniq.map(e=>e.uv[0]), vs=uniq.map(e=>e.uv[1]);
+    const u0=Math.min(...us), u1=Math.max(...us), v0=Math.min(...vs), v1=Math.max(...vs);
+    const rectOk=uniq.every(e=>(Math.abs(e.uv[0]-u0)<1e-4||Math.abs(e.uv[0]-u1)<1e-4)
+                            &&(Math.abs(e.uv[1]-v0)<1e-4||Math.abs(e.uv[1]-v1)<1e-4));
+    // 允许"退化矩形"（四角 UV 同一点）：那是"从贴图取一个纹素"= 纯色玻璃，正是均匀色块贴图的正常用法 ✓
+    if(!rectOk){skipped++;continue;}
+    quads.push({
+      positions:uniq.map(e=>[+e.p[0].toFixed(5),+e.p[1].toFixed(5),+e.p[2].toFixed(5)]),
+      uv:[+u0.toFixed(5),+v0.toFixed(5),+u1.toFixed(5),+v1.toFixed(5)]
+    });
+  }
+  if(!quads.length)return null;
+  // 该组材质的 map_Kd -> 贴图名（并把它拷到 textures/vehicle/ 下，RenderLayer 只能从那里取图）
+  const mtlName=srcBase.replace(/\.obj$/i,'.mtl');
+  const mtlPath=path.join(sub,mtlName);
+  let textureName=null;
+  if(fs.existsSync(mtlPath)){
+    let current=null;
+    for(const raw of fs.readFileSync(mtlPath,'utf8').split(/\r?\n/)){
+      const t=raw.trim();
+      if(t.startsWith('newmtl '))current=t.slice(7).trim();
+      else if(t.startsWith('map_Kd ')&&current&&materials.has(current)){textureName=t.slice(7).trim().split(/[\\/]/).pop();break;}
+    }
+  }
+  let textureResource=null;
+  if(textureName){
+    const sourcePng=path.join(sub,textureName);
+    if(fs.existsSync(sourcePng)){
+      const targetDir=path.join(aMtr,'textures','vehicle');
+      fs.mkdirSync(targetDir,{recursive:true});
+      const targetName=id+'_glass.png';
+      fs.copyFileSync(sourcePng,path.join(targetDir,targetName));
+      textureResource='mtr:textures/vehicle/'+targetName;
+    }
+  }
+  const flip=params.flipTextureV!==false;
+  return {
+    texture:textureResource,
+    textureSource:textureName,
+    flipTextureV:flip,
+    quadCount:quads.length,
+    skippedTriangles:skipped,
+    quads:quads.map(q=>({
+      positions:q.positions,
+      // uv 矩形按 MC 口径：OBJ 的 v 向上、MC 的 v 向下 ⇒ v 取 1-v（区间随之翻转）
+      uv:flip?[q.uv[0],+(1-q.uv[3]).toFixed(5),q.uv[2],+(1-q.uv[1]).toFixed(5)]:[q.uv[0],q.uv[1],q.uv[2],q.uv[3]]
+    }))
+  };
+}
+const glassPanes=buildGlassPanes();   // 没有 `glass` 组就返回 null（客户端回落成纯色玻璃）
+
 if(anchors.length){
-  const anchorFile={anchors:anchors,hud:hudLayout||DEFAULT_HUD_LAYOUT,windshield:windshieldConfig};
+  // `rider.feetY` is the car-local height a rider's FEET end up at: MTR builds no floor boxes for OBJ
+// models, so it substitutes a synthetic slab at y = 1 + legacyRiderOffset, and that is what
+// VehicleRidingMovement clamps the rider onto. The client uses this value as the cab ENTRY height, so
+// the entry lands exactly on the synthetic floor instead of relying on the clamp's 1 m tolerance - which
+// is what capped how high the driver's eye point could be raised (the entry height comes from the door
+// sill, and |syntheticFloor - sill| must stay within 1 m).
+const anchorFile={anchors:anchors,hud:hudLayout||DEFAULT_HUD_LAYOUT,windshield:windshieldConfig,
+  /*
+   * notes/358 水牌版式（**每个车型独立**）：`params.pid` / `params.next` 原样写进锚点 JSON 的
+   * `pid` / `next` 段，客户端按车型解析（MmtrPidLayout）。
+   *
+   * 为什么"只有作者写了才写"：没写 = 客户端用默认版式（班次号在上、站名在下，两行）—— 老包一个
+   * 字节都不用改，行为与加这一层之前逐字相同（facets / sagGridM / panelFlipU 都是这条"缺省 = 旧行为"）。
+   *
+   * 版式里的数字全是**比例**（x/y 是牌面 0..1，size 是牌高的比例），所以同一份版式在不同尺寸的牌上
+   * 自动等比 —— 这正是"不同车型不同尺寸与排版能各自独立"的原因。
+   */
+  pid:params.pid||undefined,
+  next:params.next||undefined,
+  /*
+   * notes/359 **动态面**：`params.faces` 原样写进锚点 JSON 的 `faces` 段。
+   *
+   * <p>键 = **锚点名**（`pid_1` / `next_2` / `face_1_2` / …，即 groupRename 之后的那个名字），
+   * 客户端按"这块锚点有没有文档"决定谁来画（有文档 = 面系统，没文档 = 老渲染器）。
+   * 于是给已有锚点加一段文档就能把它换成动态面 —— 客户端一行代码都不用改。</p>
+   *
+   * <p>只有作者写了才写：没写 = 老行为（水牌走 pid/next 段的老版式），老包一个字节不用改。</p>
+   */
+  faces:params.faces||undefined,
+  glass:glassPanes||undefined,
+  rider:{feetY:+(1+legacyRiderOffset).toFixed(4)}};
   fs.writeFileSync(path.join(aMtr,'mmtr_anchors_'+id+'.json'), JSON.stringify(anchorFile));
   console.log('hud layout: '+(hudLayout?'authored':'default')+' widgets='+(anchorFile.hud.widgets||[]).length);
+  console.log('pid layout: '+(params.pid?'authored rows='+((params.pid.rows||[]).length):'default')
+    +' / next: '+(params.next?'authored rows='+((params.next.rows||[]).length):'default'));
+  console.log('faces: '+(params.faces?('authored '+Object.keys(params.faces).length+' 块 ['+Object.keys(params.faces).join(', ')+'] —— 键必须是锚点名（打包日志的 anchors: 那行）'):'none'));
 }
 console.log('anchors:', JSON.stringify(anchors));
 if(soundBase){
@@ -1512,5 +2092,3 @@ if(fs.existsSync(zipOut)) fs.unlinkSync(zipOut);
 writeZip(stage,zipOut);
 console.log('zip',zipOut,fs.statSync(zipOut).size+' bytes');
 console.log('roles:', JSON.stringify(Object.keys(used)));
-
-

@@ -1,5 +1,5 @@
 {
-  "packName": "SAF420_v39",
+  "packName": "SAF420_v41",
   "description": "SAF420 commuter EMU - control car A / control car B / trailer",
   "outputDir": "${MC_ROOT}/mmtr/game/fabric/run/resourcepacks",
   "packFormat": 18,
@@ -316,13 +316,13 @@
         }
       },
       "_lightNote": "车灯必须是独立组：一个组只能有一个 renderStage。condition 管【画不画】，renderStage 管【发不发光】（ALWAYS_ON_LIGHT = 恒亮、不吃世界光也不吃方向光）。当前只有白前照灯；红尾灯（tail_lights / LAMP_R 灯罩格）已删，加回来 = 模型里重建该组 + 这里补一条 groupMap 与两条 part（倒行 + 在段）。",
-      "_lightConditionNote": "★ 2026-10-03：这两端控制车的 headlights **都**写成 condition=NORMAL（常画），不再写 ON_ROUTE_FORWARDS。原因：判据是 `vehicle.getIsOnRoute() && !vehicle.getReversed()`（VehicleResource.matchesCondition），而 MMTR 的编组车 `reversed = consistWalker.mirrorReversed() = towardB()` = 【这趟车正朝 B 端跑】⇒ 只要车往另一端跑，**两端车头灯的灯罩几何整个都不画**（既没白车头也没红车尾，现场就是【灯消失了】）。上游 MTR 靠 head_1/head_2 两个相反条件配对来只画前车灯的罩子，而 MMTR 的灯光是【状态驱动】的（notes/352：同一块灯罩既当前照灯也当尾灯，颜色由引擎的档位决定）⇒ 灯罩必须**永远**在，颜色/亮灭全交给 MmtrHeadlights 那条路。",
+      "_lightConditionNote": "★ 2026-10-03（notes/374）：这两端控制车的 headlights 都写成 **condition=MMTR_LAMP** = 【这组几何是车灯灯罩】。它是 MMTR 自己的条件值（不是上游 MTR 的方向条件），语义只有一句：**一直画**，颜色由客户端逐 draw 给（端 + 档位 ⇒ 近光/远光 = 白、尾灯 = 红、关闭/回库 = 暗玻璃，见 MmtrHeadlights.lampColor）。为什么不能写方向条件：上游靠 head_1/head_2 两个相反条件配对、只画前车灯的罩子，而 MMTR 的灯是【状态驱动】的（notes/352：同一块灯罩既当前照灯也当尾灯）；写 ON_ROUTE_FORWARDS 的后果实测过两次 —— 那条判据里的 reversed 是【正朝 B 端跑】，于是车往另一端跑时**两端灯罩一起消失**（现场【灯消失了】）。写 NORMAL 能画，但客户端就认不出哪组几何该染色 ⇒ 尾灯永远不会红（白贴图被原样画出来）。",
       "_lightAnchorNote": "车灯的【光源】是锚点、不是这个可见组：模型里另有 mmtr_light_<驾驶室>_<第几盏> 的独立四边形（面中心=灯罩中心，面法线=射出方向，必须朝车外）。cab 1 = A 端（-Z，与 mmtr_hud_1 / mmtr_windshield_1_1 同一个约定）。实测车头是左右两盏一样的 0.26 m 方块灯（x=±1.020, y=1.580, 外表面 z=-9.780），所以编号只是序号、【强度按灯罩面积算】—— 不是【1=主灯 2=标志灯】。锚点的面被剥掉、不进渲染几何，只进 mmtr_anchors_<id>.json。判据与规则见 notes/345，离线自检 mmtr/tools/anchor-check/verify_lights.js。",
       "partSpecs": {
         "headlights": [
           {
             "renderStage": "ALWAYS_ON_LIGHT",
-            "condition": "NORMAL"
+            "condition": "MMTR_LAMP"
           }
         ],
         "glass": [
@@ -717,13 +717,13 @@
         }
       },
       "_lightNote": "B 端控制车：整车由 rotationDegY 180 烘到另一端。**可见灯组**（headlights）不用改名 —— 几何跟着旋转走；但 **mmtr_light_* 锚点必须改名**（_1 -> _2，见下面 groupRename），否则 B 车的灯锚点会自称【驾驶室1】却长在车体另一端 —— 与 hud/seat/cabdoor/windshield 是同一条规则。用通配符一条覆盖任意数量的灯，避免【下次再加一盏就漏了】。当前只有白前照灯。",
-      "_lightConditionNote": "★ 2026-10-03：与 A 端同理，headlights 改成 condition=NORMAL（常画）。原来写 ON_ROUTE_FORWARDS ⇒ 车往另一端跑（reversed=true）时**这一端的灯罩也不画** —— 编组车两端会一起消失（现场【灯消失了】）。灯罩常画、颜色交给 MmtrHeadlights（notes/352/373）。",
+      "_lightConditionNote": "★ 2026-10-03（notes/374）：与 A 端同理，headlights 写成 condition=MMTR_LAMP（灯罩一直画、颜色由客户端逐 draw 给：白 = 近光/远光、红 = 尾灯）。原来写 ON_ROUTE_FORWARDS ⇒ 车往另一端跑（reversed=true）时**这一端的灯罩也不画** —— 编组车两端会一起消失（现场【灯消失了】）；写 NORMAL ⇒ 画得出来，但客户端认不出这是灯罩、尾灯不会变红。",
       "_pidNote": "水牌（notes/357）★ 2026-10-02 临时桥已拆：模型里那块牌现在**自己就叫** `mmtr_pid_1`（单个四边形，见 A 端那条 _pidNote），所以 `dest_board` 改名**已删除**。这端要改的只剩下面两条：无序号写法 `mmtr_pid_1` → `mmtr_pid_2`，带序号写法 `mmtr_pid_1_*` → `mmtr_pid_2_*`（通配符匹配不到无序号写法，少一个 `_`，所以两种都写）。理由同灯 —— B 车由 rotationDegY 180 打出来，作者的驾驶室1 落在文件 z<0 = 引擎 B 端。漏改的后果是 B 车水牌【自称 cab1 却长在另一端】，verify_pid.js 的 P6 会红。",
       "partSpecs": {
         "headlights": [
           {
             "renderStage": "ALWAYS_ON_LIGHT",
-            "condition": "NORMAL"
+            "condition": "MMTR_LAMP"
           }
         ],
         "glass": [
