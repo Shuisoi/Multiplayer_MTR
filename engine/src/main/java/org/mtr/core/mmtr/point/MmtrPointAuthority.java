@@ -434,12 +434,25 @@ public final class MmtrPointAuthority {
 		 *
 		 * 六台车去同一个车站、计划到达 00:05 / 00:07 / … 时，位置该给 00:05 那台；等级不同时按运营规则
 		 * "高铁踩通勤的头"、同级车号小的先：
-		 *   - 只有**更该先走**（{@link #outranks}：等级/车号 → 计划更早）才谈得上收回 ——
+		 *   - 只有**更该先走**（{@link #outranks} 的**真档位**：等级/车号 → 计划更早）才谈得上收回 ——
 		 *     否则就是位置来回翻（ping-pong 的来源）；
 		 *   - 而且要过**净空闸**：晚班车压在岔区里就不许从它脚下改位（那是把道岔抽走）；
 		 *   - 收回之后晚班车排队等（它的进向行还在，位置不在它手里），等它自己再申请时会按优先权排队。
+		 *
+		 * <h3>2026-10-09：抢位这一档**不许再吃 owner id 那条兜底**</h3>
+		 * <p>现场（引擎用例 {@code MmtrRouteConflictTests} 时红时绿）读数：咽喉口一处道岔，前车按住位置 0，
+		 * 后车（同样是自动任务、同样**没有**计划时刻）申请位置 1。日志里那一行是</p>
+		 * <pre>
+		 *   [MMTR-PT] 优先权：把道岔 -20,0,0 的位置从 v1913021474444274896（无计划） 交给更该先走的 v1549095188365414779（无计划）
+		 * </pre>
+		 * <p>"（无计划）交给（无计划）"—— 两边根本没有优先权差别，{@link #outranks} 走到最后一档
+		 * {@code owner.compareTo()} 就判了"后车更该先走"。而 owner 是 {@code "v"+车辆id}，**id 是随机的**：
+		 * 于是同一段线路一半的运行里，已经按住的岔位会被一个毫无理由的后车抢走（前车的进路随即变 PENDING
+		 * 重算，后车则冲进咽喉、在下一处岔口才被拦下）—— 这是**安全相关的不确定**，不是测试洁癖。</p>
+		 * <p>修法：抢位只认"真档位"（{@link #outranksStrictly}）；{@code owner.compareTo} 那条兜底只留给
+		 * **让位**判断（那里需要"只有一方让"的不对称性，见 {@link #someoneHasPriorityOver}）。</p>
 		 */
-		if (outranks(priorityMillis, owner, holder.priorityMillis, holder.owner)
+		if (outranksStrictly(priorityMillis, owner, holder.priorityMillis, holder.owner)
 			&& positionChangeBlockedReason(x, y, z, demand, owner) == null
 			&& !holderStillOnNodeRails(nk, holder)) {
 			System.out.println("[MMTR-PT] 优先权：把道岔 " + nk + " 的位置从 " + describeWaiter(holder.owner, holder.priorityMillis)
@@ -995,6 +1008,41 @@ public final class MmtrPointAuthority {
 		return otherOwner.compareTo(mineOwner) < 0;
 	}
 
+	/**
+	 * 与 {@link #outranks} 同前两档（服务等级/车号 → 计划时刻），但**去掉最后的 owner id 兜底**。
+	 *
+	 * <h3>为什么必须分出来（2026-10-09）</h3>
+	 * <p>{@code outranks} 的最后一档 {@code owner.compareTo()} 是为了让"让位"判断**不对称**（两边同时让 =
+	 * 回到振荡），它的两个输入是随机的 {@code "v"+车辆id}。这个"谁排前面"的口径**可以**决定"谁让位"，
+	 * 但**不可以**决定"谁能把别人already hold 的物理位置收走" —— 那会变成：同一段线路一半的运行里
+	 * 道岔从已经按住它的车手里被抢走（见 {@code request} 里抢位分支的注释）。</p>
+	 *
+	 * <p>所以抢位只认真差别：等级/车号严格更优，或计划时刻严格更早。两边"无计划"、等级车号也一样时，
+	 * 抢位这一档**不成立**，后车老老实实排队（先到先得）。</p>
+	 */
+	private boolean outranksStrictly(long otherPriority, String otherOwner, long minePriority, String mineOwner) {
+		final MmtrTrainPriority other = priorityOf(otherOwner);
+		final MmtrTrainPriority mine = priorityOf(mineOwner);
+		if (other != null || mine != null) {
+			if (other == null) {
+				return false;
+			}
+			if (mine == null) {
+				return true;
+			}
+			if (other.outranks(mine)) {
+				return true;
+			}
+			if (mine.outranks(other)) {
+				return false;
+			}
+		}
+		if (otherPriority != minePriority) {
+			return otherPriority < minePriority;
+		}
+		return false;
+	}
+
 	/** Operator releases the park: the longest-waiting auto request takes the point. */
 	public void unlock(long x, long y, long z, String viaRailHex) {
 		final String k = key(x, y, z, viaRailHex);
@@ -1259,7 +1307,18 @@ public final class MmtrPointAuthority {
 			 * 占用树回答）。续期而不是永久持有：车一开出去，下一次到期就正常释放并推进队列。</p>
 			 */
 			final long[] node = parseNodeKey(nk);
-			if (node != null && holderOccupancy != null && holderOccupancy.ownerIsOnNodeRails(node[0], node[1], node[2], holder.owner)) {
+			/*
+			 * 三态：{@code TRUE}=确知在岔轨上、{@code FALSE}=确知不在、{@code null}=查不出来。
+			 * 这一处是"窗口到期要不要放位"，按接口注释的口径**查不出来按"在"处理**（宁可不放位），
+			 * 所以用 {@code !Boolean.FALSE.equals(...)}，而不是直接拆箱。
+			 *
+			 * <p>2026-10-09 由用例 {@code MmtrPointAuthorityTests#anEqualPriorityNewcomerCannotStealAHeldPhysicalPosition}
+			 * 逮到：这里原来是裸的 {@code holderOccupancy.ownerIsOnNodeRails(...)}，返回值是 {@code null} 时
+			 * **自动拆箱直接 NPE**。而"查不出来"在生产里是常态之一 —— owner 是 {@code "v"+车辆id}，
+			 * 车辆被移除/存档恢复出一个不在车辆表里的 owner，都会让它返回 null。权限层一旦在里面抛异常，
+			 * 整条 tick 上的联锁判定就断了。</p>
+			 */
+			if (node != null && holderOccupancy != null && !Boolean.FALSE.equals(holderOccupancy.ownerIsOnNodeRails(node[0], node[1], node[2], holder.owner))) {
 				physicalHolders.put(nk, new Physical(holder.owner, holder.position, now + PHYSICAL_HOLD_EXTENSION_MILLIS, holder.priorityMillis));
 				final long last = physicalRetryLogMillis.getOrDefault(nk + "|hold", Long.MIN_VALUE);
 				if (now - last >= PHYSICAL_RETRY_LOG_INTERVAL_MILLIS) {

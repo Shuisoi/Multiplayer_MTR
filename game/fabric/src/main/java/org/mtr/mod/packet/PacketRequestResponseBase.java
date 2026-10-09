@@ -13,6 +13,7 @@ import org.mtr.mapping.registry.PacketHandler;
 import org.mtr.mapping.tool.PacketBufferReceiver;
 import org.mtr.mapping.tool.PacketBufferSender;
 import org.mtr.mod.Init;
+import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.mmtr.MmtrLoadProbe;
 
 import javax.annotation.Nonnull;
@@ -58,10 +59,17 @@ public abstract class PacketRequestResponseBase extends PacketHandler {
 		final long parseStartNanos = MmtrLoadProbe.begin();
 		final JsonReader jsonReader = new JsonReader(Utilities.parseJson(content));
 		final long parseNanos = MmtrLoadProbe.elapsed(parseStartNanos);
+		/*
+		 * notes/410 §事故：`DataResponse.write()` 是**按窗口替换**（窗口外的轨全删）。落地前后各量一次
+		 * 客户端轨数，就能直接读出"这一包有没有把玩家看得见的轨删掉"——修前那版前视窗口每移动一段
+		 * 就掉几十条，修好后应当是 0。只读计数，不改变任何顺序与副作用。
+		 */
+		final int railsBefore = MmtrLoadProbe.on() ? MinecraftClientData.getInstance().rails.size() : 0;
 		final long applyStartNanos = MmtrLoadProbe.begin();
 		try {
 			runClientInbound(jsonReader);
 		} finally {
+			MmtrLoadProbe.clientRailCount(railsBefore, MmtrLoadProbe.on() ? MinecraftClientData.getInstance().rails.size() : 0);
 			MmtrLoadProbe.packetApplied(getClass().getSimpleName(), content.length(), parseNanos, MmtrLoadProbe.elapsed(applyStartNanos));
 		}
 	}

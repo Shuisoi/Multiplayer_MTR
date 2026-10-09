@@ -2,22 +2,15 @@ package org.mtr.core.servlet;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.mtr.core.data.MmtrLongYardSidingFixture;
 import org.mtr.core.data.Rail;
-import org.mtr.core.data.Siding;
 import org.mtr.core.data.Vehicle;
 import org.mtr.core.data.VehicleCar;
-import org.mtr.core.mmtr.consist.MmtrCabState;
-import org.mtr.core.mmtr.consist.MmtrConsistWalker;
 import org.mtr.core.mmtr.signal.MmtrSectionService;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.core.tool.Vector;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -40,23 +33,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li><b>头</b>：接口自己的 {@code headX/headZ}（那个字段已被 notes/170 独立验过）必须落在**某一节车的车身内**。</li>
  * </ol>
  * <p>世界坐标用 {@code rail.railMath.getPosition(arc)} 反算 —— 与引擎报的弧长同一套几何，但没有复用
- * `mmtrCarJson` 的任何一行代码。世界存档不在时整条跳过。</p>
+ * `mmtrCarJson` 的任何一行代码。</p>
+ *
+ * <p>2026-10-09：八节编组原来停在 dev 世界那条 {@code aassdd} 长股道上（它还不在时整条跳过）。那条股道
+ * 现在没了，改成 {@link MmtrLongYardSidingFixture} 自建的 170 米直线股道 —— 判据一条没动，用例不再
+ * 依赖别人的世界存档，也不再依赖上一次运行留下的存档。</p>
  */
 public final class MmtrTrainCarsJsonTests {
 
-	/** 引擎工程目录（Gradle 跑测试时的当前目录）下的真实 dev 世界。**相对路径**：这里不许写死机器路径。 */
-	private static final Path DEV_WORLD_MTR_ROOT = Paths.get("../game/fabric/run/world/mtr");
-	private static final String DIMENSION = "minecraft/overworld";
-	/** 那条能停下 132 米编组的长股道（与 `MmtrConsistMultiCarPlacementTests` 同一个）。 */
-	private static final long LONG_YARD_SIDING_ID = -5385228036074278397L;
 	/** 车长之和的容差（米）：引擎把米数按两位数发出来。 */
 	private static final double LENGTH_TOLERANCE = 0.05;
 
 	@Test
 	public void anEightCarConsistGetsEightPlacementsOnTheRightRails() {
-		Assumptions.assumeTrue(Files.isDirectory(DEV_WORLD_MTR_ROOT), "live dev world not present - skipping");
-		final Simulator simulator = new Simulator(DIMENSION, new String[]{DIMENSION}, DEV_WORLD_MTR_ROOT, false);
-		final Vehicle vehicle = spawnEightCarConsist(simulator);
+		final MmtrLongYardSidingFixture fixture = new MmtrLongYardSidingFixture("build/mmtr-train-cars-json");
+		final Simulator simulator = fixture.simulator;
+		final Vehicle vehicle = fixture.spawnEightCarConsist();
 		assertNotNull(vehicle, "consist vehicle spawned");
 
 		final JsonObject payload = SystemMapServlet.FEEDS.get("mmtr-trains").builder().apply(simulator);
@@ -133,33 +125,6 @@ public final class MmtrTrainCarsJsonTests {
 		assertTrue(nearest <= longestCar / 2 + 1, "the head must sit inside a car body: nearest car " + nearestIndex + " is " + nearest + " m away");
 		System.out.println("[CARS] 8 节编组：总长 " + String.format("%.1f", totalLength) + " m；头在车 " + nearestIndex + " 里（" + String.format("%.2f", nearest) + " m）；"
 			+ "相邻中心距 " + gaps.toString().trim());
-	}
-
-	/** 与 `MmtrConsistMultiCarPlacementTests` 同一套：把一列 8 节编组摆到长股道上。 */
-	private static Vehicle spawnEightCarConsist(Simulator simulator) {
-		Siding siding = null;
-		for (final Siding candidate : simulator.sidings) {
-			if (candidate.getId() == LONG_YARD_SIDING_ID) {
-				siding = candidate;
-				break;
-			}
-		}
-		assertNotNull(siding, "the long siding must exist");
-
-		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
-		cars.add(new VehicleCar("hst_h", 15, 5, 400, -5, 5, 0, 0));
-		for (int i = 0; i < 6; i++) {
-			cars.add(new VehicleCar("hst_b", 17, 5, 400, -5, 5, 0, 0));
-		}
-		cars.add(new VehicleCar("hst_h_rev", 15, 5, 400, -5, 5, 0, 0));
-		siding.setVehicleCars(cars);
-		siding.clearParkedVehicles();
-
-		final MmtrConsistWalker walker = siding.mmtrConsistWalkerFromYard(null, null, null);
-		if (walker == null) {
-			return null;
-		}
-		return siding.spawnMmtrConsistVehicle(walker, MmtrCabState.Cab.CAB_A);
 	}
 
 	private static JsonObject findTrain(JsonArray trains, String vehicleId) {

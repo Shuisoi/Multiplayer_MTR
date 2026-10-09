@@ -113,6 +113,17 @@ public final class MmtrLoadProbe {
 	private static int windowLookAheadCount;
 	private static double windowLookAheadAheadSum;
 	private static long windowLookAheadRadiusM;
+	/**
+	 * 客户端轨数的单次变动（notes/410 §事故）：落地一包数据前后各量一次。
+	 *
+	 * <p>{@code DataResponse.write()} 是**按窗口替换**（窗口外的轨全删），所以"客户端轨数掉了"就是
+	 * "玩家眼里的轨没了"。修前那一版前视窗口圆心在车前方，这个数每次移动都会掉几十条；修好之后
+	 * 窗口覆盖相机，它应当稳定为 0 掉。</p>
+	 */
+	private static int windowRailBefore = -1;
+	private static int windowRailAfter = -1;
+	private static int windowRailDropMax;
+	private static int windowRailDropCount;
 
 	private MmtrLoadProbe() {
 	}
@@ -187,21 +198,41 @@ public final class MmtrLoadProbe {
 	}
 
 	/**
-	 * 一次**前视拉取**（{@link MmtrDynamicLoad}）：在车前方固定距离上主动向服务端要数据。
+	 * 一次**前视拉取**（{@link MmtrDynamicLoad}）：相机每走一段就主动向服务端要一次数据。
 	 *
-	 * <p>记下来是为了看清"提前量到底提前了多少" —— 前视拉取的意义全在"数据在到达之前就落地"，
-	 * 光看请求条数看不出这一点。</p>
+	 * <p>2026-10-09：圆心改成相机之后（见 {@code MmtrDynamicLoad} 类注释"圆心为什么必须是相机"），
+	 * "提前量"不再是"圆心挪到车前方多远"，而是**这次请求窗口从相机往前覆盖多远** = 半径。记下来
+	 * 是为了看清"提前量到底提前了多少"——数据在到达之前就落地，光看请求条数看不出这一点。</p>
 	 *
-	 * @param aheadM 这次请求中心离相机多远（米）
-	 * @param radiusM 这次请求的半径（米）＝单次拉取的切片大小
+	 * @param radiusM 这次请求的半径（米）＝窗口从相机往前覆盖的距离
 	 */
-	public static void lookAheadRequest(double aheadM, long radiusM) {
+	public static void lookAheadRequest(long radiusM) {
 		if (!ENABLED) {
 			return;
 		}
 		windowLookAheadCount++;
-		windowLookAheadAheadSum += aheadM;
+		windowLookAheadAheadSum += radiusM;
 		windowLookAheadRadiusM = radiusM;
+	}
+
+	/**
+	 * 一次数据包落地前后**客户端轨数**的变化（notes/410 §事故）。落地后比落地前少 = 有轨被这次响应
+	 * 删掉了（{@code DataResponse} 是按窗口替换）。这是"玩家眼里的轨没了一条"的**唯一直接读数** ——
+	 * 修前那版前视窗口每次移动都会让它掉几十条。
+	 *
+	 * @param before 落地前的客户端轨数
+	 * @param after  落地后的客户端轨数
+	 */
+	public static void clientRailCount(int before, int after) {
+		if (!ENABLED) {
+			return;
+		}
+		windowRailBefore = before;
+		windowRailAfter = after;
+		if (after < before) {
+			windowRailDropCount++;
+			windowRailDropMax = Math.max(windowRailDropMax, before - after);
+		}
 	}
 
 	/**
@@ -255,6 +286,10 @@ public final class MmtrLoadProbe {
 		windowKinds.clear();
 		windowLookAheadCount = 0;
 		windowLookAheadAheadSum = 0;
+		windowRailBefore = -1;
+		windowRailAfter = -1;
+		windowRailDropMax = 0;
+		windowRailDropCount = 0;
 		lastTickStartNanos = 0L;
 	}
 
@@ -357,6 +392,10 @@ public final class MmtrLoadProbe {
 		windowKinds.clear();
 		windowLookAheadCount = 0;
 		windowLookAheadAheadSum = 0;
+		windowRailBefore = -1;
+		windowRailAfter = -1;
+		windowRailDropMax = 0;
+		windowRailDropCount = 0;
 	}
 
 	private static String report(long elapsedMillis) {
@@ -371,8 +410,13 @@ public final class MmtrLoadProbe {
 		builder.append(" ｜ 明细：");
 		builder.append(windowKinds.isEmpty() ? "（本窗口没有包落地）" : describeKinds(windowKinds, MAX_KINDS));
 		if (windowLookAheadCount > 0) {
-			builder.append("\n  ｜ 前视拉取=").append(windowLookAheadCount).append(" 次（半径 ").append(windowLookAheadRadiusM)
-					.append("m，平均前视 ").append(String.format("%.0f", windowLookAheadAheadSum / windowLookAheadCount)).append("m）");
+			builder.append("\n  ｜ 前视拉取=").append(windowLookAheadCount).append(" 次（窗口半径 ").append(windowLookAheadRadiusM)
+					.append("m，平均往前覆盖 ").append(String.format("%.0f", windowLookAheadAheadSum / windowLookAheadCount)).append("m）");
+		}
+		if (windowRailBefore >= 0) {
+			builder.append("\n  ｜ 客户端轨数 ").append(windowRailBefore).append("→").append(windowRailAfter)
+					.append("（本窗口跌 ").append(windowRailDropCount).append(" 次，最多 ")
+					.append(windowRailDropMax == 0 ? "没掉" : "-" + windowRailDropMax + " 条").append("）");
 		}
 		if (windowWorstTickMillis >= LONG_TICK_MILLIS) {
 			builder.append("\n  ｜ 本窗口最长的 tick：").append(windowWorstTickDetail);

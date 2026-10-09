@@ -420,6 +420,26 @@ public final class MmtrRailMeshCache {
 						LIGHT_REFERENCE_OFFSET
 				);
 				PENDING.put(key, job);
+				/*
+				 * 新建的作业也要**立刻**打上"本帧刚被问过"。
+				 *
+				 * <p>2026-10-09 实机：这里漏了 markUsed，而 `lastUsedFrame` 的初值是 0，
+				 * {@link #evictIfNeeded()} 的判据是 {@code frame - lastUsedFrame > 120} ——
+				 * 于是进世界 2 秒之后（frame > 120），**每个新建作业都在下一个 beginPass 被 LRU 删掉**，
+				 * 而删发生在任何一次 {@code resolve()} 之前 ⇒ {@code advance()} 永远轮不到它，
+				 * 作业永远完不成。实测判据（342 条 [MMTR-RAILBAKE] 汇总行）：</p>
+				 * <pre>
+				 *   通行=1.00（无光影，只有一个主 pass）：新建=0 upload=0 在飞=2 缓存=61  ← 92 个窗口全是这样
+				 *   所有 upload&gt;0 的窗口 100% 是 通行=2.00（阴影+主两个 pass）← 作业靠阴影 pass 里的 resolve 续命
+				 *   后台线程 18656 条「走曲线」vs 只有 195 条「合桶」⇒ 99% 的作业死在 advance() 之前
+				 * </pre>
+				 * <p>后果不是"慢一点"，而是：缓存被冻在"开光影那段时间攒下的那 61 根"上，之后遇到的、
+				 * 不在这个集合里的轨永远烘不出来，只能走逐实例回退 —— 而回退路里跑着另一套逐实例视锥剔除，
+				 * 已烘的 61 根却完全不跑。画面里于是同时有两套可见性规则，边走边切换（"轨/车随移动不规律
+				 * 消失"的观感）。上面 ENTRIES 那条注释（{@link #recordRebuild}）踩的是同一个坑的
+				 * 另一半：**凡是有 lastUsedFrame 的东西，诞生时就得写上当前的 frame**。</p>
+				 */
+				job.markUsed(frame);
 				return cached;
 			}
 
@@ -454,6 +474,23 @@ public final class MmtrRailMeshCache {
 			final Baked rebuilt = upload(result.merged, key, result.lightHash, result.instanceCount, cached);
 			final long uploadNanos = System.nanoTime() - uploadStartNanos;
 			if (rebuilt == null) {
+				return cached;
+			}
+			if (rebuilt == cached) {
+				/*
+				 * 后台这条路**必须**和同步老路一样挡住"产出了 0 个材质桶"：{@code upload()} 在
+				 * {@code parts.isEmpty()} 时返回的就是传进去的 {@code previous}（= cached），
+				 * 而 {@link #recordRebuild} 会 {@code ENTRIES.put(key, rebuilt)} 再把
+				 * {@code cached.model.close()} —— 也就是**把刚登记进缓存的那个模型释放掉**。
+				 * 之后 {@code get()} 仍返回这个非 null 的 Baked，{@code RenderRails} 走烘焙分支、
+				 * 压掉逐实例回退 ⇒ **这一根轨永久不画**（直到键变化）。
+				 *
+				 * <p>同步老路在下面用同一行判断挡住了（{@code if (rebuilt == cached)}），
+				 * 后台路 2026-10-09 由审计发现漏了 —— 两条路的收尾语义必须一致，
+				 * 这类"两条路各写一遍"的漂移只在极端输入下才现形。</p>
+				 */
+				cached.lightDirty = false;
+				asyncUploadsInWindow++;
 				return cached;
 			}
 			reportBakeSegmentsAsync(result, uploadNanos);

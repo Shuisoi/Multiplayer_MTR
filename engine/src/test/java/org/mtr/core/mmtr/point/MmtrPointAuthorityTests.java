@@ -1,13 +1,26 @@
 package org.mtr.core.mmtr.point;
 
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.junit.jupiter.api.Test;
+import org.mtr.core.data.Position;
+import org.mtr.core.data.Rail;
+import org.mtr.core.data.TransportMode;
 import org.mtr.core.mmtr.MmtrRunPlanner;
+import org.mtr.core.simulation.Simulator;
+import org.mtr.core.tool.Angle;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -362,5 +375,99 @@ public final class MmtrPointAuthorityTests {
 
 		a.passed(0, 0, 0, p, "holder");
 		assertEquals("vOld", a.holder(0, 0, 0, p), "等久了的列车越过新来的高优先级列车 —— 不会被饿死");
+	}
+
+	/**
+	 * **同优先权的来车不许靠 owner id 抢走已经被按住的物理位置**（2026-10-09 实机 + 用例读数）。
+	 *
+	 * <h3>红证（修前这条必红，而且是**确定**红）</h3>
+	 * <p>前车 {@code vB} 从直股进咽喉，按住位置 0；后车 {@code vA} 从岔股进咽喉，要位置 1。
+	 * 后车走的是**另一条 via**，所以逐进向那一层不会替物理层拦住它 —— 决定权全在物理层。</p>
+	 * <p>修前物理层的"优先权收位"那一档会走到 {@code outranks} 的最后一档 {@code owner.compareTo()}：
+	 * {@code "vA" < "vB"} ⇒ 判"后车更该先走" ⇒ **把位置从 vB 手里收走**（现场日志：
+	 * {@code 优先权：把道岔 -20,0,0 的位置从 v…A（无计划） 交给更该先走的 v…B（无计划）}）。
+	 * 而 owner 是 {@code "v"+车辆id}，id 随机 ⇒ 同一段线路约一半的运行里道岔会易主。
+	 * 用例里的两个 owner 名字**故意**让 {@code compareTo} 指向"该抢"的方向，所以这条是确定性的红。</p>
+	 * <p>修后：抢位只认"真档位"（等级/车号、计划时刻更早），同优先权 ⇒ 后车排队、位置不动；
+	 * 但**真优先级更高**的车仍然收得走位置（本用例第二节钉住这一条，防"修成谁也不许收"）。</p>
+	 */
+	@Test
+	public void anEqualPriorityNewcomerCannotStealAHeldPhysicalPosition() {
+		// 咽喉 N=(-20,0,0)：直股 y1 从 (-40,0,0) 来、岔股 y2 从 (-40,0,10) 来、咽喉 throat 通向 (0,0,0)。
+		final AtomicLong clock = new AtomicLong(1_000_000L);
+		final Simulator simulator = new Simulator("test", new String[]{"test"}, wipeAndPath("build/mmtr-point-steal-guard"), false);
+		final Position node = new Position(-20, 0, 0);
+		final Rail y1 = Rail.newSidingRail(new Position(-40, 0, 0), Angle.E, node, Angle.E, Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Rail y2 = Rail.newSidingRail(new Position(-40, 0, 10), Angle.E, node, Angle.W, Rail.Shape.QUADRATIC, 0, NO_STYLES, TransportMode.TRAIN);
+		final Rail throat = Rail.newRail(node, Angle.E, new Position(0, 0, 0), Angle.W, Rail.Shape.QUADRATIC, 0, NO_STYLES, 80, 80, false, false, true, false, true, TransportMode.TRAIN);
+		simulator.rails.add(y1);
+		simulator.rails.add(y2);
+		simulator.rails.add(throat);
+		simulator.sync();
+
+		final var neighbours = new Object2ObjectOpenHashMap<Position, Rail>();
+		neighbours.put(new Position(-40, 0, 0), y1);
+		neighbours.put(new Position(-40, 0, 10), y2);
+		neighbours.put(new Position(0, 0, 0), throat);
+		final MmtrTurnout turnout = MmtrTurnout.resolve(node, neighbours);
+		assertNotNull(turnout, "咽喉口必须能解算成一处道岔（否则本用例没在测物理层）");
+
+		final int legViaY1 = legFor(turnout, y1.getHexId(), 0);
+		final int legViaY2 = legFor(turnout, y2.getHexId(), 1);
+		assertTrue(legViaY1 >= 0, "从直股进咽喉要得到位置 0");
+		assertTrue(legViaY2 >= 0, "从岔股进咽喉要得到位置 1");
+
+		final MmtrPointAuthority authority = simulator.mmtrPointAuthority;
+		final long until = clock.get() + 600_000L;
+
+		// 前车 vB（owner 名字**排在后面**）从直股来，按住位置 0。
+		assertEquals(MmtrPointAuthority.Result.GRANTED,
+			authority.request(node.getX(), node.getY(), node.getZ(), y1.getHexId(), "vB", legViaY1, until, 500L),
+			"前车先拿到咽喉");
+		assertEquals("vB", authority.physicalHolder(node.getX(), node.getY(), node.getZ()));
+		assertEquals(0, authority.physicalPosition(node.getX(), node.getY(), node.getZ()));
+
+		// 后车 vA（owner 名字**排在最前**）从岔股来，同优先权（无计划时刻）—— 旧口径下它会靠 id 抢位。
+		assertEquals(MmtrPointAuthority.Result.QUEUED,
+			authority.request(node.getX(), node.getY(), node.getZ(), y2.getHexId(), "vA", legViaY2, until, 500L),
+			"同优先权的后车只能在道岔上排队");
+		assertEquals("vB", authority.physicalHolder(node.getX(), node.getY(), node.getZ()),
+			"★ 同优先权的来车不许靠 owner id 抢走已经被按住的物理位置");
+		assertEquals(0, authority.physicalPosition(node.getX(), node.getY(), node.getZ()), "位置没有被扳走");
+
+		// 真优先级更高（计划时刻严格更早）的车仍然收得走 —— 这一档没被删掉。
+		authority.releaseAll("vA");
+		assertEquals(MmtrPointAuthority.Result.GRANTED,
+			authority.request(node.getX(), node.getY(), node.getZ(), y2.getHexId(), "vZ", legViaY2, until, 100L),
+			"计划更早的车可以收位");
+		assertEquals("vZ", authority.physicalHolder(node.getX(), node.getY(), node.getZ()),
+			"真档位更高时照旧收位（修掉的是「同优先权靠 id 抢」，不是取消优先权）");
+	}
+
+	private static final ObjectArrayList<String> NO_STYLES = new ObjectArrayList<>();
+
+	private static Path wipeAndPath(String savePath) {
+		final Path path = Paths.get(savePath);
+		if (Files.exists(path)) {
+			try (final Stream<Path> walk = Files.walk(path)) {
+				walk.sorted(Comparator.reverseOrder()).forEach(each -> {
+					try {
+						Files.delete(each);
+					} catch (IOException ignored) {
+					}
+				});
+			} catch (IOException ignored) {
+			}
+		}
+		return path;
+	}
+
+	private static int legFor(MmtrTurnout turnout, String viaRailHex, int position) {
+		for (int leg = 0; leg < 4; leg++) {
+			if (turnout.positionForLeg(viaRailHex, leg) == position) {
+				return leg;
+			}
+		}
+		return -1;
 	}
 }

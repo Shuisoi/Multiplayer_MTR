@@ -1,37 +1,29 @@
 package org.mtr.core.data;
 
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
-import org.mtr.core.mmtr.consist.MmtrCabState;
-import org.mtr.core.mmtr.consist.MmtrConsistWalker;
-import org.mtr.core.simulation.Simulator;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The client-side view of a multi-car consist, reproduced headlessly on the live dev world.
+ * The client-side view of a multi-car consist, reproduced headlessly.
  *
  * <p>Both failures pinned here were only ever visible in game: the per-frame client tick used to
  * overwrite the synced {@code railProgress} with the siding default position (every car then fell
  * outside the synced path and the whole train collapsed onto one point), and the motion simulation
  * used to close the doors on every tick (so a crew door command never survived). Both are engine
  * code, so both are testable here without a client.</p>
+ *
+ * <p>2026-10-09: the 8-car consist used to be parked on the live dev world's {@code aassdd} long
+ * siding, which no longer exists. The yard is now built by {@link MmtrLongYardSidingFixture} (a
+ * 170 m straight siding in {@code build/}), so the case no longer depends on someone else's world
+ * save - the assertions themselves are unchanged.</p>
  */
 public final class MmtrConsistMultiCarPlacementTests {
 
-	private static final Path DEV_WORLD_MTR_ROOT = Paths.get("C:/Users/30354/Desktop/Shuisoi DEV/MC/mmtr/game/fabric/run/world/mtr");
-	private static final long LONG_YARD_SIDING_ID = -5385228036074278397L;
-
 	@Test
 	public void eightCarConsistSpreadsItsCarsOverTheWholeTrain() {
-		final Vehicle vehicle = spawnEightCarConsist();
+		final Vehicle vehicle = newFixture("build/mmtr-consist-placement").spawnEightCarConsist();
 
 		final java.util.List<PathData> path = vehicle.vehicleExtraData.immutablePath;
 		System.out.println("[PROBE] railProgress=" + vehicle.getRailProgress() + " legs=" + path.size()
@@ -75,7 +67,7 @@ public final class MmtrConsistMultiCarPlacementTests {
 
 	@Test
 	public void aStandingMotionTrainKeepsTheCrewsDoorsOpen() {
-		final Vehicle vehicle = spawnEightCarConsist();
+		final Vehicle vehicle = newFixture("build/mmtr-consist-doors").spawnEightCarConsist();
 		assertTrue(vehicle.vehicleExtraData.mmtrSetDoors("open"), "the crew door command opens the doors");
 		for (int i = 0; i < 20; i++) {
 			vehicle.simulate(50, null, null);
@@ -83,56 +75,39 @@ public final class MmtrConsistMultiCarPlacementTests {
 		assertTrue(vehicle.vehicleExtraData.mmtrDoorsOpen(), "a standing train must not auto-close the crew's doors on the next tick");
 	}
 
-	private static Vehicle spawnEightCarConsist() {
-		Assumptions.assumeTrue(Files.isDirectory(DEV_WORLD_MTR_ROOT), "live dev world not present - skipping");
-		final Simulator sim = new Simulator("minecraft/overworld", new String[]{"minecraft/overworld"}, DEV_WORLD_MTR_ROOT, false);
-
-		Siding siding = null;
-		for (final Siding candidate : sim.sidings) {
-			if (candidate.getId() == LONG_YARD_SIDING_ID) {
-				siding = candidate;
-				break;
-			}
-		}
-		assertNotNull(siding, "the long aassdd siding must exist");
-
-		final ObjectArrayList<VehicleCar> cars = new ObjectArrayList<>();
-		cars.add(new VehicleCar("hst_h", 15, 5, 400, -5, 5, 0, 0));
-		for (int i = 0; i < 6; i++) {
-			cars.add(new VehicleCar("hst_b", 17, 5, 400, -5, 5, 0, 0));
-		}
-		cars.add(new VehicleCar("hst_h_rev", 15, 5, 400, -5, 5, 0, 0));
-		siding.setVehicleCars(cars);
-		siding.clearParkedVehicles();
-
-		final MmtrConsistWalker walker = siding.mmtrConsistWalkerFromYard(null, null, null);
-		assertNotNull(walker, "the 132 m consist body must fit the long siding");
-		final Vehicle vehicle = siding.spawnMmtrConsistVehicle(walker, MmtrCabState.Cab.CAB_A);
-		assertNotNull(vehicle, "consist vehicle spawned");
-		return vehicle;
+	private static MmtrLongYardSidingFixture newFixture(String savePath) {
+		return new MmtrLongYardSidingFixture(savePath);
 	}
 
 	private static void printCars(String label, Vehicle vehicle) {
-		final StringBuilder zs = new StringBuilder();
+		final StringBuilder xs = new StringBuilder();
 		for (final var carAndPosition : vehicle.getVehicleCarsAndPositions()) {
 			if (!carAndPosition.right().isEmpty()) {
-				zs.append(String.format("%.0f ", carAndPosition.right().get(0).positionAndTiltAngle1().position().z()));
+				xs.append(String.format("%.0f ", carAndPosition.right().get(0).positionAndTiltAngle1().position().x()));
 			}
 		}
-		System.out.println("[PROBE] " + label + " spread=" + String.format("%.1f", spreadOf(vehicle)) + " m  zs=[" + zs.toString().trim() + "]");
+		System.out.println("[PROBE] " + label + " spread=" + String.format("%.1f", spreadOf(vehicle)) + " m  xs=[" + xs.toString().trim() + "]");
 	}
 
+	/**
+	 * 编组在水平面上的最大车心间距（米）。用**两两车心距离**而不是某一根轴上的极差：夹具自建的股道与
+	 * 现场那条 {@code aassdd} 股道朝向未必相同，而"全车挤在一点"这个失效模式在任何朝向下都必须红。
+	 */
 	private static double spreadOf(Vehicle vehicle) {
-		double minZ = Double.MAX_VALUE;
-		double maxZ = -Double.MAX_VALUE;
+		final java.util.List<double[]> centres = new java.util.ArrayList<>();
 		for (final var carAndPosition : vehicle.getVehicleCarsAndPositions()) {
 			if (carAndPosition.right().isEmpty()) {
 				continue;
 			}
-			final double z = carAndPosition.right().get(0).positionAndTiltAngle1().position().z();
-			minZ = Math.min(minZ, z);
-			maxZ = Math.max(maxZ, z);
+			final var position = carAndPosition.right().get(0).positionAndTiltAngle1().position();
+			centres.add(new double[]{position.x(), position.z()});
 		}
-		return maxZ - minZ;
+		double max = 0;
+		for (int i = 0; i < centres.size(); i++) {
+			for (int j = i + 1; j < centres.size(); j++) {
+				max = Math.max(max, Math.hypot(centres.get(i)[0] - centres.get(j)[0], centres.get(i)[1] - centres.get(j)[1]));
+			}
+		}
+		return max;
 	}
 }

@@ -424,6 +424,18 @@ public class RenderRails implements IGui {
 		final Camera camera = MinecraftClient.getInstance().getGameRendererMapped().getCamera();
 		final Vector3d cameraPosition = camera.getPos();
 		final int renderDistance = MinecraftClientHelper.getRenderDistance() * 16;
+		/*
+		 * 相机基底（世界空间）：与交互提示**同一套**，见 {@link MmtrInteractPrompt#cameraBasis}。
+		 * 只在这里取一次，逐实例复用。
+		 *
+		 * <p>2026-10-09 换掉原来的 `new Vector3d(x1,y1,z1).subtract(cameraPosition)
+		 * .rotateY(toRadians(yaw)).rotateX(toRadians(pitch))`：那一串依赖第三方
+		 * `com.logisticscraft.occlusionculling.util.Vec3d` 的旋转约定，而那个类**既不在本仓源码里、
+		 * 也不在依赖 jar 里**（无从查证），实测症状是"抬头/低头时成片钢轨消失"（深度里混进了
+		 * `2·dy·sin(pitch)` 这一项：俯仰 30° 时视线正前方 10 m 的目标会被算出 z=5、|y|=8.7，
+		 * 判成画面外）。改用被 `mmtr/tools/projection-check` 单测钉死的基底，三个符号都是有据的。</p>
+		 */
+		final double[] cameraBasis = MmtrInteractPrompt.cameraBasis(camera);
 
 		rail.railMath.render((cx1, cy1, cz1, cx2, cy2, cz2, cx3, cy3, cz3, cx4, cy4, cz4, tiltAngle) -> {
 			// MMTR port: map the modern 13-arg corner+height callback back onto the legacy 10-arg layout.
@@ -446,8 +458,10 @@ public class RenderRails implements IGui {
 				 * **32 格以外只判前后、不判左右**。这里两带用同一套判据一次补齐。
 				 * 相机空间的 {@code z} 就是前向深度（与原 {@code z > 0} 同一套语义）。</p>
 				 */
-				final Vector3d rotatedVector = new Vector3d(x1, y1, z1).subtract(cameraPosition).rotateY((float) Math.toRadians(camera.getYaw())).rotateX((float) Math.toRadians(camera.getPitch()));
-				if (insideViewFrustum(rotatedVector)) {
+				if (cameraBasis == null || insideViewFrustum(
+						(x1 - cameraPosition.getXMapped()) * cameraBasis[0] + (y1 - cameraPosition.getYMapped()) * cameraBasis[1] + (z1 - cameraPosition.getZMapped()) * cameraBasis[2],
+						(x1 - cameraPosition.getXMapped()) * cameraBasis[3] + (z1 - cameraPosition.getZMapped()) * cameraBasis[4],
+						(x1 - cameraPosition.getXMapped()) * cameraBasis[5] + (y1 - cameraPosition.getYMapped()) * cameraBasis[6] + (z1 - cameraPosition.getZMapped()) * cameraBasis[7])) {
 					callback.renderRail(blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
 				}
 			}
@@ -455,7 +469,8 @@ public class RenderRails implements IGui {
 	}
 
 	/**
-	 * 一个轨道实例在不在画面里。{@code offset} 是**相机空间**里的偏移（+Z 为前）。
+	 * 一个轨道实例在不在画面里。三个入参都是**相机空间**的分量：{@code depth} 沿相机前向（+ = 在前方），
+	 * {@code cameraX} 沿相机右向，{@code cameraY} 沿相机上向。
 	 *
 	 * <p>判据直接来自投影矩阵对角：{@code |x| * m00 ≤ z} 且 {@code |y| * m11 ≤ z} 即在视锥内
 	 * （{@code m00 = m11/aspect}、{@code m11 = 1/tan(fov/2)}，正是
@@ -466,8 +481,7 @@ public class RenderRails implements IGui {
 	 * 之后一小段仍照画 —— 取点只是实例的一个角，不留余量会在画面边缘看到"钢轨闪掉"。
 	 * 取不到投影矩阵时退化成"只剔背后的"，比改前更保守也更正确。</p>
 	 */
-	private static boolean insideViewFrustum(Vector3d offset) {
-		final double depth = offset.getZMapped();
+	private static boolean insideViewFrustum(double depth, double cameraX, double cameraY) {
 		if (depth <= -CULL_BEHIND_METRES) {
 			return false;
 		}
@@ -476,8 +490,8 @@ public class RenderRails implements IGui {
 			return true;
 		}
 		final double safeDepth = Math.max(depth, CULL_NEAR_DEPTH);
-		return Math.abs(offset.getXMapped()) <= safeDepth / scale[0] * CULL_MARGIN
-				&& Math.abs(offset.getYMapped()) <= safeDepth / scale[1] * CULL_MARGIN;
+		return Math.abs(cameraX) * scale[0] <= safeDepth * CULL_MARGIN
+				&& Math.abs(cameraY) * scale[1] <= safeDepth * CULL_MARGIN;
 	}
 
 	private static void renderNode(BlockState blockState, BlockPos blockPos, BooleanSupplier shouldRender, int light) {

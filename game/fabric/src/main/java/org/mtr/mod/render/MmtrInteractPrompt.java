@@ -426,6 +426,56 @@ public final class MmtrInteractPrompt {
 	}
 
 	/**
+	 * **相机基底**（世界空间），供投影与钢轨的逐实例视锥剔除共用。
+	 *
+	 * <p>返回 {@code {forwardX, forwardY, forwardZ, rightX, rightZ, upX, upY, upZ}}
+	 * （{@code right} 的 y 分量恒为 0，所以不占位）；正上/正下时返回 {@code null}。</p>
+	 *
+	 * <p>这三个方向由 {@code mmtr/tools/projection-check} 的算术单测钉死，因为里面**三个符号选择**
+	 * 在屏幕中心都看不出来，而每一个都曾经错着上过线：</p>
+	 *
+	 * <pre>
+	 *   forward = (-sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch))
+	 *   right   = normalize(cross(forward, worldUp))     worldUp = (0,1,0)
+	 *   up      = cross(right, forward)
+	 * </pre>
+	 *
+	 * <p>{@code right = cross(worldUp, forward)} 会把水平轴取反（转身向左时标签往左跑），
+	 * {@code up = cross(forward, right)} 会把竖直轴取反（抬头时标签往下沉）。
+	 * yaw 0 的已知情形：相机朝 +Z ⇒ {@code right} 必须是 (-1,0,0)、{@code up} 必须是 (0,1,0)。</p>
+	 *
+	 * <p><b>2026-10-09 提取出来</b>：{@code RenderRails} 的逐实例视锥剔除原来自己用第三方
+	 * {@code Vec3d.rotateY/rotateX} 搭这套变换，而那个库的旋转约定在本仓里**无从查证**
+	 * （不在工作区源码里、也不在依赖 jar 里），实测症状是"抬头/低头时成片钢轨消失"。
+	 * 改用这里同一套基底 ⇒ 约定已知、且有单测；也顺手消掉"两处各算一遍"。</p>
+	 */
+	@Nullable
+	static double[] cameraBasis(org.mtr.mapping.holder.Camera camera) {
+		final double yaw = Math.toRadians(camera.getYaw());
+		final double pitch = Math.toRadians(camera.getPitch());
+		final double cosYaw = Math.cos(yaw);
+		final double sinYaw = Math.sin(yaw);
+		final double cosPitch = Math.cos(pitch);
+		final double sinPitch = Math.sin(pitch);
+		final double forwardX = -sinYaw * cosPitch;
+		final double forwardY = -sinPitch;
+		final double forwardZ = cosYaw * cosPitch;
+		double rightX = -forwardZ;
+		double rightZ = forwardX;
+		final double rightLength = Math.sqrt(rightX * rightX + rightZ * rightZ);
+		if (rightLength < 1.0E-6) {
+			return null;
+		}
+		rightX /= rightLength;
+		rightZ /= rightLength;
+		// up = cross(right, forward)，按定义手写开（两种叉乘顺序都曾经在这个文件里错过）
+		final double upX = -rightZ * forwardY;
+		final double upY = rightZ * forwardX - rightX * forwardZ;
+		final double upZ = rightX * forwardY;
+		return new double[]{forwardX, forwardY, forwardZ, rightX, rightZ, upX, upY, upZ};
+	}
+
+	/**
 	 * Projects the candidate to screen pixels, or returns null when it cannot be shown.
 	 *
 	 * <p>See the class documentation for the derivation. The depth test comes first and uses the same
@@ -435,54 +485,19 @@ public final class MmtrInteractPrompt {
 	private static ScreenPoint project(Window window, Candidate candidate) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final org.mtr.mapping.holder.Camera camera = minecraftClient.getGameRendererMapped().getCamera();
-		final double yaw = Math.toRadians(camera.getYaw());
-		final double pitch = Math.toRadians(camera.getPitch());
-
-		// Camera basis in world space.
-		final double cosYaw = Math.cos(yaw);
-		final double sinYaw = Math.sin(yaw);
-		final double cosPitch = Math.cos(pitch);
-		final double sinPitch = Math.sin(pitch);
-		final double forwardX = -sinYaw * cosPitch;
-		final double forwardY = -sinPitch;
-		final double forwardZ = cosYaw * cosPitch;
-		// Camera basis in world space. Derived once and pinned by the unit checks in
-		// mmtr/tools/projection-check, because THREE sign choices in here are all invisible at the screen
-		// centre and each one was wrong in a shipped version:
-		//
-		//   forward = (-sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch))
-		//   right   = normalize(cross(forward, worldUp))     worldUp = (0,1,0)
-		//   up      = cross(forward, right)
-		//
-		//   * right = cross(worldUp, forward) NEGATES the horizontal axis: turning the view left dragged
-		//     the label further left. It ALSO reproduced the logged screen position (482 vs the logged
-		//     483), so matching a screenshot could not have caught it.
-		//   * up = cross(right, forward) NEGATES the vertical axis: the label sinks when you look up.
-		//     Measured directly - at yaw 0 pitch 0 it evaluates to (0,-1,0) instead of (0,1,0).
-		//
-		// Known case: at yaw 0 the camera faces +Z, so `right` must be (-1,0,0) and `up` (0,1,0). Both do.
-		double rightX = -forwardZ;
-		double rightZ = forwardX;
-		final double rightLength = Math.sqrt(rightX * rightX + rightZ * rightZ);
-		if (rightLength < 1.0E-6) {
-			// Looking straight up or down: any "right" is arbitrary and nothing horizontal is in view.
+		final double[] basis = cameraBasis(camera);
+		if (basis == null) {
+			// 正上/正下：水平轴任意，画面里没有水平方向可言
 			return null;
 		}
-		rightX /= rightLength;
-		rightZ /= rightLength;
-		// up = cross(right, forward). Written out by hand from the definition rather than derived on the
-		// fly, because BOTH cross-product orders have been wrong in this file at different times and each
-		// one silently mirrored an axis. Working it through for this exact `right` and `forward`:
-		//
-		//   up = right x forward
-		//      = ((ry*fz - rz*fy), (rz*fx - rx*fz), (rx*fy - ry*fx))     ry = 0
-		//      = (-rz*fy,          (rz*fx - rx*fz), rx*fy)
-		//
-		// which at yaw 0, pitch 0 gives (0, 1, 0) as it must, and slopes correctly for pitch. The other
-		// order, forward x right, is the negative of this and inverts the vertical axis.
-		final double upX = -rightZ * forwardY;
-		final double upY = rightZ * forwardX - rightX * forwardZ;
-		final double upZ = rightX * forwardY;
+		final double forwardX = basis[0];
+		final double forwardY = basis[1];
+		final double forwardZ = basis[2];
+		final double rightX = basis[3];
+		final double rightZ = basis[4];
+		final double upX = basis[5];
+		final double upY = basis[6];
+		final double upZ = basis[7];
 
 		final double deltaX = candidate.x - camera.getPos().getXMapped();
 		final double deltaY = candidate.y - camera.getPos().getYMapped();
