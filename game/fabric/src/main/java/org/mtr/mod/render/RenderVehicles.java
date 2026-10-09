@@ -38,9 +38,6 @@ public class RenderVehicles implements IGui {
 
 	public static final ObjectArrayList<RidingPlayerInterpolation> RIDING_PLAYER_INTERPOLATIONS = new ObjectArrayList<>();
 
-	/** Throttle for the temporary "does MTR's world rendering run at all" diagnostic. */
-	private static long mmtrLastWorldRenderLogMillis = 0;
-
 	public static void render(long millisElapsed, Vector3d cameraShakeOffset) {
 		// notes/177：帧率单独量（tick 率看不出一帧不出）。见 MmtrPlayerMotionTrace.frame()。
 		MmtrPlayerMotionTrace.frame();
@@ -51,12 +48,9 @@ public class RenderVehicles implements IGui {
 			return;
 		}
 
-		final long nowMillis = System.currentTimeMillis();
-		if (nowMillis - mmtrLastWorldRenderLogMillis > 2000) {
-			mmtrLastWorldRenderLogMillis = nowMillis;
-			Init.LOGGER.info("[MMTR-DBG] world render running, client vehicles={}", MinecraftClientData.getInstance().vehicles.size());
-		}
-
+		// notes/177 那次"客户端卡死"用的临时探针（每 2 秒一行 "[MMTR-DBG] world render running"）已删除：
+		// 真因（ArrayOcclusionCache 每帧全清 256 MB）早已钉死并修好，而这一行在 32 分钟会话里刷了 715 条。
+		// "渲染线程还活着吗"现在由 MmtrPlayerMotionTrace 的 [MMTR-PERF] 五行窗口回答（帧=… tick=… 两条线分开量）。
 		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
 		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());

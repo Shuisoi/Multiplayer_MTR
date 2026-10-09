@@ -44,14 +44,10 @@ import org.mtr.core.mmtr.physics.TrainPhysics;
  * 所以合力由 {@link TrainPhysics#netAccelerationMps2} 四力同号相加（不再按分支丢掉残余牵引）；
  * ② 上一拍的力是**控制器状态**，客户端镜像从 0 起步（上车/重连后的头几秒与服务端略有出入）。配 0 = 不限速。</p>
  *
- * <p>气制动状态（管压/缸压）按 {@link ConsistType} 的建压/缓解速率演进，并通过
- * {@link AirBrakeStateful} 暴露给镜像种子 —— 与既有 {@link AirBrakeController} 同一套口径。</p>
+ * <p>气制动状态（管压/缸压）由共用的 {@link org.mtr.core.mmtr.brake.BrakeModel} 持有（notes/270/376），
+ * 并通过 {@link AirBrakeStateful} 暴露给镜像种子 —— 与有级/无级是同一套口径。</p>
  */
 public final class ThreeHandleDriveController implements DriveController, AirBrakeStateful, BrakeCarrier {
-
-	/** 紧急制动的排/建压速率（闸瓦/闸缸都按最快的来）。 */
-	private static final double EMERGENCY_PIPE_RATE_PER_SECOND = 5.0;
-	private static final double EMERGENCY_CYLINDER_RATE_PER_SECOND = 5.0;
 
 	/**
 	 * 缸压还剩**常用制动力**的这么多比例时，就认为"闸还压着"：这期间不许出牵引。
@@ -63,9 +59,6 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 	 * 处于让位状态，一路冲到设定速度以上才收得住。真车有牵引联锁，不会允许这种组合。</p>
 	 */
 	private static final double PNEUMATIC_INTERLOCK_FORCE_RATIO = 0.01;
-
-	private double pipePressure = 1.0;
-	private double brakeCylinderPressure = 0.0;
 
 	/**
 	 * **制动模型宿主**（notes/270）：管压→分配阀→缸压→电空混合→逐车力，全部在 {@link org.mtr.core.mmtr.brake.BrakeModel}
@@ -129,14 +122,9 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 			 * 紧急也走**同一个制动系统**：逐车快排 + 紧急限压 + 紧急力锚（notes/267/268/270）——
 			 * 于是"尾车的紧急制动也滞后"这一条对所有编组都成立（单车就是"只有一节车"）。
 			 */
-			final double emergencyAnchorN;
-			if (!brakeModel.step(air, equivalentBrakeCar(type), org.mtr.core.mmtr.brake.BrakeCommand.notched(brakePosition, spec.getBrakePositionCount(), 0, true),
-					speedMetersPerSecond, 0, dt)) {
-				stepAir(type, spec, 1.0, true, dt);
-				emergencyAnchorN = physics.getBrake().emergencyForceN(speedMetersPerSecond);
-			} else {
-				emergencyAnchorN = brakeModel.getEmergencyForceN();
-			}
+			brakeModel.step(air, equivalentBrakeCar(type), org.mtr.core.mmtr.brake.BrakeCommand.notched(brakePosition, spec.getBrakePositionCount(), 0, true),
+				speedMetersPerSecond, 0, dt);
+			final double emergencyAnchorN = brakeModel.getEmergencyForceN();
 			/*
 			 * 紧急也按增速上限**回落**（用户口径 2026-09-25：「牵引力上或下…全部 30 kN/s」——
 			 * 方向不豁免，保护动作也不豁免）。
@@ -151,11 +139,11 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 			lastAfbActive = false;
 			// notes/267：紧急也过黏着截断（干轨/湿轨对 BR101 的 138 kN 不生效，落叶/油污才真的截）
 			lastPneumaticBrakeForceN = emergencyAnchorN;
-			final double limitedEmergencyN = air == null ? emergencyAnchorN
-				: physics.adhesionLimitedBrakingForceN(emergencyAnchorN, 0, speedMetersPerSecond, air.isWspEnabled(), air.getWheelSlipMu());
+			final double limitedEmergencyN = physics.adhesionLimitedBrakingForceN(emergencyAnchorN, 0, speedMetersPerSecond,
+				air.isWspEnabled(), air.getWheelSlipMu());
 			return new DriveOutput(
 				physics.netAccelerationMps2(tractionForceN, limitedEmergencyN, speedMetersPerSecond),
-				true, true, pipePressure, brakeCylinderPressure);
+				true, true, brakeModel.getPipePressure(), brakeModel.getBrakeCylinderPressure());
 		}
 
 		final int driveHandle = spec.clampDriveHandle(control.getDriveHandle());
@@ -200,7 +188,7 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 				final double requiredForceN = requiredDecelMps2 * inertiaKg;
 				tractionRatio = 0;
 				rheostaticRatio = Math.max(spec.rheostaticRatio(driveHandle), 1.0);
-				final double rheostaticForceAvailableN = spec.getRheostaticBrakeForceN() * spec.rheostaticFade(speedMetersPerSecond);
+				final double rheostaticForceAvailableN = electricEffortN(type, spec, speedMetersPerSecond) * rheostaticRatio;
 				final double pneumaticForceGapN = Math.max(0, requiredForceN - rheostaticForceAvailableN);
 				afbCylinderTarget = Math.min(1, pneumaticForceGapN / serviceForceN);
 				// 电阻制动只要它帮得上的那部分：缺口为 0 时别白给满电阻制动（否则会过冲下冲）
@@ -232,22 +220,17 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 		boolean cylinderAboveInterlock;
 		double blendElectricForceN = 0;
 		// 电制动**可用力**（只有动力车那部分会被它替掉）；混合关掉就不给可用力 ⇒ 自动电制动不参与
-		final double availableElectricN = air != null && air.isBlendingEnabled()
-			? Math.max(0, spec.rheostaticEffortN(speedMetersPerSecond)) : 0;
-		if (!brakeModel.step(air, equivalentBrakeCar(type),
-				org.mtr.core.mmtr.brake.BrakeCommand.notched(brakePosition, spec.getBrakePositionCount(), afbCylinderTarget, false),
-				speedMetersPerSecond, availableElectricN, dt)) {
-			// 没配气压口径的车底：旧的归一化气路模型，逐位不变
-			stepAir(type, spec, Math.max(spec.brakeRatio(brakePosition), afbCylinderTarget), false, dt);
-			pneumaticForceN = type.getBrake().serviceForceN(brakeCylinderPressure);
-			cylinderAboveInterlock = pneumaticForceN > type.getBrake().getServiceForceN() * PNEUMATIC_INTERLOCK_FORCE_RATIO;
-		} else {
-			// 车头进归一化读数（HUD/日志看司机那一节），联锁另看全列最大缸压
-			syncReadingsFromModel();
-			pneumaticForceN = brakeModel.getPneumaticForceN();
-			blendElectricForceN = brakeModel.getBlendedElectricN();
-			cylinderAboveInterlock = brakeModel.isPneumaticHolding();
-		}
+		// notes/379：口径取**车底自己的**电制动规格（它才是"这列车能回馈多少"的真源；三手柄规格里那份
+		// 是同一组 JSON 键解析出来的等值对象，但它不带自定义的 regenCutoffKmh）。
+		final double availableElectricN = air.isBlendingEnabled()
+			? Math.max(0, electricEffortN(type, spec, speedMetersPerSecond)) : 0;
+		brakeModel.step(air, equivalentBrakeCar(type),
+			org.mtr.core.mmtr.brake.BrakeCommand.notched(brakePosition, spec.getBrakePositionCount(), afbCylinderTarget, false),
+			speedMetersPerSecond, availableElectricN, dt);
+		// 车头进归一化读数（HUD/日志看司机那一节），联锁另看全列最大缸压
+		pneumaticForceN = brakeModel.getPneumaticForceN();
+		blendElectricForceN = brakeModel.getBlendedElectricN();
+		cylinderAboveInterlock = brakeModel.isPneumaticHolding();
 		/*
 		 * 牵引联锁（两条都要）：
 		 *   ① 手柄**要求**气制动（离开"运行"位）—— 刚拉到 8 档那一拍缸压还是 0，不能让它偷一会儿牵引；
@@ -295,19 +278,17 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 
 		// 力必须在 AFB 定完比例之后再算 —— AFB 会改写 rheostaticRatio（先算就会用司机手柄那份，
 		// 于是"定速该上电阻制动"变成"比例写了 1.0、力还是 0"）。
-		// notes/266：电制动改走三段式（低速淡出 + 恒功率上限），只在气压口径的车底上生效。
-		final double driverElectricForceN = air == null
-			? spec.getRheostaticBrakeForceN() * rheostaticRatio * spec.rheostaticFade(speedMetersPerSecond)
-			: spec.rheostaticEffortN(speedMetersPerSecond) * rheostaticRatio;
+		// notes/266：电制动走三段式（低速淡出 + 恒功率上限）—— 只有这一条路（notes/376）。
+		final double driverElectricForceN = electricEffortN(type, spec, speedMetersPerSecond) * rheostaticRatio;
 		/*
 		 * notes/267：混合用的自动电制动与**司机电阻制动手柄**取大不相加 —— 电机只有一台：
 		 * 司机拉着手柄、同时又拉气制动时，电制动不该被算两遍（规格模块三的口径）。
 		 */
 		final double rheostaticForceN = Math.max(driverElectricForceN, blendElectricForceN);
-		if (air != null) {
+		{
 			// HUD 的"电机"行由 lastRheostaticRatio 反算 ⇒ 必须把混合吃进去的那份也折进去，
 			// 否则"电机"行会比"制动力（电）"小（两行对不上是本仓最恨的一类现场）。
-			final double availableN = spec.rheostaticEffortN(speedMetersPerSecond);
+			final double availableN = electricEffortN(type, spec, speedMetersPerSecond);
 			lastRheostaticRatio = availableN <= 0 ? 0 : Math.min(1, rheostaticForceN / availableN);
 		}
 
@@ -330,17 +311,15 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 		 * <p>四条力同号相加（notes/265）：牵引增速控制让"残余牵引"与"正在建立的制动"能同时存在，
 		 * 旧的三分支写法（牵引 / 制动 / 惰行 各算一支）会把残余牵引整段丢掉。</p>
 		 */
-		final double brakingForceN = air == null
-			? pneumaticForceN + rheostaticForceN
-			: physics.adhesionLimitedBrakingForceN(pneumaticForceN, rheostaticForceN, speedMetersPerSecond,
-				air.isWspEnabled(), air.getWheelSlipMu());
-		if (air != null && !air.isWspEnabled() && physics.isBrakingAdhesionLimited(pneumaticForceN, rheostaticForceN, speedMetersPerSecond)) {
+		final double brakingForceN = physics.adhesionLimitedBrakingForceN(pneumaticForceN, rheostaticForceN,
+			speedMetersPerSecond, air.isWspEnabled(), air.getWheelSlipMu());
+		if (!air.isWspEnabled() && physics.isBrakingAdhesionLimited(pneumaticForceN, rheostaticForceN, speedMetersPerSecond)) {
 			logWheelSlipOnce(speedMetersPerSecond, pneumaticForceN + rheostaticForceN, brakingForceN);
 		}
 		final double acceleration = physics.netAccelerationMps2(appliedTractiveEffortN, brakingForceN, speedMetersPerSecond);
 
-		final boolean brakeLamp = brakeCylinderPressure > 0.01 || rheostaticForceN > 1;
-		return new DriveOutput(acceleration, brakeLamp, false, pipePressure, brakeCylinderPressure);
+		final boolean brakeLamp = brakeModel.getBrakeCylinderPressure() > 0.01 || rheostaticForceN > 1;
+		return new DriveOutput(acceleration, brakeLamp, false, brakeModel.getPipePressure(), brakeModel.getBrakeCylinderPressure());
 	}
 
 	/** 无 WSP 抱死断崖的自白（节流 2 s）：力突然掉到动摩擦那一档，必须说出来而不是让人猜为什么刹不住。 */
@@ -402,31 +381,6 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 		return fullEffortN <= 0 ? 0 : Math.max(0, Math.min(1, effortN / fullEffortN));
 	}
 
-	/**
-	 * 制动缸追目标缸压比例（建压/缓解有速率），管压跟着镜像 —— 与 {@link AirBrakeController} 同一套口径。
-	 *
-	 * @param targetRatio 目标缸压比例 = **气制动手柄诉求与 AFB 补气诉求里大的那个**（"耦合而非合并"：
-	 *                    司机的手柄照旧管着自己那一份，AFB 只是在它之上要得更多时才抬目标）
-	 */
-	private void stepAir(ConsistType type, ThreeHandleSpec spec, double targetRatio, boolean emergency, double dt) {
-		if (emergency) {
-			pipePressure = Math.max(0, pipePressure - EMERGENCY_PIPE_RATE_PER_SECOND * dt);
-			brakeCylinderPressure = Math.min(1, brakeCylinderPressure + EMERGENCY_CYLINDER_RATE_PER_SECOND * dt);
-			return;
-		}
-		final double target = Math.max(0, Math.min(1, targetRatio));
-		if (target > brakeCylinderPressure) {
-			brakeCylinderPressure = Math.min(target, brakeCylinderPressure + type.getAirBrakeApplyRatePerSecond() * dt);
-		} else {
-			brakeCylinderPressure = Math.max(target, brakeCylinderPressure - type.getAirBrakeReleaseRatePerSecond() * dt);
-		}
-		if (target <= 0) {
-			pipePressure = Math.min(1, pipePressure + type.getAirPipeChargeRatePerSecond() * dt);
-		} else {
-			pipePressure = Math.max(1 - target, pipePressure - type.getAirPipeDischargeRatePerSecond() * target * dt);
-		}
-	}
-
 	/** AFB 的目标速度（m/s）；定速关闭时返回当前速度（⇒ 误差 0 ⇒ 什么都不做）。 */
 	private static double lastAfbTargetMps(ControlState control, ThreeHandleSpec spec) {
 		return control.getCruiseSpeedKmh() > 0 ? spec.clampCruiseKmh(control.getCruiseSpeedKmh()) / 3.6 : 0;
@@ -454,6 +408,15 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 			type.getBrake().getEmergencyForceN(), true, null);
 	}
 
+	/**
+	 * 这一拍**电制动的可用力**（N）：车底自己的电制动口径优先（notes/379，它带 {@code regenCutoffKmh}），
+	 * 车底没有时才退回三手柄规格里那份（老配置里两者同源，逐位相同）。
+	 */
+	private static double electricEffortN(ConsistType type, ThreeHandleSpec spec, double speedMetersPerSecond) {
+		final org.mtr.core.mmtr.physics.ElectricBrakeSpec consistSpec = type.getElectricBrake();
+		return consistSpec != null ? consistSpec.effortN(speedMetersPerSecond) : spec.rheostaticEffortN(speedMetersPerSecond);
+	}
+
 	/** 这一拍是不是在按**逐车管压**跑（诊断/测试用）。 */
 	public boolean isPerCarBrakePipe() {
 		return brakeModel.isPerCar();
@@ -469,21 +432,15 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 		return brakeModel.getPipeBar(index);
 	}
 
-	/** 把制动模型的归一化读数取回本控制器的对外字段（管压 / 缸压）。 */
-	private void syncReadingsFromModel() {
-		pipePressure = brakeModel.getPipePressure();
-		brakeCylinderPressure = brakeModel.getBrakeCylinderPressure();
-	}
-
-	/** 这一拍**列车管压力**（bar）；旧口径车底返回 0（那一路没有 bar 语义，读数走归一化字段）。 */
+	/** 这一拍**列车管压力**（bar）。 */
 	public double getPipeBar() { return brakeModel.getPipeBar(); }
 
-	/** 这一拍**制动缸压力**（bar）；旧口径车底返回 0。 */
+	/** 这一拍**制动缸压力**（bar）。 */
 	public double getCylinderBar() { return brakeModel.getCylinderBar(); }
 
 	// ---- 连挂接口（notes/270）----------------------------------------------------------------------
 
-	/** 逐车气路状态串（{@code 管压比例,缸压比例;…}）：与 {@code MmtrComposition.encodeAirStates} 同格式。 */
+	/** 逐车气路状态串（{@code 管压比例,缸压比例;…}）：与 {@link org.mtr.core.mmtr.brake.BrakeModel#encodeState()} 同格式。 */
 	public String encodeAirState() {
 		return brakeModel.encodeState();
 	}
@@ -491,27 +448,23 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 	/** 从状态串恢复（解挂切分 / 镜像种子 / 连挂后保住原状态）。 */
 	public void applyAirStateString(String airState) {
 		brakeModel.applyState(airState);
-		syncReadingsFromModel();
 	}
 
 	/** 连挂之后：新挂上来的无动力车按管压 0/缸压 0 起（随后自己充风），动力车自带风源。 */
 	public void seedAirStateAfterCoupling(int firstAddedCarIndex) {
 		brakeModel.seedAfterCoupling(firstAddedCarIndex);
-		syncReadingsFromModel();
 	}
 
 	@Override
-	public double getPipePressure() { return pipePressure; }
+	public double getPipePressure() { return brakeModel.getPipePressure(); }
 
 	@Override
-	public double getBrakeCylinderPressure() { return brakeCylinderPressure; }
+	public double getBrakeCylinderPressure() { return brakeModel.getBrakeCylinderPressure(); }
 
 	@Override
 	public void setState(double pipePressure, double brakeCylinderPressure) {
-		this.pipePressure = Math.max(0, Math.min(1, pipePressure));
-		this.brakeCylinderPressure = Math.max(0, Math.min(1, brakeCylinderPressure));
 		// 镜像种子是归一化的：按 bar 口径折回去（客户端与服务端的气压状态必须同一套语义）
-		brakeModel.applyState(this.pipePressure + "," + this.brakeCylinderPressure);
+		brakeModel.applyState(Math.max(0, Math.min(1, pipePressure)) + "," + Math.max(0, Math.min(1, brakeCylinderPressure)));
 	}
 
 	public double getLastTractionRatio() { return lastTractionRatio; }
@@ -536,8 +489,6 @@ public final class ThreeHandleDriveController implements DriveController, AirBra
 
 	@Override
 	public void reset() {
-		pipePressure = 1.0;
-		brakeCylinderPressure = 0.0;
 		lastTractionRatio = 0;
 		lastRheostaticRatio = 0;
 		lastAfbActive = false;

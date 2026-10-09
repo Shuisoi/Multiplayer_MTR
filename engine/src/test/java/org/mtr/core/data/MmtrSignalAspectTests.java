@@ -102,9 +102,15 @@ public final class MmtrSignalAspectTests {
 		n.occupy(n.entry);
 		assertEquals(MmtrSignalAspect.Aspect.RED, n.aspect().aspectOf(n.entry.getHexId()), "the protected rail itself occupied is red");
 
+		/*
+		 * ★ 2026-10-09 用户裁定（岔区净空阈值改回注释写的"以窗为准"）：占用 `straight` 的那段足迹同时压进
+		 * entry↔straight 之间那个岔口的 10 m 净空窗 ⇒ 该节点"清不掉" ⇒ 以它为边界的这一步就是**红**（深度 1），
+		 * 而不是"再数一段才给单黄"。真联锁口径：道岔还压着车 ⇒ 岔上任何一条进路都锁不了。
+		 */
 		final Net n2 = new Net("build/mmtr-aspect-chain2");
 		n2.occupy(n2.straight);
-		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, n2.aspect().aspectOf(n2.entry.getHexId()), "one rail beyond occupied is single yellow");
+		assertEquals(MmtrSignalAspect.Aspect.RED, n2.aspect().aspectOf(n2.entry.getHexId()),
+			"占用 straight（足迹落在岔口净空窗内）⇒ 红：岔区清不掉，这一步不许放行");
 
 		/*
 		 * n3（notes/166 R4 按新语义改写）：Net 是**无灯站场**，而新模型里"没有任何信号灯的连通块
@@ -125,8 +131,9 @@ public final class MmtrSignalAspectTests {
 	public void withoutARouteEveryForkBranchCounts() {
 		final Net n = new Net("build/mmtr-aspect-fork");
 		n.occupy(n.diverge);
-		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, n.aspect().aspectOf(n.entry.getHexId()),
-			"free driving: the occupied diverging branch is seen from the entry signal (conservative rule)");
+		// ★ 2026-10-09：岔股上的足迹压在岔口净空窗里 ⇒ 岔区清不掉 ⇒ 红（比"保守地给单黄"更严，且是教科书口径）。
+		assertEquals(MmtrSignalAspect.Aspect.RED, n.aspect().aspectOf(n.entry.getHexId()),
+			"free driving: the occupied diverging branch fouls the junction itself -> red");
 	}
 
 	@Test
@@ -135,13 +142,18 @@ public final class MmtrSignalAspectTests {
 		n.occupy(n.diverge);
 		final MmtrRoute route = n.setRoute(1, MmtrRoute.Kind.MAIN, true, n.entry, n.straight, n.beyond);
 		assertTrue(route.isEstablished(), "the route is SET (its fork is granted)");
-		assertEquals(MmtrSignalAspect.Aspect.GREEN, n.aspect().aspectOf(n.entry.getHexId()),
-			"the interlocking locked the straight path: the occupied diverging branch no longer affects this signal");
+		/*
+		 * ★ 2026-10-09（用户裁定：接受灯色变严）：进路虽然锁在直股上，但**道岔本体被岔股那列车压着**
+		 * ⇒ 这一处岔区清不掉 ⇒ 出发点信号必须红。"进路收窄"能豁免的是**不参与本进路的腿的占用**
+		 * （它仍然是"守"的范围），豁免不了"道岔上压着车"这种位置型事实。
+		 */
+		assertEquals(MmtrSignalAspect.Aspect.RED, n.aspect().aspectOf(n.entry.getHexId()),
+			"the diverging branch fouls the points: a set straight route cannot clear over occupied points");
 
 		// The route's own path stays protected: an occupied rail ON the route is still seen.
 		n.occupy(n.straight);
-		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, n.aspect().aspectOf(n.entry.getHexId()),
-			"an occupied rail on the set route still gives a caution");
+		assertEquals(MmtrSignalAspect.Aspect.RED, n.aspect().aspectOf(n.entry.getHexId()),
+			"an occupied rail on the set route still holds the signal at danger");
 	}
 
 	@Test
@@ -165,8 +177,9 @@ public final class MmtrSignalAspectTests {
 		n.occupy(n.diverge);
 		final MmtrRoute route = n.setRoute(1, MmtrRoute.Kind.SHUNT, true, n.entry, n.straight, n.beyond);
 		assertTrue(route.isEstablished(), "the shunt route is set");
-		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, n.aspect().aspectOf(n.entry.getHexId()),
-			"a subsidiary aspect authorises the shunt with the main head still at danger - it narrows nothing");
+		// ★ 2026-10-09：调车授权不改主显示的结论（本来就不许放行主灯头）；岔股压着岔口净空 ⇒ 红。
+		assertEquals(MmtrSignalAspect.Aspect.RED, n.aspect().aspectOf(n.entry.getHexId()),
+			"a subsidiary aspect authorises the shunt with the main head still at danger - and the occupied points keep it red");
 	}
 
 	/**
@@ -210,7 +223,14 @@ public final class MmtrSignalAspectTests {
 		sim.positionsToRail.get(m).forEach((otherEnd, rail) ->
 			sim.mmtrPointBranches.set(m.getX(), m.getY(), m.getZ(), rail.getHexId(), 0));
 
-		occupy(sim, d);
+		/*
+		 * ★ 2026-10-09：这条用例的**题目**是"同一根轨走两次时按方向收窄"，不是"岔口净空"。
+		 * 原来的 `occupy(sim, d)` 把整根岔股 d（从节点 M 起算）都标成占用，于是它同时压在 M 的
+		 * 10 m 净空窗里 —— 净空阈值改回"以窗为准"之后，M 会被判"清不掉"，四条断言全被岔口规则接管，
+		 * 这条用例就**测不到收窄**了。所以把岔股的占用挪出净空窗（M 起 25 m 之后），
+		 * 让它是"前端在远处被占"而不是"压着道岔"，题目照旧。
+		 */
+		occupyArcInTrees(sim, d, 25.0, d.railMath.getLength());
 		occupy(sim, entry);
 		assertEquals(MmtrSignalAspect.Aspect.SINGLE_YELLOW, new MmtrSignalAspect(sim, sim.mmtrRoutes).aspectFrom(s.getHexId(), n),
 			"no route: the occupied diverging branch is seen from the signal protecting S");

@@ -87,6 +87,8 @@ public final class Blocks {
 		PLATFORM_UK_1 = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "platform_uk_1"), () -> new Block(new BlockPlatform(createDefaultBlockSettings(false), false)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
 		PLATFORM_UK_1_INDENTED = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "platform_uk_1_indented"), () -> new Block(new BlockPlatform(createDefaultBlockSettings(false), true)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
 		PLATFORM_UK_1_SLAB = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "platform_uk_1_slab"), () -> new Block(new BlockPlatformSlab(createDefaultBlockSettings(false))), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		// 客流「村民」：由 MmtrCrowdModule 按站台客量自动铺在站台边缘；也可以手动放一个看效果。
+		CROWD_VILLAGER = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_villager"), () -> new Block(new BlockCrowdVillager()), CreativeModeTabs.STATION_BUILDING_BLOCKS);
 
 		// Signs
 		RAILWAY_SIGN_2_EVEN = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "railway_sign_2_even"), () -> new Block(new BlockRailwaySign(2, false)), CreativeModeTabs.RAILWAY_FACILITIES);
@@ -307,6 +309,7 @@ public final class Blocks {
 	public static final BlockRegistryObject PIDS_3;
 	public static final BlockRegistryObject PIDS_4;
 	public static final BlockRegistryObject PIDS_POLE;
+	public static final BlockRegistryObject CROWD_VILLAGER;
 	public static final BlockRegistryObject PIDS_SINGLE_ARRIVAL_1;
 	public static final BlockRegistryObject PLATFORM;
 	public static final BlockRegistryObject PLATFORM_INDENTED;

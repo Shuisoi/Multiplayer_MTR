@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -660,5 +661,86 @@ public final class MmtrConsistVehicleMotionTests {
 		driveTicks(v, 3, positions());
 		assertEquals(MmtrLightSwitch.HIGH, MmtrLightSwitch.switchOfEnd(v.getMmtrLightAFromSync(), v.getMmtrLightBFromSync(), mannedEnd),
 			"有司机在场 ⇒ 引擎不碰他自己拨的那盏灯");
+	}
+
+	/**
+	 * notes/411 的**兜底网**（{@code MmtrAutoKeyWatch}）：钥匙从车上出去的那一刻只**登记**，
+	 * 判断与补钥匙按有界重试做（不每 tick 扫全车队）；只有"在跑的自动任务"才在范围内。
+	 *
+	 * <p>实机验证据此而来（2026-10-09 22:51，{@code train cab <id> out} 拔钥匙后 42 秒没自愈）：
+	 * 自臂那条路有 {@code mmtrMotionAuto} 的门，"已经武装 + 随后被拔钥匙"走不到它，所以必须有这一层。</p>
+	 */
+	@Test
+	public void theKeyWatchMansAStoppedAutoMissionConsistButLeavesAPlayerMissionAlone() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		// 兜底网按 id 查车（耦合手术会换掉 Vehicle 对象，所以只存 id）⇒ 用例里得把它挂到股道上
+		final Siding siding = new Siding(new Position(-60, 0, 0), new Position(-40, 0, 0), 12, TransportMode.TRAIN, line.sim);
+		line.sim.sidings.add(siding);
+		siding.adoptVehicle(v);
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		final MmtrMission mission = new MmtrMission(v.getId(), MmtrMission.Kind.PASSENGER, 0L, 9L, 0L);
+		mission.setTargetRail(line.r2.getHexId(), 1.0);
+		assertTrue(v.setMmtrMission(mission), "自动任务挂上");
+
+		// 拔钥匙 = "到站停稳，自动交还"之后那一拍：只登记，不立刻补
+		assertTrue(v.leaveMmtrCab(), "司机拔钥匙");
+		assertFalse(walker.cabs().isManned(), "钥匙出去了 ⇒ 无人");
+		assertEquals(1, line.sim.mmtrAutoKeyWatch.size(), "丢钥匙时只登记一列车（不是全车队扫描）");
+
+		// 兜底网按 250 ms 节拍（5 tick）看一眼：车停稳 ⇒ 补回引擎占位钥匙并出表
+		for (int i = 0; i < 5; i++) {
+			line.sim.mmtrAutoKeyWatch.tick(line.sim);
+		}
+		assertTrue(walker.cabs().isManned(), "兜底网把占位钥匙补回来了");
+		assertEquals(MmtrCabState.KeyHolder.SYSTEM, walker.cabs().keyHolder(), "补的是引擎占位钥匙");
+		assertEquals(0, line.sim.mmtrAutoKeyWatch.size(), "补上即出表（表不该长期非空）");
+
+		// 玩家执行的任务不在范围内：不许抢玩家的驾驶室
+		assertTrue(v.leaveMmtrCab(), "再拔一次");
+		assertTrue(mission.setExecutor(MmtrMission.Executor.PLAYER, java.util.UUID.randomUUID()), "任务改成玩家执行（PLAYER 必须带 uuid）");
+		for (int i = 0; i < 5; i++) {
+			line.sim.mmtrAutoKeyWatch.tick(line.sim);
+		}
+		assertFalse(walker.cabs().isManned(), "玩家任务不补钥匙（司机可能正走向驾驶室）");
+		assertEquals(0, line.sim.mmtrAutoKeyWatch.size(), "不在范围 ⇒ 下一个重试节拍出表（最多 250 ms），不留悬挂条目");
+	}
+
+	/**
+	 * notes/411 现场（2026-10-09，车 00101 / 00106，整个车队停摆）：到站"自动交还"把司机的钥匙拔走之后，
+	 * 编组变**无人** ⇒ {@code MmtrConsistWalker.railHex()} 按设计返回 null（无人 = 没有车头），
+	 * 规划器于是给不出"当前轨"，而**旧代码把这一条当不可恢复**，直接 {@code mission.fail(...)} ⇒
+	 * 任务进终态、再没有任何状态机会来救它 ⇒ 两列 0 km/h 的车把整条单线堵死。
+	 *
+	 * <p>这一条把三件事钉死：</p>
+	 * <ol>
+	 *   <li>无人 ⇒ 没有当前轨（既有定义，一个字都不许改）；</li>
+	 *   <li>自动任务在"无人导致规划不出来"时**不许**进终态；</li>
+	 *   <li>车要能自己把**引擎占位钥匙**补回来（补完立刻又有当前轨）。</li>
+	 * </ol>
+	 */
+	@Test
+	public void anUnmannedConsistOnAnAutoMissionMansItselfInsteadOfFailingTheMission() {
+		final Line line = new Line();
+		final Vehicle v = consistVehicle(line.sim, line.r0, line.nA, 2, new BranchStore());
+		final MmtrConsistWalker walker = v.getMmtrConsistWalker();
+		assertTrue(walker.cabs().isManned(), "engage 时插的就是引擎占位钥匙");
+		assertNotNull(walker.leadingRailHex(), "有人 ⇒ 有当前轨");
+
+		final MmtrMission mission = new MmtrMission(v.getId(), MmtrMission.Kind.PASSENGER, 0L, 9L, 0L);
+		mission.setTargetRail(line.r2.getHexId(), 1.0);
+		assertTrue(v.setMmtrMission(mission), "自动任务挂上");
+
+		// 司机把钥匙拔走 = "到站停稳，自动交还"之后的下一拍
+		assertTrue(v.leaveMmtrCab(), "司机拔钥匙");
+		assertFalse(walker.cabs().isManned(), "钥匙拔走 ⇒ 无人");
+		assertNull(walker.leadingRailHex(), "无人 ⇒ 走行器按设计不给当前轨（这条定义不许变）");
+
+		// 自臂：旧代码在这一步 mission.fail()；现在必须自己补钥匙、任务不进终态
+		assertTrue(v.mmtrArmActiveMissionNow(line.sim), "自臂入口确实跑了一次");
+		assertFalse(mission.isTerminal(), "无人不是失败：任务不许进终态（实际 " + mission.getState() + "）");
+		assertTrue(walker.cabs().isManned(), "引擎把占位钥匙补回来了");
+		assertEquals(MmtrCabState.KeyHolder.SYSTEM, walker.cabs().keyHolder(), "补的是引擎占位钥匙，不是乘务员钥匙");
+		assertNotNull(walker.leadingRailHex(), "补完钥匙 ⇒ 又有当前轨（下一拍就能规划）");
 	}
 }

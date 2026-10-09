@@ -9,6 +9,10 @@
 		"dwellTime": {
 			"type": "integer",
 			"default": 10000
+		},
+		"crowdLevel": {
+			"type": "integer",
+			"default": 0
 		}
 	}
 }

@@ -14,40 +14,23 @@ import java.util.List;
  * with its own {@link ConsistType} (hence its own mass, traction, brake envelope and air rates).
  * The whole composition shares one longitudinal speed.</p>
  *
- * <p>Two response layers are offered:</p>
- * <ul>
- *   <li>{@link #aggregate(ControlState, double)} — the ideal, instantaneous response: mass-weighted
- *       traction from powered units, mass-weighted full service/emergency braking and resistance.
- *       Stateless, used as a quick reference and for legacy single-unit equivalence.</li>
- *   <li>{@link #stepAir(ControlState, double, long)} — the dynamic per-unit air-brake model: each
- *       unit owns its own train-pipe pressure and brake-cylinder pressure (0..1). The driver's
- *       handle acts on the leading unit (index 0) and pipe-pressure changes then propagate
- *       rearward by pairwise equalization between neighbouring units, mimicking an air-brake train
- *       pipe (Open Rails-style charging / venting / equalisation). Each unit's brake cylinder
- *       responds to its own pipe pressure. Returns the mass-weighted output for the whole train.</li>
- * </ul>
+ * <p><b>它只负责"这一列由哪些车组成"</b>（notes/376）：质量的求和、逐车 {@link org.mtr.core.mmtr.brake.BrakeCar}
+ * 列表（{@link #brakeCars()}）与等效车底（{@link #toConsistType(String)}）。**制动/牵引的推进不在这里** ——
+ * 一根手柄 → {@code BrakeCommand} → {@link org.mtr.core.mmtr.brake.BrakeModel}（逐车管压/缸压/力）
+ * 只有一条路；以前那套"编组自己的归一化逐车气路"（{@code stepAir} / {@code aggregate} /
+ * {@code encodeAirStates}）已整段删除。</p>
  *
  * <p>Assumptions (documented, refined when the world-layer coupling ops land):</p>
  * <ul>
  *   <li>unit 0 is the controlling (cab) unit that owns the driver input / notch scales;</li>
- *   <li>traction only comes from {@code powered} units; raw tractive acceleration is scaled by
- *       {@code massRatio / totalMass} so dead trailing mass reduces acceleration;</li>
+ *   <li>traction only comes from {@code powered} units;</li>
  *   <li>running resistance is the mass-weighted sum of per-unit Davis terms;</li>
- *   <li>pipe pressures are normalised 0..1; air rates come from each unit's ConsistType; newly
- *       coupled units start charged unless the caller sets an empty pipe via
- *       {@link Unit#setAirState(double, double)} (a coupling op would simulate an empty, uncharged
- *       brake pipe);</li>
+ *   <li>气压状态由制动模型逐车持有（管压/缸压，bar 口径），连挂/解挂通过它的
+ *       {@code encodeState}/{@code applyState}/{@code seedAfterCoupling} 接口跨过；</li>
  *   <li>no coupler slack/spring dynamics yet (added with the coupling operations themselves).</li>
  * </ul>
  */
 public final class MmtrComposition {
-
-	/** How quickly neighbouring units' train-pipe pressures equalise (fraction of the gap per second). */
-	public static final double PIPE_EQUALIZATION_PER_SECOND = 5.0;
-	/** Emergency vents the leading pipe several times faster than a full service application. */
-	private static final double EMERGENCY_VENT_FACTOR = 5.0;
-	/** Pipe pressure above which the local brake is considered fully released. */
-	private static final double RELEASED_PIPE = 0.999;
 
 	/** One coupled unit: identity, ConsistType, traction capability and its own air-brake state. */
 	public static final class Unit {
@@ -68,8 +51,6 @@ public final class MmtrComposition {
 		private final double lengthM;
 		/** 载重比例 0..1（notes/274 片 4）：逐车质量 = 整备 + 比例 × 车底的载重能力。 */
 		private final double loadRatio;
-		private double pipePressure = 1.0;
-		private double brakeCylinderPressure = 0.0;
 
 		public Unit(String id, ConsistType type) {
 			this(id, type, true);
@@ -110,15 +91,6 @@ public final class MmtrComposition {
 
 		/** 显式无动力：永不贡献牵引，也不该被选作"说话的车"。 */
 		public boolean isDeclaredUnpowered() { return poweredDeclared && !powered; }
-
-		public double getPipePressure() { return pipePressure; }
-		public double getBrakeCylinderPressure() { return brakeCylinderPressure; }
-
-		/** Sets this unit's air-brake state directly (used when coupling an uncharged unit, e.g. pipe 0). */
-		public void setAirState(double pipePressure, double brakeCylinderPressure) {
-			this.pipePressure = clamp(pipePressure);
-			this.brakeCylinderPressure = clamp(brakeCylinderPressure);
-		}
 	}
 
 	private final ArrayList<Unit> units = new ArrayList<>();
@@ -283,13 +255,6 @@ public final class MmtrComposition {
 	}
 
 	/** Charges every unit's pipe to 1.0 and releases all cylinders (fresh train). */
-	public void resetAirState() {
-		for (final Unit unit : units) {
-			unit.pipePressure = 1.0;
-			unit.brakeCylinderPressure = 0.0;
-		}
-	}
-
 	/**
 	 * 整列车的**惯性质量** {@code Σ λᵢ·mᵢ}（kg）—— 牛顿力 → 加速度时除的就是它。
 	 *
@@ -338,7 +303,6 @@ public final class MmtrComposition {
 		}
 		final ConsistType lead = units.get(0).type;
 		final Unit leadUnit = units.get(0);
-		ConsistType slowAirUnit = null;
 		double totalMassKg = 0;
 		double totalEffectiveMassKg = 0;
 		double totalTractiveEffortN = 0;
@@ -348,10 +312,16 @@ public final class MmtrComposition {
 		double totalResistanceAN = 0;
 		double totalResistanceBN = 0;
 		double totalResistanceCN = 0;
-		double airPipeCharge = 0;
-		double airPipeDischarge = 0;
-		double airApply = 0;
-		double airRelease = 0;
+		// notes/379：整列的**电制动（回生）**能力 = 各动力车自己的能力之和（有几台电机算几台）。
+		org.mtr.core.mmtr.physics.ElectricBrakeSpec totalElectric = null;
+		/**
+		 * notes/379：编组级的"电空混合"开关 = **有没有一节动力车带得了电制动**。
+		 *
+		 * <p>为什么不能在编组级直接沿用说话那节车：SAF420 这种编组的头车是**无动力的控制拖车**
+		 * （`blendingEnabled:false`，它本来就没有电机），照抄它会把整列的回生关掉 ——
+		 * 现场表现就是"B1/B2 明明配了电制动，缸压却照旧按纯空气建"。</p>
+		 */
+		boolean anyPoweredBlending = false;
 		/*
 		 * notes/271 片 2：**牵引的兜底改成逐车判据**。
 		 *
@@ -388,25 +358,17 @@ public final class MmtrComposition {
 			if (unit.isPowered() || unit == borrowedTraction) {
 				totalTractiveEffortN += physics.getTraction().getMaxTractiveEffortN();
 				totalPowerW += physics.getTraction().getMaxPowerW();
+				// notes/379：电制动只算**动力车**（拖车没有电机可回馈）。
+				if (type.getElectricBrake() != null) {
+					totalElectric = totalElectric == null ? type.getElectricBrake() : totalElectric.plus(type.getElectricBrake());
+					anyPoweredBlending |= type.getBrakes().isBlendingEnabled();
+				}
 			}
 			totalServiceForceN += physics.getBrake().getServiceForceN();
 			totalEmergencyForceN += physics.getBrake().getEmergencyForceN();
 			totalResistanceAN += physics.getResistance().getAN();
 			totalResistanceBN += physics.getResistance().getBN();
 			totalResistanceCN += physics.getResistance().getCN();
-			// 气路速率取**最慢的一节**（编组里管径/容积不同，全列充气由最慢那节决定）
-			airPipeCharge = airPipeCharge <= 0 ? type.getAirPipeChargeRatePerSecond() : Math.min(airPipeCharge, type.getAirPipeChargeRatePerSecond());
-			airPipeDischarge = airPipeDischarge <= 0 ? type.getAirPipeDischargeRatePerSecond() : Math.min(airPipeDischarge, type.getAirPipeDischargeRatePerSecond());
-			airApply = airApply <= 0 ? type.getAirBrakeApplyRatePerSecond() : Math.min(airApply, type.getAirBrakeApplyRatePerSecond());
-			airRelease = airRelease <= 0 ? type.getAirBrakeReleaseRatePerSecond() : Math.min(airRelease, type.getAirBrakeReleaseRatePerSecond());
-			// 谁把整列拖慢了：挂车漏写气路字段会落回缺省 0.1/s 缓解 ⇒ 松闸后十几秒没有牵引（notes/248）。
-			if (unit != leadUnit && type.getAirBrakeReleaseRatePerSecond() < lead.getAirBrakeReleaseRatePerSecond()
-				&& type.getAirBrakeReleaseRatePerSecond() <= airRelease) {
-				slowAirUnit = type;
-			}
-		}
-		if (slowAirUnit != null) {
-			warnAboutSlowAirUnit(slowAirUnit, lead, airRelease);
 		}
 		// λ_eq = Σ(λᵢmᵢ) / Σmᵢ（构造器会再做一次 max(1, ·)）
 		final double rotatingMassFactor = totalMassKg <= 0 ? 1 : totalEffectiveMassKg / totalMassKg;
@@ -417,29 +379,19 @@ public final class MmtrComposition {
 			totalResistanceAN, totalResistanceBN, totalResistanceCN,
 			// 黏着：编组沿用"说话那节车"的轨面条件（撒砂增益已经折进 usableMuMax）
 			lead.getAdhesion().usableMuMax(), false,
-			airPipeCharge, airPipeDischarge, airApply, airRelease,
 			lead.getManualMaxSpeedMetersPerSecond() * 3.6, lead.getHandles(),
-			// notes/352：灯光开关档数沿用"说话那节车"（编组的灯由驾驶室的开关决定）。
+			/*
+			 * notes/376：**气压口径同样沿用"说话那节车"**（它决定级位表、缸压上限与闸片口径）——
+			 * 逐车的气路状态不走这里，而是由 `MmtrComposition.brakeCars()` 交给制动模型的 `setCars()`。
+			 * 以前这一格是 `handles == null ? null : handles.getBrakes()`，于是有级/无级编组（SAF420 就是）
+			 * 整列丢掉气压口径、退回旧比例制动力 —— 那条路已删除。
+			 */
+			lead.getBrakes().withBlendingEnabled(anyPoweredBlending || lead.getBrakes().isBlendingEnabled()),
+			// notes/379：整列的电制动能力（各动力车之和）。
+			totalElectric, 0, null,
+			// notes/352：灯光开关档数沿用"说话的那节车"（编组的灯由驾驶室的开关决定）。
 			lead.hasMmtrLightOffPosition()
 		);
-	}
-
-	/**
-	 * 挂车把整列的**气路速率**拖慢时点名（notes/248）。
-	 *
-	 * <p>为什么要有：编组的气路速率取"最慢的一节"，而缺省值是 0.1/s 缓解（机车配的是 0.25/s）。
-	 * 挂车漏写气路字段 ⇒ 整列缓解慢 2.5 倍 ⇒ 司机松闸后缸压要十来秒才排空，牵引联锁一直按住牵引，
-	 * 现场表现是"松了闸、油门推到 96，车十几二十秒不动"。这一条只报"真的被拖慢"的组合，不报普通缺省。</p>
-	 */
-	private static final java.util.Set<String> SLOW_AIR_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
-
-	private static void warnAboutSlowAirUnit(ConsistType slowUnit, ConsistType lead, double aggregateReleaseRate) {
-		if (SLOW_AIR_WARNED.add(slowUnit.getId() + "→" + lead.getId())) {
-			System.out.println("[MMTR-CFG] 编组里的 " + slowUnit.getId() + "（缓解 " + slowUnit.getAirBrakeReleaseRatePerSecond()
-				+ "/s）比说话的车 " + lead.getId() + "（缓解 " + lead.getAirBrakeReleaseRatePerSecond()
-				+ "/s）慢 —— 整列按最慢的一节走，实际缓解 " + Math.round(aggregateReleaseRate * 1000) / 1000.0
-				+ "/s：松闸后要等缸压排空才有牵引（缺省 0.1/s 会让它多等好几倍时间）。给这节车显式写上气路速率即可（notes/248）。");
-		}
 	}
 
 	/** 运行阻力折成的减速度（m/s²，正数 = 减速）。 */
@@ -468,239 +420,5 @@ public final class MmtrComposition {
 				unit.type.loadedMassKg(unit.getLoadRatio()), unit.type.getAdhesion()));
 		}
 		return cars;
-	}
-
-	/**
-	 * Ideal, instantaneous mass-weighted response to the driver input (no air-pipe dynamics).
-	 *
-	 * @param control             driver input (notch scales come from the controlling unit, index 0)
-	 * @param speedMetersPerSecond current shared speed
-	 * @return aggregate {@link DriveOutput} for the whole composition
-	 */
-	public DriveOutput aggregate(ControlState control, double speedMetersPerSecond) {
-		if (units.isEmpty()) {
-			return new DriveOutput(0, false, false, 1, 0);
-		}
-		final double totalInertia = totalEffectiveMassKg();
-		if (totalInertia <= 0) {
-			return new DriveOutput(0, false, false, 1, 0);
-		}
-		final ConsistType controlType = units.get(0).type;
-		final double resistanceDecel = resistance(speedMetersPerSecond);
-
-		if (control.isEmergency()) {
-			double forceN = 0;
-			for (final Unit unit : units) {
-				forceN += unit.type.getPhysics().getBrake().emergencyForceN();
-			}
-			return new DriveOutput(-(forceN / totalInertia + resistanceDecel), true, true, 0, 1);
-		}
-
-		final int brake = Math.max(0, Math.min(control.getBrakeNotch(), controlType.getBrakeNotches()));
-		if (brake > 0) {
-			final double ratio = (double) brake / controlType.getBrakeNotches();
-			double forceN = 0;
-			for (final Unit unit : units) {
-				forceN += unit.type.getPhysics().getBrake().serviceForceN(ratio);
-			}
-			final double decel = forceN / totalInertia + resistanceDecel;
-			return new DriveOutput(-decel, decel > 0.01, false, 1, ratio);
-		}
-
-		final int throttle = Math.max(0, Math.min(control.getThrottleNotch(), controlType.getPowerNotches()));
-		if (throttle > 0) {
-			final double ratio = (double) throttle / controlType.getPowerNotches();
-			final double traction = tractionAccelerationMps2(ratio, speedMetersPerSecond, totalInertia, resistanceDecel);
-			return new DriveOutput(traction, false, false, 1, 0);
-		}
-
-		// Coasting: decays with the running resistance of the whole train.
-		return new DriveOutput(-resistanceDecel, false, false, 1, 0);
-	}
-
-	/**
-	 * 整列车的牵引净加速度（m/s²）：**只有动力车出牵引力**，力逐节相加，再减去整列车的运行阻力
-	 * 除以整列车的惯性质量。阻力只减一次（它是整车的事，不是每节各减一次）——旧口径把阻力塞在
-	 * 每节的"加速度"里再加权，量纲不清（notes/235）。
-	 */
-	private double tractionAccelerationMps2(double ratio, double speedMetersPerSecond, double totalInertia, double resistanceDecel) {
-		double forceN = 0;
-		for (final Unit unit : units) {
-			if (unit.isPowered()) {
-				forceN += unit.type.getPhysics().tractiveEffortN(ratio, speedMetersPerSecond);
-			}
-		}
-		return forceN / totalInertia - resistanceDecel;
-	}
-
-	/**
-	 * Advances the per-unit air-brake model by one step and returns the train's mass-weighted output.
-	 *
-	 * <ol>
-	 *   <li>the driver's handle charges/vents the leading unit's pipe (emergency vents fast);</li>
-	 *   <li>pipe-pressure differences between neighbouring units equalise (front toward rear);</li>
-	 *   <li>each unit's brake cylinder approaches {@code 1 - pipe} when its pipe drops (or releases
-	 *       toward 0 when its pipe is charged);</li>
-	 *   <li>the resulting braking (or traction when the brake is released and throttle applied) is
-	 *       mass-weighted across the whole composition.</li>
-	 * </ol>
-	 *
-	 * @param control             driver input (notch scales come from the controlling unit, index 0)
-	 * @param speedMetersPerSecond current shared speed
-	 * @param dtMillis            step length
-	 * @return aggregate {@link DriveOutput}; see per-unit state via {@link #unit(int)}
-	 */
-	public DriveOutput stepAir(ControlState control, double speedMetersPerSecond, long dtMillis) {
-		if (units.isEmpty()) {
-			return new DriveOutput(0, false, false, 1, 0);
-		}
-		final double dt = Math.max(1, dtMillis) / 1000.0;
-		final double totalInertia = totalEffectiveMassKg();
-		if (totalInertia <= 0) {
-			return new DriveOutput(0, false, false, 1, 0);
-		}
-
-		final ControlState safeControl = control == null ? ControlState.zero() : control;
-		final ConsistType controlType = units.get(0).type;
-		final Unit front = units.get(0);
-
-		// 1) Driver handle acts on the leading unit's pipe.
-		if (safeControl.isEmergency()) {
-			front.pipePressure = Math.max(0, front.pipePressure - controlType.getAirPipeDischargeRatePerSecond() * EMERGENCY_VENT_FACTOR * dt);
-		} else {
-			final int brake = Math.max(0, Math.min(safeControl.getBrakeNotch(), controlType.getBrakeNotches()));
-			if (brake > 0) {
-				final double ratio = (double) brake / controlType.getBrakeNotches();
-				front.pipePressure = Math.max(0, front.pipePressure - controlType.getAirPipeDischargeRatePerSecond() * ratio * dt);
-			} else {
-				front.pipePressure = Math.min(1, front.pipePressure + controlType.getAirPipeChargeRatePerSecond() * dt);
-			}
-		}
-
-		// 2) Pipe pressure propagates from the head (control unit, driven by the handle) toward
-		// the rear: each following unit relaxes toward its neighbour ahead. A single front-to-rear
-		// pass keeps the head as the pressure source so charging and venting both travel down the
-		// train without dragging the leading pipe off its commanded value.
-		for (int i = 0; i < units.size() - 1; i++) {
-			final Unit ahead = units.get(i);
-			final Unit behind = units.get(i + 1);
-			final double gap = ahead.pipePressure - behind.pipePressure;
-			if (Math.abs(gap) > 1e-12) {
-				final double move = gap * PIPE_EQUALIZATION_PER_SECOND * dt;
-				behind.pipePressure = clamp(behind.pipePressure + move);
-			}
-		}
-
-		// 3) Each unit's brake cylinder follows its own pipe pressure.
-		for (final Unit unit : units) {
-			if (unit.pipePressure < RELEASED_PIPE) {
-				final double target = 1.0 - unit.pipePressure;
-				unit.brakeCylinderPressure = clamp(unit.brakeCylinderPressure
-					+ unit.type.getAirBrakeApplyRatePerSecond() * dt * (target - unit.brakeCylinderPressure));
-			} else {
-				unit.brakeCylinderPressure = Math.max(0, unit.brakeCylinderPressure
-					- unit.type.getAirBrakeReleaseRatePerSecond() * dt);
-			}
-		}
-
-		// 4) Aggregate output: 逐节的**力**相加，除以整列车的惯性质量（notes/235）。
-		final boolean emergency = safeControl.isEmergency();
-		final boolean anyBrake = anyCylinderAbove(0.02) || safeControl.getBrakeNotch() > 0 || emergency;
-		final double resistanceDecel = resistance(speedMetersPerSecond);
-		double brakeForceN = 0;
-		for (final Unit unit : units) {
-			final BrakeSpec brake = unit.type.getPhysics().getBrake();
-			brakeForceN += unit.brakeCylinderPressure * (emergency ? brake.emergencyForceN() : brake.serviceForceN(1));
-		}
-		final double decel = brakeForceN / totalInertia + resistanceDecel;
-
-		if (anyBrake || decel > 0.001) {
-			return new DriveOutput(-decel, decel > 0.01, emergency, averagePipePressure(), averageCylinderPressure());
-		}
-
-		final int throttle = Math.max(0, Math.min(safeControl.getThrottleNotch(), controlType.getPowerNotches()));
-		if (throttle > 0) {
-			final double ratio = (double) throttle / controlType.getPowerNotches();
-			return new DriveOutput(tractionAccelerationMps2(ratio, speedMetersPerSecond, totalInertia, resistanceDecel), false, false,
-				averagePipePressure(), averageCylinderPressure());
-		}
-
-		return new DriveOutput(-resistanceDecel, false, false, averagePipePressure(), averageCylinderPressure());
-	}
-
-	private boolean anyCylinderAbove(double threshold) {
-		for (final Unit unit : units) {
-			if (unit.brakeCylinderPressure > threshold) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/** Average train-pipe pressure across all units (0..1). */
-	public double averagePipePressure() {
-		if (units.isEmpty()) {
-			return 1;
-		}
-		double sum = 0;
-		for (final Unit unit : units) {
-			sum += unit.pipePressure;
-		}
-		return sum / units.size();
-	}
-
-	/** Average brake-cylinder pressure across all units (0..1). */
-	public double averageCylinderPressure() {
-		if (units.isEmpty()) {
-			return 0;
-		}
-		double sum = 0;
-		for (final Unit unit : units) {
-			sum += unit.brakeCylinderPressure;
-		}
-		return sum / units.size();
-	}
-
-
-	/**
-	 * Encodes every unit's (pipe, cylinder) air state into a compact snapshot string
-	 * ({@code "pipe,cyl;pipe,cyl;..."}). Empty when there are no units.
-	 */
-	public static String encodeAirStates(MmtrComposition composition) {
-		final StringBuilder builder = new StringBuilder();
-		for (int i = 0; i < composition.size(); i++) {
-			if (i > 0) {
-				builder.append(';');
-			}
-			final Unit unit = composition.unit(i);
-			builder.append(unit.pipePressure).append(',').append(unit.brakeCylinderPressure);
-		}
-		return builder.toString();
-	}
-
-	/**
-	 * Seeds this composition's per-unit air state from a string produced by
-	 * {@link #encodeAirStates(MmtrComposition)}. Units beyond the payload keep their state;
-	 * extra payload entries are ignored.
-	 */
-	public void applyAirStateString(String airState) {
-		if (airState == null || airState.isEmpty()) {
-			return;
-		}
-		final String[] units = airState.split(";");
-		for (int i = 0; i < units.length && i < this.units.size(); i++) {
-			final String[] pair = units[i].split(",");
-			if (pair.length == 2) {
-				try {
-					this.units.get(i).setAirState(Double.parseDouble(pair[0]), Double.parseDouble(pair[1]));
-				} catch (NumberFormatException ignored) {
-					// malformed seed: keep the unit's current state
-				}
-			}
-		}
-	}
-
-	private static double clamp(double value) {
-		return Math.max(0, Math.min(1, value));
 	}
 }

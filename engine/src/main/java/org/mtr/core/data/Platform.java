@@ -5,6 +5,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectAVLTreeSet;
 import org.jspecify.annotations.Nullable;
 import org.mtr.core.generated.data.PlatformSchema;
+import org.mtr.core.mmtr.crowd.MmtrCrowd;
 import org.mtr.core.oba.Stop;
 import org.mtr.core.oba.StopDirection;
 import org.mtr.core.serializer.ReaderBase;
@@ -46,6 +47,39 @@ public final class Platform extends PlatformSchema {
 
 	public long getDwellTime() {
 		return transportMode.continuousMovement ? 1 : Math.max(1, dwellTime);
+	}
+
+	/**
+	 * 站台**客量**（0–100，%）：这个站台"有多少人"的权威数值，落盘在
+	 * {@code platforms/<末两位hex>/<hex>} 的 {@code crowdLevel} 里，并随
+	 * {@link org.mtr.core.operation.DataResponse} 一起下发客户端。
+	 *
+	 * <p>读的时候夹到 0–100：存档可能被手改过，或者以后调制器写进了越界值，
+	 * 而下游（游戏侧铺方块）用它算人数，越界会直接变成负数/无限循环。</p>
+	 */
+	public long getCrowdLevel() {
+		return MmtrCrowd.clamp(crowdLevel);
+	}
+
+	/**
+	 * 设置客量（0–100）。越界会被夹住；同时把客流的**重算版本号** +1，
+	 * 让游戏侧不必等到下一个节拍就能重铺站台上的人（见 {@link MmtrCrowd}）。
+	 */
+	public void setCrowdLevel(long crowdLevel) {
+		this.crowdLevel = MmtrCrowd.clamp(crowdLevel);
+		MmtrCrowd.bumpRevision();
+	}
+
+	/**
+	 * **有效客量**：把 {@link #getCrowdLevel()} 交给调制器跑一遍的结果（现在没有调制器，
+	 * 就等于 {@link #getCrowdLevel()}）。想接"临时高峰事件 / 早晚高峰曲线 / 真实候车人数"
+	 * 时，用 {@link MmtrCrowd#setModulator} 注册一个调制器即可，不必改这里。
+	 *
+	 * <p>游戏侧铺方块一律读这个，不读 {@link #getCrowdLevel()}——否则以后接了调制器，
+	 * 属性会变而站台上的人不变，看起来就是"设置没生效"。</p>
+	 */
+	public long getEffectiveCrowdLevel() {
+		return MmtrCrowd.modulate(this, getCrowdLevel(), data);
 	}
 
 	public void setAngles(long depotId, @Nullable Angle angle) {

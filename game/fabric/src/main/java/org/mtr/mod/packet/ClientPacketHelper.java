@@ -84,6 +84,17 @@ public final class ClientPacketHelper {
 		openScreen(new TicketMachineScreen(balance), screenExtension -> screenExtension instanceof TicketMachineScreen);
 	}
 
+	/**
+	 * 综合运转面板（notes/408 §3）：一条路给两个入口用 ——
+	 * 物品右键（服务端发 {@code PacketMmtrPdaScreen} 到这）、驾驶中按 TAB（客户端直接调）。
+	 *
+	 * <p>{@code drivePage} 只是**开屏时的初始页**：面板自己有"车次 / 驾驶"的切换按钮，
+	 * 而且驾驶页在没有"我在值守的车"时会自己退回列表页（{@code PdaScreen.init2}）。</p>
+	 */
+	public static void openPdaScreen(boolean drivePage) {
+		openScreen(new PdaScreen(drivePage), screenExtension -> screenExtension instanceof PdaScreen);
+	}
+
 	private static void openScreen(ScreenExtension screenExtension, Predicate<ScreenExtension> isInstance) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final Screen screen = minecraftClient.getCurrentScreenMapped();

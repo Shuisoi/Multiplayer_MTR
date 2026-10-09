@@ -334,6 +334,43 @@ public final class MmtrJunctionClearanceTests {
 		n.releaseOperatorHold();
 	}
 
+	/**
+	 * ★ 2026-10-09 实机锚点（`-7174,65,1661`）：**一整列车骑在道岔上，岔区必须清不掉**。
+	 *
+	 * <p>占用层是"每根轨整列车写一段"（{@code Vehicle.writeMmtrConsistBodyOccupancy}），所以真实车底的
+	 * 足迹（本用例 40 m）**远长于** 10 m 净空窗。修前 {@code foulsZone} 的阈值公式退化成"半个整车"
+	 * （内层 {@code Math.max} 把窗吃掉，外层 {@code Math.min} 于是恒等于车长）：40 m 的车要重叠 19 m
+	 * 才算占，而窗只有 10 m ⇒ **永远判"岔区干净"** —— 灯绿、行车许可绿、道岔还能从车底下被扳走。
+	 * 现场就是用户报的"AI 不在信号灯处停、而是停在最近节点"。</p>
+	 *
+	 * <p><b>证伪力</b>：把阈值改回 {@code Math.max(to - from, footLength)} ⇒ 下面四条立刻红。</p>
+	 */
+	@Test
+	public void aConsistLongerThanTheClearanceZoneStillFoulsTheJunction() {
+		final JunctionNet n = new JunctionNet("build/mmtr-junction-long-footprint");
+		n.setLegViaW(0);
+		// 实机形状：一列车骑在岔上 —— 在 E（节点起算的那根轨）上的足迹是 [0..40]，比 10 m 窗长 4 倍。
+		setSimulatorFootprint(n.sim, n.e, 0.0, 40.0, 541_280_563_035_580_1233L);
+		assertTrue(org.mtr.core.mmtr.signal.MmtrJunctionState.isUncleared(n.sim, n.j, n.sim.mmtrOccupancyTrees()),
+			"整列车骑在岔上 ⇒ 岔区清不掉（修前：阈值退化成半个车长 19 m > 窗 10 m ⇒ 判干净）");
+		assertTrue(org.mtr.core.mmtr.signal.MmtrJunctionState.reason(n.sim, n.j, n.sim.mmtrOccupancyTrees()).contains("岔区净空被占"),
+			"理由里必须说得出来是哪一处岔区");
+		assertNotNull(org.mtr.core.mmtr.signal.MmtrJunctionState.blockedThrowReason(n.sim, n.j),
+			"车压在岔上 ⇒ 不许把道岔从它脚下扳走（同一条判据）");
+		assertTrue(org.mtr.core.mmtr.signal.MmtrJunctionState.unclearedNodeKeys(n.sim, n.sim.mmtrOccupancyTrees())
+			.contains(org.mtr.core.mmtr.signal.MmtrJunctionState.nodeKey(n.j)),
+			"岔节点要进受限节点集（灯色与行车许可据此判红 ⇒ 车停在出发信号前而不是开上道岔）");
+
+		// 反面对照：**长车**的尾巴只探进净空区 1 m 仍不算被占（阈值 = 半个 10 m 窗 = 4 m；
+		// 保住 notes/101 的松弛：停在股道尽头、尾巴刚过节点的车不许把整盏灯判红）。
+		clearSimulatorFootprints(n.sim);
+		setSimulatorFootprint(n.sim, n.w, 0.0, 11.0, 999_999_007L);
+		assertFalse(org.mtr.core.mmtr.signal.MmtrJunctionState.isUncleared(n.sim, n.j, n.sim.mmtrOccupancyTrees()),
+			"探进 1 m < 阈值 4 m ⇒ 仍然清得掉（不许把'尾巴刚过节点'判成压住岔）");
+		clearSimulatorFootprints(n.sim);
+		n.releaseOperatorHold();
+	}
+
 	/** 把一段足迹**覆盖式**写进引擎自己那份占用表（S1 与闸门读的就是它）。 */
 	private static void setSimulatorFootprint(Simulator sim, Rail rail, double fromM, double toM) {
 		setSimulatorFootprint(sim, rail, fromM, toM, 999_999_005L);

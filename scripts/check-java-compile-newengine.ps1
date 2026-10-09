@@ -63,8 +63,13 @@ $files | ForEach-Object { '"' + ($_ -replace '\\', '/') + '"' } | Set-Content $r
 $exit = $LASTEXITCODE
 $classes = (Get-ChildItem $outDir -Recurse -Filter '*.class' -ErrorAction SilentlyContinue).Count
 if ($exit -eq 0) {
-  Write-Output "[check-java-compile-newengine] OK - $($files.Count) source file(s), $classes class file(s) -> $outDir (classpath = 新引擎 classes + 旧 jar)"
+  Write-Output "[check-java-compile-newengine] OK - $($files.Count) source file(s), $classes class file(s) -> $outDir (classpath = 新引擎 shadow jar + 旧 jar 环境)"
 } else {
   Write-Output "[check-java-compile-newengine] FAILED (javac exit $exit)"
+  # ★ 这条提示是给"引擎加了新 API、游戏侧却报找不到符号"的人看的：本脚本顶到最前的是
+  #   `mmtr\engine\build\libs` 里的 **shadow jar**，它**不会**因为改源码而自动更新 ——
+  #   引擎改完必须先跑一次 `shadowJar`，否则这里报的是**假错误**（实测：引擎的
+  #   `Simulator.mmtrDuties` 明明已经在 classes 里，本脚本仍然报"找不到符号"）。
+  Write-Output "[check-java-compile-newengine] 提示：本脚本用的是 build\libs 的 shadow jar；引擎源码改过之后要先 (cd mmtr\engine; .\gradlew.bat shadowJar)"
 }
 exit $exit

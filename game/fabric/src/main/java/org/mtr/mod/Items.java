@@ -33,6 +33,14 @@ public final class Items {
 		 * 分开的理由：原版那套"朝向 + 90° 扇区"在密集站场里说不准，需要一把能把话说死的工具。
 		 */
 		RAIL_BINDER = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "rail_binder"), itemSettings -> new Item(new ItemMmtrRailBindingTool(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
+		/*
+		 * **综合运转面板（PDA）**：玩家手里那台"哪趟车我能上、我现在归谁"的东西（notes/408 §3）。
+		 *
+		 * 为什么是一个**物品**而不是又一个按键：面板要在"我不是司机、甚至还没上车"的时候也能打开
+		 * （站台接站那条路就是从站台上开始的），而按键只能表达"此刻按一下"。物品还顺带回答了
+		 * "谁有这台设备"这个权限问题 —— 以后要限制发放就有地方可限。
+		 */
+		PDA = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "pda"), itemSettings -> new Item(new ItemMmtrPda(itemSettings.maxCount(1))), CreativeModeTabs.CORE);
 
 		// Doors
 		APG_DOOR = Init.REGISTRY.registerItem(new Identifier(Init.MOD_ID, "apg_door"), itemSettings -> new Item(new ItemPSDAPGBase(ItemPSDAPGBase.EnumPSDAPGItem.PSD_APG_DOOR, ItemPSDAPGBase.EnumPSDAPGType.APG, itemSettings)), CreativeModeTabs.RAILWAY_FACILITIES);
@@ -206,6 +214,8 @@ public final class Items {
 	public static final ItemRegistryObject RAIL_REMOVER;
 	/** 轨道分配工具（木斧）：把信号灯分配到具体某条轨。 */
 	public static final ItemRegistryObject RAIL_BINDER;
+	/** 综合运转面板（PDA）：右键打开车次列表；驾驶中按 TAB 也调出它。 */
+	public static final ItemRegistryObject PDA;
 	public static final ItemRegistryObject RAILWAY_DASHBOARD;
 	public static final ItemRegistryObject SIGNAL_BINDER;
 	public static final ItemRegistryObject SIGNAL_CONNECTOR_BLACK;

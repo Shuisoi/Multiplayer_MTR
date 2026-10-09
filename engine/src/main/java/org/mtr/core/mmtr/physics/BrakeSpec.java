@@ -33,8 +33,6 @@ package org.mtr.core.mmtr.physics;
  */
 public final class BrakeSpec {
 
-	public static final BrakeSpec NONE = new BrakeSpec(0, 0);
-
 	/** 出厂闸片摩擦系数（低速峰值）：粉末冶金/树脂基闸片 0.38–0.40。 */
 	public static final double DEFAULT_PAD_MU0 = 0.39;
 	/** 每 km/h 的摩擦系数衰减：0 km/h 0.390 → 200 km/h 0.300（对上规格模块一的 0.30–0.32）。 */
@@ -46,6 +44,10 @@ public final class BrakeSpec {
 	/** 出厂缸压复位弹簧（低于它活塞不动作）。 */
 	public static final double DEFAULT_CYLINDER_SPRING_BAR = 0.30;
 
+	/** 无制动能力（拖车/未配）：力恒为 0，但**缸压口径仍然存在**（气压模型不因为"没闸"而消失）。 */
+	public static final BrakeSpec NONE = new BrakeSpec(0, 0, DEFAULT_CYLINDER_MAX_BAR, DEFAULT_CYLINDER_SPRING_BAR,
+		false, DEFAULT_PAD_MU0, DEFAULT_PAD_MU_SLOPE_PER_KMH, DEFAULT_PAD_MU_FLOOR);
+
 	private final double serviceForceN;
 	private final double emergencyForceN;
 	private final double cylinderMaxBar;
@@ -54,12 +56,6 @@ public final class BrakeSpec {
 	private final double padMu0;
 	private final double padMuSlopePerKmh;
 	private final double padMuFloor;
-
-	/** 旧口径：只给两个力，缸压按比例线性换算、闸片不随速衰减。 */
-	public BrakeSpec(double serviceForceN, double emergencyForceN) {
-		this(serviceForceN, emergencyForceN, DEFAULT_CYLINDER_MAX_BAR, DEFAULT_CYLINDER_SPRING_BAR,
-			false, DEFAULT_PAD_MU0, DEFAULT_PAD_MU_SLOPE_PER_KMH, DEFAULT_PAD_MU_FLOOR);
-	}
 
 	public BrakeSpec(double serviceForceN, double emergencyForceN, double cylinderMaxBar, double cylinderSpringBar,
 		boolean padFadeEnabled, double padMu0, double padMuSlopePerKmh, double padMuFloor) {
@@ -110,15 +106,7 @@ public final class BrakeSpec {
 	public double getPadMuSlopePerKmh() { return padMuSlopePerKmh; }
 	public double getPadMuFloor() { return padMuFloor; }
 
-	/** 旧口径：常用制动力（牛顿），缸压**比例** {@code 0..1} 线性给（不做弹簧/衰减）。 */
-	public double serviceForceN(double cylinderPressure) {
-		return serviceForceN * Math.max(0, Math.min(1, cylinderPressure));
-	}
-
-	/** 常用制动力（牛顿）：比例 + 闸片衰减（{@code padFadeEnabled=false} 时与 {@link #serviceForceN(double)} 相同）。 */
-	public double serviceForceN(double cylinderPressure, double speedMetersPerSecond) {
-		return serviceForceN * Math.max(0, Math.min(1, cylinderPressure)) * frictionFactor(speedMetersPerSecond);
-	}
+	/** 常用制动力（牛顿）：旧的比例口径已删除（notes/376）—— 只有 {@link #serviceForceNFromCylinderBar} 一条路。 */
 
 	/**
 	 * **缸压(bar) → 常用制动力**（牛顿）：扣缸簧死区、按缸压上限饱和、再乘闸片衰减。
@@ -132,12 +120,7 @@ public final class BrakeSpec {
 		return serviceForceN * usableBar * frictionFactor(speedMetersPerSecond);
 	}
 
-	/** 紧急制动力（牛顿）：旧口径（不衰减）。 */
-	public double emergencyForceN() {
-		return emergencyForceN;
-	}
-
-	/** 紧急制动力（牛顿）：带闸片衰减（{@code padFadeEnabled=false} 时与 {@link #emergencyForceN()} 相同）。 */
+	/** 紧急制动力（牛顿）：带闸片衰减（唯一口径，notes/376）。 */
 	public double emergencyForceN(double speedMetersPerSecond) {
 		return emergencyForceN * frictionFactor(speedMetersPerSecond);
 	}

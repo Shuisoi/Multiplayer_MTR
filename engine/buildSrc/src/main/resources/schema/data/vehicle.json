@@ -197,21 +197,13 @@
 			"type": "number",
 			"default": 1.8
 		},
-		"mmtrAirPipeChargeRatePerSecond": {
-			"type": "number",
-			"default": 0.1
+		"mmtrPneumaticSpec": {
+			"type": "string",
+			"default": ""
 		},
-		"mmtrAirPipeDischargeRatePerSecond": {
-			"type": "number",
-			"default": 0.4
-		},
-		"mmtrAirBrakeApplyRatePerSecond": {
-			"type": "number",
-			"default": 0.15
-		},
-		"mmtrAirBrakeReleaseRatePerSecond": {
-			"type": "number",
-			"default": 0.1
+		"mmtrElectricSpec": {
+			"type": "string",
+			"default": ""
 		},
 		"mmtrPipePressure": {
 			"type": "number",
@@ -292,6 +284,18 @@
 		"mmtrMissionExecutor": {
 			"type": "string",
 			"default": ""
+		},
+		"mmtrDutyState": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrDutyCrew": {
+			"type": "string",
+			"default": ""
+		},
+		"mmtrDutyWaiting": {
+			"type": "integer",
+			"default": 0
 		},
 		"mmtrSubTasks": {
 			"type": "string",

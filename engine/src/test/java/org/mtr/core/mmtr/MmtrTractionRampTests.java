@@ -141,13 +141,15 @@ public final class MmtrTractionRampTests {
 		final DriveOutput firstTick = controller.compute(braking, type, 0, DT_MS);
 		assertTrue(firstTick.getAccelerationMetersPerSecondSquared() > 0,
 			"牵引还没退完 + 缸压才刚建 ⇒ 合力仍为正，实际 " + firstTick.getAccelerationMetersPerSecondSquared());
-		assertTrue(controller.getAppliedTractiveEffortN() > type.getBrake().serviceForceN(controller.getBrakeCylinderPressure()),
-			"这一拍牵引力仍大于气制动力");
+		assertTrue(controller.getAppliedTractiveEffortN() > type.getBrake().serviceForceNFromCylinderBar(controller.getCylinderBar(), 0),
+			"这一拍牵引力仍大于气制动力（缸压刚开始建，力 = 锚 × f(缸压)，notes/376）");
 
 		runAt(controller, type, braking, 0, 15);
 		assertEquals(0, controller.getAppliedTractiveEffortN(), 1e-6, "牵引最终必须退到 0");
-		assertEquals(-type.getBrake().serviceForceN(1) / 84_000.0, controller.compute(braking, type, 0, DT_MS).getAccelerationMetersPerSecondSquared(),
-			1e-6, "退干净之后就是纯常用制动力");
+		assertEquals(type.getBrakes().getCylinderMaxBar(), controller.getCylinderBar(), 1e-9, "15 s 后缸压已经建到上限");
+		assertEquals(-type.getBrake().serviceForceNFromCylinderBar(type.getBrakes().getCylinderMaxBar(), 0) / 84_000.0,
+			controller.compute(braking, type, 0, DT_MS).getAccelerationMetersPerSecondSquared(),
+			1e-6, "退干净之后就是纯常用制动力（缸压上限折成的力 / 惯性质量；本车底 A=B=C=0、λ=1）");
 	}
 
 	/** 紧急也一样（方向与保护动作都不豁免）：残余牵引从紧急制动力里扣，直到 300 kN 退完才纯紧急。 */
@@ -159,13 +161,22 @@ public final class MmtrTractionRampTests {
 
 		final ControlState emergency = ControlState.zero().setEmergency(true);
 		final DriveOutput firstTick = controller.compute(emergency, type, 0, DT_MS);
-		assertEquals((FULL_EFFORT_N - 3_000 - 210_000) / 84_000.0, firstTick.getAccelerationMetersPerSecondSquared(), 1e-9,
-			"第一拍：300 − 3 kN 牵引 − 210 kN 紧急 ⇒ 仍为正");
+		/*
+		 * notes/376：紧急制动力现在也走"缸压 → 力"这一条路（缸簧 0.3 bar 以下不出力）。
+		 * 紧急建压 2.0 bar/s，第一拍只到 0.2 bar ⇒ **这一拍还没有紧急制动力**，合力 = 残余牵引（300 − 3 kN）。
+		 * 旧口径的"第一拍就扣满 210 kN"来自比例制动力（缸压比例 × 全制动力、没有缸簧、没有建压时间），已删除。
+		 */
 		assertTrue(firstTick.isEmergencyBrake());
+		assertEquals(0.2, controller.getCylinderBar(), 1e-9, "紧急建压 2.0 bar/s × 100 ms");
+		assertEquals(FULL_EFFORT_N - 3_000, firstTick.getAccelerationMetersPerSecondSquared() * 84_000.0, 1e-6,
+			"第一拍：缸压还在缸簧以下 ⇒ 只剩残余牵引");
 
+		// 建压到紧急限压 4.2 bar（高于常用上限 3.8）、牵引也退干净 ⇒ 纯紧急减速度
 		runAt(controller, type, emergency, 0, 10);
-		assertEquals(-210_000 / 84_000.0, controller.compute(emergency, type, 0, DT_MS).getAccelerationMetersPerSecondSquared(), 1e-6,
-			"10 s 后牵引退干净 ⇒ 纯紧急减速度");
+		assertEquals(0, controller.getAppliedTractiveEffortN(), 1e-6, "牵引最终必须退到 0");
+		assertEquals(type.getBrakes().getCylinderEmergencyBar(), controller.getCylinderBar(), 1e-9, "紧急限压 4.2 bar");
+		assertEquals(-type.getBrake().emergencyForceN(0) / 84_000.0, controller.compute(emergency, type, 0, DT_MS).getAccelerationMetersPerSecondSquared(), 1e-6,
+			"10 s 后牵引退干净 ⇒ 纯紧急减速度（0 速 ⇒ 闸片不衰减）");
 	}
 
 	// ---- ⑤ 配 0 = 不限速（旧口径，零回归）----------------------------------------------------------

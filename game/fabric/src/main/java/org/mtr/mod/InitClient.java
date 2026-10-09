@@ -31,6 +31,8 @@ import org.mtr.mod.generated.WebserverResources;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.item.ItemBlockClickingBase;
 import org.mtr.mod.item.ItemDriverKey;
+import org.mtr.mod.mmtr.MmtrDynamicLoad;
+import org.mtr.mod.mmtr.MmtrLoadProbe;
 import org.mtr.mod.packet.PacketRequestData;
 import org.mtr.mod.render.*;
 import org.mtr.mod.resource.CachedResource;
@@ -367,6 +369,9 @@ public final class InitClient {
 
 		REGISTRY_CLIENT.eventRegistryClient.registerClientJoin(() -> {
 			MinecraftClientData.reset();
+			// notes/410：换世界时窗口清零（免得跨世界算平均）+ 前视管线状态清零。
+			MmtrLoadProbe.resetWindow();
+			MmtrDynamicLoad.reset();
 			DynamicTextureCache.instance = new DynamicTextureCache();
 			lastMillis = System.currentTimeMillis();
 			gameMillis = 0;
@@ -401,6 +406,7 @@ public final class InitClient {
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerStartClientTick(() -> {
+			MmtrLoadProbe.tickStart();
 			// notes/177 取证：这是**开工前**的那次采样，用于和上一拍收工时的坐标对比 —— 两者之差
 			// 就是"tick 之间被外部挪动"（服务端位置校正），也就是"人来回抽搐"里被服务端拉的那一半。
 			MmtrPlayerMotionTrace.tickStart();
@@ -428,6 +434,7 @@ public final class InitClient {
 				if (lastClientWorld == null || !lastClientWorld.equals(clientWorld)) {
 					lastClientWorld = clientWorld;
 					MinecraftClientData.reset();
+					MmtrDynamicLoad.reset();
 				}
 			}
 
@@ -442,6 +449,10 @@ public final class InitClient {
 				InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketRequestData(dataRequest));
 				lastUpdatePacketMillis = 0;
 			}
+
+			// notes/410：动态项**前视加载管线**（沿运动方向提前固定距离、按片拉取）。
+			// 老的那次拉取（上面那段）一条不删 —— 它负责"新区块出现后收敛"，这里负责"车前方提前到位"。
+			MmtrDynamicLoad.tick();
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerEndClientTick(() -> {
@@ -452,6 +463,8 @@ public final class InitClient {
 			ScheduledSound.playScheduledSounds();
 			// notes/177 取证：收工后采样（此时车内定位已经跑过），用于量"这一拍本地把玩家挪了多少"。
 			MmtrPlayerMotionTrace.tickEnd();
+			// notes/410：本拍收工 —— 长 tick 归因（区块载入 / 包落地 / 其余）在这里结算。
+			MmtrLoadProbe.tickEnd();
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerChunkLoad((clientWorld, worldChunk) -> {
@@ -459,6 +472,9 @@ public final class InitClient {
 				lastUpdatePacketMillis = getGameMillis() + 500;
 			}
 		});
+
+		// notes/410：动态项加载管线的记账（区块载入个数 + 包落地耗时，见 MmtrLoadProbe）。
+		MmtrLoadProbe.register(REGISTRY_CLIENT.eventRegistryClient);
 
 		REGISTRY_CLIENT.eventRegistryClient.registerResourceReloadEvent(CustomResourceLoader::reload);
 

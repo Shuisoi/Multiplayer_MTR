@@ -4,17 +4,20 @@ import org.mtr.core.mmtr.MmtrHidMapping;
 import org.mtr.core.mmtr.MmtrLightSwitch;
 import org.mtr.core.mmtr.MmtrTrace;
 import org.mtr.core.mmtr.ThreeHandleSpec;
+import org.mtr.core.mmtr.net.MmtrMotionFrame;
 import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mapping.holder.KeyBinding;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.Text;
 import org.mtr.mapping.mapper.TextHelper;
+import org.mtr.mod.Init;
 import org.mtr.mod.InitClient;
 import org.mtr.mod.KeyBindings;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.packet.PacketDriveControl;
 
 import javax.annotation.Nullable;
+import java.util.UUID;
 
 /**
  * 三手柄机车的**客户端输入逻辑**（BR101）：把键盘读成三根手柄的状态，变化时上报引擎。
@@ -141,6 +144,59 @@ public final class MmtrDriveInput {
 	private static int sentLightSwitch = Integer.MIN_VALUE;
 	private static long lastSendMillis;
 
+	// ---- 本地闭环（notes/407）------------------------------------------------------------------------
+
+	/**
+	 * 本地闭环开关：{@code -Dmmtr.localdrive=false} ⇒ 完全回到改前的行为（手柄只在 ① 的回声里到本地）。
+	 * 出问题时这一个开关就能逐位回退，不必回滚代码。
+	 */
+	private static final boolean LOCAL_DRIVE = !"false".equalsIgnoreCase(System.getProperty("mmtr.localdrive", "true"));
+	/**
+	 * 本地写进镜像之后，多久之内**不接受 ① 的 CONTROL 回声**。
+	 *
+	 * <p>回声携带的是同一批字段的**稍旧**值（它比我的值晚一个来回），收下就等于把我刚推的手柄拉回去 ——
+	 * 那正是"本地闭环白做"的形状。窗口只在**我真的改了手柄**时刷新（每秒那次心跳补发不算，
+	 * 否则窗口永不过期）；窗口一到回声重新成为权威，于是"引擎钳位 / 拒绝 / 换端 / 钥匙被抢"
+	 * 这类情况最多错这么多毫秒。</p>
+	 */
+	private static final long LOCAL_HOLD_MILLIS = Math.max(1L, Long.getLong("mmtr.localdrive.hold", 600L));
+
+	/**
+	 * **回声连续多久与我的值不一致就解除本地闭环**（notes/407 §2.2 的修正，2026-10-09 实测逼出来的）。
+	 *
+	 * <p>为什么需要：本地闭环的前提是"引擎会接受我这份值"。实测抓到了前提不成立的一格 ——
+	 * 玩家被送上 00104 时驾驶室钥匙还是引擎的 SYSTEM 占位钥匙（AI 在开），客户端照样把手柄写进了
+	 * 本地（`本地写=2`），而引擎收到的是 0（它根本没接）。**那时"本地是权威"就等于客户端自己跑、
+	 * 服务端不动 —— 无界分叉**（`manOverride` 倒是置上了，力却一直是 0）。</p>
+	 *
+	 * <p>所以本地闭环期间**不再无条件丢回声，而是比对**：一致 ⇒ 引擎跟上了，继续丢；
+	 * 连续不一致超过这个上限 ⇒ 解除，并让那一条回声落地 ⇒ 分叉被夹在这段时间以内。</p>
+	 */
+	private static final long LOCAL_UNCONFIRMED_MAX_MILLIS = Math.max(1L, Long.getLong("mmtr.localdrive.unconfirmed", 1500L));
+
+	/** 我坐在哪个司机位上（= 本地闭环的候选车）；0 = 没坐在任何司机位上。 */
+	private static long localOverrideVehicleId;
+	/** 上一次"我改了手柄"的墙钟时刻；0 = 还没改过（于是窗口还没开始，回声照收）。 */
+	private static long lastLocalChangeMillis;
+	/** 引擎没跟上（见 {@link #LOCAL_UNCONFIRMED_MAX_MILLIS}）⇒ 本地闭环停用，直到它认一次。 */
+	private static boolean localOverrideDisarmed;
+
+	/** 读数：本窗口本地写了几次、手柄变了几次、以及"变化 → 镜像追上我"的时延样本。 */
+	private static int localWrites;
+	private static int handleChanges;
+	private static int latencySamples;
+	/** 取样被跳过的次数：那一拍镜像**已经**是我这份值，量它只能量到"两帧之间"（见 {@link #startLatencySample}）。 */
+	private static int latencySkipped;
+	/** 本地闭环被解除的次数（引擎连续没跟上我的手柄）。 */
+	private static int localDisarms;
+	private static long latencySumMillis;
+	private static long latencyMaxMillis = Long.MIN_VALUE;
+	private static long localWindowStartMillis;
+	private static long pendingLatencyStartMillis = Long.MIN_VALUE;
+	private static long pendingLatencyVehicleId;
+	/** 那一次变化我要的六个值（镜像追上它们就记一次时延）。 */
+	private static int[] pendingLatencyValues;
+
 	/** 每客户端 tick 调用一次（挨着其它交互键，见 {@code MainRenderer}）。 */
 	public static void tick() {
 		/*
@@ -159,6 +215,10 @@ public final class MmtrDriveInput {
 		final long vehicleId = seat == null ? 0 : seat.vehicleId();
 
 		if (vehicleId == 0) {
+			// 离开司机位：本地闭环立刻失效（回声重新成为权威），否则"人走了车还在按我的手柄动"。
+			localOverrideVehicleId = 0;
+			tickLatencyMetric(nowMillis);
+			logLocalDriveIfDue(nowMillis);
 			if (controlledVehicleId != 0) {
 				neutraliseHandles();
 				send(controlledVehicleId);
@@ -169,6 +229,13 @@ public final class MmtrDriveInput {
 		}
 
 		final VehicleExtension vehicle = vehicleById(vehicleId);
+		/*
+		 * 本地闭环（notes/407）：**候选**是"我坐在司机位上"。是否真的本地生效在
+		 * {@link #applyLocally} 里还要按"我有没有资格替它说话"（占用锁）判一次 ——
+		 * 坐在别人正开着的车的司机位上，不该让本地提前动起来。
+		 */
+		localOverrideVehicleId = vehicleId;
+		tickLatencyMetric(nowMillis);
 		/*
 		 * "刚坐上司机位"= 换车**或换端**（notes/352）。换端必须也算：同一个人从 A 端走到 B 端时车没变，
 		 * 但那边的换向器位置与**灯光开关**都是另一套值，不重新认就会把 A 端那套推给 B 端。
@@ -215,10 +282,15 @@ public final class MmtrDriveInput {
 			MmtrTrace.log("[MMTR-DRV] client pressed the response key (acknowledge) for vehicle " + vehicleId);
 			message("响应键：已确认（AWS 报警 / 解除紧急制动）");
 		}
-		if (changedSinceLastSend() || nowMillis - lastSendMillis >= REFRESH_INTERVAL_MILLIS) {
+		final boolean changedNow = changedSinceLastSend();
+		if (changedNow) {
+			startLatencySample(vehicleId, nowMillis);
+		}
+		if (changedNow || nowMillis - lastSendMillis >= REFRESH_INTERVAL_MILLIS) {
 			send(vehicleId);
 			traceSentState(nowMillis, vehicleId);
 		}
+		logLocalDriveIfDue(nowMillis);
 	}
 
 	// ---- 灯光开关（notes/352） ----------------------------------------------------------------------
@@ -530,13 +602,12 @@ public final class MmtrDriveInput {
 		//   engine's own counts as the limits. Everything downstream is unchanged: the engine clamps
 		//   per consist type, `ControlState` carries all of these at once, and a car that reads the
 		//   three-handle fields simply never sees a non-zero throttle notch from this path.
-		final boolean single = isSingleHandle();
-		final int throttleNotch = single ? Math.max(0, singleNotch) : 0;
-		final int brakeNotch = single ? Math.max(0, -singleNotch) : brakePosition;
-		final boolean emergency = single && singleHandleEmergency();
+		final ControlOut out = controlOut();
+		// 本地闭环（notes/407）：把**同一份值**立刻写进本地镜像，让本地物理这一拍就能响应。
+		applyLocally(vehicleId, out);
 		// acknowledge 只在按下响应键的那一拍为真（点按语义），其余时刻必须为假 ——
 		// 引擎把"报警时按下的那一次"当成确认，若常亮就等于每拍都在确认（notes/94 的坑）。
-		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDriveControl(vehicleId, throttleNotch, brakeNotch, reverser, emergency, acknowledge, driveHandle, cruiseKmh, lightSwitch));
+		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDriveControl(vehicleId, out.throttleNotch(), out.brakeNotch(), reverser, out.emergency(), acknowledge, driveHandle, cruiseKmh, lightSwitch));
 		sentDriveHandle = driveHandle;
 		sentBrakePosition = brakePosition;
 		sentSingleNotch = singleNotch;
@@ -550,6 +621,238 @@ public final class MmtrDriveInput {
 		lastSendMillis = System.currentTimeMillis();
 		MmtrTrace.log("[MMTR-DRV] client handles → " + describeHandles() + " 灯光=" + MmtrLightSwitch.label(lightSwitch)
 			+ (lightHasOff ? "(四档)" : "(三档)") + " (vehicle " + vehicleId + (acknowledge ? ", acknowledge" : "") + ")");
+	}
+
+	// ---- 本地闭环（notes/407）------------------------------------------------------------------------
+
+	/** 这一拍的手柄值（也是本地要写的值）：三种操纵方式折成 ① 的 CONTROL 那两个档位字段。 */
+	private record ControlOut(int throttleNotch, int brakeNotch, boolean emergency) {
+	}
+
+	/**
+	 * 把这一拍的手柄值折出来。**只有这一处**做这个折算 —— {@code send}（上报）与本地闭环（本地写镜像）
+	 * 必须逐字段相同；两处各写一遍迟早会漏一个（notes/279 那次"有级车只有制动、永远没有牵引"
+	 * 就是这个形状：一个字段在一条路上被硬编码成 0）。
+	 */
+	private static ControlOut controlOut() {
+		final boolean single = isSingleHandle();
+		return new ControlOut(
+			single ? Math.max(0, singleNotch) : 0,
+			single ? Math.max(0, -singleNotch) : brakePosition,
+			single && singleHandleEmergency());
+	}
+
+	/**
+	 * 本地闭环：把我这一份手柄值立刻写进本地镜像（notes/407）。
+	 *
+	 * <p>三个前置：开关开着、我坐在这辆车的司机位上、以及**我有资格替它说话**（占用锁，见
+	 * {@link #ownsCab}）。值本来就一样时不写、也**不刷新窗口** —— 否则每秒那次心跳补发会让
+	 * "不接受回声"的窗口永不过期。</p>
+	 */
+	private static void applyLocally(long vehicleId, ControlOut out) {
+		if (!LOCAL_DRIVE || localOverrideDisarmed || vehicleId == 0 || vehicleId != localOverrideVehicleId) {
+			return;
+		}
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		if (vehicle == null || !ownsCab(vehicle)) {
+			return;
+		}
+		if (mirrorMatches(vehicle, out.throttleNotch(), out.brakeNotch(), driveHandle, cruiseKmh, reverser, out.emergency())) {
+			return;
+		}
+		vehicle.mmtrApplyLocalDriveControl(out.throttleNotch(), out.brakeNotch(), driveHandle, cruiseKmh, reverser, out.emergency());
+		localWrites++;
+		lastLocalChangeMillis = System.currentTimeMillis();
+	}
+
+	/** 镜像那六个字段现在是不是就是这一份值。 */
+	private static boolean mirrorMatches(VehicleExtension vehicle, int throttleNotch, int brakeNotch, int driveHandle, int cruiseKmh, int reverser, boolean emergency) {
+		return vehicle.getMmtrThrottleFromSync() == throttleNotch
+			&& vehicle.getMmtrBrakeFromSync() == brakeNotch
+			&& vehicle.getMmtrDriveHandleFromSync() == driveHandle
+			&& vehicle.getMmtrCruiseKmhFromSync() == cruiseKmh
+			&& vehicle.getMmtrReverserFromSync() == reverser
+			&& vehicle.isMmtrEmergencyFromSync() == emergency;
+	}
+
+	/**
+	 * 我有没有资格替这辆车说话：引擎只认**占着这个驾驶室的人**的手柄（占用锁，见
+	 * {@code PacketDriveControl#runServer}）。
+	 *
+	 * <p>镜像里的 crew uuid 为空 = 还没人持有 ⇒ 我这一动手柄引擎就会把它给我（{@code MmtrCabInteraction}
+	 * 那条申领路）；是别人 ⇒ 我说了不算，**本地不许提前生效** —— 否则"别人正开着"时我会看到车在
+	 * 我手上动、而服务端根本不理我。</p>
+	 */
+	private static boolean ownsCab(VehicleExtension vehicle) {
+		final UUID crew = vehicle.getMmtrCrewUuid();
+		if (crew == null) {
+			return true;
+		}
+		final ClientPlayerEntity player = MinecraftClient.getInstance().getPlayerMapped();
+		return player != null && crew.equals(player.getUuid());
+	}
+
+	/**
+	 * 这辆车现在是不是"我在本地开车"（notes/407）。
+	 *
+	 * <p>{@code MmtrVehicleMotionClient} 靠它做两件事：① 本地闭环期间**不收** ① 的 CONTROL 回声
+	 * （那是同一批字段的稍旧值）；② 显示模型对**这一辆**改成"对账纠正" —— 不再每帧把我拉向服务端那一帧，
+	 * 而那一帧按定义落在我后面一个来回（见 {@code MmtrVehicleMotionClient#mmtrDisplayTick}）。</p>
+	 */
+	public static boolean isLocallyDriving(long vehicleId) {
+		return LOCAL_DRIVE && !localOverrideDisarmed && vehicleId != 0 && vehicleId == localOverrideVehicleId
+			&& lastLocalChangeMillis != 0 && System.currentTimeMillis() - lastLocalChangeMillis <= LOCAL_HOLD_MILLIS;
+	}
+
+	/**
+	 * 我此刻**仍坐在这辆车的司机位上、并且有资格替它说话** —— 与 {@link #isLocallyDriving} 的唯一区别是
+	 * **不含那个 600 ms 的手柄窗口**（notes/409 §8.2）。
+	 *
+	 * <h3>为什么必须把它与"窗口"分开</h3>
+	 * <p>那个窗口的语义是"我最近真的写过手柄值"（它证明引擎在收我这份值），是**进入**本地权威的前提。
+	 * 但拿它当"我还在不在开"的判据是错的：AFB 定速巡航时手柄可以几分钟不动，
+	 * 于是权威会每 600 ms 交接一次 —— 现场就是"车被反复拽"。所以：</p>
+	 * <ul>
+	 *   <li>**进入**本地权威（{@code MmtrAuthority}）：要 {@link #isLocallyDriving}；</li>
+	 *   <li>**待在**本地权威：只要这一句（人在那间驾驶室 + 钥匙是我的）。</li>
+	 * </ul>
+	 */
+	public static boolean holdsCabOf(long vehicleId) {
+		if (!LOCAL_DRIVE || localOverrideDisarmed || vehicleId == 0 || vehicleId != localOverrideVehicleId) {
+			return false;
+		}
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		return vehicle != null && ownsCab(vehicle);
+	}
+
+	/**
+	 * ① 的 {@code CONTROL} 回声到了：**比对**，而不是无条件丢掉（notes/407 §2.2 的修正）。
+	 *
+	 * <h3>为什么必须比对</h3>
+	 * <p>本地闭环的前提是"引擎会接受我这份值"。2026-10-09 实测抓到了前提不成立的一格：玩家被送上
+	 * 00104 时钥匙还是引擎的 SYSTEM 占位钥匙（AI 在开），客户端照样把手柄写进本地（`本地写=2`），
+	 * 而引擎收到的是 0（它压根没接）—— 那时"本地是权威"= 客户端自己跑、服务端不动，**无界分叉**。</p>
+	 *
+	 * <p>规则：回声六字段 == 我这份 ⇒ 引擎跟上了，继续丢；不一致但还在
+	 * {@link #LOCAL_UNCONFIRMED_MAX_MILLIS} 之内 ⇒ 正常（回声本来就是稍旧值），也丢；
+	 * 超过上限 ⇒ **解除**本地闭环，并让这一条回声落地（立刻收敛）。引擎钳位 / 换端 / 钥匙被抢
+	 * 走的是同一支。回声一旦与我一致，解除状态自动清掉（本地闭环重新可用）。</p>
+	 *
+	 * @return 要不要**跳过**这一条回声
+	 */
+	public static boolean noteEcho(long vehicleId, int packedControl) {
+		if (!LOCAL_DRIVE || vehicleId == 0 || vehicleId != localOverrideVehicleId) {
+			return false;
+		}
+		final ControlOut out = controlOut();
+		final boolean agrees = MmtrMotionFrame.controlThrottleNotch(packedControl) == out.throttleNotch()
+			&& MmtrMotionFrame.controlBrakeNotch(packedControl) == out.brakeNotch()
+			&& MmtrMotionFrame.controlDriveHandle(packedControl) == driveHandle
+			&& MmtrMotionFrame.controlCruiseKmh(packedControl) == cruiseKmh
+			&& MmtrMotionFrame.controlReverser(packedControl) == reverser
+			&& MmtrMotionFrame.controlEmergency(packedControl) == out.emergency();
+		if (agrees) {
+			// 引擎认了我这份值 ⇒ 解除状态清掉（下一次动手柄本地闭环照常可用）。
+			localOverrideDisarmed = false;
+			return isLocallyDriving(vehicleId);
+		}
+		if (localOverrideDisarmed) {
+			return false;
+		}
+		if (System.currentTimeMillis() - lastLocalChangeMillis <= LOCAL_UNCONFIRMED_MAX_MILLIS) {
+			// 窗口内的不一致是正常的：这一条回声是"我改之前"的那份值。
+			return true;
+		}
+		localOverrideDisarmed = true;
+		localDisarms++;
+		Init.LOGGER.warn("[MMTR-LOCAL] 本地闭环解除：引擎连续 {}ms 没跟上我的手柄（它收到的不等于我这份）—— 回声重新成为权威。车={}",
+			LOCAL_UNCONFIRMED_MAX_MILLIS, vehicleId);
+		return false;
+	}
+
+	/** 记下"这一拍我改了手柄"，等镜像追上这一份值就得到一次时延样本。 */
+	private static void startLatencySample(long vehicleId, long nowMillis) {
+		final ControlOut out = controlOut();
+		handleChanges++;
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		if (vehicle == null) {
+			return;
+		}
+		/*
+		 * ★ **镜像已经是我这份值的一拍不算样本**（2026-10-09 实测抓到的假读数）。
+		 *
+		 * 落座时的"手柄归位"就是这么一拍：镜像本来就停在关闭位，于是 `tickLatencyMetric` 下一帧立刻
+		 * 匹配，量出来 18 ms —— 而那一拍的 `本地写=0`，一个来回都没发生。量的其实是"两帧之间"。
+		 * 只在"镜像与我这份**不同**"时取样，这个数才真的是"我的值传到物理上要多久"。
+		 */
+		if (mirrorMatches(vehicle, out.throttleNotch(), out.brakeNotch(), driveHandle, cruiseKmh, reverser, out.emergency())) {
+			latencySkipped++;
+			return;
+		}
+		pendingLatencyVehicleId = vehicleId;
+		pendingLatencyStartMillis = nowMillis;
+		pendingLatencyValues = new int[]{out.throttleNotch(), out.brakeNotch(), driveHandle, cruiseKmh, reverser, out.emergency() ? 1 : 0};
+	}
+
+	/**
+	 * 实测读数：**"我改了手柄" → "本地镜像的手柄值等于我这一份"** 过了多少毫秒。
+	 *
+	 * <h3>为什么这个读数就是驾驶回路的死时间</h3>
+	 * <p>客户端跑的是同一套物理（{@code Vehicle.simulateMoving} 的镜像分支），而它的输入是
+	 * {@code createMirrorControlStateFromSync()} —— 也就是**镜像**。所以镜像什么时候变成我的值，
+	 * 车上就什么时候有反应。本地闭环打开时它是"写进去的同一拍"（下一次确认，0–50 ms = 一个客户端 tick）；
+	 * 关掉时它等于 C2S + 引擎 tick + ① 一帧 + 回程（局域网实测 ≥150 ms）。</p>
+	 *
+	 * <p>两条路用**同一个**读数，所以开/关可以直接 A/B 比，不必靠手感。</p>
+	 */
+	private static void tickLatencyMetric(long nowMillis) {
+		if (pendingLatencyValues == null) {
+			return;
+		}
+		final VehicleExtension vehicle = vehicleById(pendingLatencyVehicleId);
+		if (vehicle == null) {
+			pendingLatencyValues = null;
+			return;
+		}
+		final boolean matched = pendingLatencyValues != null && mirrorMatches(vehicle,
+			pendingLatencyValues[0], pendingLatencyValues[1], pendingLatencyValues[2], pendingLatencyValues[3], pendingLatencyValues[4], pendingLatencyValues[5] != 0);
+		if (!matched) {
+			return;
+		}
+		final long elapsed = Math.max(0, nowMillis - pendingLatencyStartMillis);
+		latencySamples++;
+		latencySumMillis += elapsed;
+		latencyMaxMillis = Math.max(latencyMaxMillis, elapsed);
+		pendingLatencyValues = null;
+	}
+
+	/** 本地闭环 1 秒一行：写了多少次、时延多少、开关状态。只在有动静时打，免得站着不动刷屏。 */
+	private static void logLocalDriveIfDue(long nowMillis) {
+		if (localWindowStartMillis == 0) {
+			localWindowStartMillis = nowMillis;
+			return;
+		}
+		final long elapsed = nowMillis - localWindowStartMillis;
+		if (elapsed < 1000) {
+			return;
+		}
+		// 也要在"样本补上了"时打：样本是**下一帧**才完成的，落在一秒窗口的最后一帧那次变化
+		// 会出现在下一个窗口里 —— 只在 handleChanges>0 时打就会把它整条丢掉。
+		if (handleChanges > 0 || localWrites > 0 || latencySamples > 0) {
+			Init.LOGGER.info("[MMTR-LOCAL] 驾驶回路：本地写={} 手柄变化={} 时延均值={}ms 最大={}ms 样本={} 跳取样={} 解除={} 开关={}",
+				localWrites, handleChanges,
+				latencySamples == 0 ? "-" : Long.toString(latencySumMillis / latencySamples),
+				latencyMaxMillis == Long.MIN_VALUE ? "-" : Long.toString(latencyMaxMillis),
+				latencySamples, latencySkipped, localDisarms, LOCAL_DRIVE ? "开" : "关");
+		}
+		localWindowStartMillis = nowMillis;
+		localWrites = 0;
+		handleChanges = 0;
+		latencySamples = 0;
+		latencySkipped = 0;
+		localDisarms = 0;
+		latencySumMillis = 0;
+		latencyMaxMillis = Long.MIN_VALUE;
 	}
 
 	/**

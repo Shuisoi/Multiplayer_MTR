@@ -387,6 +387,76 @@ public final class MmtrMotionBlockingTests {
 			}, Object2ObjectAVLTreeMap::new);
 	}
 
+	/**
+	 * ★ notes/409 §4.6 第 16 条（2026-10-09 实机相撞）：**占用/几何硬界限必须对"上行（客户端）权威"生效**。
+	 *
+	 * <p>修前的形状：位置权威在客户端时，引擎这一拍**只跟上传值**（{@code mmtrApplyUploadAuthorityToTick}），
+	 * 而客户端镜像里**没有别的车** —— 于是"客户端报 4 m、引擎就走 4 m"，一路走进另一列车的车厢
+	 * （现场读数：两列 10 节车的占弧在同一根 220 m 的轨上交错 [36..220] / [76..220]）。</p>
+	 *
+	 * <p>司机的紧急制动包线救不了这一条：上传帧带的速度是 0（客户端"停下"时也在传），而
+	 * {@code mmtrTickDriverAuthorityTrip} 在 {@code speed <= STOPPED_SPEED} 时直接早退、
+	 * {@code DynamicsEnvelope.requiresBraking(0, …)} 也永远为假 ⇒ 车头一路被传到界限**之外**才开始制动。</p>
+	 *
+	 * <p><b>证伪力</b>：去掉硬夹紧（或 {@code -Dmmtr.hardstop=false}）⇒ 上传帧会把车带过占用面减去
+	 * GAP 的那条界限，下面的 {@code <= 38.5} 与速度归零两条立刻失败。</p>
+	 */
+	@Test
+	public void anUploadedFrameMayNotCarryTheTrainPastAnOccupancyFace() {
+		System.setProperty("mmtr.upload", "true");
+		try {
+			final ChainNet n = new ChainNet("build/mmtr-upload-hard-stop");
+			final Vehicle v = n.spawn2();
+			boardDriver(n.sim, v, 3);
+			final UUID uploader = UUID.randomUUID();
+			// 占用面在 MA 的 10.5..13 m（= 走行里程 40.5..43 m）；非授权运行的尾隙是 2 m ⇒ 界限 38.5 m。
+			final double holdProgress = 38.5;
+			int sequence = 0;
+			// 第一段：占用**还没注入**，先把车送到占用面所在的那根轨上（否则规则 ② 会先把它挡在
+			// 上一根轨的末端 —— 那是另一条规则、另一个用例）。
+			for (double target = 4; target <= 36 + 1e-9; target += 4) {
+				assertNull(v.mmtrAcceptUploadedMotion(uploader, "阿甲", target, 0, ++sequence, n.sim.getCurrentMillis(), true),
+					"无占用时的上行帧都合法（目标 " + target + "）");
+				n.tick();
+			}
+			assertEquals(36, v.getRailProgress(), 1e-6, "先头已在占用面所在的那根轨上");
+			// 第二段：另一列车出现在**同一根轨**前方，客户端继续按 4 m/帧 往前报 —— 引擎必须把它钉在界限上。
+			for (double target = 40; target <= 60 + 1e-9; target += 4) {
+				injectMaOccupancy(n);
+				assertNull(v.mmtrAcceptUploadedMotion(uploader, "阿甲", target, 0, ++sequence, n.sim.getCurrentMillis(), true),
+					"这一帧本身合法（4 m 一步）：被夹住的是**位置**，不是帧（目标 " + target + "）");
+				n.tick();
+			}
+			assertEquals(0, v.getSpeed(), 1e-9, "被硬界限按住 ⇒ 速度读数也归零（不许「表上在走、车不动」）");
+			assertTrue(v.getRailProgress() <= holdProgress + 1e-6,
+				"车头绝不许越过占用面 − 尾隙的界限：实际 " + v.getRailProgress() + " / 界限 " + holdProgress);
+			assertTrue(v.getRailProgress() >= holdProgress - 0.5,
+				"而且应当正好停在界限上（不是远远早停）：实际 " + v.getRailProgress());
+			assertTrue(v.mmtrUploadAuthorityHeld(), "硬界限只**按住**、不交回权威（交回会把一次正常的等待变成一次权威切换）");
+			assertEquals(n.ma.getHexId(), v.getMmtrMotionWalker().railHex(), "始终没有越过占用面所在的那根轨");
+			/*
+			 * ★ 自证伪（本仓库的纪律：新用例必须能红）：把开关关掉 = **修前的口径**，同一条上传
+			 * 立刻就能把车带过界限 —— 于是上面那两条断言不是"恒真"的装饰。
+			 */
+			System.setProperty(Vehicle.MMTR_HARDSTOP_FLAG, "false");
+			try {
+				for (double target = 64; target <= 76 + 1e-9; target += 4) {
+					injectMaOccupancy(n);
+					assertNull(v.mmtrAcceptUploadedMotion(uploader, "阿甲", target, 0, ++sequence, n.sim.getCurrentMillis(), true),
+						"关掉开关后帧照样合法（目标 " + target + "）");
+					n.tick();
+				}
+				assertTrue(v.getRailProgress() > holdProgress + 1e-6,
+					"-Dmmtr.hardstop=false（=修前）必须能把车带过界限，这就是 2026-10-09 撞车的形状；"
+						+ "若这一条也失败，说明上面的断言没有证伪力。实际 " + v.getRailProgress());
+			} finally {
+				System.clearProperty(Vehicle.MMTR_HARDSTOP_FLAG);
+			}
+		} finally {
+			System.clearProperty("mmtr.upload");
+		}
+	}
+
 	@Test
 	public void peekNextRailPredictsTheFollowingAdvanceElect() {
 		// Fork right at the yard mouth: yRail (-16..-8) then {straight rA | diverge rB}.

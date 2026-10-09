@@ -45,19 +45,6 @@ public final class TractionSpec {
 		this.fieldWeakeningSpeedMps = Math.max(0, fieldWeakeningSpeedMps);
 	}
 
-	/**
-	 * 由旧口径换算（**只用于数据迁移与用例**，不是运行时的退路）：
-	 * {@code F_max = m·A₀}、{@code P = F_max·v_bp} —— 换完与原曲线逐点相同（notes/235）。
-	 *
-	 * @param legacyAccelerationMps2 旧的 {@code tractionAccelerationMps2}
-	 * @param massKg                 车列质量（旧模型里没有，迁移时取一个物理上合理的值）
-	 * @param legacyBreakpointKmh    旧的 {@code tractionBreakpointKmh}
-	 */
-	public static TractionSpec fromLegacy(double legacyAccelerationMps2, double massKg, double legacyBreakpointKmh) {
-		final double effort = Math.max(0, legacyAccelerationMps2) * Math.max(1, massKg);
-		return new TractionSpec(effort, effort * Math.max(0, legacyBreakpointKmh) / 3.6);
-	}
-
 	public double getMaxTractiveEffortN() { return maxTractiveEffortN; }
 	public double getMaxPowerW() { return maxPowerW; }
 	/** 弱磁段起点（m/s）；0 = 不启用第三段。 */

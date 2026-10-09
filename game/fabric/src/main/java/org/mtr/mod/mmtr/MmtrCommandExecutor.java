@@ -66,12 +66,32 @@ public final class MmtrCommandExecutor {
 			if (command != null && !command.isEmpty()) {
 				execute(simulator, serverWorld, command);
 			}
+			/*
+			 * **值守待办**（notes/408 §2）：引擎说得出、做不到的那一半 —— "把这个人送上车" 与
+			 * "告诉他车到站了，可以上车接管"。引擎是 headless 的，玩家实体与骑乘状态只有这里能碰，
+			 * 所以它排成待办、由这一处执行。
+			 *
+			 * <p>放在**服务端 tick** 上是必须的（不是偏好）：这一步会传送玩家、改骑乘，而它的判据
+			 * 又读引擎刚算完的位置 —— 换个线程就会读到半拍之前的世界。</p>
+			 */
+			MmtrDutyBoardWatch.tick(new org.mtr.mapping.holder.MinecraftServer(minecraftServer), simulator);
 		}
 	}
 
 	private static void execute(Simulator simulator, ServerWorld serverWorld, String command) {
 		if (command.equals("signals scan")) {
 			scanSignals(simulator, serverWorld);
+			return;
+		}
+		/*
+		 * 站台客流核对（引擎指令 `platform scan`）：只有游戏端数得到世界里的方块。
+		 * 报告逐站台给"应有 / 实有"，见 MmtrCrowdModule.report —— 这是"客量设了到底生效没有"的决定性读数。
+		 */
+		if (command.equals("crowd scan")) {
+			for (final String line : org.mtr.mod.mmtr.crowd.MmtrCrowdModule.report(
+				new org.mtr.mapping.holder.ServerWorld(serverWorld), simulator)) {
+				simulator.mmtrCommandResult(line);
+			}
 			return;
 		}
 		// B7.6 crew commands: changeends <vehicleId> | cab <vehicleId> <A|B|out> | doors <vehicleId> [open|close|toggle]

@@ -76,16 +76,11 @@ public final class BrakeModel implements AirBrakeStateful {
 		this.system = null;
 	}
 
-	/** 这一拍是不是按 bar 口径在跑（车底配了气压参数）。 */
-	public boolean isPneumatic() {
-		return spec != null;
-	}
-
 	/**
 	 * 这一列是不是**多节编组**（逐车管压的判据）。
 	 *
 	 * <p>看的是**连挂形式**（车列长度），不是"系统建起来没有"—— 装配完车列但还没跑第一拍时也该是 true
-	 * （连挂手术/换端就发生在那一拍）。是否真的在跑 bar 口径另看 {@link #isPneumatic()}。</p>
+	 * （连挂手术/换端就发生在那一拍）。</p>
 	 */
 	public boolean isPerCar() {
 		return cars.size() > 1 || (system != null && system.size() > 1);
@@ -99,29 +94,20 @@ public final class BrakeModel implements AirBrakeStateful {
 	/**
 	 * 推进一拍。
 	 *
-	 * @param air                 这一列车的制动口径；{@code null} = 没配 ⇒ 不接管，返回 {@code false}
+	 * @param air                 这一列车的制动口径（**必填**，notes/376：气压口径是车底必填项，
+	 *                            旧的比例制动力已删除，所以这里没有 {@code null} 这一支）
 	 * @param equivalentCar       单车时用的等效车（整列锚）；多节编组时忽略
 	 * @param command             制动诉求（{@link BrakeCommand}，与操纵方式无关）
 	 * @param speedMetersPerSecond 当前速度
 	 * @param availableElectricN  这一拍可用的电制动力（N，0 = 不混合）
 	 * @param dtSeconds           步长
-	 * @return {@code true} = 这一拍的气制动力已由本模型给出（调用方用 {@link #getPneumaticForceN()}）
 	 */
-	public boolean step(@Nullable PneumaticBrakeSpec air, @Nullable BrakeCar equivalentCar, BrakeCommand command,
+	public void step(PneumaticBrakeSpec air, @Nullable BrakeCar equivalentCar, BrakeCommand command,
 			double speedMetersPerSecond, double availableElectricN, double dtSeconds) {
-		if (air == null) {
-			spec = null;
-			system = null;
-			pneumaticForceN = 0;
-			emergencyForceN = 0;
-			blendedElectricN = 0;
-			pneumaticHolding = false;
-			return false;
-		}
 		ensure(air, equivalentCar);
 		final BrakeSystem brakes = system;
 		if (brakes == null) {
-			return false;
+			return;
 		}
 		brakes.step(command, speedMetersPerSecond, availableElectricN, dtSeconds);
 		pneumaticForceN = brakes.getPneumaticForceN();
@@ -131,10 +117,9 @@ public final class BrakeModel implements AirBrakeStateful {
 		// 对外读数按**车头**折算（驾驶室的表看的就是司机那一节，notes/268）
 		pipePressure = clamp01(brakes.getHeadPipeBar() / Math.max(1e-9, air.getChargedBar()));
 		brakeCylinderPressure = clamp01(brakes.getHeadCylinderBar() / Math.max(1e-9, air.getCylinderMaxBar()));
-		return true;
 	}
 
-	/** 按需（重）建制动系统：口径换了 / 车列换了 / 还没建。 */
+	/** **按需（重）建**制动系统：口径换了 / 车列换了 / 还没建。 */
 	private void ensure(PneumaticBrakeSpec air, @Nullable BrakeCar equivalentCar) {
 		final int expectedSize = cars.isEmpty() ? 1 : cars.size();
 		if (system == null || spec != air || system.size() != expectedSize) {
@@ -188,13 +173,22 @@ public final class BrakeModel implements AirBrakeStateful {
 		return brakeCylinderPressure;
 	}
 
-	/** 镜像种子：权威端的归一化管压/缸压灌进这个模型（两端必须同一套 bar 语义）。 */
+	/**
+	 * 镜像种子：权威端的归一化管压/缸压灌进这个模型（两端必须同一套 bar 语义）。
+	 *
+	 * <p>notes/376：制动系统**还没建**（新车还没人开过）时也要能接住种子 —— 与
+	 * {@link #applyState(String)} 一样先存进 {@code pendingState}（单节等效车 + 编组级口径折算成
+	 * "管压比例,缸压比例"这一串），否则那一拍的气压状态会被静默丢掉（客户端镜像每来一份快照就种一次，
+	 * 丢一次就会出现"表上满管、解挂后却当成满管"那类现场）。</p>
+	 */
 	@Override
 	public void setState(double pipePressure, double brakeCylinderPressure) {
 		this.pipePressure = clamp01(pipePressure);
 		this.brakeCylinderPressure = clamp01(brakeCylinderPressure);
 		if (system != null) {
 			system.applyState(this.pipePressure + "," + this.brakeCylinderPressure);
+		} else {
+			pendingState = this.pipePressure + "," + this.brakeCylinderPressure;
 		}
 	}
 

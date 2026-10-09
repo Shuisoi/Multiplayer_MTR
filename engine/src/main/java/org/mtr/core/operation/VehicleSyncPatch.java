@@ -68,6 +68,11 @@ public final class VehicleSyncPatch {
 		// 司机控制与保护（三手柄：油门手柄位置、定速巡航设定值、手柄规格字符串）
 		"mmtrThrottleNotch", "mmtrBrakeNotch", "mmtrReverser", "mmtrThrottleAxis", "mmtrBrakeAxis",
 		"mmtrDriveHandle", "mmtrCruiseKmh", "mmtrHandleSpec", "mmtrHoldReason",
+		// notes/376：气压口径的紧凑串（客户端 HUD 的"管压/缸压"折 bar 的刻度）。车底一变它就变，
+		// 不进白名单的话客户端会拿旧刻度显示新车的压力。
+		"mmtrPneumaticSpec",
+		// notes/379：电制动（回生）口径的紧凑串（客户端跑同一份物理要用它算"电替掉多少气"）。
+		"mmtrElectricSpec",
 		/*
 		 * notes/352 灯光：两端各一份开关 + "本车有没有关闭档"。
 		 *
@@ -97,6 +102,14 @@ public final class VehicleSyncPatch {
 		// 任务提示（作业号 / 这一步的人话说明 / 第几步 / mission 状态与执行者）—— 司机 HUD 读它。
 		// 停在站台等发车时速度与门都不变，所以它靠引擎侧的"变了就标脏"推，不靠这些读数顺带带出去。
 		"mmtrJobId", "mmtrTaskNote", "mmtrTaskStep", "mmtrTaskSteps", "mmtrMissionState", "mmtrMissionExecutor",
+		/*
+		 * notes/408 S1：**值守占用**（这趟车归谁 / 有没有挂下一站退出 / 有几个人认领了它）。
+		 *
+		 * <p>它变化的时刻恰恰是"车稳稳停着、速度与门都不变"的那几拍（接管 / 挂下一站退出 / 交还），
+		 * 所以与上面那一组同一个道理：不进这张表就只能在"整份快照"那一刻到客户端 ——
+		 * 而 PDA 的按钮可用性（"直接上车"出不出现）就是读它决定的，晚一拍就是点错按钮。</p>
+		 */
+		"mmtrDutyState", "mmtrDutyCrew", "mmtrDutyWaiting",
 		// 站台作业子任务（到站停稳 / 开门 / 停够 / 关门）：清单 + "现在该做什么" + 版本号与确认数。
 		// 同样靠"变了就标脏"推 —— 这些字变化的时刻（车稳稳停着、门开着）恰恰是读数全都不变的时候。
 		"mmtrSubTasks", "mmtrSubTaskHint", "mmtrSubTaskRevision", "mmtrSubTaskAcks",

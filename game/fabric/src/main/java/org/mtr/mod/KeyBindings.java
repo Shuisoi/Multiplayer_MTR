@@ -51,6 +51,16 @@ public final class KeyBindings {
 		MMTR_DOORS = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.doors", GLFW.GLFW_KEY_Y, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		MMTR_DOORS_SIDE = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.doors.side", GLFW.GLFW_KEY_U, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
 		/*
+		 * **综合运转面板（PDA）** —— 用户口径："在驾驶中，按 TAB 可以调出 PDA"。
+		 *
+		 * TAB 在本 mod 里原本是空的（全仓库零命中），但它同时是**原版的"按住看玩家列表"**。
+		 * 这一条之所以还能用 TAB：① 名字用了 `key.mmtr.` 前缀，坐在司机位上时
+		 * {@code MmtrInputDecouple} 会把非本前缀的绑定从原版动作上摘掉，于是驾驶室里 TAB
+		 * 不会再翻出玩家列表；② 读取端（{@code MmtrPdaInteraction}）只在"手里拿着 PDA
+		 * 或人在驾驶室里"时才开面板，其余情况**什么都不做**，把 TAB 让回原版。
+		 */
+		MMTR_PDA = InitClient.REGISTRY_CLIENT.registerKeyBinding("key.mmtr.pda", GLFW.GLFW_KEY_TAB, TranslationProvider.CATEGORY_MTR_KEYBINDING.key);
+		/*
 		 * 三手柄机车（BR101）的驾驶输入，见 docs/01-设计/驾驶输入与控制模型.md §7。
 		 *
 		 * 键位是**用户 2026-09-29 指定**的那一套（A/D 油门、; ' 刹车、R/F 定速、Q 响应、J 雨刷、L 灯光），
@@ -117,6 +127,8 @@ public final class KeyBindings {
 	public static final KeyBinding MMTR_DOORS;
 	/** 司机车门键（U）：只动右侧门。 */
 	public static final KeyBinding MMTR_DOORS_SIDE;
+	/** 综合运转面板（TAB）：只在手里拿着 PDA 或人在驾驶室里时开面板，否则让给原版的玩家列表。 */
+	public static final KeyBinding MMTR_PDA;
 	/** One key, three positions: the windshield wiper stalk (关 / 慢 / 快). */
 	public static final KeyBinding MMTR_WIPER;
 	/** 三手柄：油门手柄往牵引侧（+1%，长按扫）。 */

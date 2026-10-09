@@ -732,9 +732,14 @@ node mmtr\tools\anchor-check\selftest.js                                       #
 | **雨刷整体不见了**（刚改过部件批次相关代码） | 机构件**漏登记**位置 → wrapper 为空（见上一行）。跑 `verify_plane_frame.js`，它会报 `disappears` |
 
 游戏内：Options→资源包启用新包(旧包先关)。按你的常规列车测试流程验收。
+★ **音效跟着车包走**：打包器把 `soundBase`/`soundDir` 指到的音效集（ogg + `sounds.json` +
+`mmtr_traction.json`）**合并进同一个 zip** ⇒ **一个车型一个包**。**不要**把音效另打一个包让玩家装两个：
+同名 ogg 与同一份 `sounds.json` 会被两个包各带一遍，且"这是哪台车的音效"会重新变成一个问题
+（`SAF420_v42.zip` 与 `Kei2100_v1.zip` 就是这么并存的，见 notes/402）。
 
 ## 5. 版本管理
 - 每次输出 `<name>_v<数字>.zip`（`pack-vehicle.ps1 -Version N` 自动改），游戏只启用最新；验收通过后退出游戏再清理旧包(避免占用)。
+- **一个车型一个包**（车 + 它自己的音效，见 §4 末）。音效**不是**第二个交付物。
 - 几何/贴图改动：Blender 改完重导出→重打包；纯参数(长宽/门/转向架)手改 json→重打包即可，无需重建模。
 - 打包脚本自带校验，失败即非 0 退出；**不要**用旧的 `pack.bat` 出正式包（它不校验、且 zip 分隔符有坑）。
 

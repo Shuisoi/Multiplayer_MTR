@@ -69,9 +69,9 @@ public final class MmtrTrailerLoadTests {
 		assertEquals(136_000, half.getMassKg(), 1e-9, "半载：24 t + 0.5×56 t = 52 t");
 		assertEquals(164_000, full.getMassKg(), 1e-9, "满载：24 t + 56 t = 80 t");
 
-		final double emptyAccel = empty.getPhysics().tractionAccelerationMps2(1, 0);
-		final double halfAccel = half.getPhysics().tractionAccelerationMps2(1, 0);
-		final double fullAccel = full.getPhysics().tractionAccelerationMps2(1, 0);
+		final double emptyAccel = empty.getPhysics().fullTractionAccelerationMps2(0);
+		final double halfAccel = half.getPhysics().fullTractionAccelerationMps2(0);
+		final double fullAccel = full.getPhysics().fullTractionAccelerationMps2(0);
 		System.out.println(String.format("[TEST] 起步加速度：空车 %.3f / 半载 %.3f / 满载 %.3f m/s²（质量 %.0f/%.0f/%.0f t）",
 			emptyAccel, halfAccel, fullAccel, empty.getMassKg() / 1000, half.getMassKg() / 1000, full.getMassKg() / 1000));
 		assertTrue(fullAccel < halfAccel && halfAccel < emptyAccel, "越重越慢，必须单调");
@@ -150,11 +150,11 @@ public final class MmtrTrailerLoadTests {
 		final ConsistType empty = MmtrComposition.fromVehicleCars(carsEmpty, registry, registry.get("br101_three_handle")).toConsistType("empty");
 		final ConsistType full = MmtrComposition.fromVehicleCars(carsFull, registry, registry.get("br101_three_handle")).toConsistType("full");
 		System.out.println(String.format("[TEST] BR101+2×货车：空车 %.0f t（起步 %.3f m/s²）/ 满载 %.0f t（起步 %.3f m/s²）",
-			empty.getMassKg() / 1000, empty.getPhysics().tractionAccelerationMps2(1, 0),
-			full.getMassKg() / 1000, full.getPhysics().tractionAccelerationMps2(1, 0)));
+			empty.getMassKg() / 1000, empty.getPhysics().fullTractionAccelerationMps2(0),
+			full.getMassKg() / 1000, full.getPhysics().fullTractionAccelerationMps2(0)));
 		assertEquals(132_000, empty.getMassKg(), 1e-9);
 		assertEquals(244_000, full.getMassKg(), 1e-9);
-		assertTrue(full.getPhysics().tractionAccelerationMps2(1, 0) < empty.getPhysics().tractionAccelerationMps2(1, 0) * 0.65,
+		assertTrue(full.getPhysics().fullTractionAccelerationMps2(0) < empty.getPhysics().fullTractionAccelerationMps2(0) * 0.65,
 			"满载起步明显更肉");
 	}
 

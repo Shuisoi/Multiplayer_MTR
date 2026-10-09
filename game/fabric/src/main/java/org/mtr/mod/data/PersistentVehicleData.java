@@ -154,6 +154,28 @@ public final class PersistentVehicleData {
 		getVehicleSoundBase(vehicleResource, carNumber).playMotorSound(bogiePosition, speed, speedChange, acceleration, isOnRoute);
 	}
 
+	/**
+	 * 把这一帧的**电机出力**（N，牵引为正、电阻制动为负）喂给该节车的音效。
+	 *
+	 * <p>单独一个方法而不是塞进 {@code playMotorSound} 的参数表：那是 MTR 的签名，
+	 * 两个加载器（fabric/forge）与所有现存音效类都挂在上面，加参数会牵动一大片；
+	 * 而 {@link org.mtr.mod.sound.VehicleSoundBase#feedDemand} 默认空实现，只有 MMTR 牵引音用得上。</p>
+	 */
+	public void feedDemand(VehicleResource vehicleResource, int carNumber, double motorForceN) {
+		getVehicleSoundBase(vehicleResource, carNumber).feedDemand(motorForceN);
+	}
+
+	/**
+	 * 把"听者是不是就坐在这节车的操纵位上"递给该节车的音效。
+	 *
+	 * <p>与 {@link #feedDemand} 同一个理由走单独的方法：{@code playMotorSound} 是 MTR 的签名，
+	 * 而 {@link org.mtr.mod.sound.VehicleSoundBase#setListenerAtControls} 默认空实现，
+	 * 只有 MMTR 牵引音用得上。它决定那一节车的所有层**要不要忽略距离衰减**。</p>
+	 */
+	public void setListenerAtControls(VehicleResource vehicleResource, int carNumber, boolean atControls) {
+		getVehicleSoundBase(vehicleResource, carNumber).setListenerAtControls(atControls);
+	}
+
 	public void playDoorSound(VehicleResource vehicleResource, int carNumber, BlockPos vehiclePosition) {
 		getVehicleSoundBase(vehicleResource, carNumber).playDoorSound(vehiclePosition, doorValue, oldDoorValue);
 	}

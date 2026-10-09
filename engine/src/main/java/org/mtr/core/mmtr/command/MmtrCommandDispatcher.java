@@ -117,10 +117,14 @@ public final class MmtrCommandDispatcher {
 				return MmtrPointCommands.execute(simulator, verb, positional, options);
 			case "rail":
 				return MmtrRailCommands.execute(simulator, verb, positional, options);
+			case "platform":
+				return MmtrPlatformCommands.execute(simulator, verb, positional, options);
 			case "manifest":
 				return MmtrManifestCommands.execute(simulator, verb, positional, options);
 			case "job":
 				return MmtrJobCommands.execute(simulator, verb, positional, options);
+			case "duty":
+				return MmtrDutyCommands.execute(simulator, verb, positional, options);
 			case "query":
 			case "world":
 				return MmtrQueryCommands.execute(simulator, namespace, verb, positional, options);
@@ -182,6 +186,11 @@ public final class MmtrCommandDispatcher {
 		result.line("  signal why <x> <y> <z>");
 		result.line("  manifest list | manifest reload | manifest add <depotId> <sidingId> [车型...] | manifest remove <depotId> [sidingId]");
 		result.line("  job take <车辆id> [司机uuid] | job release <车辆id> | job status [车辆id]   ← 计划内接管（只在车静止时）");
+		result.line("  duty status [<玩家uuid>]                                    ← 值守状态（界面词 + 为什么停在这个态）");
+		result.line("  duty claim <玩家uuid> <车辆id> [--wait] [--name=<玩家名>]     ← --wait = 站台接站，否则直接上车");
+		result.line("  duty assign <玩家uuid> <车次名> <驾驶室> [--wait] [--name=<玩家名>]");
+		result.line("                                                        ← 按**车次名 + 驾驶室编号**给某个玩家派车（<驾驶室> 如 1A / 10B）");
+		result.line("  duty exit <玩家uuid> [--next] | duty cancel <玩家uuid>        ← --next = 下一站退出（到站自动交还）");
 		result.line("  point set <x> <y> <z> --via=<轨hex> --branch=n | point lock|unlock|release <x> <y> <z> --via=<轨hex>");
 		result.line("  point unlock --all                                               ← 解开全部人工锁（含界面上没有按钮的进向）");
 		result.line("  point locks                                                      ← 引擎现在锁着哪些（逐进向列出）");
@@ -191,6 +200,11 @@ public final class MmtrCommandDispatcher {
 		result.line("      ★ 不给 --angle1/--angle2 只会画直线（两端朝向被钉在弦向上）；给了才能画转角与 S 弯");
 		result.line("  rail remove <x> <y> <z>   ← 删掉挂在这个节点上的所有轨（= 玩家敲掉该节点方块），不用人在游戏里敲");
 		result.line("  rail list");
+		result.line("  platform list [--station=<车站id|16位hex|名>]                          ← 逐站台报客量与折合人数（1 格一人 = 100%）");
+		result.line("  platform set <站台16位hex|站台id> <0-100> | platform station <车站id|hex|名> <0-100> | platform all <0-100>");
+		result.line("  platform refresh                                                     ← 立刻重铺一遍（不改客量；站台上的人被敲掉了就用它）");
+		result.line("  platform scan                                                        ← 让游戏端数一遍世界里**实际**站着几个村民（核对用）");
+		result.line("  platform cap <n|show> | platform radius <n|show>                      ← 人数闸门：单站台上限（默认 48）/ 玩家半径（默认 96 格），防客户端卡顿");
 		result.line("  query <topology|signals|trains|points|sections|depots>");
 		result.line("  world scan-signals");
 		result.line("  probe on | probe off | probe dump | probe reset | probe status   ← 服务端性能探针（notes/337）");

@@ -165,19 +165,24 @@ public final class TrainPhysics {
 	}
 
 	/**
-	 * **牵引净加速度**（m/s²，已减运行阻力）：控制器直接用它（notes/234 起旧 {@code MmtrPhysics} 已删除），
-	 * 控制器直接用它。
+	 * **满牵引净加速度**（m/s²，已减运行阻力）：镜像/信号预留足迹/日志用 —— 控制器自己不走它
+	 * （控制器把所有力交给 {@link #netAccelerationMps2} 一次算清）。
 	 */
-	public double tractionAccelerationMps2(double ratio, double speedMetersPerSecond) {
-		return netAccelerationMps2(tractiveEffortN(ratio, speedMetersPerSecond), 0, 0, speedMetersPerSecond);
+	public double fullTractionAccelerationMps2(double speedMetersPerSecond) {
+		return netAccelerationMps2(tractiveEffortN(1, speedMetersPerSecond), 0, speedMetersPerSecond);
 	}
 
-	/** **常用制动减速度大小**（m/s²，已加运行阻力）：缸压比例 {@code cylinderPressure}（0..1）。 */
-	public double serviceBrakeDecelerationMps2(double cylinderPressure, double speedMetersPerSecond) {
-		return (brake.serviceForceN(cylinderPressure, speedMetersPerSecond) + resistanceForceN(speedMetersPerSecond)) / effectiveMassKg();
+	/**
+	 * **全常用制动减速度大小**（m/s²，已加运行阻力）：缸压顶到车底上限那一份力（含闸片衰减）。
+	 * notes/376：比例口径（{@code serviceBrakeDecelerationMps2(ratio, v)}）已随 legacy 模型删除 ——
+	 * 要看某个档位的力，就把**缸压**交给 {@link #serviceForceNFromCylinderBar}（制动模型内部就是这么做的）。
+	 */
+	public double fullServiceDecelerationMps2(double speedMetersPerSecond) {
+		return (brake.serviceForceNFromCylinderBar(brake.getCylinderMaxBar(), speedMetersPerSecond)
+			+ resistanceForceN(speedMetersPerSecond)) / effectiveMassKg();
 	}
 
-	/** **紧急制动减速度大小**（m/s²，已加运行阻力）。 */
+	/** **紧急制动减速度大小**（m/s²，已加运行阻力）：按紧急力锚（含闸片衰减）。 */
 	public double emergencyDecelerationMps2(double speedMetersPerSecond) {
 		return (brake.emergencyForceN(speedMetersPerSecond) + resistanceForceN(speedMetersPerSecond)) / effectiveMassKg();
 	}

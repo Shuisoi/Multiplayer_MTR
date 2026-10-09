@@ -549,7 +549,11 @@ public final class MmtrHeadlights {
 	 * <p>原版/光影包的程序里没有这些 uniform ⇒ 查到的位置是 −1 ⇒ 静默跳过（不会画坏任何东西）。</p>
 	 */
 	public void uploadForCurrentProgram() {
-		upload();
+		if (!canUpload()) {
+			return;
+		}
+		// 逐 draw 那条路：program 走光场的批次级缓存（一个批次内恒定），不再每 draw 查一次 GL。
+		upload(MmtrLightField.getInstance().currentProgramId());
 	}
 
 	/**
@@ -561,7 +565,19 @@ public final class MmtrHeadlights {
 	 * （世界坐标 = 相机相对 + 相机，平移量对 8 盏灯是同一个），滞后就被消掉了。</p>
 	 */
 	public void uploadForTerrainProgram() {
-		upload();
+		if (!canUpload()) {
+			return;
+		}
+		/*
+		 * 地形这条路由 Sodium 的 GlProgram.bind() 直接调进来，**不在 MTR 的批次循环里**
+		 * ⇒ 光场那份"批次级 program"缓存对这一侧没有意义（可能是上一帧最后一个批次的残留），
+		 * 必须现查。代价是每次 Sodium 绑 program 一次 —— 一帧只有几个，不是逐 draw。
+		 */
+		upload(GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
+	}
+
+	private static boolean canUpload() {
+		return MmtrLightField.isEnabled() && MmtrLightField.headlightsEnabled();
 	}
 
 	/**
@@ -577,12 +593,7 @@ public final class MmtrHeadlights {
 		locationsByProgram.clear();
 	}
 
-	private void upload() {
-		if (!MmtrLightField.isEnabled() || !MmtrLightField.headlightsEnabled()) {
-			return;
-		}
-
-		final int programId = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+	private void upload(int programId) {
 		Locations locations = locationsByProgram.get(programId);
 		if (locations == null) {
 			locations = new Locations(programId);

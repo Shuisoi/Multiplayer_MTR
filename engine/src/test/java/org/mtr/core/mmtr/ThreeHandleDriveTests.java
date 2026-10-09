@@ -1,6 +1,8 @@
 package org.mtr.core.mmtr;
 
 import org.junit.jupiter.api.Test;
+import org.mtr.core.mmtr.physics.BrakeSpec;
+import org.mtr.core.mmtr.physics.PneumaticBrakeSpec;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -205,33 +207,45 @@ public final class ThreeHandleDriveTests {
 
 	// ---- 控制器：制动手柄 ---------------------------------------------------------------------------
 
+	/**
+	 * **气压速率**（notes/376：这一支现在走出厂 bar 口径 —— 本车底一个 bar 键都没写）。
+	 *
+	 * <p>用 **v = 0** 量：电阻制动在 5 km/h 以下整段淡出 ⇒ 电空混合不参与，量到的就是气压本身。
+	 * （在 20 m/s 量的话，电制动先吃饱、EP 阀把缸压削到 0.36 bar —— 那是 notes/267 的另一条律，
+	 * 由 {@code afbPneumaticAssistIsCoupledWithTheBrakeHandle} 与 MmtrPneumaticBrakeTests 钉。）</p>
+	 */
 	@Test
 	public void pneumaticBrakeBuildsAndReleasesAtTheConfiguredRates() {
 		final ConsistType type = br101();
+		final PneumaticBrakeSpec air = type.getBrakes();
 		final ThreeHandleDriveController controller = new ThreeHandleDriveController();
 		final ControlState fullService = ControlState.zero().setBrakeNotch(9);
 
-		// 0.35/s 的建压速率：1 s 后约 0.35，3 s 后满
-		controller.compute(fullService, type, 20, 1000);
-		assertEquals(0.35, controller.getBrakeCylinderPressure(), 1e-9, "建压按 airBrakeApplyRatePerSecond");
+		// 第一拍 1 s：管压按排气速率掉、缸压按建压速率长（出厂口径 0.85 / 1.30 bar per second）
+		controller.compute(fullService, type, 0, 1000);
+		assertEquals(5.2 - air.getDischargeBarPerSecond(), controller.getPipeBar(), 1e-9, "管压按 airPipeDischargeBarPerSecond 掉");
+		assertEquals(air.getCylinderApplyBarPerSecond(), controller.getCylinderBar(), 1e-9, "建压按 brakeCylinderApplyBarPerSecond");
 		for (int i = 0; i < 20; i++) {
-			controller.compute(fullService, type, 20, DT_MS);
+			controller.compute(fullService, type, 0, DT_MS);
 		}
-		assertEquals(1.0, controller.getBrakeCylinderPressure(), 1e-9, "3 s 内建满");
-		assertEquals(-1.0, controller.compute(fullService, type, 20, DT_MS).getAccelerationMetersPerSecondSquared(), 1e-9,
-			"满缸压 = serviceBrakeDecelerationMps2");
+		assertEquals(1.0, controller.getBrakeCylinderPressure(), 1e-9, "3 s 内建满（归一化缸压 = bar / 缸压上限）");
+		assertEquals(3.5, controller.getPipeBar(), 1e-6, "8 档管压停在全常用 3.5 bar");
+		assertEquals(-1.0, controller.compute(fullService, type, 0, DT_MS).getAccelerationMetersPerSecondSquared(), 1e-9,
+			"满缸压 = 缸压上限折成的力 / 惯性质量（−82 kN / 82 t；0 速 ⇒ 闸片不衰减）");
 
-		// 缓解：0.25/s 排空缸压；管压 0.15/s 回充（从满制动时的 0 起，约 6.7 s 充满）
+		// 缓解：管压按充风速率回充，缸压跟着分配阀往下走（管压回到充风值 ⇒ 缸压才归零）
 		final ControlState running = ControlState.zero().setBrakeNotch(0);
 		for (int i = 0; i < 45; i++) {
-			controller.compute(running, type, 20, DT_MS);
+			controller.compute(running, type, 0, DT_MS);
 		}
-		assertEquals(0.0, controller.getBrakeCylinderPressure(), 1e-9, "缓解到零");
 		assertTrue(controller.getPipePressure() > 0.6, "管压正在回充，实际 " + controller.getPipePressure());
+		assertEquals(air.distributorCylinderBar(controller.getPipeBar()), controller.getCylinderBar(), 1e-9,
+			"缓解时缸压由分配阀跟着**当前**管压走（不是「立刻归零」）");
 		for (int i = 0; i < 100; i++) {
-			controller.compute(running, type, 20, DT_MS);
+			controller.compute(running, type, 0, DT_MS);
 		}
 		assertEquals(1.0, controller.getPipePressure(), 1e-9, "最终充满");
+		assertEquals(0, controller.getCylinderBar(), 1e-9, "管压回到充风值 ⇒ 缸压归零");
 	}
 
 	@Test
@@ -240,8 +254,13 @@ public final class ThreeHandleDriveTests {
 		final ThreeHandleDriveController controller = new ThreeHandleDriveController();
 		final StateAfter weak = settle(controller, type, ControlState.zero().setBrakeNotch(1));
 		final StateAfter strong = settle(new ThreeHandleDriveController(), type, ControlState.zero().setBrakeNotch(9));
-		assertEquals(0.05, weak.cylinder, 1e-9, "1A = 缸压 0.05");
-		assertEquals(1.0, strong.cylinder, 1e-9, "8 = 缸压 1.0");
+		/*
+		 * notes/376：缸压不再是 brakeRatios 里的比例，而是"管压级位 → 分配阀 → 缸压(bar)"：
+		 * 1A 的管压目标 4.6 bar ⇒ (4.6 − 5.2 + 灵敏限… ) × 倍率 = **1.013 bar**；8 档顶到 3.8 bar。
+		 * （旧口径的 0.05 / 1.0 是 brakeRatios 表里的两个数，没有管压/分配阀/缸簧这三层。）
+		 */
+		assertEquals(1.013, weak.cylinder, 1e-3, "1A = 缸压 1.013 bar（管压 4.6 − 灵敏限 0.2）");
+		assertEquals(type.getBrakes().getCylinderMaxBar(), strong.cylinder, 1e-9, "8 档 = 缸压上限 3.8 bar");
 		assertTrue(weak.acceleration > strong.acceleration, "弱档减速必须明显小于全常用");
 	}
 
@@ -249,10 +268,30 @@ public final class ThreeHandleDriveTests {
 	public void emergencyPositionOverridesTractionAndUsesTheEmergencyRate() {
 		final ConsistType type = br101();
 		final ThreeHandleDriveController controller = new ThreeHandleDriveController();
-		// 油门推满 + 制动到 EB：紧急必须压住牵引
+		// 油门推满 + 制动到 EB：紧急必须压住牵引（本车底增速关闭 ⇒ 一拍切零）
 		final DriveOutput out = controller.compute(ControlState.zero().setDriveHandle(97).setBrakeNotch(10), type, 20, DT_MS);
 		assertTrue(out.isEmergencyBrake(), "EB 位置要置紧急标志");
-		assertEquals(-1.8, out.getAccelerationMetersPerSecondSquared(), 1e-9, "紧急减速度");
+		assertEquals(0, controller.getLastTractionRatio(), 1e-9, "EB 必须压住牵引");
+		/*
+		 * notes/376：紧急制动力也走"缸压 → 力"这一条路（缸簧 0.3 bar 以下不出力）。
+		 * 第一拍缸压 = 紧急建压 2.0 bar/s × 100 ms = 0.2 bar，还在缸簧以下 ⇒ **这一拍零力**。
+		 * （旧口径的 −1.8 = 紧急锚 ÷ 质量，属比例制动力：没有缸簧、没有建压时间，已删除。）
+		 */
+		assertEquals(0.2, controller.getCylinderBar(), 1e-9, "紧急建压 2.0 bar/s × 100 ms");
+		assertEquals(0, out.getAccelerationMetersPerSecondSquared(), 1e-9, "缸簧以下 ⇒ 零牵引、零闸、零阻力");
+
+		// 0.2 bar/拍 ⇒ 第 21 拍顶到紧急限压 4.2 bar（高于常用上限 3.8）；0 速以外按闸片衰减
+		for (int i = 0; i < 20; i++) {
+			controller.compute(ControlState.zero().setDriveHandle(97).setBrakeNotch(10), type, 20, DT_MS);
+		}
+		assertEquals(type.getBrakes().getCylinderEmergencyBar(), controller.getCylinderBar(), 1e-9, "紧急限压 4.2 bar（> 常用 3.8）");
+		final double padFade = (BrakeSpec.DEFAULT_PAD_MU0 - BrakeSpec.DEFAULT_PAD_MU_SLOPE_PER_KMH * 20 * 3.6) / BrakeSpec.DEFAULT_PAD_MU0;
+		System.out.println(String.format("[TEST] EB 稳态 @20 m/s：缸压 %.2f bar、减速度 %.4f m/s²",
+			controller.getCylinderBar(), controller.compute(ControlState.zero().setDriveHandle(97).setBrakeNotch(10), type, 20, DT_MS)
+				.getAccelerationMetersPerSecondSquared()));
+		assertEquals(-147_600 * padFade / 82_000, controller.compute(ControlState.zero().setDriveHandle(97).setBrakeNotch(10), type, 20, DT_MS)
+			.getAccelerationMetersPerSecondSquared(), 1e-9,
+			"稳态 = 紧急锚 × κ(72 km/h) / 质量（−1.650；旧比例口径给 −1.8，那是「紧急锚不衰减、也不等建压」）");
 	}
 
 	@Test
@@ -356,11 +395,13 @@ public final class ThreeHandleDriveTests {
 		assertTrue(controller.isAfbActive(), "定速还挂着 ⇒ AFB 在岗（耦合），只是不出牵引");
 		assertEquals(0, controller.getLastTractionRatio(), 1e-9, "有制动需求时不得牵引");
 		assertTrue(out.getAccelerationMetersPerSecondSquared() <= 0);
-		// 建压之后：缸压 = 司机 1A 的目标（0.05）；此时速度为 0、低于设定值，AFB 没有补气诉求 ⇒ 不叠加
+		// 建压之后：缸压 = 1A 的分配阀输出 —— 管压 4.6 bar ⇒ (5.2 − 4.6 − 灵敏限 0.2) × 倍率 2.5333 = 1.013 bar
+		// （旧口径的「1A = 0.05」是 brakeRatios 表里的比例，没有管压/分配阀/缸簧三层，notes/376）
 		for (int i = 0; i < 100; i++) {
 			controller.compute(state, type, 0, DT_MS);
 		}
-		assertEquals(0.05, controller.getBrakeCylinderPressure(), 1e-9, "司机的手柄照旧管着自己那一份");
+		assertEquals(4.6, controller.getPipeBar(), 1e-6, "1A 的列车管目标 4.6 bar");
+		assertEquals(1.013, controller.getCylinderBar(), 1e-3, "司机的手柄照旧管着自己那一份");
 	}
 
 	@Test
@@ -467,7 +508,8 @@ public final class ThreeHandleDriveTests {
 	/**
 	 * 现场反馈诊断（根因）：**拉过气制动再回"运行"**的那几秒。
 	 *
-	 * <p>缸压要按 {@code airBrakeReleaseRatePerSecond} 慢慢排空（满缸压 4 s）。修前那 4 秒里
+	 * <p>缸压要按车底自己的建/缓解速率慢慢走（出厂口径 0.95 bar/s ⇒ 满缸压 4 s；notes/376 之后
+	 * 速率键在 {@code PneumaticBrakeSpec} 里，不再是 {@code airBrakeReleaseRatePerSecond}）。修前那几秒里
 	 * "闸还满着、牵引已经满上"，而且**残余制动力被整段丢掉** —— 实测 5 s 内 50 → 72.7 km/h，
 	 * AFB 还因为缸压没排空而让位，于是冲到设定速度以上才收得住。修后：松闸那几秒**在减速**。</p>
 	 */
@@ -480,7 +522,19 @@ public final class ThreeHandleDriveTests {
 		for (int i = 0; i < 4 * 1000 / dt; i++) {
 			speed = ConsistDynamics.step(speed, controller.compute(ControlState.zero().setBrakeNotch(9), type, speed, dt), type, dt);
 		}
-		assertEquals(1.0, controller.getBrakeCylinderPressure(), 1e-9, "8 档 4 s 后缸压应当建满");
+		assertEquals(3.5, controller.getPipeBar(), 1e-6, "8 档管压停在全常用 3.5 bar");
+		/*
+		 * notes/376：缸压不再是"司机诉求的镜像"—— 电制动先吃饱（本车底 70 kN）、机械补缺口（notes/267）。
+		 * 所以这里量的是**分配阀给的那一份减去电制动**：缸压 = 缸簧 + 缺口/满力 × 量程。
+		 */
+		final double kappa = (BrakeSpec.DEFAULT_PAD_MU0 - BrakeSpec.DEFAULT_PAD_MU_SLOPE_PER_KMH * speed * 3.6) / BrakeSpec.DEFAULT_PAD_MU0;
+		final double fullForceN = type.getBrake().getServiceForceN() * kappa;
+		final double residualN = Math.max(0, fullForceN - type.getHandles().rheostaticEffortN(speed));
+		final double springBar = BrakeSpec.DEFAULT_CYLINDER_SPRING_BAR;
+		final double expectedCylinderBar = springBar + residualN / fullForceN * (type.getBrakes().getCylinderMaxBar() - springBar);
+		System.out.println(String.format("[AFB2] 4 s 全常用后：v=%.1f km/h 管压 %.2f bar 缸压 %.3f bar（电制动补 %.0f kN）",
+			speed * 3.6, controller.getPipeBar(), controller.getCylinderBar(), (fullForceN - residualN) / 1000));
+		assertEquals(expectedCylinderBar, controller.getCylinderBar(), 0.01, "8 档 4 s 后缸压 = 分配阀那一份减去电制动替掉的");
 
 		final ControlState released = ControlState.zero().setDriveHandle(97).setCruiseSpeedKmh(100);
 		final double speedAtRelease = speed;
@@ -488,7 +542,8 @@ public final class ThreeHandleDriveTests {
 		for (int i = 0; i < 30 * 1000 / dt; i++) {
 			final DriveOutput out = controller.compute(released, type, speed, dt);
 			speed = ConsistDynamics.step(speed, out, type, dt);
-			if (controller.getBrakeCylinderPressure() > 0.01) {
+			// 联锁口径（notes/376）：判据就是模型自己那一位（缸压 > 缸簧 + 1% 量程 = 0.335 bar）
+			if (controller.getBrakeModel().isPneumaticHolding()) {
 				assertEquals(0, controller.getLastTractionRatio(), 1e-9, "闸没松完不许出牵引（tick " + i + "）");
 				assertTrue(out.getAccelerationMetersPerSecondSquared() <= 0, "闸没松完必须还在减速，tick " + i);
 			}
@@ -512,34 +567,69 @@ public final class ThreeHandleDriveTests {
 		final ThreeHandleDriveController controller = new ThreeHandleDriveController();
 		final ControlState state = ControlState.zero().setDriveHandle(97).setCruiseSpeedKmh(20);
 		double speed = 60 / 3.6;
-		double maxCylinder = 0;
+		double maxCylinderBar = 0;
+		boolean pneumaticHelpsWhileElectricIsSaturated = false;
 		final int dt = 50;
 		for (int i = 0; i < 90 * 1000 / dt; i++) {
 			speed = ConsistDynamics.step(speed, controller.compute(state, type, speed, dt), type, dt);
-			maxCylinder = Math.max(maxCylinder, controller.getBrakeCylinderPressure());
+			maxCylinderBar = Math.max(maxCylinderBar, controller.getCylinderBar());
+			// 电制动与机械**同时**在出力 = 电阻制动一个人压不住，AFB 补了气（notes/267 的口径，与单位无关）
+			pneumaticHelpsWhileElectricIsSaturated |= controller.getBrakeModel().getBlendedElectricN() > 1
+				&& controller.getBrakeModel().getPneumaticForceN() > 1;
 		}
-		System.out.println(String.format("[AFB4] 60 → 定速 20 km/h：90 s 后 v=%.2f km/h 最大缸压=%.3f", speed * 3.6, maxCylinder));
-		assertTrue(maxCylinder > 0.5, "电阻制动压不住时必须补气，最大缸压 " + maxCylinder);
+		System.out.println(String.format("[AFB4] 60 → 定速 20 km/h：90 s 后 v=%.2f km/h 最大缸压=%.3f bar", speed * 3.6, maxCylinderBar));
+		assertTrue(pneumaticHelpsWhileElectricIsSaturated, "电制动吃满的同时机械也在出力 ⇒ 电阻制动压不住时 AFB 补了气");
+		// 判据用 **bar**（0.5 bar 已在缸簧 0.3 bar 之上 ⇒ 机械那一份真的压上了闸）；
+		// 旧口径的 0.5 是归一化缸压（= 1.9 bar）—— 单位变了，读数也随电空混合变小（实测 0.969 bar）。
+		assertTrue(maxCylinderBar > 0.5, "电阻制动压不住时必须补气，最大缸压 " + maxCylinderBar + " bar");
 		assertEquals(20, speed * 3.6, 2.0, "补气之后应当稳在设定速度附近，实际 " + speed * 3.6 + " km/h");
 	}
 
-	/** 补气与气制动手柄**耦合**：司机要得多时听司机的（AFB 不许把缸压压下来），司机要得少时 AFB 往上抬。 */
+	/**
+	 * 补气与气制动手柄**耦合**：司机要得多时听司机的（AFB 不许把总制动力压下来），司机要得少时 AFB 往上抬。
+	 *
+	 * <p>notes/267 之后多了**电空混合**这一层：缸压不再等于"司机的诉求"，
+	 * 而是"诉求 − 电制动替掉的那一份"（EP 阀只削不加）。所以这一条量的是**总制动力**（气 + 电），
+	 * 加上缸压本身那一位 —— 旧口径量的是"缸压 = brakeRatios 比例"。</p>
+	 */
 	@Test
 	public void afbPneumaticAssistIsCoupledWithTheBrakeHandle() {
 		final ConsistType type = ConsistTypeRegistry.parse(WORLD_JSON).get("br101");
-		// ① 司机 6 档（0.56）而 AFB 的缺口为 0（电阻制动一个人就够）⇒ 缸压就是司机的 0.56：一分别加、也一分不减
+		final double speedMps = 60 / 3.6;
+		// ① 司机 6 档（管压 3.8 bar ⇒ 缸压 3.04 bar）而 AFB 的缺口为 0（电阻制动一个人就够）
+		//    ⇒ 电制动把司机那一份整份顶掉：缸压被削到 0，但总制动力**仍然等于司机要的那一份**。
 		final ThreeHandleDriveController driverHeavier = new ThreeHandleDriveController();
 		for (int i = 0; i < 200; i++) {
-			driverHeavier.compute(ControlState.zero().setBrakeNotch(6).setCruiseSpeedKmh(55), type, 60 / 3.6, 50);
+			driverHeavier.compute(ControlState.zero().setBrakeNotch(6).setCruiseSpeedKmh(55), type, speedMps, 50);
 		}
-		assertEquals(0.56, driverHeavier.getBrakeCylinderPressure(), 1e-9, "司机要得多 ⇒ 听司机的");
-		// ② 司机只拉 1A（0.05），AFB 的缺口比它大 ⇒ 缸压被抬到 AFB 要的那一档
+		final double driverDemandN = type.getBrake().serviceForceNFromCylinderBar(
+			type.getBrakes().distributorCylinderBar(3.8), speedMps);
+		System.out.println(String.format("[AFB6] 司机 6 档 + 定速 55：管压 %.2f bar 缸压 %.3f bar 气 %.0f kN 电 %.0f kN（司机诉求 %.0f kN）",
+			driverHeavier.getPipeBar(), driverHeavier.getCylinderBar(), driverHeavier.getBrakeModel().getPneumaticForceN() / 1000,
+			driverHeavier.getBrakeModel().getBlendedElectricN() / 1000, driverDemandN / 1000));
+		assertEquals(3.8, driverHeavier.getPipeBar(), 1e-6, "6 档管压目标 3.8 bar");
+		assertEquals(driverDemandN, driverHeavier.getBrakeModel().getBlendedElectricN(), 1e-6, "司机那一份被电制动整份顶掉");
+		assertEquals(0, driverHeavier.getCylinderBar(), 1e-9, "电制动一个人就够 ⇒ 机械那一份被削到 0");
+		assertEquals(driverDemandN, driverHeavier.getBrakeModel().getPneumaticForceN() + driverHeavier.getBrakeModel().getBlendedElectricN(), 1e-6,
+			"总制动力 = 司机要的那一份（气 + 电），AFB 一分不加也一分不减");
+
+		// ② 司机只拉 1A（管压 4.6 ⇒ 缸压 1.013 bar），AFB 的缺口比它大 ⇒ 缸压被抬到满缸压那一档，
+		//    电制动先吃掉可用力（70 kN），剩下的机械补 —— 总制动力因此远大于"司机一个人拉 1A"。
 		final ThreeHandleDriveController afbHeavier = new ThreeHandleDriveController();
+		final ThreeHandleDriveController driverAlone = new ThreeHandleDriveController();
 		for (int i = 0; i < 200; i++) {
-			afbHeavier.compute(ControlState.zero().setBrakeNotch(1).setCruiseSpeedKmh(20), type, 60 / 3.6, 50);
+			afbHeavier.compute(ControlState.zero().setBrakeNotch(1).setCruiseSpeedKmh(20), type, speedMps, 50);
+			driverAlone.compute(ControlState.zero().setBrakeNotch(1), type, speedMps, 50);
 		}
-		assertTrue(afbHeavier.getBrakeCylinderPressure() > 0.05,
-			"司机要得少 ⇒ AFB 把它抬上去，实际 " + afbHeavier.getBrakeCylinderPressure());
+		final double afbTotalN = afbHeavier.getBrakeModel().getPneumaticForceN() + afbHeavier.getBrakeModel().getBlendedElectricN();
+		final double driverAloneN = driverAlone.getBrakeModel().getPneumaticForceN() + driverAlone.getBrakeModel().getBlendedElectricN();
+		System.out.println(String.format("[AFB6] 司机 1A + 定速 20：缸压 %.3f bar 总力 %.0f kN（司机一个人 %.0f kN）",
+			afbHeavier.getCylinderBar(), afbTotalN / 1000, driverAloneN / 1000));
+		assertEquals(type.getBrake().serviceForceNFromCylinderBar(type.getBrakes().getCylinderMaxBar(), speedMps), afbTotalN, 5,
+			"AFB 把总制动力抬到满缸压那一档（电制动吃 70 kN、机械补缺口）");
+		assertEquals(type.getHandles().rheostaticEffortN(speedMps), afbHeavier.getBrakeModel().getBlendedElectricN(), 5, "电制动吃满可用力");
+		assertTrue(afbHeavier.getCylinderBar() > 0.5, "机械那一份真的压上了闸，实际 " + afbHeavier.getCylinderBar() + " bar");
+		assertTrue(afbTotalN > driverAloneN * 3, "AFB 补气必须明显抬上去（司机一个人拉 1A 只有 " + driverAloneN / 1000 + " kN）");
 	}
 
 	/**
@@ -592,15 +682,17 @@ public final class ThreeHandleDriveTests {
 	/** 世界配置的**增速关闭**版：静态断言（一拍就要稳态比例）与 τ 用例用它，免得 30 kN/s 盖住被测的那条律。 */
 	private static final String WORLD_INSTANT_JSON = withKey(WORLD_JSON, "tractionRampNPerSecond", "0");
 
+	/** 稳态读数：{@code cylinder} 是**缸压（bar）**，{@code acceleration} 是那一刻的合加速度。 */
 	private record StateAfter(double cylinder, double acceleration) {
 	}
 
+	/** 跑到稳态（**v = 0**：电阻制动淡出 ⇒ 量的是气压/闸本身，不含电空混合）。 */
 	private static StateAfter settle(ThreeHandleDriveController controller, ConsistType type, ControlState control) {
 		DriveOutput out = DriveOutput.coast();
 		for (int i = 0; i < 100; i++) {
-			out = controller.compute(control, type, 20, DT_MS);
+			out = controller.compute(control, type, 0, DT_MS);
 		}
-		return new StateAfter(controller.getBrakeCylinderPressure(), out.getAccelerationMetersPerSecondSquared());
+		return new StateAfter(controller.getCylinderBar(), out.getAccelerationMetersPerSecondSquared());
 	}
 
 	private static double timeToStop(ConsistType type, ControlState control, double startSpeed) {

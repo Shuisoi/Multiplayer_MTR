@@ -228,9 +228,22 @@ public final class MmtrCabInteraction {
 	}
 
 	private static void handle(ClientPlayerEntity player) {
-		// Holding a cab: the same key gives it back (the crew's "pull the key").
+		/*
+		 * Holding a cab: the same key gives it back (the crew's "pull the key") - and, from 2026-10-05,
+		 * ALSO lets the player off the train when they are aiming at a cab door.
+		 *
+		 * <p>用户口径：「目前实现了按 G 键上车，但在驾驶状态后，需要实现对着门按 G 键下车」。
+		 * 所以这里按**准星方向有没有车门锚点**分流：有 = 下车（人离开这列车），没有 = 只拔钥匙、
+		 * 人留在车上当乘客（今天的行为，一个字不改）。</p>
+		 */
 		final long heldCabVehicleId = VehicleRidingMovement.mmtrCabVehicleId();
 		if (heldCabVehicleId != 0) {
+			final MmtrInteractPrompt.CabTarget doorTarget = MmtrInteractPrompt.findAlightTarget(
+					player, heldCabVehicleId, VehicleRidingMovement.mmtrCabCarNumber(), VehicleRidingMovement.mmtrCabNumber());
+			if (doorTarget != null) {
+				alight(player, heldCabVehicleId, doorTarget);
+				return;
+			}
 			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(heldCabVehicleId, PacketMmtrCabOp.Op.LEAVE, ""));
 			VehicleRidingMovement.mmtrLeaveCab();
 			message(player, "已拔钥匙，可以走动了 / key out");
@@ -243,6 +256,51 @@ public final class MmtrCabInteraction {
 			return;
 		}
 		enterCab(player, target);
+	}
+
+	/**
+	 * **下车**：拔钥匙 + 结束骑乘。
+	 *
+	 * <h3>闸门：车必须停稳</h3>
+	 * <p>口径与 {@link #confirm} 里那句"车没停稳"逐字一致（同一个镜像速度、同一个 1 km/h 门槛）——
+	 * 玩家在同一个会话里看到的两句话必须是同一条规则，否则"它刚才说我停稳了、现在又说没停稳"。
+	 * 动着的车不让人下车不是洁癖：骑乘是客户端权威的，人一旦不再被 {@code movePlayer} 钉在车上，
+	 * 这列车会在 {@code teleport} 之后从人身边开走（{@code Init.updatePlayer} 只复位那三面旗，
+	 * 不会把人送到站台）。</p>
+	 *
+	 * <h3>落地位置刻意是"就地"</h3>
+	 * <p>先不自己写传送：原版潜行离车今天也是就地留下（{@code VehicleRidingMovement.tick} 的 30 拍
+	 * 潜行计时 → {@code leaveRide}），下车走**同一条路**，于是两种离车方式的行为一致、风险最小。
+	 * 代价写在明处：人停在座位上那个世界坐标，可能仍在车体内部（等于"站在车里"）。
+	 * 是否卡在车体里只有实机能判（见交付报告），真要横向让开需要一条服务端权威的落点算法
+	 * （样板是 {@code MmtrBoardPlayer.board}），那是另一个改动。</p>
+	 */
+	private static void alight(ClientPlayerEntity player, long heldCabVehicleId, MmtrInteractPrompt.CabTarget doorTarget) {
+		if (cabIsMoving(heldCabVehicleId)) {
+			// 拒绝时说清"怎么才能下车"，否则"按 G 没反应"和"按 G 拔了钥匙但没下成"分不出来。
+			message(player, "未生效：车没停稳 —— 停稳后再对着车门按 G / no effect: vehicle still moving");
+			Init.LOGGER.info("[MMTR-CAB] 下车被拒（车没停稳）：车={} 车节={} 驾驶室={} 瞄准的车门=车{} 车节{} 驾驶室{}",
+					heldCabVehicleId, VehicleRidingMovement.mmtrCabCarNumber(), VehicleRidingMovement.mmtrCabNumber(),
+					doorTarget.vehicleId(), doorTarget.carNumber(), doorTarget.cab());
+			return;
+		}
+		// 拔钥匙由 VehicleRidingMovement.leaveRide 统一发出（那是"结束骑乘"的唯一出口，
+		// 并且它读的是本地那份"我握着哪间驾驶室"），这里不重复发第二个包 —— 见 mmtrAlight 的注释。
+		VehicleRidingMovement.mmtrAlight();
+		message(player, "已拔钥匙并下车 / key out, stepped off");
+	}
+
+	/**
+	 * 这辆车**此刻在不在动**（镜像速度，与 {@link #confirm} 同一份数据源、同一个 1 km/h 门槛）。
+	 *
+	 * <p>车不在客户端镜像里时返回 {@code false}（= 放行），**这是刻意的**：找不到镜像说明"没有信息"，
+	 * 而把"没有信息"判成"在动"会让人在车还没同步过来的那几拍里下不去车 —— 那是把一次信息缺失
+	 * 变成功能不可用。反过来（车其实在动却放行）代价有限：人自己愿意在动着的车上按 G，
+	 * 而且他此刻正坐在里面看着窗外。</p>
+	 */
+	private static boolean cabIsMoving(long vehicleId) {
+		final VehicleExtension vehicle = vehicleById(vehicleId);
+		return vehicle != null && Math.round(Math.abs(vehicle.getSpeed()) * 3600) > 1;
 	}
 
 	/**
@@ -367,8 +425,7 @@ public final class MmtrCabInteraction {
 	/** The model ID of one car of a consist - the same lookup {@code ModelPropertiesPart} uses. */
 	@Nullable
 	private static String modelIdFor(VehicleExtension vehicle, int carNumber) {
-		final ObjectArrayList<org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair<org.mtr.core.data.VehicleCar, ObjectArrayList<org.mtr.core.data.Vehicle.BogiePosition>>> cars = vehicle.getVehicleCarsAndPositions();
-		return carNumber < 0 || carNumber >= cars.size() ? null : cars.get(carNumber).left().getVehicleId();
+		return vehicle.mmtrCarResourceId(carNumber);
 	}
 
 	private static void message(ClientPlayerEntity player, String text) {

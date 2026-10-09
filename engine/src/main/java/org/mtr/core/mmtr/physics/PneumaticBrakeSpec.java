@@ -333,6 +333,16 @@ public final class PneumaticBrakeSpec {
 		}
 	}
 
+	/** 这颗"电空混合"开关的拷贝（notes/379：编组级要把"有没有动力车能混合"折进来，规格本身不可变）。 */
+	public PneumaticBrakeSpec withBlendingEnabled(boolean blendingEnabled) {
+		return this.blendingEnabled == blendingEnabled ? this
+			: new PneumaticBrakeSpec(nominalBar, chargedBar, fullServiceBar, emergencyBar, targetsBar,
+				chargeBarPerSecond, dischargeBarPerSecond, cylinderMaxBar, cylinderSpringBar, cylinderEmergencyBar,
+				cylinderApplyBarPerSecond, cylinderReleaseBarPerSecond, emergencyCylinderBarPerSecond,
+				distributorRatio, distributorSensitivityBar, padFadeEnabled, padMu0, padMuSlopePerKmh, padMuFloor,
+				blendingEnabled, wspEnabled, wheelSlipMu, pipePropagationPerSecond);
+	}
+
 	public double getNominalBar() { return nominalBar; }
 	public double getChargedBar() { return chargedBar; }
 	public double getFullServiceBar() { return fullServiceBar; }

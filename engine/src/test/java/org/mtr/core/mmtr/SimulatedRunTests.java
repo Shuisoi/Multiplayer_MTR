@@ -83,7 +83,9 @@ public final class SimulatedRunTests {
 	@Test
 	public void testAirBrakeRunStopsAndNeverBackwards() {
 		final ConsistType freight = ConsistTypeRegistry.parse(JSON).get("freight");
-		final AirBrakeController controller = new AirBrakeController();
+		// notes/376：AIR_BRAKE（"降保升"）不再有自己的控制器 —— 它的语义就是"闸位 = 管压级位"，
+		// 由 NotchedDriveController 服务（见 Vehicle 的控制器工厂）。
+		final NotchedDriveController controller = new NotchedDriveController();
 		// accelerate at notch 4 for a while
 		final NotchedDriveController power = new NotchedDriveController();
 		double speed = 0;
@@ -106,6 +108,7 @@ public final class SimulatedRunTests {
 		}
 		assertTrue(speed <= 0.01, "air brake should stop the freight consist, got " + speed);
 		assertTrue(controller.getBrakeCylinderPressure() > 0.5, "brake cylinder should be engaged after stopping");
+		assertEquals(3.8, controller.getBrakeModel().getCylinderBar(), 1e-9, "3 档（全常用）= 缸压上限 3.8 bar");
 	}
 
 	@Test

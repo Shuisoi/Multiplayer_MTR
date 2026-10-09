@@ -39,6 +39,17 @@ public final class MmtrCoupleInteraction {
 	private static final double MAX_AIM_ANGLE_DEGREES = 35;
 	/** How far (blocks) a train may be before the "aim at it" hint is shown. */
 	private static final double HINT_RANGE_M = 25.0;
+	/**
+	 * 粗筛余量（米）：见 {@link #anyTrainNearby} 的解释 —— 车头到最长那一节车尾的距离用
+	 * {@code getTotalVehicleLength()} 估，再加一点余量吸收朝向/瞄准高度带来的差。
+	 * 只影响"要不要认真算"（算多了只是慢，算少了才会漏），所以取宽一点。
+	 */
+	private static final double NEARBY_SLACK_M = 8.0;
+	/**
+	 * MMTR（notes/405）：{@link #anyTrainNearby} 的粗筛（车头距离 > 提示半径 + 车长 + 余量 ⇒ 整列车都不可能命中）。
+	 * {@code -Dmmtr.couplehintfilter=false} 回到"每列车都算整列位置"。
+	 */
+	private static final boolean MMTR_COUPLE_HINT_FILTER = !"false".equalsIgnoreCase(System.getProperty("mmtr.couplehintfilter", "true"));
 	/** Aim points are also tested at car-body height so the crosshair catches the train at eye level. */
 	private static final double AIM_HEIGHT_OFFSET_M = 1.5;
 	/** How often the action bar prompt is refreshed, in ticks. */
@@ -250,12 +261,29 @@ public final class MmtrCoupleInteraction {
 		return result;
 	}
 
-	/** True when some train is within the hint range of the player's eye, aimed at or not. */
+	/**
+	 * True when some train is within the hint range of the player's eye, aimed at or not.
+	 *
+	 * <p>粗筛（notes/405）：一列车的每一节都在**车头往后 totalLength 之内**，所以
+	 * "车头到眼睛的距离 > 提示半径 + 车长 + 余量"时，不可能有任一节车进入提示半径 ⇒ 直接跳过这列车。
+	 * 这一步只是把"离得远、本来就不会命中"的列车从"算整列车的位置"里摘出去：被判为"可能近"的列车
+	 * 仍然走下面原来的逐节判定，**结论不变**。</p>
+	 */
 	private static boolean anyTrainNearby(ClientPlayerEntity player) {
 		final double eyeX = player.getX();
 		final double eyeY = player.getY() + 1.6;
 		final double eyeZ = player.getZ();
 		for (final VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
+			final Vehicle.PositionAndTiltAngle head = MMTR_COUPLE_HINT_FILTER ? vehicle.getHeadPositionAndTiltAngle() : null;
+			if (head != null) {
+				final double dx = head.position().x() - eyeX;
+				final double dy = head.position().y() - eyeY;
+				final double dz = head.position().z() - eyeZ;
+				final double reach = HINT_RANGE_M + vehicle.vehicleExtraData.getTotalVehicleLength() + NEARBY_SLACK_M;
+				if (dx * dx + dy * dy + dz * dz > reach * reach) {
+					continue;
+				}
+			}
 			for (final ObjectArrayList<Vector> centres : carCentres(vehicle)) {
 				for (final Vector centre : centres) {
 					final double dx = centre.x() - eyeX;

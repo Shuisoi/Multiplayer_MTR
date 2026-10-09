@@ -188,6 +188,7 @@ public final class MmtrLightField {
 	 * <pre>
 	 *   debug=true    # 换上假色片元着色器（红=方块光 绿=天空光 灰=没数据 蓝=MTR 强制亮）；改完按 F3+T 重载资源
 	 *   screenshot=6  # 自动截 N 张（每 2 秒一张）到 run/screenshots/
+	 *   drawLog=true  # 每个 draw 打一行坐标/光照对照（默认**关**；排查"采样落到哪一格"时才开）
 	 * </pre>
 	 * 不用 {@code -D} 的原因：dev 客户端是 gradle **daemon** 派生出来的，
 	 * 早先启动的 daemon 不会继承新设的 JAVA_TOOL_OPTIONS，参数会被静默吞掉（实测 14:12 那次）。
@@ -198,6 +199,13 @@ public final class MmtrLightField {
 	private static long diagnosticsReadMillis;
 	private static boolean diagnosticsDebug;
 	private static int diagnosticsScreenshotCount;
+	/**
+	 * 逐 draw 的坐标/光照对照日志（properties: {@code drawLog}，默认 <b>关</b>）。
+	 *
+	 * <p>它天生高频：配额是"每个 5 秒窗口 {@link #MAX_DRAW_STATE_LOGS} 条"，稳态下约 4.8 行/秒 ——
+	 * 实测 32 分钟会话刷了约 6500 行，是整份日志里最吵的一项。排查"光场采样落到了哪一格"时再打开。</p>
+	 */
+	private static boolean diagnosticsDrawLog;
 	/**
 	 * AO 强度 × 1000（0 = 关闭，1000 = 全强度），来自 properties 的 {@code ao=}。
 	 * 它被写进 LUT 元数据列第 6 行，着色器读它决定要不要做那 27 次实心取位
@@ -267,6 +275,7 @@ public final class MmtrLightField {
 				properties.load(inputStream);
 			}
 			diagnosticsDebug = Boolean.parseBoolean(properties.getProperty("debug", "false").trim());
+			diagnosticsDrawLog = Boolean.parseBoolean(properties.getProperty("drawLog", "false").trim());
 			diagnosticsScreenshotCount = Integer.parseInt(properties.getProperty("screenshot", "0").trim());
 			diagnosticsReloadNonce = properties.getProperty("reload", "").trim();
 			final double aoStrength = Math.max(0, Math.min(1, Double.parseDouble(properties.getProperty("ao", "1.0").trim())));
@@ -570,6 +579,49 @@ public final class MmtrLightField {
 	private static final int MAX_PACK_SAMPLER_LOGS = 4;
 	/** 进入"光影包模式"时打一次说明（每次启动一次）。 */
 	private boolean packShaderpackModeLog = true;
+
+	/**
+	 * 本批次绑定的 program（在 {@code ShaderManager.setupShaderBatchState} RETURN 处缓存 —— 那一刻 program 刚 bind 好）。
+	 *
+	 * <p><b>为什么能缓存：</b>MTR 的批次循环是"每桶 setupShaderBatchState 一次 → 把这个桶的 RenderCall 全画完"，
+	 * 而 {@code BatchManager$RenderCall.draw()} 里只做绑 VAO、传逐 draw 顶点属性、{@code glDrawElements}
+	 * —— <b>不重绑 program</b>。所以一个批次内的每个 draw 看到的 {@code GL_CURRENT_PROGRAM} 都是同一个值。</p>
+	 *
+	 * <p><b>原先的代价：</b>每个 draw 有**三处**各查一次 {@code glGetInteger(GL_CURRENT_PROGRAM)}
+	 * （{@link #uploadPackModelMatrix}、{@link #clearPackModelMatrix}、{@code MmtrHeadlights.upload}），
+	 * 而实测 {@code draws/frame=2487}、{@code batches/frame=12}（每批次 207 个 draw）
+	 * ⇒ 同一个值每帧被查了约 1.5 万次、而上限只需要 24 次（两遍 pass × 12 批次）。</p>
+	 *
+	 * <p><b>安全性：</b>缓存**只在批次内**被信任（由 {@code ShaderManagerMixin} 在 RETURN 置位、
+	 * 下一批次 HEAD 与优化渲染器退出时作废）；任何"不在批次里"的调用点都会回落到真正的查询，
+	 * 也就是完全等于改动前的旧行为。地形那条路由 Sodium 自己 bind program（不在批次循环里），
+	 * 见 {@code MmtrHeadlights.uploadForTerrainProgram()} —— 那条路始终现查，不吃这份缓存。</p>
+	 */
+	private int batchProgramId;
+	private boolean batchProgramValid;
+
+	/** 批次开始：program 已经 bind 好（{@code setupShaderBatchState} RETURN），把这一批的 program 记下来。 */
+	public void onBatchProgramBound() {
+		batchProgramId = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+		batchProgramValid = batchProgramId != 0;
+	}
+
+	/**
+	 * 作废批次级 program 缓存。调用点：{@code setupShaderBatchState} HEAD（上一批已经画完）、
+	 * {@code MainRenderer} 里优化渲染器退出之后（保证批次外的 draw 不会用到过期值），
+	 * 以及包重载（{@link #clearPackSamplerCache()}）。
+	 */
+	public void invalidateBatchProgram() {
+		batchProgramValid = false;
+	}
+
+	/**
+	 * 当前绑定的 GL program。批次内由 {@link #onBatchProgramBound()} 的缓存回答（零 GL 调用）；
+	 * 缓存无效时回落到真正的查询 —— 所以批次外的调用点行为与改动前完全一致。
+	 */
+	public int currentProgramId() {
+		return batchProgramValid ? batchProgramId : GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+	}
 
 	private MmtrLightField() {
 	}
@@ -1016,7 +1068,7 @@ public final class MmtrLightField {
 		if (!isEnabled() || !isUnderShaderpack()) {
 			return;
 		}
-		final int programId = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+		final int programId = currentProgramId();
 		final PackSamplerBinding binding = packSamplerBindings.get(programId);
 		if (binding == null || binding.modelMatLocation < 0) {
 			// 还没建缓存（= 这个 program 不是我们注入的），或者注入文本里没有这条 uniform
@@ -1026,15 +1078,28 @@ public final class MmtrLightField {
 			packModelMatrixFloats.clear();
 			Utilities.store(modelMatrix, packModelMatrixFloats);
 			GL20.glUniformMatrix4fv(binding.modelMatLocation, false, packModelMatrixFloats);
-			if (binding.normalFixLocation >= 0) {
-				// 法线空间修正开关：每 draw 传一次（改 properties 后 2 秒内生效，不用重启）。
-				GL20.glUniform1i(binding.normalFixLocation, diagnosticsNormalFix ? 1 : 0);
+			/*
+			 * 这三个是**开关/调参**，不是逐 draw 的量：它们的源值每 2 秒才重读一次 properties。
+			 *
+			 * <p>而 uniform 是 **program 的状态**（写一次就一直保持，除非重新 link 或程序被销毁），
+			 * 所以"值没变就不用再写"。原来的写法是每个 draw 都写一遍：实测每视觉帧 ~4974 个 draw
+			 * ⇒ 这三个 glUniform1i 每帧被调约 1.5 万次，而真正需要写的次数是 0。
+			 * 按 program 记住上次写进去的值（{@code PackSamplerBinding} 本来就是按 program 建的）。</p>
+			 *
+			 * <p>语义不变：源值一变（改 properties 后 2 秒内）比较就会不等，立刻上传 —— 仍然是"不用重启"。</p>
+			 */
+			final int normalFix = diagnosticsNormalFix ? 1 : 0;
+			if (binding.normalFixLocation >= 0 && binding.lastNormalFix != normalFix) {
+				GL20.glUniform1i(binding.normalFixLocation, normalFix);
+				binding.lastNormalFix = normalFix;
 			}
-			if (binding.probeLocation >= 0) {
+			if (binding.probeLocation >= 0 && binding.lastProbe != diagnosticsProbe) {
 				GL20.glUniform1i(binding.probeLocation, diagnosticsProbe);
+				binding.lastProbe = diagnosticsProbe;
 			}
-			if (binding.fieldMixLocation >= 0) {
+			if (binding.fieldMixLocation >= 0 && binding.lastFieldMix != diagnosticsFieldMix) {
 				GL20.glUniform1f(binding.fieldMixLocation, diagnosticsFieldMix);
+				binding.lastFieldMix = diagnosticsFieldMix;
 			}
 			if (Math.abs(lastFieldMixState - diagnosticsFieldMix) > 0.001F) {
 				// 光场占比也要能证明"真的到着色器了"（上传值 + 回读值）。
@@ -1096,7 +1161,7 @@ public final class MmtrLightField {
 		if (!isEnabled() || !isUnderShaderpack()) {
 			return;
 		}
-		final int programId = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+		final int programId = currentProgramId();
 		final PackSamplerBinding binding = packSamplerBindings.get(programId);
 		if (binding == null || binding.modelMatLocation < 0) {
 			return;
@@ -1119,7 +1184,8 @@ public final class MmtrLightField {
 		// **必须在下面那个日志配额的提前返回之前**，否则开局 24 条日志用完之后车灯就再也不上传了。
 		MmtrHeadlights.getInstance().uploadForCurrentProgram();
 
-		if (drawStatesLogged >= MAX_DRAW_STATE_LOGS) {
+		// 这一段纯粹是诊断：默认关（properties: drawLog），要"采样落到哪一格"的证据时才开。
+		if (!diagnosticsDrawLog || drawStatesLogged >= MAX_DRAW_STATE_LOGS) {
 			return;
 		}
 		if (modelMatrix == null) {
@@ -2000,8 +2066,12 @@ public final class MmtrLightField {
 	 * <p>判据故意放宽到"路径里含 {@code /rail/}"并以日志把**第一次**判成钢轨的贴图打出来 ——
 	 * 万一某个车辆贴图被误判，日志里一眼能看到（宁可先看见，不要先猜）。
 	 * 资源包自定义的 3D 钢轨若把贴图放在别处，这条判据识别不了（会继续参与光场）。</p>
+	 *
+	 * <p><b>这是"什么算钢轨批次"的唯一一份判据</b> —— 光场用它决定 LUT，
+	 * {@link MmtrOptimizerStats#onBatch} 也用它把 draw 分到钢轨/非钢轨两个桶。
+	 * 所以它是 public 的：不要再写第二份实现。</p>
 	 */
-	private static boolean isRailTexture(String path) {
+	public static boolean isRailTexture(String path) {
 		return path.contains("/rail/") || path.endsWith("/rail.png") || path.endsWith("/rail_siding.png");
 	}
 
@@ -2030,7 +2100,7 @@ public final class MmtrLightField {
 			return;
 		}
 
-		final int programId = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+		final int programId = currentProgramId();
 		if (programId == 0) {
 			return;
 		}
@@ -2067,6 +2137,8 @@ public final class MmtrLightField {
 	public void clearPackSamplerCache() {
 		packSamplerBindings.clear();
 		packSamplerLogs = 0;
+		// program 可能被销毁重发，批次级 program 缓存也必须一起作废。
+		batchProgramValid = false;
 	}
 
 	/**
@@ -2091,6 +2163,19 @@ public final class MmtrLightField {
 		private final int lutUnit;
 		private final int atlasUnit;
 		private final int solidUnit;
+
+		/**
+		 * 上一次**真正上传**给这个 program 的三个标量值。
+		 *
+		 * <p>uniform 是 program 的状态（写一次就一直保持，除非重新 link / 程序被销毁），所以值没变就不必再写
+		 * —— 见 {@link MmtrLightField#uploadPackModelMatrix}。初值刻意取成"不可能等于任何合法值"，
+		 * 保证每个 program 第一次一定上传。</p>
+		 *
+		 * <p>{@link #NONE} 是共享哨兵，它的三个 location 全是 −1，走不到这段逻辑，所以这些可变字段不会被写到。</p>
+		 */
+		private int lastNormalFix = Integer.MIN_VALUE;
+		private int lastProbe = Integer.MIN_VALUE;
+		private float lastFieldMix = Float.NaN;
 
 		private PackSamplerBinding() {
 			lutLocation = -1;

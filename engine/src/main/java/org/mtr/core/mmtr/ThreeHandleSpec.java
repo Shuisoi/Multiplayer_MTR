@@ -3,6 +3,7 @@ package org.mtr.core.mmtr;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.jspecify.annotations.Nullable;
+import org.mtr.core.mmtr.physics.ElectricBrakeSpec;
 import org.mtr.core.mmtr.physics.PneumaticBrakeSpec;
 
 /**
@@ -71,6 +72,12 @@ public final class ThreeHandleSpec {
 	 * （notes/266，规格模块二）。{@code 0} = 不限（旧口径：一路给到 {@link #rheostaticBrakeForceN}）。
 	 */
 	private final double rheostaticMaxPowerW;
+	/**
+	 * notes/379：电阻/回生制动的**三段式曲线 + 低速切除**集中在一个可复用的口径里
+	 * （{@link ElectricBrakeSpec}），与车底自己的电制动是同一套公式 —— 免得两处各写一遍淡入/恒功率。
+	 * 本规格里这份的切除速度取"满力速度的一半"（notes/266 的老口径，逐位不变）。
+	 */
+	private final ElectricBrakeSpec electricBrake;
 	/**
 	 * **气压与闸片口径**（notes/266）：列车管级位表 + 分配阀 + 充排气速率 + 闸片摩擦。
 	 * {@code null} = 这份车底继续走旧的归一化模型（零回归）。
@@ -148,6 +155,8 @@ public final class ThreeHandleSpec {
 		this.tractionLagMillis = Math.max(0, tractionLagMillis);
 		this.tractionRampNPerSecond = Math.max(0, tractionRampNPerSecond);
 		this.rheostaticMaxPowerW = Math.max(0, rheostaticMaxPowerW);
+		// notes/379：曲线口径收敛到 ElectricBrakeSpec（默认切除 = 满力速度的一半，与 notes/266 逐位相同）。
+		this.electricBrake = new ElectricBrakeSpec(this.rheostaticBrakeForceN, this.rheostaticMaxPowerW, this.rheostaticFadeKmh);
 		this.brakes = brakes;
 		this.brakePositions = brakePositions == null || brakePositions.length == 0 ? DEFAULT_BRAKE_POSITIONS : brakePositions;
 		this.brakeRatios = brakeRatios == null || brakeRatios.length == 0 ? DEFAULT_BRAKE_RATIOS.clone() : brakeRatios;
@@ -191,9 +200,7 @@ public final class ThreeHandleSpec {
 	 * 渐近停住，"电阻制动停不住车"这条就变成一句空话 —— 而它正是"两根手柄要配合"的根据。</p>
 	 */
 	public double rheostaticFade(double speedMetersPerSecond) {
-		final double fadeSpeedMps = rheostaticFadeKmh / 3.6;
-		final double cutoffSpeedMps = fadeSpeedMps * 0.5;
-		return Math.max(0, Math.min(1, (Math.max(0, speedMetersPerSecond) - cutoffSpeedMps) / (fadeSpeedMps - cutoffSpeedMps)));
+		return electricBrake.fadeFactor(speedMetersPerSecond);
 	}
 
 	/**
@@ -209,18 +216,12 @@ public final class ThreeHandleSpec {
 	 * 150 kN / 6.4 MW ⇒ 折点 153.6 km/h，200 km/h 时只剩 115 kN。</p>
 	 */
 	public double rheostaticEffortN(double speedMetersPerSecond) {
-		final double v = Math.max(0, speedMetersPerSecond);
-		final double fade = rheostaticFade(v);
-		if (fade <= 0 || rheostaticBrakeForceN <= 0) {
-			return 0;
-		}
-		final double powerLimited = rheostaticMaxPowerW > 0 && v > 0 ? rheostaticMaxPowerW / v : Double.MAX_VALUE;
-		return Math.min(rheostaticBrakeForceN, powerLimited) * fade;
+		return electricBrake.effortN(speedMetersPerSecond);
 	}
 
 	/** 电制动恒功率段的折点速度（m/s）：{@code P/B_max}；不限功率或无力时为 0。 */
 	public double rheostaticBreakpointMetersPerSecond() {
-		return rheostaticBrakeForceN <= 0 || rheostaticMaxPowerW <= 0 ? 0 : rheostaticMaxPowerW / rheostaticBrakeForceN;
+		return electricBrake.breakpointMetersPerSecond();
 	}
 
 	/** 制动手柄位置的制动缸目标比例；越界按两端钳。 */
@@ -262,6 +263,14 @@ public final class ThreeHandleSpec {
 	// ---- 配置读写 ---------------------------------------------------------------------------------
 
 	public static ThreeHandleSpec fromJson(JsonObject json, double fallbackRheostaticForceN) {
+		return fromJson(json, fallbackRheostaticForceN, PneumaticBrakeSpec.fromJsonOrNull(json));
+	}
+
+	/**
+	 * notes/376：气压口径由调用方（{@link ConsistType#fromJson}）解析一次后传进来 —— 同一份文档不再解析两份口径，
+	 * 车底与手柄规格共用**同一个** {@link PneumaticBrakeSpec} 实例。
+	 */
+	public static ThreeHandleSpec fromJson(JsonObject json, double fallbackRheostaticForceN, @Nullable PneumaticBrakeSpec brakes) {
 		return new ThreeHandleSpec(
 			getDouble(json, "driveMinRatio", 0.02),
 			getInt(json, "drivePercentSteps", 96),
@@ -280,8 +289,7 @@ public final class ThreeHandleSpec {
 			getDouble(json, "tractionRampNPerSecond", DEFAULT_TRACTION_RAMP_N_PER_SECOND),
 			// 电制动高速恒功率上限（notes/266）：缺省 0 = 不限（旧口径）。
 			getDouble(json, "rheostaticMaxPowerW", 0),
-			// 气压与闸片口径（notes/266）：**只要没有 bar 键就是 null** ⇒ 这份车底继续走旧归一化模型。
-			PneumaticBrakeSpec.fromJsonOrNull(json)
+			brakes
 		);
 	}
 
@@ -380,6 +388,9 @@ public final class ThreeHandleSpec {
 	public double getTractionRampNPerSecond() { return tractionRampNPerSecond; }
 	/** 电制动最大回馈功率（W）：{@code 0} = 不限（旧口径）。 */
 	public double getRheostaticMaxPowerW() { return rheostaticMaxPowerW; }
+
+	/** notes/379：这份手柄规格带的电制动口径（{@code null} = 没有电制动）。 */
+	public ElectricBrakeSpec getElectricBrake() { return electricBrake.isPresent() ? electricBrake : null; }
 	/** **气压与闸片口径**（notes/266）；{@code null} = 这份车底走旧归一化模型。 */
 	public @Nullable PneumaticBrakeSpec getBrakes() { return brakes; }
 	public int getBrakePositionCount() { return brakeRatios.length; }

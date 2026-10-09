@@ -13,6 +13,7 @@ import org.mtr.mod.mmtr.face.MmtrFaceAnim;
 import org.mtr.mod.mmtr.face.MmtrFaceData;
 import org.mtr.mod.mmtr.face.MmtrFaceDocument;
 import org.mtr.mod.mmtr.face.MmtrFaceGeometry;
+import org.mtr.mod.render.MmtrFrameProbe;
 import org.mtr.mod.render.StoredMatrixTransformations;
 
 import java.util.HashMap;
@@ -104,9 +105,14 @@ public final class MmtrFaceRuntime {
 		}
 
 		final MmtrFaceData data = dataOf(vehicle);
+		// ★ 只包住真正的绘制循环：上面那几个提前返回都是"这节车没有面"的便宜路径（不值得量），
+		//   而这里每一次 drawFace 都可能触发 Java2D 软件光栅 + 整幅纹理上传。
+		//   次数 ÷ 帧数 = 每帧有几节车真的画了面，与车数、与面文档是否有动画都相关。
+		final long probeFaces = MmtrFrameProbe.begin();
 		for (final MmtrVehicleAnchors.Anchor anchor : faces) {
 			drawFace(vehicle, carNumber, vehicleId, anchor, carTransform, data);
 		}
+		MmtrFrameProbe.end("faces", probeFaces);
 	}
 
 	private static void drawFace(VehicleExtension vehicle, int carNumber, String vehicleId, MmtrVehicleAnchors.Anchor anchor, StoredMatrixTransformations carTransform, MmtrFaceData data) {
@@ -175,6 +181,15 @@ public final class MmtrFaceRuntime {
 	/**
 	 * 重画签名：**变了才重画**这一条全靠它（车开着的时候每帧重画画布会把 CPU 吃光）。
 	 *
+	 * <p>⚠️ 数据那一段**只取这块牌真正引用到的字段**（{@link MmtrFaceDocument#referencedFields()}），
+	 * **不是** {@link MmtrFaceData#describe()} 的全量快照。全量里含 {@code speed}、{@code cab.arcM}
+	 * 这些每帧都在变的量 ⇒ 车一开动，连只显示一句静态文字的牌子都会被判定成"内容变了"而每帧重画。
+	 * 实测这一笔占 {@code main.vehicles} 的 **86%**（notes/396）。</p>
+	 *
+	 * <p>{@code referencedFields()} 返回 {@code null} 时（用了动画/forEach/翻牌机 ⇒ 判断不了）
+	 * {@code describeOnly(null)} 就是全量 ⇒ **自动回落**。这是故意的失败方向：宁可多画几次，
+	 * 也绝不能出现"牌子该变却没变"。</p>
+	 *
 	 * <p>带时间桶的只有"真的有动画"的文档（{@link MmtrFaceDocument#animated()}）：
 	 * 没有动画的牌一个字都不多画，回到 F0 的口径。</p>
 	 *
@@ -182,7 +197,7 @@ public final class MmtrFaceRuntime {
 	 */
 	private static String signature(MmtrFaceDocument document, int page, MmtrFaceData data, MmtrVehicleAnchors.Anchor anchor, int pxPerMetre, long timeMs) {
 		final StringBuilder builder = new StringBuilder();
-		builder.append(document.id()).append('|').append(data.describe()).append('|')
+		builder.append(document.id()).append('|').append(data.describeOnly(document.referencedFields())).append('|')
 			.append(anchor.widthM).append('x').append(anchor.heightM).append('@').append(pxPerMetre).append('|')
 			.append(document.side()).append('|').append(document.roll()).append(',').append(document.tilt());
 		if (page >= 0) {

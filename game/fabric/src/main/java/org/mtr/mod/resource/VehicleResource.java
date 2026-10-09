@@ -7,6 +7,7 @@ import org.mtr.libraries.it.unimi.dsi.fastutil.ints.Int2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.*;
 import org.mtr.mapping.holder.Box;
 import org.mtr.mapping.holder.MutableText;
+import org.mtr.mapping.mapper.OptimizedRenderer;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.client.CustomResourceLoader;
@@ -15,16 +16,20 @@ import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.generated.resource.VehicleResourceSchema;
 import org.mtr.mod.render.DynamicVehicleModel;
 import org.mtr.mod.render.MainRenderer;
+import org.mtr.mod.render.MmtrVehicleDrawProbe;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.StoredMatrixTransformations;
 import org.mtr.mod.render.light.MmtrHeadlights;
 import org.mtr.mod.sound.BveVehicleSound;
 import org.mtr.mod.sound.BveVehicleSoundConfig;
 import org.mtr.mod.sound.LegacyVehicleSound;
+import org.mtr.mod.sound.MmtrTractionSoundSet;
+import org.mtr.mod.sound.MmtrVehicleSound;
 import org.mtr.mod.sound.VehicleSoundBase;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -39,9 +44,6 @@ public final class VehicleResource extends VehicleResourceSchema {
 	private final LegacyVehicleSupplier<ObjectArrayList<VehicleModel>> extraModelsSupplier;
 	private final Int2ObjectAVLTreeMap<Int2ObjectAVLTreeMap<ObjectArrayList<VehicleModel>>> allModels = new Int2ObjectAVLTreeMap<>();
 	private final Int2ObjectAVLTreeMap<Int2ObjectAVLTreeMap<CachedResource<CachedResource<CachedResource<VehicleResourceCacheHolder>>>>> cachedVehicleResource = new Int2ObjectAVLTreeMap<>();
-
-	/** Throttle for the temporary "is any geometry actually submitted" diagnostic. */
-	private static long mmtrLastQueueLogMillis = 0;
 
 	private static final boolean[][] CHRISTMAS_LIGHT_STAGES = {
 			{true, false, false, false},
@@ -238,46 +240,17 @@ public final class VehicleResource extends VehicleResourceSchema {
 			 */
 			final int lampColor = MmtrHeadlights.lampColor(vehicle, carNumber);
 			if (noOpenDoorways) {
-				logQueueDiagnostics(vehicle, carNumber, vehicleResourceCache.optimizedModelsDoorsClosed, true, lampColor);
-				queue(vehicleResourceCache.optimizedModelsDoorsClosed, storedMatrixTransformations, vehicle, light, true, lampColor);
+				queue(vehicleResourceCache.optimizedModelsDoorsClosed, storedMatrixTransformations, vehicle, light, true, lampColor, totalCars);
 			} else {
-				logQueueDiagnostics(vehicle, carNumber, vehicleResourceCache.optimizedModels, false, lampColor);
-				queue(vehicleResourceCache.optimizedModels, storedMatrixTransformations, vehicle, light, false, lampColor);
+				queue(vehicleResourceCache.optimizedModels, storedMatrixTransformations, vehicle, light, false, lampColor, totalCars);
 			}
 		}
-	}
-
-	/**
-	 * 每 2 秒一行：**这一节车这一帧到底有哪些条件真的有几何**，以及灯罩算出来的颜色。
-	 *
-	 * <p>为什么需要它（notes/374）：原来那行只报 {@code 0/11 part conditions have optimized geometry} ——
-	 * 看不出是哪一组，于是"灯罩那组几何到底在不在被画的那张表里"只能靠猜。2026-10-03 的现场正是这样：
-	 * 颜色算得对（另一行有日志），画面还是白的，而"这条 draw 到底有没有料"没有第三行可以对照。</p>
-	 */
-	private void logQueueDiagnostics(VehicleExtension vehicle, int carNumber, Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, boolean noOpenDoorways, int lampColor) {
-		final long nowMillis = System.currentTimeMillis();
-		if (nowMillis - mmtrLastQueueLogMillis <= 2000) {
-			return;
-		}
-		mmtrLastQueueLogMillis = nowMillis;
-		final StringBuilder withGeometry = new StringBuilder();
-		optimizedModels.forEach((partCondition, wrapper) -> {
-			if (wrapper.optimizedModel != null) {
-				if (withGeometry.length() > 0) {
-					withGeometry.append(',');
-				}
-				withGeometry.append(partCondition);
-			}
-		});
-		Init.LOGGER.info("[MMTR-DBG] vehicle queue: {}/{} 条件有几何 [{}] doorsClosed={} 灯罩色=#{} model={}",
-				withGeometry.toString().isEmpty() ? 0 : withGeometry.toString().split(",").length, optimizedModels.size(), withGeometry,
-				noOpenDoorways, String.format("%08X", lampColor), getId());
 	}
 
 	public void queueBogie(int bogieIndex, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light) {
 		final VehicleResourceCache vehicleResourceCache = getCachedVehicleResource(0, 1, false);
 		if (vehicleResourceCache != null && Utilities.isBetween(bogieIndex, 0, 1)) {
-			queue(bogieIndex == 0 ? vehicleResourceCache.optimizedModelsBogie1 : vehicleResourceCache.optimizedModelsBogie2, storedMatrixTransformations, vehicle, light, true, ARGB_WHITE);
+			queue(bogieIndex == 0 ? vehicleResourceCache.optimizedModelsBogie1 : vehicleResourceCache.optimizedModelsBogie2, storedMatrixTransformations, vehicle, light, true, ARGB_WHITE, 1);
 		}
 	}
 
@@ -485,6 +458,7 @@ public final class VehicleResource extends VehicleResourceSchema {
 				final Object2ObjectOpenHashMap<PartCondition, ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper>> objModelsBogie2Model = new Object2ObjectOpenHashMap<>();
 
 				final ObjectArrayList<Box> doorways = new ObjectArrayList<>();
+				final long floorsStartNanos = System.nanoTime();
 				forEachNonNull(allModelsList, dynamicVehicleModel -> dynamicVehicleModel.writeFloorsAndDoorways(floors, doorways, materialGroupsModel, materialGroupsModelDoorsClosed, objModelsModel, objModelsModelDoorsClosed), force);
 
 				if (floors.isEmpty() && doorways.isEmpty()) {
@@ -503,12 +477,13 @@ public final class VehicleResource extends VehicleResourceSchema {
 				forEachNonNull(allModelsList, dynamicVehicleModel -> dynamicVehicleModel.modelProperties.iterateParts(modelPropertiesPart -> modelPropertiesPart.mapDoors(doorways)), force);
 				forEachNonNull(bogie1Models, dynamicVehicleModel -> dynamicVehicleModel.writeFloorsAndDoorways(new ObjectArrayList<>(), new ObjectArrayList<>(), new Object2ObjectOpenHashMap<>(), materialGroupsBogie1Model, new Object2ObjectOpenHashMap<>(), objModelsBogie1Model), force);
 				forEachNonNull(bogie2Models, dynamicVehicleModel -> dynamicVehicleModel.writeFloorsAndDoorways(new ObjectArrayList<>(), new ObjectArrayList<>(), new Object2ObjectOpenHashMap<>(), materialGroupsBogie2Model, new Object2ObjectOpenHashMap<>(), objModelsBogie2Model), force);
+				MmtrVehicleRebuildProbe.report("地面/门洞/mapDoors", id, floorsStartNanos);
 
 				return new CachedResource<>(() -> {
-					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModels = writeToOptimizedModels(materialGroupsModel, objModelsModel, modelLifespan);
-					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModelsDoorsClosed = writeToOptimizedModels(materialGroupsModelDoorsClosed, objModelsModelDoorsClosed, modelLifespan);
-					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModelsBogie1 = writeToOptimizedModels(materialGroupsBogie1Model, objModelsBogie1Model, modelLifespan);
-					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModelsBogie2 = writeToOptimizedModels(materialGroupsBogie2Model, objModelsBogie2Model, modelLifespan);
+					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModels = writeToOptimizedModels(materialGroupsModel, objModelsModel, modelLifespan, id + "/开门");
+					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModelsDoorsClosed = writeToOptimizedModels(materialGroupsModelDoorsClosed, objModelsModelDoorsClosed, modelLifespan, id + "/关门");
+					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModelsBogie1 = writeToOptimizedModels(materialGroupsBogie1Model, objModelsBogie1Model, modelLifespan, id + "/转向架1");
+					final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModelsBogie2 = writeToOptimizedModels(materialGroupsBogie2Model, objModelsBogie2Model, modelLifespan, id + "/转向架2");
 					return new VehicleResourceCacheHolder(new ObjectImmutableList<>(floors), new ObjectImmutableList<>(doorways), optimizedModels, optimizedModelsDoorsClosed, optimizedModelsBogie1, optimizedModelsBogie2);
 				}, modelLifespan);
 			}, modelLifespan);
@@ -516,6 +491,18 @@ public final class VehicleResource extends VehicleResourceSchema {
 	}
 
 	private Supplier<VehicleSoundBase> createVehicleSoundBaseInitializer() {
+		/*
+		 * 三条路，按"音效集自己怎么声明"来选，而不是靠车辆配置里再加一个开关位：
+		 *   · 目录里有 mmtr_traction.json ⇒ MMTR 牵引音（离线烘焙 27 档 + 在线挑档变调）；
+		 *   · 有 bveSoundBaseResource     ⇒ MTR 原来的 BVE 引擎（现存的 27 套素材走这条）；
+		 *   · 都没有                      ⇒ legacy。
+		 * 清单在、但解析坏了时 load() 会写一条 error 日志并返回 null —— 于是**退回 BVE/legacy**，
+		 * 不会静默无声（现场至少还有别的音）。
+		 */
+		final MmtrTractionSoundSet mmtrSoundSet = MmtrTractionSoundSet.load(bveSoundBaseResource);
+		if (mmtrSoundSet != null) {
+			return () -> new MmtrVehicleSound(mmtrSoundSet);
+		}
 		if (bveSoundBaseResource.isEmpty()) {
 			final LegacyVehicleSound legacyVehicleSound = new LegacyVehicleSound(
 					legacySpeedSoundBaseResource,
@@ -565,7 +552,40 @@ public final class VehicleResource extends VehicleResourceSchema {
 		return CHRISTMAS_LIGHT_STAGES[(int) ((System.currentTimeMillis() / 500) % CHRISTMAS_LIGHT_STAGES.length)][index];
 	}
 
-	private static void queue(Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light, boolean noOpenDoorways, int lampColor) {
+	private static void queue(Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels, StoredMatrixTransformations storedMatrixTransformations, VehicleExtension vehicle, int light, boolean noOpenDoorways, int lampColor, int totalCars) {
+		/*
+		 * notes/400 判定性埋点：把「这一帧这一辆车排队了几次 draw」直接量出来。
+		 *
+		 * 光看 [MMTR-VEHMERGE] 只能知道**构建时**合并成没成；渲染时用的是哪一个模型、匹配到了几个
+		 * PartCondition，只有在这里才看得见。条件集合用位掩码累加（热路径上不拼字符串），
+		 * 由 MmtrVehicleDrawProbe 每 5 秒出一行有界的报告。
+		 */
+		final boolean probe = MmtrVehicleDrawProbe.isEnabled();
+		int conditionMask = 0;
+		int matchingConditions = 0;
+		int parts = 0;
+		if (probe) {
+			for (final PartCondition partCondition : PartCondition.values()) {
+				if (matchesCondition(vehicle, partCondition, noOpenDoorways)) {
+					/*
+					 * CHRISTMAS_LIGHT_* 的判据是 System.currentTimeMillis()/500 的相位，**每 500 ms 翻一次**
+					 * ⇒ 它进掩码的话，桶键与签名都会跟着抖，读出来全是"只差一位"的碎片，还会把真正
+					 * 有信息的那几个桶挤出 MAX_SIGNATURES（notes/400 §4.2）。这几档在本 mod 的资源包里
+					 * 没有几何，所以**只计数、不进掩码**。代价：真用圣诞灯的资源包在这条埋点里看不出来。
+					 */
+					if (!partCondition.name().startsWith("CHRISTMAS_LIGHT")) {
+						conditionMask |= 1 << partCondition.ordinal();
+					}
+					final OptimizedModelWrapper wrapper = optimizedModels.get(partCondition);
+					if (wrapper != null) {
+						matchingConditions++;
+						final int wrapperParts = wrapper.partCount();
+						parts = parts < 0 || wrapperParts < 0 ? -1 : parts + wrapperParts;
+					}
+				}
+			}
+		}
+
 		optimizedModels.forEach((partCondition, optimizedModel) -> {
 			if (matchesCondition(vehicle, partCondition, noOpenDoorways)) {
 				// 只有灯罩那一组几何吃 lampColor，其余部件一律不染（notes/374）。
@@ -577,30 +597,139 @@ public final class VehicleResource extends VehicleResourceSchema {
 				});
 			}
 		});
+
+		if (probe) {
+			MmtrVehicleDrawProbe.onCarQueued(conditionMask, matchingConditions, parts, totalCars, noOpenDoorways);
+		}
 	}
 
+	/**
+	 * 把一个 bundle 变成"按材质合桶的 {@code OptimizedModel}"。
+	 *
+	 * <h2>两段式（notes/400 §8）</h2>
+	 *
+	 * <p>映射库的 {@code fromObjModels}/{@code merge} 是**就地**对每组几何跑
+	 * {@code generateNormals() + distinct()} 的，而 {@code distinct()} 会
+	 * {@code vertices.clear(); addAll(去重结果)} —— 读的人会看到半个列表。所以这一段只能留在渲染线程，
+	 * 也就成了 notes/400 §7 之后剩下那几十毫秒的主体。现在拆成两段：</p>
+	 *
+	 * <ul>
+	 *   <li><b>后台</b>（{@link MmtrVehicleMeshMerger#bake}，纯 CPU、只改副本）：复制 → 法线 → 去重 → 合桶；</li>
+	 *   <li><b>渲染线程</b>（{@link MmtrVehicleMeshMerger#upload}）：只做 {@code upload()} 建 GL buffer。</li>
+	 * </ul>
+	 *
+	 * <p>后台没算完就让这一轮返回 {@code null} —— {@code CachedResource} 与
+	 * {@code getCachedVehicleResource} 那条链本来就用 {@code null} 表达"未就绪"，
+	 * 所以车厢只是晚一两个 tick 出现，而不是把渲染线程按住几十毫秒。</p>
+	 *
+	 * <h2>为什么先轮询完再碰 GL</h2>
+	 *
+	 * <p>第一阶段一个 GL 调用都没有。只要有一份后台还没好就整体 {@code return null}，
+	 * 绝不出现"这份 upload 了、那份没有"的半成品 —— 半成品意味着已经建好的 GL buffer 被丢掉（漏显存）。</p>
+	 *
+	 * <h2>回退纪律</h2>
+	 *
+	 * <p>后台烘焙抛异常（映射库变了、内存不够）⇒ <b>回退到渲染线程上同步算</b>，并且这一份以后都走同步，
+	 * 画面完全不受影响；开关 {@code -Dmmtr.meshbakeasync=false} 也是一样的路。</p>
+	 */
 	private static CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> writeToOptimizedModels(
 			Object2ObjectOpenHashMap<PartCondition, ObjectArrayList<OptimizedModelWrapper.MaterialGroupWrapper>> materialGroupsModel,
 			Object2ObjectOpenHashMap<PartCondition, ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper>> objModelsModel,
-			int modelLifespan
+			int modelLifespan,
+			String label
 	) {
-		return new CachedResource<>(() -> {
-			CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.beginReload();
-			final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels = new Object2ObjectOpenHashMap<>();
-
+		/*
+		 * 只有"这条路真能走"时才造后台作业：没开优化渲染时一条 GL 都不该碰，
+		 * 映射库字段取不到时 bake 会返回 null（那就没省下任何东西，白开线程）。
+		 */
+		final boolean async = MmtrVehicleMeshMerger.isBakeAsyncEnabled() && MmtrVehicleMeshMerger.canBake() && OptimizedRenderer.hasOptimizedRendering();
+		final Object2ObjectOpenHashMap<PartCondition, MmtrAsyncModelParse<MmtrVehicleMeshMerger.Baked>> bakes = new Object2ObjectOpenHashMap<>();
+		if (async) {
 			for (final PartCondition partCondition : PartCondition.values()) {
-				final OptimizedModelWrapper optimizedModel1;
-				final ObjectArrayList<OptimizedModelWrapper.MaterialGroupWrapper> materialGroups = materialGroupsModel.get(partCondition);
-				optimizedModel1 = materialGroups == null ? null : OptimizedModelWrapper.fromMaterialGroups(materialGroups);
-
-				final OptimizedModelWrapper optimizedModel2;
 				final ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper> objModels = objModelsModel.get(partCondition);
-				optimizedModel2 = objModels == null ? null : OptimizedModelWrapper.fromObjModels(objModels);
-				optimizedModels.put(partCondition, new OptimizedModelWrapper(optimizedModel1, optimizedModel2));
+				if (objModels != null && !objModels.isEmpty()) {
+					final MmtrAsyncModelParse<MmtrVehicleMeshMerger.Baked> bake = new MmtrAsyncModelParse<>("后台烘焙 " + label + ":" + partCondition, () -> MmtrVehicleMeshMerger.bake(objModels));
+					bakes.put(partCondition, bake);
+					// 早点开工：反正下一轮才会来问结果，这一轮先把活交出去。
+					bake.start();
+				}
 			}
+		}
 
-			CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.finishReload();
-			return optimizedModels;
+		return new CachedResource<>(() -> {
+			final long waitStartNanos = System.nanoTime();
+			final Object2ObjectOpenHashMap<PartCondition, MmtrVehicleMeshMerger.Baked> baked = new Object2ObjectOpenHashMap<>();
+			if (!bakes.isEmpty()) {
+				boolean failed = false;
+				for (final Map.Entry<PartCondition, MmtrAsyncModelParse<MmtrVehicleMeshMerger.Baked>> entry : bakes.entrySet()) {
+					final MmtrVehicleMeshMerger.Baked result;
+					try {
+						result = entry.getValue().poll();
+					} catch (Throwable throwable) {
+						// 后台失败 ⇒ **同步兜底**：这一轮就在渲染线程上把几何算完，画面照常（绝不静默）。
+						Init.LOGGER.warn("[MMTR-MESH] {} 后台烘焙失败 —— 回退到渲染线程上同步烘焙", label, throwable);
+						failed = true;
+						break;
+					}
+					if (result == null) {
+						// 还没好：这一轮按"模型未就绪"处理（那条链本来就用 null 表达未就绪），下一轮再问。
+						return null;
+					}
+					baked.put(entry.getKey(), result);
+				}
+				if (failed) {
+					bakes.clear();
+				}
+			}
+			final long waitMillis = (System.nanoTime() - waitStartNanos) / 1_000_000L;
+
+			final long uploadStartNanos = System.nanoTime();
+			CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.beginReload();
+			/*
+			 * try/finally 是必须的（notes/399）。
+			 *
+			 * 原来这里是裸的一对 beginReload/finishReload：一旦循环里抛异常（坏资源、缺 group、
+			 * 映射库的变化），finishReload 就永远不执行 —— GlStateTracker 的保护位会**永久留着**，
+			 * 而保护区又是个布尔量，后果是 GL 状态再也回不到调用前的绑定。
+			 * VehicleModel.createModel 那边本来就有 try/finally，这里补齐。
+			 */
+			try {
+				final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels = new Object2ObjectOpenHashMap<>();
+
+				for (final PartCondition partCondition : PartCondition.values()) {
+					final OptimizedModelWrapper optimizedModel1;
+					final ObjectArrayList<OptimizedModelWrapper.MaterialGroupWrapper> materialGroups = materialGroupsModel.get(partCondition);
+					optimizedModel1 = materialGroups == null ? null : OptimizedModelWrapper.fromMaterialGroups(materialGroups);
+
+					final ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper> objModels = objModelsModel.get(partCondition);
+					final MmtrVehicleMeshMerger.Baked bakedForCondition = baked.get(partCondition);
+					/*
+					 * 有后台结果就直接 upload 它（几何已经在别的线程上归一化 + 合桶好了）；
+					 * 否则走老路：
+					 *   - 默认（notes/399）按材质合并后 upload（一个材质一次 draw）；
+					 *   - -Dmmtr.vehiclemerge=false 时逐部件 upload（一个部件一次 draw）。
+					 *
+					 * 只碰这两个 bundle（开门用的非门部件 / 关门用的车体+关门后的门）——
+					 * 门与雨刷走的是 ModelPropertiesPart 里另一条 optimizedModelDoor 的路，不在这里。
+					 */
+					final OptimizedModelWrapper optimizedModel2;
+					if (bakedForCondition != null) {
+						final OptimizedModelWrapper uploaded = MmtrVehicleMeshMerger.upload(bakedForCondition);
+						optimizedModel2 = uploaded != null ? uploaded : OptimizedModelWrapper.fromObjModels(objModels);
+					} else {
+						optimizedModel2 = objModels == null ? null
+								: MmtrVehicleMeshMerger.isEnabled()
+										? MmtrVehicleMeshMerger.mergeOrFallback(objModels)
+										: OptimizedModelWrapper.fromObjModels(objModels);
+					}
+					optimizedModels.put(partCondition, new OptimizedModelWrapper(optimizedModel1, optimizedModel2));
+				}
+
+				return optimizedModels;
+			} finally {
+				CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.finishReload();
+				MmtrVehicleRebuildProbe.reportUpload(label, waitMillis, (System.nanoTime() - uploadStartNanos) / 1_000_000L);
+			}
 		}, modelLifespan);
 	}
 

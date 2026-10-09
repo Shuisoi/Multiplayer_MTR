@@ -10,8 +10,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 力模型（正向半）的真值表。
  *
  * <p>两条主线：①**曲线形状**（恒力矩 → 恒功率、手柄线性、折点由 P/F 自动给出）；
- * ②**与旧口径的无损换算**（{@link TractionSpec#fromLegacy}）—— 这一条是"换模型不改手感"的根据，
- * 也是 notes/235 里配置迁移配方的可执行版本。</p>
+ * ②**制动侧的"缸压 → 力"**（缸簧死区 + 上限饱和 + 闸片衰减）。</p>
+ *
+ * <p><b>旧口径已随 notes/376 删除，换算函数不留</b>：{@code tractionAccelerationMps2(ratio, v)} /
+ * {@code serviceBrakeDecelerationMps2(ratio, v)} / {@code BrakeSpec(service, emergency)} 与
+ * {@code TractionSpec.fromLegacy} 都只服务"旧加速度常数"的迁移，旧配置键既然已经不读，
+ * 那条"无损换算"的用例连同夹具一起删除（留着它就得留一个没人调用的换算函数）。</p>
  */
 public final class TrainPhysicsTests {
 
@@ -19,8 +23,18 @@ public final class TrainPhysicsTests {
 	private static TrainPhysics br101() {
 		return new TrainPhysics(82_000, 1.06,
 			new TractionSpec(200_000, 1_900_000),
-			new BrakeSpec(120_000, 200_000),
+			legacyBrake(120_000, 200_000),
 			new RunningResistanceSpec(1_500, 20, 3.0));
+	}
+
+	/**
+	 * 旧的 2 参构造（{@code BrakeSpec(service, emergency)}，notes/376 已删除）的等价物：
+	 * 闸片衰减**关**、缸压上限 3.8 bar、缸簧 0.30 bar。用例里要"不衰减"的解析值就走这里。
+	 */
+	private static BrakeSpec legacyBrake(double serviceForceN, double emergencyForceN) {
+		return new BrakeSpec(serviceForceN, emergencyForceN, BrakeSpec.DEFAULT_CYLINDER_MAX_BAR,
+			BrakeSpec.DEFAULT_CYLINDER_SPRING_BAR, false, BrakeSpec.DEFAULT_PAD_MU0,
+			BrakeSpec.DEFAULT_PAD_MU_SLOPE_PER_KMH, BrakeSpec.DEFAULT_PAD_MU_FLOOR);
 	}
 
 	/**
@@ -60,19 +74,19 @@ public final class TrainPhysicsTests {
 		final double normal = 84_000 * TrainPhysics.GRAVITY;
 		final ConsistType br101 = new ConsistType("br101", "BR 101", ConsistType.ControlMode.THREE_HANDLE, 97, 11,
 			220, 84_000, 1.16, 300_000, 6_400_000, 150_000, 220_000,
-			1350, 28, 2.76, 0.37, false, 0.1, 0.4, 0.15, 0.1, 0, null);
+			1350, 28, 2.76, 0.37, false, 0, null, ConsistType.DEFAULT_BRAKES, null, 0, null, false);
 		// 干轨：μ=0.37 ⇒ 上限 305 kN > 电机给的 300 kN ⇒ 满牵引可用（与真车"300 kN 几乎占满黏着"一致）
 		assertTrue(br101.getPhysics().adhesionLimitedEffortN() > 300_000, "干轨要能把 300 kN 传下去");
 		assertEquals(300_000, br101.getPhysics().tractiveEffortN(1.0, 0), 1e-6, "干轨满手柄 = 电机上限");
 		// 湿轨：μ=0.20 ⇒ 只能传 165 kN
 		final ConsistType wet = new ConsistType("wet", "wet", ConsistType.ControlMode.THREE_HANDLE, 97, 11,
 			220, 84_000, 1.16, 300_000, 6_400_000, 150_000, 220_000,
-			1350, 28, 2.76, 0.20, false, 0.1, 0.4, 0.15, 0.1, 0, null);
+			1350, 28, 2.76, 0.20, false, 0, null, ConsistType.DEFAULT_BRAKES, null, 0, null, false);
 		assertEquals(0.20 * normal, wet.getPhysics().tractiveEffortN(1.0, 0), 1e-6, "湿轨：力被黏着截住");
 		// 撒砂 ×1.30 ⇒ 湿轨 0.26
 		final ConsistType wetSanding = new ConsistType("wet_sand", "wet+sand", ConsistType.ControlMode.THREE_HANDLE, 97, 11,
 			220, 84_000, 1.16, 300_000, 6_400_000, 150_000, 220_000,
-			1350, 28, 2.76, 0.20, true, 0.1, 0.4, 0.15, 0.1, 0, null);
+			1350, 28, 2.76, 0.20, true, 0, null, ConsistType.DEFAULT_BRAKES, null, 0, null, false);
 		assertEquals(0.26 * normal, wetSanding.getPhysics().tractiveEffortN(1.0, 0), 1e-6, "撒砂增粘 ×1.30");
 
 		// μ–s 曲线：微滑线性升到峰值（s_crit = 2%），之后负斜率衰减
@@ -110,28 +124,39 @@ public final class TrainPhysicsTests {
 		final TrainPhysics heavy = new TrainPhysics(164_000, 1.06, new TractionSpec(200_000, 1_900_000), BrakeSpec.NONE, RunningResistanceSpec.NONE);
 		final TrainPhysics light = new TrainPhysics(82_000, 1.06, new TractionSpec(200_000, 1_900_000), BrakeSpec.NONE, RunningResistanceSpec.NONE);
 		// 同样的牵引力，质量翻倍 ⇒ 加速度减半
-		assertEquals(light.tractionAccelerationMps2(1, 2) / 2, heavy.tractionAccelerationMps2(1, 2), 1e-12);
+		assertEquals(light.fullTractionAccelerationMps2(2) / 2, heavy.fullTractionAccelerationMps2(2), 1e-12);
 		// λ = 1.06 ⇒ 加速度小 6%（相对 λ=1）
 		final TrainPhysics noRotating = new TrainPhysics(82_000, 1.0, new TractionSpec(200_000, 1_900_000), BrakeSpec.NONE, RunningResistanceSpec.NONE);
-		assertEquals(noRotating.tractionAccelerationMps2(1, 2) / 1.06, light.tractionAccelerationMps2(1, 2), 1e-12);
+		assertEquals(noRotating.fullTractionAccelerationMps2(2) / 1.06, light.fullTractionAccelerationMps2(2), 1e-12);
 		// 无动力车节：质量参与、牵引为 0
-		assertEquals(0, new TrainPhysics(40_000, 1.06, TractionSpec.POWERLESS, BrakeSpec.NONE, RunningResistanceSpec.NONE).tractionAccelerationMps2(1, 10), 1e-12);
+		assertEquals(0, new TrainPhysics(40_000, 1.06, TractionSpec.POWERLESS, BrakeSpec.NONE, RunningResistanceSpec.NONE).fullTractionAccelerationMps2(10), 1e-12);
 	}
 
 	@Test
 	public void brakingIsForceOverInertiaAndEmergencyIsStronger() {
 		// 先看纯力-质量关系（不带阻力），再看阻力对制动的"帮忙"
-		final TrainPhysics pure = new TrainPhysics(82_000, 1.06, TractionSpec.POWERLESS, new BrakeSpec(120_000, 200_000), RunningResistanceSpec.NONE);
+		final TrainPhysics pure = new TrainPhysics(82_000, 1.06, TractionSpec.POWERLESS, legacyBrake(120_000, 200_000), RunningResistanceSpec.NONE);
 		final double inertia = pure.effectiveMassKg();
-		assertEquals(120_000 / inertia, pure.serviceBrakeDecelerationMps2(1, 0), 1e-12, "常用制动 = 力 / (λm)");
-		assertEquals(60_000 / inertia, pure.serviceBrakeDecelerationMps2(0.5, 0), 1e-12, "缸压比例线性");
+		assertEquals(120_000 / inertia, pure.fullServiceDecelerationMps2(0), 1e-12, "全常用 = 满缸压折成的力 / (λm)");
+		/*
+		 * **缸压 → 力的线性**（notes/376：旧的"比例 0.5 ⇒ 半力"口径已删除）。新口径的等价性质：
+		 * 缸簧以上、缸压上限以下的**可用行程是线性的** —— 半量程缸压给出半个锚。
+		 * 这里把缸簧/上限显式写出来（不借实现里的常数），量的是
+		 * {@code 力 = 锚 × (bar − 弹簧)/(上限 − 弹簧) × 闸片衰减}。
+		 */
+		final double halfCylinderBar = BrakeSpec.DEFAULT_CYLINDER_SPRING_BAR
+			+ 0.5 * (BrakeSpec.DEFAULT_CYLINDER_MAX_BAR - BrakeSpec.DEFAULT_CYLINDER_SPRING_BAR);
+		assertEquals(60_000, pure.getBrake().serviceForceNFromCylinderBar(halfCylinderBar, 0), 1e-6,
+			"半量程缸压 ⇒ 半个锚（本夹具闸片不衰减 ⇒ κ = 1）");
+		assertEquals(0, pure.getBrake().serviceForceNFromCylinderBar(BrakeSpec.DEFAULT_CYLINDER_SPRING_BAR, 0), 1e-9,
+			"缸簧以下不出力（旧口径的「比例 > 0 就有力」没有这条死区）");
 		assertEquals(200_000 / inertia, pure.emergencyDecelerationMps2(0), 1e-12);
-		assertTrue(pure.emergencyDecelerationMps2(0) > pure.serviceBrakeDecelerationMps2(1, 0), "EB 必须强于全常用");
+		assertTrue(pure.emergencyDecelerationMps2(0) > pure.fullServiceDecelerationMps2(0), "EB 必须强于全常用");
 		// 配置写反（EB < 常用）时取常用为下限，绝不出现"EB 更软"
-		assertEquals(120_000, new BrakeSpec(120_000, 50_000).emergencyForceN(), 0, "紧急制动力不会低于常用");
+		assertEquals(120_000, legacyBrake(120_000, 50_000).emergencyForceN(0), 0, "紧急制动力不会低于常用");
 		// 阻力在制动时**帮忙**（方向相同）
 		final TrainPhysics p = br101();
-		assertTrue(p.serviceBrakeDecelerationMps2(1, 30) > p.serviceBrakeDecelerationMps2(1, 0), "运行阻力与制动力同向");
+		assertTrue(p.fullServiceDecelerationMps2(30) > p.fullServiceDecelerationMps2(0), "运行阻力与制动力同向");
 	}
 
 	@Test
@@ -153,42 +178,5 @@ public final class TrainPhysicsTests {
 		assertEquals(0, p.tractiveEffortN(1, balancing) - p.resistanceForceN(balancing), 5.0, "平衡点上牵引≈阻力");
 		assertTrue(p.balancingSpeedMps2(0.5) < balancing, "手柄越小平衡速度越低");
 		assertEquals(0, p.balancingSpeedMps2(0), 0, "手柄关闭没有平衡点");
-	}
-
-	/**
-	 * **无损迁移**：旧口径 {@code A₀ / v_bp / 阻力} 换算成力以后，曲线逐点相同。
-	 *
-	 * <p>这就是 notes/235 的配置迁移配方：{@code F_max = m₀·A₀}、{@code P = F_max·v_bp}、
-	 * {@code F_制动 = m₀·a_制动}、{@code A_N/B_N/C_N = m₀·A/B/C}，参考质量取 {@code m₀}。</p>
-	 */
-	@Test
-	public void legacyAccelerationParametersConvertWithoutChangingTheCurve() {
-		final double legacyA0 = 0.55;
-		final double legacyBreakpointKmh = 80;
-		final double legacyService = 1.0;
-		final double legacyEmergency = 1.8;
-		final double legacyResA = 0.02;
-		final double legacyResB = 0.0005;
-		final double legacyResC = 0.00002;
-		final double m0 = 60_000;
-		final double lambda = 1.0;
-
-		final TrainPhysics migrated = new TrainPhysics(m0, lambda,
-			TractionSpec.fromLegacy(legacyA0, m0, legacyBreakpointKmh),
-			new BrakeSpec(legacyService * m0, legacyEmergency * m0),
-			new RunningResistanceSpec(legacyResA * m0, legacyResB * m0, legacyResC * m0));
-
-		// 旧模型（已删除的 MmtrPhysics 口径）：a = A0·ratio（折点前）/ A0·ratio·v_bp/v（折点后）− 阻力
-		final double vBp = legacyBreakpointKmh / 3.6;
-		for (final double v : new double[]{0, 1, 5, vBp, vBp * 2, 30, 44}) {
-			for (final double ratio : new double[]{0.02, 0.5, 1.0}) {
-				final double legacyTraction = legacyA0 * ratio * (v > vBp ? vBp / v : 1);
-				final double legacyResistance = legacyResA + legacyResB * v + legacyResC * v * v;
-				assertEquals(legacyTraction - legacyResistance, migrated.tractionAccelerationMps2(ratio, v), 1e-12,
-					"v=" + v + " ratio=" + ratio + " 的牵引净加速度必须逐点相同");
-			}
-			assertEquals(legacyService + legacyResA + legacyResB * v + legacyResC * v * v,
-				migrated.serviceBrakeDecelerationMps2(1, v), 1e-12, "常用制动（含阻力）逐点相同：v=" + v);
-		}
 	}
 }

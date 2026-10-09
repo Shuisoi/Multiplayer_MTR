@@ -13,6 +13,7 @@ import org.mtr.mapping.registry.PacketHandler;
 import org.mtr.mapping.tool.PacketBufferReceiver;
 import org.mtr.mapping.tool.PacketBufferSender;
 import org.mtr.mod.Init;
+import org.mtr.mod.mmtr.MmtrLoadProbe;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -44,9 +45,25 @@ public abstract class PacketRequestResponseBase extends PacketHandler {
 		runServerOutbound(serverPlayerEntity.getServerWorld(), serverPlayerEntity);
 	}
 
+	/**
+	 * MMTR 取证（notes/410）：这条路上**解析**与**落地**分开计时。
+	 *
+	 * <p>为什么要分：{@code DataResponse} 一份落地 = {@code parseJson(content)}（整份 JSON 建对象图）
+	 * + {@code DataResponse.write()}（{@code rails.removeIf/addAll} → {@code data.sync()}：全量重建
+	 * positionsToRail、各 id 映射、站台与站关系）。现场"经过节点卡一下"的 300ms 里这两段各占多少，
+	 * 决定了该修哪一段 —— 只记一个总数会让我们一起改错地方。探针不改变任何顺序与副作用。</p>
+	 */
 	@Override
 	public final void runClient() {
-		runClientInbound(new JsonReader(Utilities.parseJson(content)));
+		final long parseStartNanos = MmtrLoadProbe.begin();
+		final JsonReader jsonReader = new JsonReader(Utilities.parseJson(content));
+		final long parseNanos = MmtrLoadProbe.elapsed(parseStartNanos);
+		final long applyStartNanos = MmtrLoadProbe.begin();
+		try {
+			runClientInbound(jsonReader);
+		} finally {
+			MmtrLoadProbe.packetApplied(getClass().getSimpleName(), content.length(), parseNanos, MmtrLoadProbe.elapsed(applyStartNanos));
+		}
 	}
 
 	protected void runServerOutbound(ServerWorld serverWorld, @Nullable ServerPlayerEntity serverPlayerEntity) {

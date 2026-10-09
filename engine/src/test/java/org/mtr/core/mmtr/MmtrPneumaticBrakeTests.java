@@ -14,7 +14,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * <p>这里钉六组数：① UIC 锚（102.2 / 138.4 kN）；② 级位表与分配阀（含灵敏限/限压）；
  * ③ 缸簧死区与闸片 κ(v)；④ 建压/缓解时间；⑤ 电制动三段（含 153.6 km/h 折点）；
- * ⑥ 镜像串往返 + **旧串/旧配置零回归**（没有 bar 键 ⇒ 逐位回到归一化老模型）。</p>
+ * ⑥ 镜像串往返 + **旧串/旧配置的口径补齐**（没有 bar 键 ⇒ 出厂气压口径，notes/376 ——
+ * 旧的比例/归一化模型已整段删除）。</p>
  */
 public final class MmtrPneumaticBrakeTests {
 
@@ -165,8 +166,11 @@ public final class MmtrPneumaticBrakeTests {
 		assertEquals(0.769, brake.frictionFactor(200 / 3.6), 1e-3);
 		assertEquals(78_600, brake.serviceForceNFromCylinderBar(3.8, 200 / 3.6), 300,
 			"8 档 @200 km/h = 102.2 kN × 0.769 ≈ 78.6 kN");
-		// 关闭衰减 ⇒ 与旧口径一致（零回归的判据）
-		final BrakeSpec noFade = new BrakeSpec(150_000, 210_000);
+		// 关闭衰减 ⇒ 与旧口径一致（零回归的判据）。旧的 2 参构造（notes/376 已删除）就是
+		// "闸片不衰减 + 缸压上限 3.8 / 缸簧 0.30"，这里显式写出来。
+		final BrakeSpec noFade = new BrakeSpec(150_000, 210_000, BrakeSpec.DEFAULT_CYLINDER_MAX_BAR,
+			BrakeSpec.DEFAULT_CYLINDER_SPRING_BAR, false, BrakeSpec.DEFAULT_PAD_MU0,
+			BrakeSpec.DEFAULT_PAD_MU_SLOPE_PER_KMH, BrakeSpec.DEFAULT_PAD_MU_FLOOR);
 		assertFalse(noFade.isPadFadeEnabled());
 		assertEquals(1, noFade.frictionFactor(200 / 3.6), 1e-12);
 	}
@@ -689,25 +693,37 @@ public final class MmtrPneumaticBrakeTests {
 			"HUD 制动力（气）= 满缸压折成的力 = UIC 锚");
 	}
 
+	/**
+	 * **旧串 / 旧配置**（notes/376）：没有 bar 键的车底取出厂口径 —— 气压规格**不再为 null**
+	 * （"没配就退回旧归一化模型"那条路已整段删除），所以旧镜像串解回来必须带着同一份出厂口径
+	 * （客户端才跑同一套气路），力也必须走"缸压 → 力"这一条。
+	 */
 	@Test
-	public void legacyStringsAndConfigsFallBackToTheOldModel() {
-		// 旧镜像串（没有 PB 段）：解出来必须是 null，而不是"半套气压参数"
-		final ThreeHandleSpec legacySpec = type(LEGACY_JSON, "legacy").getHandles();
-		assertNull(legacySpec.getBrakes(), "没有 bar 键的车底 ⇒ 气压规格为 null（零回归）");
-		assertNull(ThreeHandleSpec.decode(legacySpec.encode()).getBrakes(), "旧串解回来也不能凭空多出气压口径");
-
-		// 旧模型的力：150 kN × 比例，与速度无关（闸片不衰减）
+	public void legacyStringsAndConfigsCarryTheFactoryPneumaticSpec() {
 		final ConsistType legacyType = type(LEGACY_JSON, "legacy");
-		assertEquals(150_000, legacyType.getBrake().getServiceForceN(), 1e-9);
-		assertEquals(75_000, legacyType.getBrake().serviceForceN(0.5), 1e-9);
-		assertEquals(75_000, legacyType.getBrake().serviceForceN(0.5, 200 / 3.6), 1e-9, "旧口径不随速衰减");
+		final ThreeHandleSpec legacySpec = legacyType.getHandles();
+		assertNotNull(legacySpec.getBrakes(), "没有 bar 键 ⇒ 出厂口径（不是「没有气压规格」）");
+		assertEquals(ConsistType.DEFAULT_BRAKES.getChargedBar(), legacySpec.getBrakes().getChargedBar(), 1e-12);
+		assertEquals(ConsistType.DEFAULT_BRAKES.getCylinderMaxBar(), legacySpec.getBrakes().getCylinderMaxBar(), 1e-12);
+		// 旧串解回来也不能丢口径（镜像串带着 PB 段）：客户端与服务器跑同一套气路
+		final ThreeHandleSpec decoded = ThreeHandleSpec.decode(legacySpec.encode());
+		assertNotNull(decoded, "旧串必须仍然能解");
+		assertNotNull(decoded.getBrakes(), "镜像串必须把气压口径带过去（notes/376）");
+		assertEquals(legacySpec.getBrakes().getChargedBar(), decoded.getBrakes().getChargedBar(), 1e-9);
+		assertEquals(legacySpec.getBrakes().getCylinderMaxBar(), decoded.getBrakes().getCylinderMaxBar(), 1e-9);
 
-		// 旧模型的缸压：查 brakeRatios 表（8 档 = 1.00），管压/缸压仍是归一化的
+		// 力走缸压口径：满缸压 = 全锚（0 速不衰减）；闸片衰减在高速侧把力压下来
+		assertEquals(150_000, legacyType.getBrake().getServiceForceN(), 1e-9);
+		assertEquals(150_000, legacyType.getBrake().serviceForceNFromCylinderBar(3.8, 0), 1e-9, "满缸压 = 全锚");
+		assertTrue(legacyType.getBrake().serviceForceNFromCylinderBar(3.8, 200 / 3.6) < 150_000,
+			"新版只有一条口径且含闸片衰减（旧 serviceForceN(0.5, v) = 75 kN 且不衰减，已删除）");
+
+		// 缸压读数：9 档（= 全常用）建到 3.8 bar（旧口径这里读的是归一化 1.00、bar 读数为 0）
 		final ThreeHandleDriveController controller = controller();
 		for (int i = 0; i < 200; i++) {
 			controller.compute(ControlState.zero().setBrakeNotch(9), legacyType, 0, DT_MS);
 		}
-		assertEquals(1.0, controller.getBrakeCylinderPressure(), 1e-9, "旧口径 8 档缸压 1.00");
-		assertEquals(0, controller.getCylinderBar(), 1e-9, "旧口径没有 bar 读数");
+		assertEquals(1.0, controller.getBrakeCylinderPressure(), 1e-9, "9 档 = 全常用 ⇒ 归一化缸压 1.00");
+		assertEquals(3.8, controller.getCylinderBar(), 1e-9, "bar 读数就是车底自己的缸压上限");
 	}
 }

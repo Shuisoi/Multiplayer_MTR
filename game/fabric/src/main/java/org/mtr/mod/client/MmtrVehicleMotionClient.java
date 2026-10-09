@@ -122,6 +122,74 @@ public final class MmtrVehicleMotionClient {
 	/** 超过这个误差（米）才认为是"真瞬移"而不是"该吸收的误差"。 */
 	private static final double DISPLAY_HARD_SNAP_M = 8;
 
+	/**
+	 * **本地闭环的对账口径**（notes/407）：我自己正在开的这辆车，服务端那一帧按定义落在我后面一个来回
+	 * （我本地已经把同样的手柄值算进去了），所以按上面那套"每帧吸收误差"办就是每帧把我往回拉 ——
+	 * 本地闭环等于白做。改成：误差不超过阈值就不动它，超过才硬对齐。
+	 *
+	 * <p>阈值 = {@link #LOCAL_CORRECT_BASE_M} + {@link #LOCAL_CORRECT_SECONDS} × 速度：
+	 * 网络来回造成的正常领先是 {@code speed × RTT}（60 km/h、150 ms ≈ 2.5 m；120 km/h ≈ 5 m），
+	 * 半秒的余量把它稳稳盖住，而"换了轨 / 连挂 / 引擎拒绝了我的输入"那类真不同步仍然会被抓住。</p>
+	 */
+	private static final double LOCAL_CORRECT_BASE_M = Math.max(0.0, readDoubleProperty("mmtr.localdrive.correctm", 8));
+	private static final double LOCAL_CORRECT_SECONDS = 0.5;
+	/**
+	 * **引擎内部速度单位（m/ms）→ m/s 的换算**。
+	 *
+	 * <p>存在的唯一理由是 2026-10-10 实机抓到的那次单位错：{@code Vehicle.getSpeed()} 返回的是
+	 * **m/ms**，而"半秒的余量"要的是 m/s；漏掉这个 ×1000，速度那一项就等于不存在
+	 * （120 km/h 只得 0.017 m），阈值事实上恒为 {@link #LOCAL_CORRECT_BASE_M}。见下面
+	 * {@code correctThresholdM} 那一大段注释里的实机读数。</p>
+	 */
+	private static final double INTERNAL_SPEED_TO_SI = 1000.0;
+
+	/** 读数：本窗口本地闭环期间跑了几帧、跳过了几条回声、领先最大多少、对账纠正了几次。 */
+	private static int locallyDrivenFrames;
+	private static int echoesSkipped;
+	private static int localCorrections;
+	private static double localMaxLeadM;
+
+	/*
+	 * ============================================================================================
+	 * **上行：把权威车辆的位置传回引擎**（notes/409 §4）。这是"上下行架构"里"上"的那一半。
+	 *
+	 * 触发条件是 {@link MmtrAuthority#isClient}：权威在我这儿 ⇒ 引擎就部分让出了权威，我必须把
+	 * 它需要的位置给它。目的不是"让服务端知道我在哪"（它本来就有自己那一份），而是**让它停止用自己
+	 * 那一份**：交接之后引擎不再采纳自己的位移，只采纳这一条 —— 于是本地物理（那份不会被网络延迟
+	 * 拽回去的物理）成为所有人看到的位置。
+	 *
+	 * 三条刻意不做：
+	 *   ① **权威不在我这儿就一条都不发**（服务端权威时上传没有意义，还会被引擎的"认人"挡）；
+	 *   ② **不新开通道**：与 ① 同频（100 ms）—— 因为 ① 本来就是"读权威车辆的位置打包发出去"，
+	 *      引擎接受了上传之后，观察者下一次收到的自然就是上传后的位置（notes/409 §4.2 第 5 条）；
+	 *   ③ **默认不发**（{@code -Dmmtr.upload=false}）：开关关着时这一条路一个字节都不发。
+	 * ============================================================================================
+	 */
+	/** 上行总开关（{@code -Dmmtr.upload}，默认 false）。与引擎侧读的是**同一个属性名**。 */
+	private static final boolean UPLOAD_ENABLED = Boolean.parseBoolean(System.getProperty("mmtr.upload", "false"));
+	/** 上行周期（ms）：与 ① 的 10 Hz 同频，便于直接对照"上行领先了多少"。 */
+	private static final long UPLOAD_INTERVAL_MILLIS = 100;
+	/**
+	 * 每辆车一份的单调序号。
+	 *
+	 * <p>**跨交接也不重置**：服务端只在"连续的权威窗口"内比较大小（第一帧不看序号 —— 换司机时
+	 * 新司机的序号比旧司机小是正常的，拿它卡人会把交接卡死），所以这里让它一路涨下去最省事。</p>
+	 */
+	private static final Map<Long, Integer> UPLOAD_SEQUENCE = new HashMap<>();
+	private static long uploadAtMillis;
+	/** 读数：本窗口发了几条、最后发出去的位置与速度 —— 与服务端的"接受 N 条 / 差 X m"对照。 */
+	private static int uploadsSent;
+	private static double uploadLastProgressM;
+	private static double uploadLastSpeedMilli;
+
+	private static double readDoubleProperty(String name, double fallback) {
+		try {
+			return Double.parseDouble(System.getProperty(name, Double.toString(fallback)));
+		} catch (final NumberFormatException e) {
+			return fallback;
+		}
+	}
+
 	/** 服务端一帧的位置/速度/收到时刻（速度单位与引擎一致：blocks/ms）。 */
 	private record ServerSample(double railProgress, double speedMilliBlocksPerMs, long millis) {
 	}
@@ -236,7 +304,18 @@ public final class MmtrVehicleMotionClient {
 		} else if (record instanceof Motion motion) {
 			withMirror(slotVehicle(motion.slot()), mirror -> applyMotion(mirror, motion));
 		} else if (record instanceof Control control) {
-			withMirror(slotVehicle(control.slot()), mirror -> mirror.mmtrApplySyncControl(control.packed()));
+			final Long echoVehicleId = slotVehicle(control.slot());
+			/*
+			 * 本地闭环（notes/407）：我自己正在开的车这一条 Echo **先比对再决定**（见
+			 * {@code MmtrDriveInput#noteEcho}）—— 一致就丢（它是我改之前那份值），连续不一致超过上限
+			 * 就解除本地闭环并让这一条落地。原来这里是"无条件丢"，2026-10-09 实测因此漏过一格：
+			 * 钥匙还在 AI 手里时客户端自己跑、服务端不动（无界分叉）。
+			 */
+			if (echoVehicleId != null && MmtrDriveInput.noteEcho(echoVehicleId, control.packed())) {
+				echoesSkipped++;
+			} else {
+				withMirror(echoVehicleId, mirror -> mirror.mmtrApplySyncControl(control.packed()));
+			}
 		} else if (record instanceof State state) {
 			withMirror(slotVehicle(state.slot()), mirror -> mirror.mmtrApplySyncState(state.flags(), state.runStopTarget(), state.runTotalDistance(), state.blockStopM()));
 		} else if (record instanceof Legs legs) {
@@ -269,10 +348,21 @@ public final class MmtrVehicleMotionClient {
 	private static void applyMotion(VehicleExtension mirror, Motion motion) {
 		final double error = motion.railProgress() - mirror.getRailProgress();
 		maxAbsErrorM = Math.max(maxAbsErrorM, Math.abs(error));
-		if (motion.speed() != null) {
+		if (motion.speed() != null && !MmtrAuthority.isClient(mirror.getId())) {
 			// 位置交给显示模型（传回它自己的 railProgress = 不改位置），只把速度软拉向服务端。
 			mirror.mmtrApplySyncMotion(mirror.getRailProgress(), motion.speed());
 		}
+		/*
+		 * ★ **本地权威期间不拿 ① 的速度盖本地速度**（2026-10-10 实机：用户报"经过一个节点速度就归 0"）。
+		 *
+		 * <p>位置早就不写了（本地物理 + 显示模型），速度却一直在被 ① 无脑覆盖；而引擎那一拍**自己**
+		 * 算出来的速度在"被权威扣住 / 到点夹紧 / 换端 / 无任务"这些拍上是 0 —— 于是本地物理被按停，
+		 * 现场就是车在每个节点处顿一下、速度表掉到 0。</p>
+		 *
+		 * <p>"本地权威 ⇒ 下载降级为对账"这条口径对**速度**与对位置是同一条：只记账（这一帧仍然进
+		 * {@link #SERVER_SAMPLE}，显示模型照旧按它纠偏），不接管。权威一旦交回服务端，这一支立刻
+		 * 恢复写速度（交接/夺回两条路都在 {@link MmtrAuthority} 里）。</p>
+		 */
 		final ServerSample previous = SERVER_SAMPLE.get(mirror.getId());
 		SERVER_SAMPLE.put(mirror.getId(), new ServerSample(
 			motion.railProgress(),
@@ -300,6 +390,94 @@ public final class MmtrVehicleMotionClient {
 		}
 		final double projected = sample.railProgress() + sample.speedMilliBlocksPerMs() * (System.currentTimeMillis() - sample.millis());
 		final double error = projected - vehicle.getRailProgress();
+		/*
+		 * ★ **阈值必须按 SI 速度算**（2026-10-10 实机抓到的单位错 —— 用户报的是"经过一个节点速度就归 0"）。
+		 *
+		 * <p>这一项（notes/407）的意思是"**半秒的余量**"：`0.5 s × 速度(m/s)`。而
+		 * `vehicle.getSpeed()` 返回的是引擎内部单位 **m/ms**（`Vehicle#getSpeed` 的注释就写着），
+		 * 原来写成 `0.5 × getSpeed()` ⇒ 120 km/h 只加 `0.5 × 0.0333 = 0.017 m`，
+		 * **速度这一项等于不存在**，阈值事实上永远是 {@link #LOCAL_CORRECT_BASE_M}（8 m）。</p>
+		 *
+		 * <p>于是速度一起来就必然击穿：正常的上行提前量 `速度 × RTT`（90 km/h ≈ 4 m）再加上
+		 * ① 帧龄造成的投影误差（客户端掉到 2~5 帧/s 时帧龄 200~500 ms ⇒ 5~12 m），
+		 * 一叠加就超过 8 m ⇒ **每拍都在"本地 ↔ 交接中"之间翻转**。实机读数（19:06:37，90 km/h）：</p>
+		 *
+		 * <pre>
+		 * [MMTR-AUTH] 车 -710282462574849916：本地 → 交接中（对账超阈值（9 m > 8 m）：交回服务端）
+		 * [MMTR-AUTH] 车 -710282462574849916：交接中 → 本地（对账两拍无硬失配：本地权威生效…）
+		 * </pre>
+		 *
+		 * <p>现场表现：交回服务端 ⇒ 位置被吸一下；下一拍又回本地 ⇒ 本地物理接着走；同时 ① 带下来的
+		 * 瞬时速度（引擎自己那一拍为 0 时就是 0）也写进镜像 ⇒ 看上去就是**每个节点处速度归零**。</p>
+		 */
+		final double correctThresholdM = LOCAL_CORRECT_BASE_M
+			+ LOCAL_CORRECT_SECONDS * Math.abs(vehicle.getSpeed()) * INTERNAL_SPEED_TO_SI;
+		/*
+		 * **权威是一个显式状态**（notes/409 §2/§3）：以前这里问的是
+		 * {@code MmtrDriveInput.isLocallyDriving} —— 一个每 tick 现算、600 ms 就过期、而过期时
+		 * **一句日志都没有**的谓词。现在问的是 {@link MmtrAuthority} 的三态：
+		 *   · **进入**本地权威要下面那两条闸门同时成立；
+		 *   · **待在**本地权威只要它们继续成立（不含任何时间窗口 —— 否则 AFB 巡航
+		 *     手不动时权威会每 600 ms 交接一次）；
+		 *   · 每次迁移恰好一行 {@code [MMTR-AUTH]}，理由写在里面。
+		 */
+		/*
+		 * notes/409 §4.6 第 13 条：**"我坐在驾驶室里"不等于"引擎把驾驶权给了我"**。
+		 * brief 的顺序是"明确赋予驾驶的权利并把它与列车绑定 → **此时**下载才旁路、才开始上行"，
+		 * 所以闸门是两条之和：
+		 *   · {@link MmtrDriveInput#holdsCabOf} —— 这间驾驶室是我的、我坐在里面；
+		 *   · {@link MmtrDutyView#holdsDrivingRight} —— 引擎推过来的镜像说这趟车
+		 *     {@code DRIVING}/{@code DRIVING_EXIT_ARMED} 且值守人是我。
+		 * 少了第二条就会漂出"客户端一直上行、引擎一直丢掉"（派车后车还在动 = {@code ABOARD}、
+		 * 或归还作业之后）：两边各算各的 ⇒ 对账误差长大 ⇒ 权威在本地/服务端之间翻转 ⇒
+		 * 那几拍的下载把速度拉回引擎那一份（常常是 0）。
+		 */
+		final boolean inCab = MmtrDriveInput.holdsCabOf(vehicle.getId());
+		final org.mtr.mapping.holder.ClientPlayerEntity mmtrPlayer = org.mtr.mapping.holder.MinecraftClient.getInstance().getPlayerMapped();
+		final String mmtrMyUuid = mmtrPlayer == null || mmtrPlayer.getUuid() == null ? "" : mmtrPlayer.getUuid().toString();
+		final String notAllowed;
+		if (!inCab) {
+			notAllowed = "已不在那间驾驶室，或钥匙不是我的";
+		} else if (MmtrDutyView.holdsDrivingRight(vehicle, mmtrMyUuid)) {
+			notAllowed = "";
+		} else {
+			notAllowed = "引擎没把驾驶权给我：这趟车值守状态=" + MmtrDutyView.of(vehicle).word();
+		}
+		final MmtrAuthority.Source authority = MmtrAuthority.tick(vehicle.getId(), inCab, notAllowed,
+			Math.abs(error), correctThresholdM, Math.abs(error) > DISPLAY_HARD_SNAP_M, System.currentTimeMillis());
+		MmtrAuthority.countFrame(authority);
+		/*
+		 * notes/409 §2 的"本地"态要告诉引擎一声：引擎的 {@code simulate()} 里有一条"夹在腿表末端"的
+		 * 判据（`mmtrRunTotalDistance`），它在**本地权威**时会变成死锁 —— 车被夹在阴影末端停住，
+		 * 而阴影要靠服务端前进才会延长、服务端又只跟着本地的上传前进。实机现场（用户原话）：
+		 * 「经过一个节点速度就归 0」。这一行就是那条判据的开关（见 Vehicle.simulate 里的长注释）。
+		 */
+		vehicle.mmtrSetLocalAuthority(authority == MmtrAuthority.Source.CLIENT);
+		/*
+		 * notes/409 §4：权威在我这儿 ⇒ 这一拍起**把位置传上去**（引擎那边从"收下这条"的那一刻起
+		 * 不再采纳它自己算出来的位移）。放在这里而不是"按键时发一次"：位置是连续的物理量，
+		 * 上行必须是**流**，与 ① 同频。
+		 */
+		uploadIfDue(vehicle, authority, System.currentTimeMillis());
+		if (authority == MmtrAuthority.Source.CLIENT) {
+			// 本地权威：下载降级为对账 —— 阈值内**一个字都不写位置**（写了就是把 10 Hz 采样变成台阶）。
+			locallyDrivenFrames++;
+			localMaxLeadM = Math.max(localMaxLeadM, -error);
+			if (Math.abs(error) <= correctThresholdM) {
+				return;
+			}
+			// 超阈值：交给下面的吸收/硬对齐去纠偏（MmtrAuthority 同一拍已经把权威退回"交接中"）。
+			localCorrections++;
+		}
+		if (authority == MmtrAuthority.Source.HANDOVER_OUT) {
+			/*
+			 * 交接中：**吸收但不硬对齐**。交接那一瞬间若按 {@link #DISPLAY_HARD_SNAP_M} 硬对齐，
+			 * 就会把车拽一下 —— 那正是用户要消掉的观感（notes/409 §3）。这一态会持续吸收误差，
+			 * 等它收进阈值以内再由 {@link MmtrAuthority} 确认回本地权威。
+			 */
+			vehicle.mmtrApplySyncMotion(vehicle.getRailProgress() + error * Math.min(1.0, millisElapsed / DISPLAY_TAU_MS), null);
+			return;
+		}
 		if (Math.abs(error) > DISPLAY_HARD_SNAP_M) {
 			hardAligns++;
 			maxAbsErrorM = Math.max(maxAbsErrorM, Math.abs(error));
@@ -307,6 +485,33 @@ public final class MmtrVehicleMotionClient {
 		} else {
 			vehicle.mmtrApplySyncMotion(vehicle.getRailProgress() + error * Math.min(1.0, millisElapsed / DISPLAY_TAU_MS), null);
 		}
+	}
+
+	/**
+	 * **上行一步**（notes/409 §4）：权威在我这儿时，每 {@link #UPLOAD_INTERVAL_MILLIS} ms 传一条。
+	 *
+	 * <p>传的是**镜像此刻的位置与速度** —— 镜像就是"本地物理"那份读数（同一套 {@code ConsistDynamics}、
+	 * 同一批手柄输入、由 {@code MmtrDriveInput} 本地闭环驱动），也正是 {@link MmtrAuthority.Source#CLIENT}
+	 * 下渲染所依据的那一份。于是"传上去的"与"本地显示的"是同一个数，不会出现"我看着一个位置、
+	 * 引擎收到另一个位置"。</p>
+	 *
+	 * <p>权威不在客户端时**一条都不发**（连计时都不推进）：此刻服务端权威是自洽的，上传只会被
+	 * "认人"-以外的判据挡回来，白花带宽还让日志变噪。</p>
+	 */
+	private static void uploadIfDue(VehicleExtension vehicle, MmtrAuthority.Source authority, long nowMillis) {
+		if (!UPLOAD_ENABLED || authority != MmtrAuthority.Source.CLIENT) {
+			return;
+		}
+		if (nowMillis - uploadAtMillis < UPLOAD_INTERVAL_MILLIS) {
+			return;
+		}
+		uploadAtMillis = nowMillis;
+		final int sequence = UPLOAD_SEQUENCE.merge(vehicle.getId(), 1, Integer::sum);
+		uploadLastProgressM = vehicle.getRailProgress();
+		uploadLastSpeedMilli = vehicle.getSpeed();
+		uploadsSent++;
+		org.mtr.mod.InitClient.REGISTRY_CLIENT.sendPacketToServer(new org.mtr.mod.packet.PacketMmtrUploadMotion(
+			vehicle.getId(), uploadLastProgressM, uploadLastSpeedMilli, sequence));
 	}
 
 	/**
@@ -383,13 +588,21 @@ public final class MmtrVehicleMotionClient {
 		if (elapsed < 1000) {
 			return;
 		}
-		Init.LOGGER.info("[MMTR-MOTION] 运动流：帧/s={} 记录/s={} 字节/s={} 槽位={} 未知槽位={} 坏帧={} 腿记录={}（接={} 丢={} 整表={} 无基准={} 空表={} 缺轨={} 接不上={} 重试成={} 重试弃={}）最大误差={}m 硬对齐={} 阴影越界={}次/{}m 时钟差={}ms",
+		Init.LOGGER.info("[MMTR-MOTION] 运动流：帧/s={} 记录/s={} 字节/s={} 槽位={} 未知槽位={} 坏帧={} 腿记录={}（接={} 丢={} 整表={} 无基准={} 空表={} 缺轨={} 接不上={} 重试成={} 重试弃={}）最大误差={}m 硬对齐={} 阴影越界={}次/{}m 时钟差={}ms {} 本地闭环={}帧 跳回声={} 领先max={}m 对账={} 上行={}条（最后 {}m / {}km/h）",
 			frames, records, bytes, SLOT_TO_VEHICLE.size(), unknownSlots, malformedFrames, legRecords,
 			legAppended, legDropped, legReplaced, legNoBase, legEmptyTable, legUnknownRail, legDiscontinuous,
 			legRetryApplied, legRetryGaveUp,
 			Math.round(maxAbsErrorM * 1000.0) / 1000.0, hardAligns,
 			shadowOverrunCount, Math.round(maxShadowOverrunM * 1000.0) / 1000.0,
-			serverMillisOffset == Long.MIN_VALUE ? "-" : Long.toString(serverMillisOffset));
+			serverMillisOffset == Long.MIN_VALUE ? "-" : Long.toString(serverMillisOffset),
+			// ★ 位置权威是显式状态（notes/409）：这一小段就是它的读数 —— 切换次数能直接量出
+			//   以前那个"600 ms 窗口"的抖动（一次驾驶里应该是**个位数**次，不是几十次）。
+			MmtrAuthority.report(),
+			locallyDrivenFrames, echoesSkipped, Math.round(localMaxLeadM * 100.0) / 100.0, localCorrections,
+			// ★ 上行读数（notes/409 §4.6）：发了几条 + 最后一条的内容。服务端那侧对应的读数是
+			//   `[MMTR-UP] 接受 N 条（这一帧与引擎当前差 X m）` —— 两个数放在一起就是"上行领先"。
+			uploadsSent, Math.round(uploadLastProgressM * 100.0) / 100.0,
+			Math.round(uploadLastSpeedMilli * 360000.0) / 100.0);
 		windowStartMillis = now;
 		frames = 0;
 		bytes = 0;
@@ -410,5 +623,13 @@ public final class MmtrVehicleMotionClient {
 		maxAbsErrorM = 0;
 		shadowOverrunCount = 0;
 		maxShadowOverrunM = 0;
+		locallyDrivenFrames = 0;
+		echoesSkipped = 0;
+		localCorrections = 0;
+		localMaxLeadM = 0;
+		// 上行读数与上面这些同一个节拍清零（它记的是"这一秒往引擎传了几条位置"）。
+		uploadsSent = 0;
+		// 权威计数与上面这些同一个节拍清零（它记的是"这一秒里按哪个权威渲染了多少拍"）。
+		MmtrAuthority.resetWindow();
 	}
 }

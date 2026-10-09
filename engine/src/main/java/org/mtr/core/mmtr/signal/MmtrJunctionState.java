@@ -252,7 +252,23 @@ public final class MmtrJunctionState {
 				continue;
 			}
 			final double footLength = footTo - footFrom;
-			final double required = Math.max(0.5, 0.5 * Math.min(footLength, Math.max(to - from, footLength)) - 1.0);
+			/*
+			 * ★ **净空区更短时以区间为准**（用户 2026-10-09 裁定：改回教科书口径，接受灯色变严）。
+			 *
+			 * <p>与上面那段注释逐字一致，但内层原来写的是 {@code Math.max(to - from, footLength)}：
+			 * {@code max(窗, 车长) ≥ 车长} ⇒ 外层 {@code Math.min} 恒等于车长 ⇒ 阈值实际是"**半个整车**"。
+			 * 窗只有 {@link Vehicle#MMTR_JUNCTION_CLEARANCE_M} = 10 m，而占用层是**每根轨整列车写一段**
+			 * （{@code Vehicle.writeMmtrConsistBodyOccupancy}）⇒ 任何车长 > 约 22 m 的车**永远**弄不脏岔区：
+			 * "车压在岔上 ⇒ 岔区清不掉/不许扳岔/受限节点"这条安全网对**真实列车**全线失效
+			 * （2026-10-09 实机：一列 10 节车骑在 `-7174,65,1661` 上，`signal why` 仍打印 `受限节点=无`、灯读 GREEN，
+			 * 而 00102 就停在那个岔上）。</p>
+			 *
+			 * <p>代价（已确认并逐条重定）：`MmtrSignalAspectTests` 里 5 条"占用禁行腿不该影响这条进路"
+			 * 的期望从 GREEN/SINGLE_YELLOW 变成 RED —— 真联锁里"道岔被占 ⇒ 岔上任何一条进路都锁不了"，
+			 * 这正是本片要的严格性。窗长**没有**改（不是"整根轨都算岔区"那一次的错），
+			 * 也不动 `blockedAtDeparture`（禁行腿仍不进灯色，除非它被"岔区被占"这条位置型判据命中）。</p>
+			 */
+			final double required = Math.max(0.5, 0.5 * Math.min(footLength, to - from) - 1.0);
 			if (overlap >= required) {
 				return true;
 			}

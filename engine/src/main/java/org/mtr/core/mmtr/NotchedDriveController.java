@@ -3,6 +3,7 @@ package org.mtr.core.mmtr;
 import org.mtr.core.mmtr.brake.BrakeCar;
 import org.mtr.core.mmtr.brake.BrakeCommand;
 import org.mtr.core.mmtr.brake.BrakeModel;
+import org.mtr.core.mmtr.physics.ElectricBrakeSpec;
 import org.mtr.core.mmtr.physics.PneumaticBrakeSpec;
 import org.mtr.core.mmtr.physics.TrainPhysics;
 
@@ -10,48 +11,41 @@ import org.mtr.core.mmtr.physics.TrainPhysics;
  * Notched ("有级") controller: throttle and brake are discrete notches mapped onto the
  * consist's performance envelope. Brake input overrides traction whenever brake > 0.
  *
- * <p>档位比例映射到**力**：牵引力 = 全牵引力 × 比例（功率同步缩放），制动力 = 全常用制动力 × 比例；
- * 加速度由 {@link TrainPhysics} 除以惯性质量得到（notes/235）。</p>
+ * <p>档位 → **力**：牵引力 = 全牵引力 × 比例（功率同步缩放），加速度由 {@link TrainPhysics}
+ * 除以惯性质量得到（notes/235）。</p>
  *
- * <h2>气压口径（notes/270）</h2>
+ * <h2>制动：只有气压口径一条路（notes/270/376）</h2>
  *
- * <p>车底在 {@code consist-types.json} 里配了 bar 键（{@link ConsistType#getBrakes()}）时，制动**不再**走
- * "比例 × 全制动力"，而是把档位折成 {@link BrakeCommand} 丢进共用的 {@link BrakeModel}
+ * <p>档位折成 {@link BrakeCommand} 丢进共用的 {@link BrakeModel}
  * （列车管 → 分配阀 → 缸压 → 逐车力 → 黏着截断），与三手柄/无级用的是同一套逻辑 ——
- * 于是"换一种操纵方式"不再意味着"换一套制动模型"。没配 bar 键的车底逐位不变。</p>
+ * 于是"换一种操纵方式"不再意味着"换一套制动模型"。**旧的比例制动力（{@code 档/档数 × 全制动力}）
+ * 已删除**：车底的气压口径是必填项（{@link ConsistType} 构造器保证非空）。</p>
  */
 public final class NotchedDriveController implements DriveController, BrakeCarrier, AirBrakeStateful {
 
 	private final BrakeModel brakeModel = new BrakeModel("有级");
+	/** notes/379：上一拍的牵引力与电制动力（HUD/镜像读数，服务端算好发下去）。 */
+	private double lastTractionForceN;
+	private double lastElectricBrakeForceN;
+
+	@Override
+	public double getLastTractionForceN() {
+		return lastTractionForceN;
+	}
+
+	@Override
+	public double getLastElectricBrakeForceN() {
+		return lastElectricBrakeForceN;
+	}
 
 	@Override
 	public DriveOutput compute(ControlState control, ConsistType type, double speedMetersPerSecond, long dtMillis) {
 		final TrainPhysics physics = type.getPhysics();
 		final int throttle = clamp(control.getThrottleNotch(), 0, type.getPowerNotches());
 		final int brake = clamp(control.getBrakeNotch(), 0, type.getBrakeNotches());
-		final PneumaticBrakeSpec air = type.getBrakes();
-
-		if (air != null) {
-			return computePneumatic(control, type, physics, air, throttle, brake, speedMetersPerSecond, dtMillis);
-		}
-
-		if (control.isEmergency()) {
-			return new DriveOutput(-physics.emergencyDecelerationMps2(speedMetersPerSecond), true, true, 0, 1);
-		}
-
-		if (brake > 0) {
-			final double ratio = (double) brake / type.getBrakeNotches();
-			final double decel = physics.serviceBrakeDecelerationMps2(ratio, speedMetersPerSecond);
-			return new DriveOutput(-decel, decel > 0.01, false, 1, ratio);
-		}
-
-		if (throttle > 0) {
-			final double ratio = (double) throttle / type.getPowerNotches();
-			// 恒力矩 → 恒功率（自然折点），减运行阻力；平衡速度由"牵引 vs 阻力"自己长出来。
-			return new DriveOutput(physics.tractionAccelerationMps2(ratio, speedMetersPerSecond), false, false, 1, 0);
-		}
-
-		return new DriveOutput(-physics.coastDecelerationMps2(speedMetersPerSecond), false, false, 1, 0);
+		// notes/376：**只有这一条路** —— 车底一定有气压口径（ConsistType 构造器保证），
+		// 旧的比例制动力分支（air == null）已整段删除。
+		return computePneumatic(control, type, physics, type.getBrakes(), throttle, brake, speedMetersPerSecond, dtMillis);
 	}
 
 	/**
@@ -71,18 +65,34 @@ public final class NotchedDriveController implements DriveController, BrakeCarri
 		 * 不该够到它（紧急由保护层给）。于是"这台车有几档制动"只是配置，模型一行不改。
 		 */
 		final double demandRatio = (double) brake / Math.max(1, type.getBrakeNotches()) * air.getServiceDemandLimit();
+		/*
+		 * notes/379（用户口径 2026-10-03「B1,B2 是电再生制动逻辑」）：**电制动先吃饱，机械补缺口**。
+		 *
+		 * <p>以前有级/无级这条路上 {@code availableElectricN} 恒为 0 ⇒ 车底就算配了电制动也用不上，
+		 * 低档（B1/B2）全是空气闸、缸压与真车不符。现在把整列的可用电制动力交给共用制动系统：
+		 * 它替掉**动力车自己**那份机械制动（拖车的空气闸不动 —— 它们没有电机），于是
+		 * "缸压 = 司机诉求" 只在电制动不够时才成立。</p>
+		 */
+		final ElectricBrakeSpec electric = type.getElectricBrake();
+		final double availableElectricN = electric == null || !air.isBlendingEnabled()
+			? 0 : Math.max(0, electric.effortN(speedMetersPerSecond));
 		brakeModel.step(air, equivalentCar, BrakeCommand.ofRatio(demandRatio, 0, emergency),
-			speedMetersPerSecond, 0, dt);
+			speedMetersPerSecond, availableElectricN, dt);
 
 		final double pneumaticForceN = emergency ? brakeModel.getEmergencyForceN() : brakeModel.getPneumaticForceN();
+		// 电制动替掉的那一份要**加回来**（EP 只削不加：总制动力 = 诉求，只是气/电的分配变了）。
+		final double electricForceN = emergency ? 0 : brakeModel.getBlendedElectricN();
 		// 牵引联锁：闸没排空就不许牵引（真车口径；逐车时按全列最大缸压判）
 		final boolean tractionAllowed = brake == 0 && !emergency && !brakeModel.isPneumaticHolding();
 		final double tractionForceN = tractionAllowed && throttle > 0
 			? physics.tractiveEffortN((double) throttle / type.getPowerNotches(), speedMetersPerSecond) : 0;
-		final double brakingForceN = physics.adhesionLimitedBrakingForceN(pneumaticForceN, 0, speedMetersPerSecond,
+		final double brakingForceN = physics.adhesionLimitedBrakingForceN(pneumaticForceN, electricForceN, speedMetersPerSecond,
 			air.isWspEnabled(), air.getWheelSlipMu());
 		// 制动灯看**真的在出制动力**，不看"合加速度为负"（惰行时运行阻力也让加速度为负，不能点灯）
-		final boolean braking = emergency || pneumaticForceN > 1 || brakeModel.isPneumaticHolding();
+		final boolean braking = emergency || pneumaticForceN > 1 || electricForceN > 1 || brakeModel.isPneumaticHolding();
+		// notes/379：读数（HUD 的"电机"行与"制动力（电）"）：牵引与电制动分开报，气那份来自模型。
+		lastTractionForceN = tractionForceN;
+		lastElectricBrakeForceN = electricForceN;
 		return new DriveOutput(physics.netAccelerationMps2(tractionForceN, brakingForceN, speedMetersPerSecond),
 			braking, emergency, brakeModel.getPipePressure(), brakeModel.getBrakeCylinderPressure());
 	}
@@ -110,6 +120,8 @@ public final class NotchedDriveController implements DriveController, BrakeCarri
 
 	@Override
 	public void reset() {
+		lastTractionForceN = 0;
+		lastElectricBrakeForceN = 0;
 		brakeModel.reset();
 	}
 

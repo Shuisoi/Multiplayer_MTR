@@ -8,9 +8,13 @@ import org.mtr.mod.mmtr.MmtrPidText;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 车辆动态面的**面文档**（notes/359）：一块面上画什么、什么条件下画。
@@ -178,6 +182,9 @@ public final class MmtrFaceDocument {
 	private final double roll;
 	private final double tilt;
 	private final Drum drum;
+	/** {@link #referencedFields()} 的缓存（文档不可变，算一次就够）。 */
+	private boolean referencedFieldsComputed;
+	private Set<String> referencedFieldsCache;
 
 	private MmtrFaceDocument(String id, int background, int textColor, int pxPerMetre, Side side, JsonElement require, JsonObject vars, List<Element> elements,
 	                         List<Page> pages, double pageSeconds, JsonElement pageExpr, int fps, double roll, double tilt, Drum drum) {
@@ -330,6 +337,156 @@ public final class MmtrFaceDocument {
 			}
 		}
 		return false;
+	}
+
+	/** 模板里 {@code {pid.terminus}} / {@code {speed|round}} 这类花括号内要抽的标识符。 */
+	private static final Pattern TEMPLATE_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)*");
+
+	/**
+	 * 这份文档**真正引用到的字段名**（点号路径，如 {@code pid.terminus}、{@code speed}）。
+	 *
+	 * <p><b>为什么需要它：</b>重画签名原来用 {@link MmtrFaceData#describe()}，那是**整张字段登记表**的
+	 * 展开 —— 其中 {@code speed}、{@code cab.arcM}、{@code lzb.targetM}、{@code motor.forceN}
+	 * 这些量**每帧都在变**。于是车一开动，连只显示一句静态文字的牌子也被判定成"内容变了"，
+	 * 每帧重画画布（461×204 ≈ 9.4 万像素 + 逐像素上传 ≈ 1–2 ms/块面）。实测这占了
+	 * {@code main.vehicles} 的 86%。签名只该包含**这块牌真正读到的东西**。见 notes/396。</p>
+	 *
+	 * <p><b>返回 {@code null} = 判断不了</b>（用了动画 / {@code forEach} / 翻牌机，或
+	 * {@code {"var": ""}} 这种"要整份数据"的写法）⇒ 调用方**必须回落到全量快照**。
+	 * 这是**故意的失败方向**：宁可多画几次，也绝不能出现"牌子该变却没变"。</p>
+	 */
+	public Set<String> referencedFields() {
+		if (!referencedFieldsComputed) {
+			referencedFieldsCache = collectReferencedFields();
+			referencedFieldsComputed = true;
+		}
+		return referencedFieldsCache;
+	}
+
+	private Set<String> collectReferencedFields() {
+		// 翻牌机的取值口没在这棵树里 ⇒ 不冒险
+		if (drum != null) {
+			return null;
+		}
+		final Set<String> fields = new LinkedHashSet<>();
+		if (!collectFromJson(require, fields) || !collectFromJson(pageExpr, fields) || !collectFromJson(vars, fields)) {
+			return null;
+		}
+		// 顶层 elements 与 pages 都扫：多收无害，漏收会让牌子不刷新
+		if (!collectFromElements(elements, fields)) {
+			return null;
+		}
+		// ⚠️ pages 可以是 null（builtinPid 那条路就传 null）—— 2026-10-05 漏了这个空保护，
+		//    结果这里抛 NPE、异常从 RenderVehicles 里穿出去，MainRenderer 剩下的半边不执行 ⇒
+		//    RenderRails 整段不跑，表现为"铁轨全没了"。见 notes/396。
+		if (pages != null) {
+			for (final Page page : pages) {
+				if (!collectFromJson(page.require(), fields) || !collectFromElements(page.elements(), fields)) {
+					return null;
+				}
+			}
+		}
+		return fields;
+	}
+
+	private static boolean collectFromElements(List<Element> elements, Set<String> fields) {
+		if (elements == null) {
+			return true;
+		}
+		for (final Element element : elements) {
+			// 动画的相位由 fps 驱动，但它也可能读数据 ⇒ 不冒险
+			if (element.anim() != null || FOREACH_TYPE.equals(element.type())) {
+				return false;
+			}
+			if (element.text() != null) {
+				collectFromTemplate(element.text(), fields);
+			}
+			if (!collectFromJson(element.when(), fields) || !collectFromJson(element.raw(), fields) || !collectFromElements(element.children(), fields)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 扫一棵 JSONLogic 表达式树，把每个 {@code {"var": …}} 的路径收进来。返回 false = 有看不懂的写法。 */
+	private static boolean collectFromJson(JsonElement node, Set<String> fields) {
+		if (node == null || node.isJsonNull() || node.isJsonPrimitive()) {
+			return true;
+		}
+		if (node.isJsonArray()) {
+			for (final JsonElement child : node.getAsJsonArray()) {
+				if (!collectFromJson(child, fields)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		for (final Map.Entry<String, JsonElement> entry : node.getAsJsonObject().entrySet()) {
+			if ("var".equals(entry.getKey())) {
+				if (!collectFromVar(entry.getValue(), fields)) {
+					return false;
+				}
+			} else if (!collectFromJson(entry.getValue(), fields)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** {@code {"var": "a.b"}} 或 {@code {"var": ["a.b", 缺省]}}；{@code ""} = 整份数据 ⇒ 判断不了。 */
+	private static boolean collectFromVar(JsonElement argument, Set<String> fields) {
+		if (argument.isJsonPrimitive() && argument.getAsJsonPrimitive().isString()) {
+			return addReferencedPath(argument.getAsString(), fields);
+		}
+		if (argument.isJsonArray()) {
+			final JsonArray array = argument.getAsJsonArray();
+			if (array.size() == 0 || !addReferencedPath(asPathString(array.get(0)), fields)) {
+				return false;
+			}
+			// 第 2 个起是缺省值，也可能是表达式 ⇒ 继续扫
+			for (int i = 1; i < array.size(); i++) {
+				if (!collectFromJson(array.get(i), fields)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	private static String asPathString(JsonElement element) {
+		return element.isJsonPrimitive() && element.getAsJsonPrimitive().isString() ? element.getAsString() : null;
+	}
+
+	private static boolean addReferencedPath(String path, Set<String> fields) {
+		if (path == null || path.isEmpty()) {
+			return false;
+		}
+		fields.add(path);
+		return true;
+	}
+
+	/**
+	 * 从 {@code "开往 {pid.terminus}"} / {@code "{speed|round}"} 这类模板里抽出花括号内的标识符。
+	 * **多抽无害**（抽出来的名字在快照里没有就当没选），但**少抽会让牌子不刷新**，所以取所有标识符。
+	 */
+	private static void collectFromTemplate(String template, Set<String> fields) {
+		int index = 0;
+		while (true) {
+			final int open = template.indexOf('{', index);
+			if (open < 0) {
+				return;
+			}
+			final int close = template.indexOf('}', open + 1);
+			if (close < 0) {
+				return;
+			}
+			final Matcher matcher = TEMPLATE_IDENTIFIER.matcher(template.substring(open + 1, close));
+			while (matcher.find()) {
+				fields.add(matcher.group());
+			}
+			index = close + 1;
+		}
 	}
 
 	/**

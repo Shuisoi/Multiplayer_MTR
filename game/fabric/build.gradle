@@ -23,6 +23,28 @@ if (!worldEditJar.isFile()) {
 	throw new GradleException("WorldEdit 缺失：${worldEditJar}（清单与装法见 mmtr/notes/287）")
 }
 
+// —— Fresh Animations 的两个前置（客户端专用）——
+// 用户口径（2026-10）：「村民用原版模型……还是需要点动态的……fresh animations 那个」。
+// Fresh Animations 是**资源包**，但它只改实体渲染管线，所以必须配这两个模组才生效：
+//   EMF（Entity Model Features）= 换实体模型 + 播放动画表达式；ETF = 随机/发光实体贴图。
+// 走 **maven.modrinth + modLocalRuntime**（与 Sodium/Iris/Journeymap 同一条路）：
+//   loom 在**构建期**把它们 remap 进 loom 缓存，客户端直接吃 classpath，**不碰 run/.fabric/processedMods**。
+//
+// ★ 为什么不用 `vendor/mods + fabric.addMods`（WorldEdit 那条路）—— 2026-10-05 实测踩过：
+//   那条路要 Fabric Loader 在**启动时运行时 remap**，它会往 `run/.fabric/processedMods/` 里
+//   用 jdk 的 zipfs 新建 jar；而这个目录的 ACL 带一条
+//     Everyone : DeleteSubdirectoriesAndFiles = Deny      （外加两个沙箱身份 S-1-4-…）
+//   zipfs 建文件要走"临时文件 → 原子替换"，正好撞上这条 Deny，客户端启动直接失败：
+//     java.io.IOException: the jar file ...\processedMods\entity_model_features-3.0.17-<hash>.jar can't be written
+//       at net.fabricmc.loader.impl.lib.tinyremapper.OutputConsumerPath.<init>(OutputConsumerPath.java:102)
+//   （对照实验：普通会话往同一目录写文件是成功的 ⇒ 不是"目录不可写"，是**那条 remap 路径**不可用。）
+//   服务端不受影响是因为 WorldEdit 的 jar 早在 11:28 就 remap 过、缓存已存在。
+//
+// 版本（2026-10-05 取自 Modrinth，1.20.4 fabric）：EMF 3.0.17 / ETF 7.0.13。
+// EMF 的 fabric.mod.json 写死依赖 `entity_texture_features>=7.0.0` ⇒ **两个必须同时装**，少一个 EMF 不加载。
+final File entityModelFeaturesJar = file("${rootDir}/../../vendor/mods/entity_model_features_1.20.4-fabric-3.0.17.jar")
+final File entityTextureFeaturesJar = file("${rootDir}/../../vendor/mods/entity_texture_features_1.20.4-fabric-7.0.13.jar")
+
 loom {
 	accessWidenerPath = file("src/main/resources/mtr.accesswidener")
 	runConfigs.configureEach {
@@ -59,6 +81,18 @@ dependencies {
 	// 光影包放 fabric/run/shaderpacks/（run/ 不入库）；游戏内：选项 → 视频设置 → 光影包。
 	modLocalRuntime "maven.modrinth:sodium:mc1.20.4-0.5.8"
 	modLocalRuntime "maven.modrinth:iris:1.7.2+1.20.4"
+	// Fresh Animations 的两个前置（客户端专用；见文件上方 EMF/ETF 的长注释）。
+	// ★ 版本为什么钉在 3.0.7 / 7.0.6（2026-10-05 实测）：
+	//   loom 会拒绝"用比本工程更新的 loom 构建的 mod"——
+	//     java.lang.IllegalStateException: Mod was built with a newer version of Loom (1.15.48), you are using Loom (1.10.5)
+	//   这个戳写在 jar 的 `META-INF/MANIFEST.MF` 的 `Fabric-Loom-Version:` 里，**离线就能筛**：
+	//     EMF 3.0.17/3.0.16/3.0.15 = 1.15.48 ✗   3.0.12/3.0.11 = 1.13.44 ✗   3.0.10/3.0.9 = 1.11.38 ✗
+	//     EMF 3.0.7 = 1.9.32 ✓                    ETF 7.0.13 = 1.15.48 ✗   7.0.9 = 1.13.44 ✗
+	//     ETF 7.0.8 = 1.11.38 ✗                   7.0.6 = 1.9.32 ✓（且满足 EMF 的 entity_texture_features>=7.0.0）
+	//   配套资源包也用同期的 Fresh Animations 1.10.2（2025-11-22，与 EMF 3.0.7 / ETF 7.0.6 同一周）。
+	//   要升 EMF 就得先升本工程的 loom（那是另一件事，别顺手做）。
+	modLocalRuntime files("${rootDir}/../../vendor/mods/entity_model_features_1.20.4-fabric-3.0.7.jar")
+	modLocalRuntime files("${rootDir}/../../vendor/mods/entity_texture_features_1.20.4-fabric-7.0.6.jar")
 
 	// ★ 2026-09-29：Sodium 也必须出现在 **compile** classpath 上，否则 `:fabric:compileJava` 直接失败：
 	//     SodiumGlProgramMixin.java:24  错误: Mixin target me.jellysquid.mods.sodium.client.gl.shader.GlProgram could not be found

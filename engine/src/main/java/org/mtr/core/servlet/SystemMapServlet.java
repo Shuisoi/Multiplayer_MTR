@@ -1444,6 +1444,10 @@ public final class SystemMapServlet extends ServletBase {
 			out.addProperty("stationHex", station == null ? "" : station.getHexId());
 			out.addProperty("stationName", platform.getStationName());
 			out.addProperty("dwellMillis", platform.getDwellTime());
+			// 站台客量（0–100%）：落盘字段 + 经调制器后的有效值。
+			// 游戏侧铺"村民"读的是 effectiveCrowdLevel，所以这里两个都报出来，网页/指令对账时不会看错一栏。
+			out.addProperty("crowdLevel", platform.getCrowdLevel());
+			out.addProperty("effectiveCrowdLevel", platform.getEffectiveCrowdLevel());
 			final org.mtr.core.data.Rail rail = platform.mmtrGraphRail();
 			// 规范 hex：与 /mmtr-topology 的 rails[].hex 同一写法，前端按它取那根轨的 path 才不会找不到。
 			out.addProperty("railHex", rail == null ? "" : org.mtr.core.mmtr.signal.MmtrSectionService.canonicalHex(rail.getHexId()));

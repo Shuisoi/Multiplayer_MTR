@@ -23,6 +23,11 @@ public final class DynamicVehicleModel extends EntityModelExtension<EntityAbstra
 
 	public final ModelProperties modelProperties;
 	private final Identifier texture;
+	/**
+	 * A 路线（notes/400 §6）：这一辆车开门时那条"逐部件组排队"的路，现在按动画类合成一次 draw。
+	 * 状态挂在这辆车上（每个模型只建一次），见 {@link MmtrDoorBatch}。
+	 */
+	private final MmtrDoorBatch doorBatch = new MmtrDoorBatch();
 	private final ObjectArraySet<Box> floors = new ObjectArraySet<>();
 	private final ObjectArraySet<Box> doorways = new ObjectArraySet<>();
 	private final Object2ObjectOpenHashMap<PartCondition, Object2ObjectOpenHashMap<RenderStage, OptimizedModelWrapper.MaterialGroupWrapper>> materialGroupsForPartConditionAndRenderStage = new Object2ObjectOpenHashMap<>();
@@ -71,15 +76,55 @@ public final class DynamicVehicleModel extends EntityModelExtension<EntityAbstra
 
 	public DynamicVehicleModel(Object2ObjectAVLTreeMap<String, OptimizedModel.ObjModel> nameToObjModels, Identifier texture, ModelProperties modelProperties, PositionDefinitions positionDefinitions, String id) {
 		super(0, 0);
+		/*
+		 * 构造分段读数（notes/401 §8）：`[MMTR-MODEL]` 报的"建 VBO"就是这一个构造函数（实测 72–111 ms），
+		 * 但它里面混了三件性质不同的事 —— 逐部件把位置烘进几何（addTransformation）、
+		 * 门/雨刷各自的那次 upload（GL）、以及测试门的重叠（纯计算）。
+		 * 不分开量就不知道"搬走"能不能解决问题。
+		 */
+		final long ctorStartNanos = System.nanoTime();
 		buildModel();
 		modelProperties.addPartsIfEmpty(nameToObjModels.keySet());
 		this.texture = texture;
 		this.modelProperties = modelProperties;
-		// Temporary diagnostic: MTR keys the OBJ geometry by group name, so a mismatch between the
-		// parsed group names and the part names in properties_<id>.json silently yields no geometry.
-		modelProperties.iterateParts(modelPropertiesPart -> modelPropertiesPart.writeCache(nameToObjModels, positionDefinitions, objModelsForPartConditionAndRenderStage, objModelsForPartConditionAndRenderStageDoorsClosed, modelProperties.getModelYOffset()));
+		final int[] parts = {0};
+		final long writeCacheStartNanos = System.nanoTime();
+		modelProperties.iterateParts(modelPropertiesPart -> {
+			parts[0]++;
+			modelPropertiesPart.writeCache(nameToObjModels, positionDefinitions, objModelsForPartConditionAndRenderStage, objModelsForPartConditionAndRenderStageDoorsClosed, modelProperties.getModelYOffset());
+		});
+		final long writeCacheNanos = System.nanoTime() - writeCacheStartNanos;
+		final long addTransformationNanos = ModelPropertiesPart.takeAddTransformationNanos();
+		final int addTransformationCalls = ModelPropertiesPart.takeAddTransformationCalls();
+		final long doorModelNanos = ModelPropertiesPart.takeDoorModelNanos();
+		final int doorModelCalls = ModelPropertiesPart.takeDoorModelCalls();
+		final long logStartNanos = System.nanoTime();
 		Init.LOGGER.info("[MMTR-DBG] model {} objGroups={} renderConditions={} doorsClosedConditions={}", id, nameToObjModels.keySet(), objModelsForPartConditionAndRenderStage.size(), objModelsForPartConditionAndRenderStageDoorsClosed.size());
+		final long logNanos = System.nanoTime() - logStartNanos;
+		final long testDoorsStartNanos = System.nanoTime();
 		testDoors(id);
+		final long testDoorsNanos = System.nanoTime() - testDoorsStartNanos;
+		reportCtorSegments(id, parts[0], (System.nanoTime() - ctorStartNanos) / 1_000_000L,
+				writeCacheNanos / 1_000_000L, addTransformationNanos / 1_000_000L, addTransformationCalls,
+				doorModelNanos / 1_000_000L, doorModelCalls,
+				logNanos / 1_000_000L, testDoorsNanos / 1_000_000L);
+	}
+
+	/** 构造太慢时打一条分段读数（有界、只在 ≥ 20 ms 时打；notes/401 §11）。 */
+	private static final long CTOR_LOG_MIN_MILLIS = 20;
+	private static final int MAX_CTOR_LOGS = 40;
+	private static int ctorLogCount;
+
+	private static void reportCtorSegments(String id, int parts, long totalMillis, long writeCacheMillis, long addTransformationMillis, int addTransformationCalls, long doorModelMillis, int doorModelCalls, long logMillis, long testDoorsMillis) {
+		if (totalMillis < CTOR_LOG_MIN_MILLIS || ctorLogCount >= MAX_CTOR_LOGS) {
+			return;
+		}
+		ctorLogCount++;
+		Init.LOGGER.info("[MMTR-VEHCTOR] {} {} ms ｜ 部件 {} ｜ writeCache {}（其中 addTransformation {} / {} 次、现建门/雨刷模型 {} / {} 次）｜ 调试日志 {} ｜ testDoors {} ms",
+				id, totalMillis, parts, writeCacheMillis, addTransformationMillis, addTransformationCalls, doorModelMillis, doorModelCalls, logMillis, testDoorsMillis);
+		if (ctorLogCount == MAX_CTOR_LOGS) {
+			Init.LOGGER.info("[MMTR-VEHCTOR] 构造分段读数已达 {} 条上限，后续不再输出", MAX_CTOR_LOGS);
+		}
 	}
 
 	@Override
@@ -91,7 +136,14 @@ public final class DynamicVehicleModel extends EntityModelExtension<EntityAbstra
 	}
 
 	public void render(StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, int[] scrollingDisplayIndexTracker, int light, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, boolean fromResourcePackCreator) {
-		modelProperties.iterateParts(modelPropertiesPart -> modelPropertiesPart.render(texture, storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, light, openDoorways, fromResourcePackCreator));
+		/*
+		 * A 路线（notes/400 §6）：先把可以按动画类合并的门画掉（一个类一次 draw），拿回"已经画过的
+		 * 部件"集合；随后逐部件渲染时把那些部件的那一次 door draw 跳掉，避免画第二遍。
+		 * 这个调用必须在本方法里、在逐部件渲染**之前**：两者都在同一个 pass、同一层、
+		 * 同一个 `new Identifier("")` 键下入队，所以顺序就是这里决定的。
+		 */
+		final ObjectSet<ModelPropertiesPart> batchedDoors = doorBatch.renderBatched(this, storedMatrixTransformations, vehicle, light, openDoorways);
+		modelProperties.iterateParts(modelPropertiesPart -> modelPropertiesPart.render(texture, storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, light, openDoorways, fromResourcePackCreator, batchedDoors.contains(modelPropertiesPart)));
 	}
 
 	public void writeFloorsAndDoorways(

@@ -16,6 +16,16 @@ public class BlockPlatform extends BlockExtension implements PlatformHelper {
 		this.isIndented = isIndented;
 	}
 
+	/**
+	 * 这是不是"内缩站台"（面高 13/16）。
+	 *
+	 * <p>公开出来是给客流生成器（{@code MmtrCrowdModule}）用的：内缩站台的边缘比满格站台低 3/16，
+	 * 站在上面的人要跟着往下挪，否则会浮在砖面之上。</p>
+	 */
+	public boolean isIndented() {
+		return isIndented;
+	}
+
 	@Nonnull
 	@Override
 	public BlockState getStateForNeighborUpdate2(BlockState state, Direction direction, BlockState neighborState, WorldAccess world, BlockPos pos, BlockPos neighborPos) {

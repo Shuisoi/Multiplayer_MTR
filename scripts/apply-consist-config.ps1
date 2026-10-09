@@ -20,6 +20,28 @@ param(
 $ErrorActionPreference = 'Stop'
 $configFile = [System.IO.Path]::GetFullPath($ConfigFile)
 if (-not (Test-Path $configFile)) { throw "config not found: $configFile" }
+
+<#
+**先做一次严格 JSON 校验（2026-10-03，notes/376 现场）**。
+
+`ConvertFrom-Json`（本脚本下面用它做合并）**容忍尾逗号/注释**，而游戏侧的 `ConsistTypeRegistry.parse`
+用的是 **Gson —— 严格解析器，一个尾逗号就抛 MalformedJsonException**：配置整份读不进去，
+现场表现是"每节车都解析不出车底、全列借缺省车底"（正是 notes/338 §6.2 那个形状，只是原因换成了 JSON 语法）。
+
+实测：一份带 7 个尾逗号的 `consist-types.json` 被本脚本一路"合并/覆盖"进 6 份世界配置，
+PowerShell 每次都报 JSON OK —— 所以这道闸只能加在**装机之前**，而且必须是严格解析器。
+#>
+$strictFail = $null
+try {
+  $doc = [System.Text.Json.JsonDocument]::Parse((Get-Content -Raw $configFile))
+  $doc.Dispose()
+} catch {
+  $strictFail = $_.Exception.Message
+}
+if ($strictFail) {
+  throw ("配置不是严格合法的 JSON（Gson 会拒绝，游戏侧整份读不进去）：" + $strictFail + "`n  文件：" + $configFile)
+}
+
 $source = Get-Content -Raw $configFile | ConvertFrom-Json
 
 $installed = 0

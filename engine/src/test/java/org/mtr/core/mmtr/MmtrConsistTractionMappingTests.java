@@ -280,11 +280,11 @@ public final class MmtrConsistTractionMappingTests {
 		 */
 		assertEquals(189_500, aggregate.getBrake().getServiceForceN(), 1_000,
 			"UIC 逐车：102.2 kN + 2×43.7 kN（旧口径 150 + 2×70 = 290 kN）");
-		final double startAcceleration = aggregate.getPhysics().tractionAccelerationMps2(1, 0);
+		final double startAcceleration = aggregate.getPhysics().fullTractionAccelerationMps2(0);
 		assertTrue(startAcceleration > 1.4 && startAcceleration < 1.8,
 			"起步加速度必须落在 1.4–1.8 m/s²（一台机车拉两节客车），实际 " + startAcceleration);
 		// 145 km/h（40.3 m/s）处的加速度：功率限制段，约 0.85 m/s²（三台机车模型会给约 1.6）
-		final double atSpeed = aggregate.getPhysics().tractionAccelerationMps2(1, 40.3);
+		final double atSpeed = aggregate.getPhysics().fullTractionAccelerationMps2(40.3);
 		assertTrue(atSpeed > 0.7 && atSpeed < 1.0,
 			"145 km/h 处约 0.85 m/s²，实际 " + atSpeed);
 	}
@@ -321,7 +321,7 @@ public final class MmtrConsistTractionMappingTests {
 		double speed = 0;
 		double seconds = 0;
 		while (speed < targetMps && seconds < 600) {
-			speed += physics.tractionAccelerationMps2(1, speed) * 0.01;
+			speed += physics.fullTractionAccelerationMps2(speed) * 0.01;
 			seconds += 0.01;
 		}
 		return seconds;
@@ -407,8 +407,18 @@ public final class MmtrConsistTractionMappingTests {
 			List.of(car("br101", true), car("p1", false), car("p1", false)), registry, registry.get("br101_three_handle"));
 		assertNotNull(train);
 		final ConsistType aggregate = train.toConsistType("consist:br101+p1+p1");
-		assertEquals(0.25, aggregate.getAirBrakeReleaseRatePerSecond(), 1e-9,
-			"整列的缓解速率不该被拖车的缺省值拖慢（拖车必须显式写气路字段）");
+		/*
+		 * notes/376：整列"缓解速率"**不再是编组级的一个数** —— 逐车各自拿自己的 bar 口径
+		 * （每节车一个 {@code PneumaticBrakeSpec}，缺省才沿用编组级）。这里钉的还是原来那条：
+		 * 拖车必须**显式**写气路字段，别让缺省值把整列的缓解拖慢（旧口径的 0.25/s 归一化速率已删除）。
+		 */
+		assertEquals(0.95, aggregate.getBrakes().getCylinderReleaseBarPerSecond(), 1e-9,
+			"编组口径 = 说话那节车（br101_three_handle）的缓解速率");
+		for (final org.mtr.core.mmtr.brake.BrakeCar brakeCar : train.brakeCars()) {
+			assertNotNull(brakeCar.spec(), "每节车都必须自带 bar 口径（拖车也不许借缺省值）");
+			assertTrue(brakeCar.spec().getCylinderReleaseBarPerSecond() >= 0.9,
+				"缓解速率不得被拖车的缺省值拖慢，实际 " + brakeCar.spec().getCylinderReleaseBarPerSecond());
+		}
 
 		final ThreeHandleDriveController controller = new ThreeHandleDriveController();
 		for (int i = 0; i < 200; i++) {

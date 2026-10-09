@@ -69,9 +69,9 @@ if (Test-Path (Join-Path $webRoot 'index.html')) {
 <#
 ★ 给服务端的 JVM 一个**可写的临时目录**（2026-10-02 实测，notes/362）。
 
-这台机器上 `%TEMP%`（`C:\Users\<你>\AppData\Local\Temp`）**PowerShell 能写、JVM 不能写**：
+这台机器上 `%TEMP%`（`%USERPROFILE%\AppData\Local\Temp`）**PowerShell 能写、JVM 不能写**：
 
-    java.io.tmpdir = C:\Users\30354\AppData\Local\Temp\
+    java.io.tmpdir = %USERPROFILE%\AppData\Local\Temp\
     ✗ 临时目录不可写: java.nio.file.AccessDeniedException: ...\Temp\probe3231661387922866489.txt
 
 症状不是"临时文件失败"这么直白，而是**服务端起不来、报的却是一个毫不相干的错**：

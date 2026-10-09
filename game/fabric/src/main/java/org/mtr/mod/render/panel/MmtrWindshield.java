@@ -33,6 +33,7 @@ import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.MainRenderer;
+import org.mtr.mod.render.MmtrFrameProbe;
 import org.mtr.mod.render.QueuedRenderLayer;
 import org.mtr.mod.render.glass.MmtrGlass;
 import org.mtr.mod.render.StoredMatrixTransformations;
@@ -473,6 +474,10 @@ public final class MmtrWindshield {
 		if (world == null) {
 			return;
 		}
+		// ★ 本方法**每节车每帧调一次**（调用点在 RenderVehicles），而它在下雨时会为每个挡风锚点跑一遍
+		//   雨滴场模拟（advanceDrops / mergeDrops / 每个雨刷一遍 applyWipe）。次数 ÷ 帧数 = 每帧几节车，
+		//   而开销 ∝ 车数 × 挡风数 —— **与分辨率、与这块玻璃是否在视锥内都无关**。
+		final long probeWiper = MmtrFrameProbe.begin();
 
 		// The client's synced copy of the weather. The gradient is the same 0..1 intensity vanilla uses
 		// for its own rain particles; here it is how WET the glass gets (how many beads, how fast they
@@ -528,6 +533,7 @@ public final class MmtrWindshield {
 			state.advance(now, rainGradient, vehicleSpeedMetersPerMs, mode);
 			state.draw(carTransform);
 		}
+		MmtrFrameProbe.end("wiper", probeWiper);
 	}
 
 	/**
@@ -837,8 +843,7 @@ public final class MmtrWindshield {
 	/** The model's resource id for one car of a consist - the same lookup ModelPropertiesPart uses. */
 	@Nullable
 	private static String resourceIdFor(VehicleExtension vehicle, int carNumber) {
-		final ObjectArrayList<ObjectObjectImmutablePair<org.mtr.core.data.VehicleCar, ObjectArrayList<org.mtr.core.data.Vehicle.BogiePosition>>> cars = vehicle.getVehicleCarsAndPositions();
-		return carNumber < 0 || carNumber >= cars.size() ? null : cars.get(carNumber).left().getVehicleId();
+		return vehicle.mmtrCarResourceId(carNumber);
 	}
 
 	/** The vehicle the local player is riding, or null when they are riding nothing (or a lift). */

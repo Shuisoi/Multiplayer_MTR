@@ -1,0 +1,90 @@
+{
+  "parent": "mtr:block/crowd_villager_0_0",
+  "display": {
+    "gui": {
+      "rotation": [
+        30,
+        225,
+        0
+      ],
+      "translation": [
+        0,
+        -1,
+        0
+      ],
+      "scale": [
+        0.385,
+        0.385,
+        0.385
+      ]
+    },
+    "ground": {
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "translation": [
+        0,
+        1.85,
+        0
+      ],
+      "scale": [
+        0.154,
+        0.154,
+        0.154
+      ]
+    },
+    "fixed": {
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "translation": [
+        0,
+        -0.5,
+        0
+      ],
+      "scale": [
+        0.308,
+        0.308,
+        0.308
+      ]
+    },
+    "thirdperson_righthand": {
+      "rotation": [
+        75,
+        45,
+        0
+      ],
+      "translation": [
+        0,
+        1.6,
+        0
+      ],
+      "scale": [
+        0.231,
+        0.231,
+        0.231
+      ]
+    },
+    "firstperson_righthand": {
+      "rotation": [
+        0,
+        45,
+        0
+      ],
+      "translation": [
+        0,
+        -0.5,
+        0
+      ],
+      "scale": [
+        0.246,
+        0.246,
+        0.246
+      ]
+    }
+  }
+}

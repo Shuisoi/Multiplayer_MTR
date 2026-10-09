@@ -526,6 +526,17 @@ public final class MmtrTaskHud {
 	}
 
 	/**
+	 * 值守那三个字（notes/408 §3.4）。
+	 *
+	 * <p>词表与可用性表都在 {@link org.mtr.mod.client.MmtrDutyView} 里 —— **HUD 与面板说同一句话**，
+	 * 所以这里只做"没值守的人怎么写"这一件事：镜像字段为空 = 这趟车是自动在跑，不是"有个叫 IDLE 的人"。</p>
+	 */
+	private static String dutyWord(VehicleExtension vehicle) {
+		final org.mtr.mod.client.MmtrDutyView.State state = org.mtr.mod.client.MmtrDutyView.of(vehicle);
+		return state == org.mtr.mod.client.MmtrDutyView.State.NONE ? "自动运行（无人值守）" : state.word();
+	}
+
+	/**
 	 * 这一拍要画的行。**只有值、没有前缀**（用户口径 2026-09-25「不要把前缀排出来 / 先把前缀全部删除」），
 	 * 且按当轮追加的口径排：
 	 *
@@ -563,6 +574,20 @@ public final class MmtrTaskHud {
 		if (!jobId.isEmpty()) {
 			rows.add(Row.of(jobId, jobColor));
 		}
+
+		/*
+		 * ★ **值守行**（notes/408 §3.4）：这趟车现在归谁。
+		 *
+		 * <p>这里原本有一行 `司机` / `自动`，**2026-09-25 用户口径「把司机删除」把它删了**，
+		 * 当时的理由是"人坐在司机位上才看得见这块卡片，所以它是冗余的"。那个理由后来被现场推翻了：
+		 * 接管/归还只在那一刻播报一句，说完就走，于是"我现在到底算不算在开"没有一个**常驻**的地方可查
+		 * —— 而这正是司机会问的问题（notes/408 §1）。</p>
+		 *
+		 * <p>补回来的不是一个 `司机/自动` 二值，而是引擎那台值守状态机的词：
+		 * 等待接站 / 已上车·未获驾驶权 / 运转中 / 运转中·下一站退出 / 已退出 / 无人。
+		 * 它顺带解释了"为什么我推了手柄车不走"（答案是：未获驾驶权）。</p>
+		 */
+		rows.add(Row.of("值守：" + dutyWord(vehicle), LABEL_COLOR));
 
 		// ② 时间行（当前时刻 = 系统时间即北京时间）。
 		rows.add(timeRow());

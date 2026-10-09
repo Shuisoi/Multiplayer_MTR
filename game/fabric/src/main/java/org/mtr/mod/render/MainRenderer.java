@@ -86,16 +86,38 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			return;
 		}
 
+		/*
+		 * ★ 阴影 pass 与主 pass 是**两次调用**（见 MmtrFrameProbe 的类注释）。
+		 *
+		 * <p>下面那个早期返回只挡掉了 else 里的"模拟 + 每帧钩子"，而这一行之后的
+		 * RenderVehicles / RenderLifts / RenderRails / 队列派发 / MmtrLightField.beginFrame /
+		 * 优化批次提交**照样各跑一遍** —— 开光影时一个视觉帧就是两遍。</p>
+		 */
+		final boolean shadowPass = OptimizedRenderer.renderingShadows();
+		if (shadowPass && Config.getClient().getDisableShadowsForShaders()) {
+			return;
+		}
+
+		/*
+		 * ★ pass 从这里就开始了 —— **必须在 simulate/tick 的探针之前**。
+		 *
+		 * <p>否则那两个段会记到"上一个 pass"头上：阴影 pass 先跑，于是主 pass 里的 simulate/tick
+		 * 会被算成 {@code shadow.simulate} / {@code shadow.tick}。2026-10-05 在日志里实测到这个错误读数
+		 * （一个只有 4 个主 pass 的窗口出现 {@code shadow.simulate=136ms/4}），notes/395 记。</p>
+		 */
+		MmtrFrameProbe.passBegin(shadowPass);
+		final long probePass = MmtrFrameProbe.begin();
+
 		final long millisElapsed;
-		if (OptimizedRenderer.renderingShadows()) {
-			if (Config.getClient().getDisableShadowsForShaders()) {
-				return;
-			}
+		if (shadowPass) {
 			millisElapsed = 0;
 		} else {
+			// 一次视觉帧的边界：主 pass 恰好一次（阴影 pass 不算新的一帧），否则"帧间隔"只有半个视觉帧。
+			MmtrFrameProbe.frameBoundary();
 			millisElapsed = getMillisElapsed();
 			timerMillis += millisElapsed;
 
+			final long probeSimulate = MmtrFrameProbe.begin();
 			MinecraftClientData.getInstance().blockedRailIds.clear();
 			MinecraftClientData.getInstance().vehicles.forEach(vehicle -> vehicle.simulate(millisElapsed));
 			MinecraftClientData.getInstance().lifts.forEach(lift -> {
@@ -105,6 +127,9 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 				}
 			});
 			lastRenderedMillis = InitClient.getGameMillis();
+			MmtrFrameProbe.end("simulate", probeSimulate);
+
+			final long probeTick = MmtrFrameProbe.begin();
 			WORKER_THREAD.start();
 			DynamicTextureCache.instance.tick();
 			// B7.6e: release cab panel textures that stopped being drawn
@@ -115,8 +140,6 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			VehicleRidingMovement.tick();
 			// C7: the "aim at a train and press K to couple/uncouple" interaction.
 			org.mtr.mod.client.MmtrCoupleInteraction.tick();
-			// B2: the "aim at a driver's door and press G to take/give back that cab" interaction.
-			org.mtr.mod.client.MmtrCabInteraction.tick();
 			// 服务端请求的"把这位玩家放进驾驶室"（/mtr mmtrboard、引擎指令栏的 train board）：
 			// 车镜像还没到位时在这里逐拍重试。
 			org.mtr.mod.client.MmtrBoardRequest.tick();
@@ -125,12 +148,29 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			 *
 			 * <p>这套交互键（K/G/B/Y/U/N/H/J）全是**字母**，而"在聊天框里打一句话"就是在按它们 ——
 			 * 不挡的话打一个 K 就把车挂了、打一个 H 就重拉一次引擎数据。原版自己也是这个口径
-			 * （{@code MinecraftClient.handleInputEvents} 只在没有界面时跑），这里照抄它。</p>
+			 * （{@code MinecraftClient.handleInputEvents} 只在没有界面时跑），这里照抄它。
+			 * **G 原本漏在外面，2026-10-05 补进来**（见下面那一行）。</p>
 			 *
 			 * <p>驾驶输入（{@code MmtrDriveInput}）**不在这个括号里**：它还要靠每拍 tick 维持手柄状态与
 			 * 每秒补发（引擎侧的占用锁靠"人还在司机位上"维持），所以它自己内部只挡"读键"那一半。</p>
 			 */
 			if (MinecraftClient.getInstance().getCurrentScreenMapped() == null) {
+				/*
+				 * B2: the "aim at a driver's door and press G to take that cab / step off the train" interaction.
+				 *
+				 * <p>★ 2026-10-05：它从括号**外面**挪了进来（原本在 {@code MmtrCoupleInteraction.tick()} 旁边）。
+				 * G 和 Y/U/K 一样是**字母键** —— 开着聊天框打一句话里的 g 就是"按了 G"，
+				 * 于是打字会拔钥匙 / 上下车。原版自己就是这个口径（{@code MinecraftClient.handleInputEvents}
+				 * 只在没有界面时跑），这里照抄它，并让 G 与门键、作业键完全对齐：**同一个界面挡掉全部交互键**。</p>
+				 *
+				 * <p>代价（刻意接受）：界面开着时不跑 {@code confirm}/{@code refreshConfirmation} ——
+				 * 上车结果那一行提示会晚到，直到关掉界面。那段逻辑**不是按键**，它的另一半职责
+				 * （把 {@code mmtrCabConfirmed} 跟上引擎镜像）只在人已经坐在驾驶室里时才有意义，
+				 * 而界面开着的时候玩家既走不动也开不了车 —— 所以"晚一拍"没有可观察的后果。
+				 * 反过来说，把它拆成"镜像那半留外面、读键那半挪进来"会让这个类多出一个只有时序意义的
+				 * 状态，不值得：开界面本身就是把人按在原地的操作。</p>
+				 */
+				org.mtr.mod.client.MmtrCabInteraction.tick();
 				// 计划内接管：坐在司机位上按 B 把本车的作业单接过来 / 还回去。
 				org.mtr.mod.client.MmtrTaskInteraction.tick();
 				// 司机的车门键（Y 两侧 / U 右侧）：站台作业的"按键开门 … 关门"子任务靠它达成。
@@ -140,6 +180,15 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 				org.mtr.mod.client.MmtrDataResync.tick();
 				// Windshield wiper stalk (关 / 慢 / 快): a driver input, so it is ticked with the other keys.
 				MmtrWindshield.tick();
+				/*
+				 * 综合运转面板（notes/408 §3）：驾驶中按 TAB 调出。
+				 *
+				 * <p>放在这个括号里与别的字母键一致，但它的**必要性更强**：TAB 原本是原版的
+				 * "按住看玩家列表"，如果界面开着时也读它，玩家在聊天框里打不了字 —— 每按一次 TAB
+				 * 就会弹一次面板。读取端自己也只把 TAB 用在"手里拿着 PDA 或人在驾驶室里"，
+				 * 其余情况让给原版。</p>
+				 */
+				org.mtr.mod.client.MmtrPdaInteraction.tick();
 			}
 			// 三手柄机车的驾驶输入（油门/制动/定速/换向）：只在握着驾驶室钥匙时才产生控制意图。
 			org.mtr.mod.client.MmtrDriveInput.tick();
@@ -151,13 +200,21 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			 */
 			org.mtr.mod.client.MmtrKeyNeutraliser.tick();
 			ArrivalsCacheClient.INSTANCE.tick();
+			MmtrFrameProbe.end("tick", probeTick);
 		}
 
 		final Vector3d cameraShakeOffset = clientPlayerEntity.getPos().subtract(offset);
+		final long probeVehicles = MmtrFrameProbe.begin();
 		RenderVehicles.render(millisElapsed, cameraShakeOffset);
+		MmtrFrameProbe.end("vehicles", probeVehicles);
+		final long probeLifts = MmtrFrameProbe.begin();
 		RenderLifts.render(millisElapsed, cameraShakeOffset);
+		MmtrFrameProbe.end("lifts", probeLifts);
+		final long probeRails = MmtrFrameProbe.begin();
 		RenderRails.render();
+		MmtrFrameProbe.end("rails", probeRails);
 
+		final long probeQueue = MmtrFrameProbe.begin();
 		for (int i = 0; i < TOTAL_RENDER_STAGES; i++) {
 			for (int j = 0; j < QueuedRenderLayer.values().length; j++) {
 				CURRENT_RENDERS.get(i).get(j).clear();
@@ -211,14 +268,26 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			}
 		}
 
+		MmtrFrameProbe.end("queue", probeQueue);
+
 		// MMTR 光场：把车辆所在 section 的世界光照采好、传上 GPU，并绑到 Sampler3/4。
 		// 必须在这里——优化渲染器真正 draw 之前的最后一步；`offset` 用的就是下面那些变换减掉的同一个相机位置。
+		final long probeLightField = MmtrFrameProbe.begin();
 		MmtrLightField.getInstance().beginFrame(offset);
+		MmtrFrameProbe.end("lightfield", probeLightField);
 
+		final long probeSubmit = MmtrFrameProbe.begin();
 		CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.render(!Config.getClient().getHideTranslucentParts());
+		MmtrFrameProbe.end("submit", probeSubmit);
+
+		// 优化渲染器已退出：批次级 program 缓存到此为止。它只在"批次内 program 恒定"这个前提下成立，
+		// 而此刻后面还会有原版实体、别的渲染器绑 program —— 缓存留着就会被逐 draw 钩子误用。
+		MmtrLightField.getInstance().invalidateBatchProgram();
 
 		// 诊断用自动截图（-Dmmtr.lightfield.screenshot=N）：放在优化渲染器之后，截到的是含车厢的这一帧。
 		MmtrLightField.getInstance().maybeCaptureScreenshot();
+
+		MmtrFrameProbe.passEnd(probePass);
 	}
 
 	public static void scheduleRender(@Nullable Identifier identifier, boolean priority, QueuedRenderLayer queuedRenderLayer, BiConsumer<GraphicsHolder, Vector3d> callback) {

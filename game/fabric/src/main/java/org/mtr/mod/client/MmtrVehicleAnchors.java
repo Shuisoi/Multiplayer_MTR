@@ -563,14 +563,15 @@ public final class MmtrVehicleAnchors {
 	 * 一套锚点的模型，它的每一节都该用那一套（notes/365）。</p>
 	 */
 	public static int modelCarIndex(VehicleExtension vehicle, int carNumber) {
-		final var cars = vehicle.getVehicleCarsAndPositions();
-		if (carNumber < 0 || carNumber >= cars.size()) {
+		// 只要"车节 → 模型 id"的顺序，**不要**整列车的位置（那是这一帧里最贵的一步）。
+		// 引擎的 mmtrCarResourceId 读的就是 getVehicleCarsAndPositions() 用的那份 immutableVehicleCars，结果相同。
+		final String vehicleId = vehicle.mmtrCarResourceId(carNumber);
+		if (vehicleId == null) {
 			return 0;
 		}
-		final String vehicleId = cars.get(carNumber).left().getVehicleId();
 		int index = 0;
 		for (int i = 0; i < carNumber; i++) {
-			if (cars.get(i).left().getVehicleId().equals(vehicleId)) {
+			if (vehicleId.equals(vehicle.mmtrCarResourceId(i))) {
 				index++;
 			}
 		}

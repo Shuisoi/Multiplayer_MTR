@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ol>
  *   <li>Client mirror plumbing: mmtr sync fields survive a full server snapshot
  *       serialise/parse round trip and default safely on legacy vehicles.</li>
- *   <li>Air-brake controller state seeding (mirror state handoff).</li>
+ *   <li>Air-brake state seeding (mirror state handoff) on the controller's BrakeModel.</li>
  *   <li>Occupation rules are enforced by {@link MmtrDriveAccess} (see MmtrDriveAccessTests).</li>
  *   <li>SimRail-style server health watchdog reports live counts and jammed routes
  *       on demand and automatically while the simulator ticks.</li>
@@ -139,9 +139,23 @@ public final class MmtrMultiplayerFoundationTests {
 
 	@Test
 	public void testAirBrakeStateSeeding() {
-		final AirBrakeController controller = new AirBrakeController();
+		/*
+		 * notes/376：旧 AirBrakeController 已删除，气压种子现在由控制器自己持有的
+		 * {@link org.mtr.core.mmtr.brake.BrakeModel} 负责 —— 归一化 0…1（镜像/HUD 口径）与逐车 bar
+		 * 状态串是同一件事的两种写法，比例按**车底口径**折成 bar。
+		 */
+		final NotchedDriveController controller = new NotchedDriveController();
 		controller.setState(0.4, 0.25);
 		assertEquals(0.4, controller.getPipePressure(), 1e-9);
+		assertEquals(0.25, controller.getBrakeCylinderPressure(), 1e-9);
+		// 逐车状态串种子：0.4 × 充风 5.2 bar = 2.08 bar、0.25 × 缸压上限 3.8 bar = 0.95 bar
+		final org.mtr.core.mmtr.brake.BrakeModel model = controller.getBrakeModel();
+		model.applyState("0.4,0.25");
+		// dt = 0：只把系统建起来（把种子灌进去），不推进这一拍
+		model.step(ConsistType.DEFAULT_BRAKES, null, org.mtr.core.mmtr.brake.BrakeCommand.coast(), 0, 0, 0);
+		assertEquals(0.4 * ConsistType.DEFAULT_BRAKES.getChargedBar(), model.getPipeBar(), 1e-9, "管压比例 × 充风值");
+		assertEquals(0.25 * ConsistType.DEFAULT_BRAKES.getCylinderMaxBar(), model.getCylinderBar(), 1e-9, "缸压比例 × 缸压上限");
+		assertEquals(0.4, controller.getPipePressure(), 1e-9, "两种写法读回来必须是同一个数");
 		assertEquals(0.25, controller.getBrakeCylinderPressure(), 1e-9);
 		controller.reset();
 		assertEquals(1.0, controller.getPipePressure(), 1e-9);

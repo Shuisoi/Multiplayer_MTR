@@ -39,8 +39,14 @@ public final class MmtrPanelTexture {
 
 	private static final long EXPIRY_MILLIS = 10_000;
 	private static final Map<String, MmtrPanelTexture> CACHE = new Object2ObjectOpenHashMap<>();
-	/** B7.6e diagnostics: dump the first rasterised panel of each texture to run/mmtr-panel-debug. */
-	private static final boolean DEBUG_DUMP = true;
+	/**
+	 * B7.6e diagnostics: dump the first rasterised panel of each texture to run/mmtr-panel-debug.
+	 *
+	 * <p><b>默认关闭</b>：它每个面板 key 首绘时同步走一次 {@code ImageIO.write}（PNG 压缩）**在渲染线程上**，
+	 * 而这条路径一旦长开就是一路顿挫 —— 实测 run/mmtr-panel-debug 积到 4455 个 PNG / 40 MB
+	 * （单日最多 2603 个）。排障要那份 PNG 时再临时改回 true。</p>
+	 */
+	private static final boolean DEBUG_DUMP = false;
 	private static final ObjectOpenHashSet<String> DUMPED = new ObjectOpenHashSet<>();
 
 	private final String key;

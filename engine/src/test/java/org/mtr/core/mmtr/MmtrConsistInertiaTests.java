@@ -62,10 +62,10 @@ public final class MmtrConsistInertiaTests {
 	public void deadTrailingMassReducesTheAccelerationTowardsTheMassRatio() {
 		final ConsistType loco = ConsistTypeRegistry.parse(JSON).get("loco");
 		final ConsistType consist = consist().toConsistType("consist:test");
-		final double singleAcceleration = loco.getPhysics().tractionAccelerationMps2(1, 0);
-		final double consistAcceleration = consist.getPhysics().tractionAccelerationMps2(1, 0);
+		final double singleAcceleration = loco.getPhysics().fullTractionAccelerationMps2(0);
+		final double consistAcceleration = consist.getPhysics().fullTractionAccelerationMps2(0);
 		/*
-		 * 惯性比 = 82/162 ≈ 0.506；实际比值会比它**再低一点**，因为 `tractionAccelerationMps2` 已经
+		 * 惯性比 = 82/162 ≈ 0.506；实际比值会比它**再低一点**，因为 `fullTractionAccelerationMps2` 已经
 		 * 扣掉了运行阻力，而挂车只加阻力、不加牵引。所以用带宽断言（0.40…0.55），而不是把"刚好等于
 		 * 质量比"写成等式 —— 那会是一条假的精确判据。
 		 */

@@ -1,0 +1,139 @@
+{
+  "variants": {
+    "facing=north,foot=0,variant=0": {
+      "model": "mtr:block/crowd_villager_0_0"
+    },
+    "facing=east,foot=0,variant=0": {
+      "model": "mtr:block/crowd_villager_0_0",
+      "y": 90
+    },
+    "facing=south,foot=0,variant=0": {
+      "model": "mtr:block/crowd_villager_0_0",
+      "y": 180
+    },
+    "facing=west,foot=0,variant=0": {
+      "model": "mtr:block/crowd_villager_0_0",
+      "y": 270
+    },
+    "facing=north,foot=0,variant=1": {
+      "model": "mtr:block/crowd_villager_1_0"
+    },
+    "facing=east,foot=0,variant=1": {
+      "model": "mtr:block/crowd_villager_1_0",
+      "y": 90
+    },
+    "facing=south,foot=0,variant=1": {
+      "model": "mtr:block/crowd_villager_1_0",
+      "y": 180
+    },
+    "facing=west,foot=0,variant=1": {
+      "model": "mtr:block/crowd_villager_1_0",
+      "y": 270
+    },
+    "facing=north,foot=0,variant=2": {
+      "model": "mtr:block/crowd_villager_2_0"
+    },
+    "facing=east,foot=0,variant=2": {
+      "model": "mtr:block/crowd_villager_2_0",
+      "y": 90
+    },
+    "facing=south,foot=0,variant=2": {
+      "model": "mtr:block/crowd_villager_2_0",
+      "y": 180
+    },
+    "facing=west,foot=0,variant=2": {
+      "model": "mtr:block/crowd_villager_2_0",
+      "y": 270
+    },
+    "facing=north,foot=1,variant=0": {
+      "model": "mtr:block/crowd_villager_0_1"
+    },
+    "facing=east,foot=1,variant=0": {
+      "model": "mtr:block/crowd_villager_0_1",
+      "y": 90
+    },
+    "facing=south,foot=1,variant=0": {
+      "model": "mtr:block/crowd_villager_0_1",
+      "y": 180
+    },
+    "facing=west,foot=1,variant=0": {
+      "model": "mtr:block/crowd_villager_0_1",
+      "y": 270
+    },
+    "facing=north,foot=1,variant=1": {
+      "model": "mtr:block/crowd_villager_1_1"
+    },
+    "facing=east,foot=1,variant=1": {
+      "model": "mtr:block/crowd_villager_1_1",
+      "y": 90
+    },
+    "facing=south,foot=1,variant=1": {
+      "model": "mtr:block/crowd_villager_1_1",
+      "y": 180
+    },
+    "facing=west,foot=1,variant=1": {
+      "model": "mtr:block/crowd_villager_1_1",
+      "y": 270
+    },
+    "facing=north,foot=1,variant=2": {
+      "model": "mtr:block/crowd_villager_2_1"
+    },
+    "facing=east,foot=1,variant=2": {
+      "model": "mtr:block/crowd_villager_2_1",
+      "y": 90
+    },
+    "facing=south,foot=1,variant=2": {
+      "model": "mtr:block/crowd_villager_2_1",
+      "y": 180
+    },
+    "facing=west,foot=1,variant=2": {
+      "model": "mtr:block/crowd_villager_2_1",
+      "y": 270
+    },
+    "facing=north,foot=2,variant=0": {
+      "model": "mtr:block/crowd_villager_0_2"
+    },
+    "facing=east,foot=2,variant=0": {
+      "model": "mtr:block/crowd_villager_0_2",
+      "y": 90
+    },
+    "facing=south,foot=2,variant=0": {
+      "model": "mtr:block/crowd_villager_0_2",
+      "y": 180
+    },
+    "facing=west,foot=2,variant=0": {
+      "model": "mtr:block/crowd_villager_0_2",
+      "y": 270
+    },
+    "facing=north,foot=2,variant=1": {
+      "model": "mtr:block/crowd_villager_1_2"
+    },
+    "facing=east,foot=2,variant=1": {
+      "model": "mtr:block/crowd_villager_1_2",
+      "y": 90
+    },
+    "facing=south,foot=2,variant=1": {
+      "model": "mtr:block/crowd_villager_1_2",
+      "y": 180
+    },
+    "facing=west,foot=2,variant=1": {
+      "model": "mtr:block/crowd_villager_1_2",
+      "y": 270
+    },
+    "facing=north,foot=2,variant=2": {
+      "model": "mtr:block/crowd_villager_2_2"
+    },
+    "facing=east,foot=2,variant=2": {
+      "model": "mtr:block/crowd_villager_2_2",
+      "y": 90
+    },
+    "facing=south,foot=2,variant=2": {
+      "model": "mtr:block/crowd_villager_2_2",
+      "y": 180
+    },
+    "facing=west,foot=2,variant=2": {
+      "model": "mtr:block/crowd_villager_2_2",
+      "y": 270
+    }
+  }
+}

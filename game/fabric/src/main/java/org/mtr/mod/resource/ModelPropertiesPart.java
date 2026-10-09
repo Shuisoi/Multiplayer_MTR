@@ -20,6 +20,7 @@ import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.generated.resource.ModelPropertiesPartSchema;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.MmtrDoorSides;
+import org.mtr.mod.render.MmtrVehicleDrawProbe;
 import org.mtr.mod.render.light.MmtrHeadlights;
 import org.mtr.mod.render.panel.MmtrWindshield;
 import org.mtr.mod.render.QueuedRenderLayer;
@@ -32,10 +33,20 @@ import java.util.function.Supplier;
 
 public final class ModelPropertiesPart extends ModelPropertiesPartSchema implements IGui {
 
+	/** 门模型惰性化（notes/401 §11.3）：默认开；{@code -Dmmtr.lazydoor=false} 回到改动前的"构造时就建好"。 */
+	private static final boolean LAZY_DOOR_MODEL = Boolean.parseBoolean(System.getProperty("mmtr.lazydoor", "true"));
+
 	private final ObjectArrayList<PartDetails> partDetailsList = new ObjectArrayList<>();
 	private final ObjectArrayList<DisplayPartDetails> displayPartDetailsList = new ObjectArrayList<>();
 	private final int displayColorCjkInt;
 	private final int displayColorInt;
+
+	/**
+	 * A 路线（notes/400 §6）：这一组门的几何，交给 {@link MmtrDoorBatch} 按动画类合并。
+	 * {@code null} = 不走合并（不是门、是雨刷、不是 OBJ 路、或者位置数 &gt; 1）。
+	 */
+	@Nullable
+	private ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper> doorBatchObjModels;
 
 	private static final int LINE_PADDING = 2;
 
@@ -159,7 +170,7 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 							addCube(texture, modelParts, materialGroupsForPartConditionAndRenderStage, x, y, z, flipped);
 						}
 						addCube(texture, modelParts, materialGroupsForPartConditionAndRenderStageDoorsClosed, x, y, z, flipped);
-						partDetailsList.add(new PartDetails(modelParts, optimizedModelDoor, addBox(mutableBox.get(), x, y, z, flipped), x, y, z, flipped));
+						partDetailsList.add(new PartDetails(modelParts, optimizedModelDoor, null, addBox(mutableBox.get(), x, y, z, flipped), x, y, z, flipped));
 					});
 					break;
 				case DISPLAY:
@@ -211,7 +222,21 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		// so skipping the call entirely builds an EMPTY wrapper and the wiper disappears altogether. A
 		// scratch map is thrown away instead of being turned into a vehicle-level model.
 		final boolean mechanism = isMechanism();
+		/*
+		 * 这一份**不要**在这里按材质合并（notes/400 §5 实测：零收益）。
+		 *
+		 * 它的粒度是"一个部件组的一个位置"，而实测每个门部件组的位置数就是 1 ⇒ 这里 upload 出来
+		 * 永远只有 1 个材质 = 1 次 draw，`[MMTR-VDRAW]` 的 `每次排队 draw 数 avg=1.0 max=1` 就是证据。
+		 * 真正的大头是"开门时按部件组逐条排队"：24 组门 × 每车 ⇒ 一辆车开门态多出 20+ 次 draw。
+		 * 那个要**跨部件组**按动画类合并（MmtrDoorBatch），不是在这里。
+		 */
 		optimizedModelDoor = () -> isDoor() || mechanism ? OptimizedModelWrapper.fromObjModels(objModels) : null;
+		/*
+		 * 门模型惰性化（notes/401 §11.3）的**回退开关**：`-Dmmtr.lazydoor=false` 回到"构造时就建好"
+		 * （改动前的行为：每次重建都把那 24 组门的模型建出来并上传）。
+		 * 雨刷（mechanism）两条路都现建 —— 它每帧都画，推迟没有收益。
+		 */
+		final boolean lazyDoor = LAZY_DOOR_MODEL && !mechanism;
 
 		positionDefinitions.forEach(positionDefinitionName -> positionDefinitionsObject.getPositionDefinition(positionDefinitionName, (positions, positionsFlipped) -> {
 			if (type == PartType.NORMAL) {
@@ -224,21 +249,56 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 						}
 						addObjModelPosition(objModels, objModelsForPartConditionAndRenderStageDoorsClosed, x, y, z, flipped, modelYOffset);
 					}
-					partDetailsList.add(new PartDetails(new ObjectArrayList<>(), optimizedModelDoor.get(), addBox(mutableBox.get(), x, y, z, flipped), x, y, z, flipped));
+					/*
+					 * 门那一次"自己的模型"**改成第一次真要用时才建**（notes/401 §11.2）。
+					 *
+					 * <p>读数：`[MMTR-VEHCTOR]` 实测一次车辆构造 97 ms 里有 **36 ms / 28 次** 花在这里
+					 * （`fromObjModels` → generateNormals + distinct + **upload**，也就是 writeCache 里唯一的 GL）。
+					 * 而门那 24 个包装**只在开门态才用得到**（`renderNormal` 的分支条件里带
+					 * `!openDoorways.isEmpty()`；按动画类合并的 `MmtrDoorBatch` 用的是源 `ObjModel`，不用它）
+					 * ⇒ 关门态（常见情形）那 24 次建 VBO 是白做的。</p>
+					 *
+					 * <p>雨刷（mechanism）**照旧现建**：它走 else 分支、**每帧都画**，推迟只是把同一笔钱挪到
+					 * 第一帧，没有收益。</p>
+					 */
+					final long doorStartNanos = System.nanoTime();
+					final OptimizedModelWrapper doorModel;
+					final Supplier<OptimizedModelWrapper> lazyDoorSupplier;
+					if (lazyDoor) {
+						doorModel = null;
+						lazyDoorSupplier = optimizedModelDoor;
+					} else {
+						doorModel = optimizedModelDoor.get();
+						lazyDoorSupplier = null;
+					}
+					doorModelNanos += System.nanoTime() - doorStartNanos;
+					if (doorModel != null && doorModel.partCount() != 0) {
+						doorModelCalls++;
+					}
+					partDetailsList.add(new PartDetails(new ObjectArrayList<>(), doorModel, lazyDoorSupplier, addBox(mutableBox.get(), x, y, z, flipped), x, y, z, flipped));
 				});
 			}
 		}));
+
+		/*
+		 * A 路线（notes/400 §6）：把这一组门的几何交给"按动画类合并"那条路。
+		 *
+		 * 只在 OBJ 路、只在门、只在一个位置时登记。位置数 > 1 时不登记（合并的 draw 只能有一个变换，
+		 * 多位置的门得各画各的，理由见 notes/400 §6）。登记的是**已经烘进位置的**那批 ObjModel，
+		 * 所以合并后的模型里每个门都已经站在自己的位置上，draw 时只需要一个共同的动画位移。
+		 */
+		doorBatchObjModels = isDoor() && !mechanism && type == PartType.NORMAL && partDetailsList.size() == 1 ? objModels : null;
 	}
 
-	public void render(Identifier texture, StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, int[] scrollingDisplayIndexTracker, int light, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, boolean fromResourcePackCreator) {
+	public void render(Identifier texture, StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, int[] scrollingDisplayIndexTracker, int light, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, boolean fromResourcePackCreator, boolean doorBatched) {
 		if (vehicle == null || VehicleResource.matchesCondition(vehicle, condition, openDoorways.isEmpty())) {
 			switch (type) {
 				case NORMAL:
 					final ObjectIntImmutablePair<QueuedRenderLayer> renderProperties = getRenderProperties(renderStage, light, vehicle);
 					if (OptimizedRenderer.hasOptimizedRendering()) {
-						MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, carNumber, renderProperties, openDoorways, light, graphicsHolder, offset));
+						MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, carNumber, renderProperties, openDoorways, light, graphicsHolder, offset, doorBatched));
 					} else {
-						MainRenderer.scheduleRender(texture, false, renderProperties.left(), (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, carNumber, renderProperties, openDoorways, light, graphicsHolder, offset));
+						MainRenderer.scheduleRender(texture, false, renderProperties.left(), (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, carNumber, renderProperties, openDoorways, light, graphicsHolder, offset, doorBatched));
 					}
 					break;
 				case DISPLAY:
@@ -333,10 +393,146 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		}
 	}
 
+	/**
+	 * 开门态下这个门部件该被平移到哪里（单位 1/16 格），以及它这一帧到底画不画。
+	 *
+	 * <p>从 {@code renderNormal} 里原样抽出来的（notes/400 §6）—— <b>只有这一份</b>：
+	 * 逐部件的路（{@code renderNormal}）和按动画类合并的路（{@link MmtrDoorBatch}）都必须用同一个
+	 * 判据，否则"合并后门的位置和现在不一样"。抽的时候没有改任何一行算式。</p>
+	 *
+	 * @return {@code {x, y, z}}；{@code null} = 这一帧不该画（原来是用 {@code Integer.MAX_VALUE}
+	 *         把它挪到天边去，这里让调用方自己决定怎么表达"不画"）
+	 */
+	@Nullable
+	private float[] doorDrawTranslation(VehicleExtension vehicle, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, PartDetails partDetails) {
+		final boolean flashOn = flashOnTime + flashOffTime == 0 || (System.currentTimeMillis() % (flashOnTime + flashOffTime)) > flashOffTime;
+		double doorOverrideValue = 0;
+		boolean canOpen = false;
+		for (final ObjectDoubleImmutablePair<Box> openDoorway : openDoorways) {
+			if (openDoorway.left().equals(partDetails.doorway)) {
+				doorOverrideValue = openDoorway.rightDouble();
+				canOpen = true;
+				break;
+			}
+		}
+
+		// MMTR B7.6h: when the cab crew works the doors by hand, the side they commanded decides
+		// - MTR's own rule (a doorway only opens next to a platform block) would leave the doors
+		// shut on a train standing in a siding, which is exactly what "the HUD says open but
+		// nothing moves" was.
+		if (isDoor() && vehicle.vehicleExtraData.isMmtrDoorManual()) {
+			canOpen = MmtrDoorSides.isOpenSide(vehicle, partDetails.box);
+		}
+
+		final double doorValue = canOpen ? vehicle.persistentVehicleData.getDoorValue() : 0;
+		final boolean opening = vehicle.persistentVehicleData.getAdjustedDoorMultiplier(vehicle.vehicleExtraData) > 0;
+		final boolean shouldRender;
+
+		if (opening) {
+			shouldRender = renderFromOpeningDoorTime == 0 && renderUntilOpeningDoorTime == 0 || Utilities.isBetween(Math.abs(doorValue) * Vehicle.DOOR_MOVE_TIME, renderFromOpeningDoorTime, renderUntilOpeningDoorTime);
+		} else {
+			shouldRender = renderFromClosingDoorTime == 0 && renderUntilClosingDoorTime == 0 || Utilities.isBetween(Math.abs(doorValue) * Vehicle.DOOR_MOVE_TIME, renderFromClosingDoorTime, renderUntilClosingDoorTime);
+		}
+
+		if (!shouldRender) {
+			return null;
+		}
+
+		final float x = (float) (partDetails.x + doorAnimationType.getDoorAnimationX(doorXMultiplier, partDetails.flipped, Math.max(doorValue, doorOverrideValue)));
+		final float y = flashOn ? (float) partDetails.y : Integer.MAX_VALUE;
+		final float z = (float) (partDetails.z + (canOpen ? vehicle.persistentVehicleData.getInterpolatedDoorValue(doorAnimationType, doorZMultiplier, partDetails.flipped, doorOverrideValue, opening) : 0));
+		return new float[]{x, y, z};
+	}
+
 	private boolean isDoor() {
 		return doorXMultiplier != 0 || doorZMultiplier != 0;
 	}
 
+	/**
+	 * A 路线（notes/400 §6）：这一组门的**动画类**。同一个类的门在同一帧里的 draw 位移必然相同，
+	 * 所以可以合成一次 draw。
+	 *
+	 * <p>类里必须包含所有"会影响这一组门怎么被画出来"的部件级参数，一个都不能漏：</p>
+	 * <ul>
+	 *   <li>两个 multiplier —— 它们直接进动画函数，决定位移的方向与大小；</li>
+	 *   <li>{@link DoorAnimationType} —— 同一个 multiplier 下不同动画曲线的位移也不同；</li>
+	 *   <li>{@code flipped} —— 它决定 draw 时那一次 180° Y 旋转，不能和没转的合并；</li>
+	 *   <li>{@link PartCondition} —— 不同条件的部件在 {@code render()} 里被**分别**判定要不要画，
+	 *       合并就把条件判定的粒度也合并了；</li>
+	 *   <li><b>哪一侧</b> —— 这一条是实机逼出来的：资源包里 `door_r_1` 与 `door_l_1` 的
+	 *       {@code doorZMultiplier} **完全相同**（都是 −14，见 `properties_saf420car.json`，
+	 *       左右门是同一套动画），所以只按 multiplier 分组会把左右门塞进一个类 ——
+	 *       而 `canOpen` 是**逐 doorway** 判的（{@code RenderVehicleHelper.canOpenDoors}
+	 *       看那一扇门口有没有站台），一站台只在一侧时左右就不一致，整个类永远合不上。</li>
+	 * </ul>
+	 *
+	 * <p>侧别取"这一组门映射到的那个 doorway 的中线 x 符号"，取不到就用部件自己的盒子。
+	 * 这也是 {@code canOpen} 真正的判据来源。**粒度只能到"侧"**：再细到 doorway 就变成
+	 * 一组门一个类，一组的 draw 数本来就只有 1，合并反而更贵。</p>
+	 *
+	 * @return {@code null} = 这一组不参与合并
+	 */
+	@Nullable
+	String doorBatchKey() {
+		if (doorBatchObjModels == null || partDetailsList.size() != 1) {
+			return null;
+		}
+		final PartDetails partDetails = partDetailsList.get(0);
+		return doorXMultiplier + "|" + doorZMultiplier + "|" + doorAnimationType.name() + "|" + partDetails.flipped + "|" + condition.name() + "|" + doorBatchSide();
+	}
+
+	/**
+	 * "这一组门在哪一侧"。
+	 *
+	 * <p>取的是**车厢局部坐标**里盒子的中线符号（{@code writeFloorsAndDoorways} 交出去的 doorway
+	 * 与部件盒子同在这一套坐标里，`canOpenDoors` 也是把它们变换到世界坐标的）。优先用 doorway：
+	 * 那一扇门口就是 {@code canOpen} 的来源；没有 doorway（模型没声明 {@code DOORWAY} 部件、
+	 * 或者这一组还没被 {@code mapDoors} 认领）就退回部件自己的盒子。</p>
+	 */
+	private int doorBatchSide() {
+		final PartDetails partDetails = partDetailsList.get(0);
+		return sideOf(partDetails.doorway) * 2 + sideOf(partDetails.box);
+	}
+
+	private static int sideOf(@Nullable Box box) {
+		return box == null || box.getMinXMapped() + box.getMaxXMapped() >= 0 ? 1 : 0;
+	}
+
+	/** @return 这一组门的几何（已按位置烘好）；{@code null} = 不参与合并 */
+	@Nullable
+	ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper> doorBatchGeometry() {
+		return doorBatchObjModels;
+	}
+
+	/** @return draw 时是否要施加那一次 180° Y 旋转（与 {@link #doorBatchKey()} 里的 flipped 同源） */
+	boolean doorBatchFlipped() {
+		return !partDetailsList.isEmpty() && partDetailsList.get(0).flipped;
+	}
+
+	/** @return 这一组门的 group 名（"为什么没合并"的日志里要用它指认是哪一组） */
+	String doorBatchNames() {
+		return names.toString();
+	}
+
+	/**
+	 * @return 这一组门在这一帧的 draw 位移（单位 1/16 格）；{@code null} = 这一帧不画，或者
+	 *         不参与合并（位置数 &gt; 1）。**与 {@code renderNormal} 用的是同一个算式。**
+	 */
+	@Nullable
+	float[] doorBatchTranslation(VehicleExtension vehicle, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways) {
+		if (doorBatchObjModels == null || partDetailsList.size() != 1) {
+			return null;
+		}
+		/*
+		 * 条件必须先判（notes/400 §6）：`render()` 是先过 `matchesCondition` 才排队的，条件不成立的部件
+		 * 这一帧根本不画。合并模型里却带着它的几何 ⇒ 不判条件就会**多画**（例如 AT_DEPOT 的门在途时
+		 * 被合并模型画出来）。类的键里含 condition，所以同一个类要么全中、要么全不中，判一次就够。
+		 */
+		if (!VehicleResource.matchesCondition(vehicle, condition, openDoorways.isEmpty())) {
+			return null;
+		}
+		return doorDrawTranslation(vehicle, openDoorways, partDetailsList.get(0));
+	}
 	/**
 	 * @return whether this part is a wiper mechanism piece (wiper_/wiperarm_/wiperrod_). Such a part is
 	 *         moved by rotating the PART, not by the door animation, so on the OBJ path it needs its own
@@ -353,13 +549,18 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 
 	/** The model's RESOURCE id for one car of a consist - what the anchors and wiper states are keyed by. */
 	private static String vehicleIdFor(VehicleExtension vehicle, int carNumber) {
-		final var cars = vehicle.getVehicleCarsAndPositions();
-		return carNumber < 0 || carNumber >= cars.size() ? null : cars.get(carNumber).left().getVehicleId();
+		return vehicle.mmtrCarResourceId(carNumber);
 	}
 
-	private void renderNormal(StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, ObjectIntImmutablePair<QueuedRenderLayer> renderProperties, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, int light, GraphicsHolder graphicsHolder, Vector3d offset) {
+	private void renderNormal(StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, ObjectIntImmutablePair<QueuedRenderLayer> renderProperties, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, int light, GraphicsHolder graphicsHolder, Vector3d offset, boolean doorBatched) {
 		storedMatrixTransformations.transform(graphicsHolder, offset);
 		final boolean flashOn = flashOnTime + flashOffTime == 0 || (System.currentTimeMillis() % (flashOnTime + flashOffTime)) > flashOffTime;
+		/*
+		 * A 路线（notes/400 §6）：这一组门的几何已经由 MmtrDoorBatch 用**一个动画类一份合并模型**
+		 * 画过了，这里就不能再画第二遍 —— 那会是一模一样的重影（同一个位移、同一批顶点）。
+		 * 只有"开门态"那条分支会被跳过；雨刷走的是下面 else 分支，不受影响。
+		 */
+		final boolean skipOptimizedDoor = doorBatched && isDoor();
 		partDetailsList.forEach(partDetails -> {
 			final float x;
 			final float y = flashOn ? (float) partDetails.y : Integer.MAX_VALUE;
@@ -369,36 +570,9 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				x = (float) partDetails.x;
 				z = (float) partDetails.z;
 			} else {
-				double doorOverrideValue = 0;
-				boolean canOpen = false;
-				for (final ObjectDoubleImmutablePair<Box> openDoorway : openDoorways) {
-					if (openDoorway.left().equals(partDetails.doorway)) {
-						doorOverrideValue = openDoorway.rightDouble();
-						canOpen = true;
-						break;
-					}
-				}
-
-				// MMTR B7.6h: when the cab crew works the doors by hand, the side they commanded decides
-				// - MTR's own rule (a doorway only opens next to a platform block) would leave the doors
-				// shut on a train standing in a siding, which is exactly what "the HUD says open but
-				// nothing moves" was.
-				if (isDoor() && vehicle.vehicleExtraData.isMmtrDoorManual()) {
-					canOpen = MmtrDoorSides.isOpenSide(vehicle, partDetails.box);
-				}
-
-				final double doorValue = canOpen ? vehicle.persistentVehicleData.getDoorValue() : 0;
-				final boolean opening = vehicle.persistentVehicleData.getAdjustedDoorMultiplier(vehicle.vehicleExtraData) > 0;
-				final boolean shouldRender;
-
-				if (opening) {
-					shouldRender = renderFromOpeningDoorTime == 0 && renderUntilOpeningDoorTime == 0 || Utilities.isBetween(Math.abs(doorValue) * Vehicle.DOOR_MOVE_TIME, renderFromOpeningDoorTime, renderUntilOpeningDoorTime);
-				} else {
-					shouldRender = renderFromClosingDoorTime == 0 && renderUntilClosingDoorTime == 0 || Utilities.isBetween(Math.abs(doorValue) * Vehicle.DOOR_MOVE_TIME, renderFromClosingDoorTime, renderUntilClosingDoorTime);
-				}
-
-				x = shouldRender ? (float) (partDetails.x + doorAnimationType.getDoorAnimationX(doorXMultiplier, partDetails.flipped, Math.max(doorValue, doorOverrideValue))) : Integer.MAX_VALUE;
-				z = shouldRender ? (float) (partDetails.z + (canOpen ? vehicle.persistentVehicleData.getInterpolatedDoorValue(doorAnimationType, doorZMultiplier, partDetails.flipped, doorOverrideValue, opening) : 0)) : Integer.MAX_VALUE;
+				final float[] doorTranslation = doorDrawTranslation(vehicle, openDoorways, partDetails);
+				x = doorTranslation == null ? Integer.MAX_VALUE : doorTranslation[0];
+				z = doorTranslation == null ? Integer.MAX_VALUE : doorTranslation[2];
 			}
 
 			// The mechanism parts (wiper_ / wiperarm_ / wiperrod_) are moved per part by their own kinematics,
@@ -417,14 +591,19 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 			if (OptimizedRenderer.hasOptimizedRendering() && !isWiperPart) {
 				// If doors are open, only render the optimized door parts
 				// Otherwise, the main model already includes closed doors
-				if (!openDoorways.isEmpty() && partDetails.optimizedModelDoor != null) {
-					graphicsHolder.push();
-					graphicsHolder.translate(x / 16, y / 16, z / 16);
-					if (partDetails.flipped) {
-						graphicsHolder.rotateYDegrees(180);
+				if (!skipOptimizedDoor && !openDoorways.isEmpty() && partDetails.hasDoorModel()) {
+					// 惰性：开门态第一次走到这里才真的建（关门态永远不建 —— notes/401 §11.2）
+					final OptimizedModelWrapper doorModel = partDetails.doorModel();
+					if (doorModel != null) {
+						graphicsHolder.push();
+						graphicsHolder.translate(x / 16, y / 16, z / 16);
+						if (partDetails.flipped) {
+							graphicsHolder.rotateYDegrees(180);
+						}
+						CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(doorModel, graphicsHolder, light);
+						MmtrVehicleDrawProbe.onDoorQueued(doorModel.partCount());
+						graphicsHolder.pop();
 					}
-					CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(partDetails.optimizedModelDoor, graphicsHolder, light);
-					graphicsHolder.pop();
 				}
 			} else {
 				// W4: a modelled wiper part is moved by the mechanism's own kinematics, applied as a matrix
@@ -445,14 +624,19 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				// wrapper (the same one doors use). Without this the draw above is a no-op, which is why the
 				// wiper rotated into nothing. The wrapper is queued INSIDE the rotation push/pop from
 				// pushPartTransform above, so the blade actually turns.
-				if (partDetails.modelParts.isEmpty() && partDetails.optimizedModelDoor != null) {
-					graphicsHolder.push();
-					graphicsHolder.translate(x / 16, y / 16, z / 16);
-					if (partDetails.flipped) {
-						graphicsHolder.rotateYDegrees(180);
+				if (partDetails.modelParts.isEmpty() && partDetails.hasDoorModel()) {
+					// 雨刷（mechanism）那条路：模型在构造时就现建好了，这里只是取；门在非优化渲染下也走这里（那时建它是零成本，见 doorModel 的说明）
+					final OptimizedModelWrapper doorModel = partDetails.doorModel();
+					if (doorModel != null) {
+						graphicsHolder.push();
+						graphicsHolder.translate(x / 16, y / 16, z / 16);
+						if (partDetails.flipped) {
+							graphicsHolder.rotateYDegrees(180);
+						}
+						CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(doorModel, graphicsHolder, light);
+						MmtrVehicleDrawProbe.onDoorQueued(doorModel.partCount());
+						graphicsHolder.pop();
 					}
-					CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(partDetails.optimizedModelDoor, graphicsHolder, light);
-					graphicsHolder.pop();
 				}
 				if (wiperMoved) {
 					graphicsHolder.pop();
@@ -628,10 +812,56 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 	) {
 		objModels.forEach(objModel -> Data.put(objModelsForPartConditionAndRenderStage, condition, renderStage, oldValue -> {
 			final ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper> newObjModels = oldValue == null ? new ObjectArrayList<>() : oldValue;
+			/*
+			 * 判定性读数（notes/401 §8）：把"烘位置"这一段的耗时单独累出来。
+			 * 车辆构造那 72–111 ms 到底花在哪，光看总数分不出来 —— 而 addTransformation 是里面
+			 * 唯一一段"逐实例深拷贝网格"的重活，它是不是大头决定了下一步该不该把它搬走。
+			 */
+			final long transformationStartNanos = System.nanoTime();
 			objModel.addTransformation(renderStage.shaderType, (x + doorAnimationType.getDoorAnimationX(doorXMultiplier, flipped, 0)) / 16, y / 16 - modelYOffset, (z + doorAnimationType.getDoorAnimationZ(doorZMultiplier, flipped, 0, false)) / 16, flipped);
+			addTransformationNanos += System.nanoTime() - transformationStartNanos;
+			addTransformationCalls++;
 			newObjModels.add(objModel);
 			return newObjModels;
 		}, Object2ObjectOpenHashMap::new));
+	}
+
+	/** {@code addTransformation} 的累计耗时/次数（notes/401 §8 的分段读数，由模型构造那边汇总后清零）。 */
+	private static long addTransformationNanos;
+	private static int addTransformationCalls;
+
+	/**
+	 * 取走累计耗时并清零（跨包：{@code DynamicVehicleModel} 在 {@code org.mtr.mod.render}）。
+	 *
+	 * <p>为什么不做成"每辆车一个计数器"：模型构造是**单线程**的（渲染线程），
+	 * 而这两个数只在"这一次构造"的边界上被取走 —— 加锁反而会把热路径拖慢。</p>
+	 */
+	public static long takeAddTransformationNanos() {
+		final long value = addTransformationNanos;
+		addTransformationNanos = 0;
+		return value;
+	}
+
+	public static int takeAddTransformationCalls() {
+		final int value = addTransformationCalls;
+		addTransformationCalls = 0;
+		return value;
+	}
+
+	/** {@code optimizedModelDoor.get()} 的累计耗时/有效次数（notes/401 §8 续）—— writeCache 里唯一的 GL 那一段。 */
+	private static long doorModelNanos;
+	private static int doorModelCalls;
+
+	public static long takeDoorModelNanos() {
+		final long value = doorModelNanos;
+		doorModelNanos = 0;
+		return value;
+	}
+
+	public static int takeDoorModelCalls() {
+		final int value = doorModelCalls;
+		doorModelCalls = 0;
+		return value;
 	}
 
 	private String formatText(Vehicle vehicle) {
@@ -798,21 +1028,80 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		@Nullable
 		private Box doorway;
 		private final ObjectArrayList<ModelPartExtension> modelParts;
-		private final OptimizedModelWrapper optimizedModelDoor;
+		/** 已建好的门/雨刷模型；门那条路是**惰性**的 ⇒ 第一次要用之前这里是 {@code null}。 */
+		@Nullable
+		private OptimizedModelWrapper optimizedModelDoor;
+		/** 惰性建门模型的那个 supplier（与雨刷共用同一份实现：`isDoor() || mechanism ? fromObjModels : null`）。 */
+		@Nullable
+		private final Supplier<OptimizedModelWrapper> lazyDoorModel;
+		private boolean lazyDoorResolved;
 		private final Box box;
 		private final double x;
 		private final double y;
 		private final double z;
 		private final boolean flipped;
 
-		private PartDetails(ObjectArrayList<ModelPartExtension> modelParts, @Nullable OptimizedModelWrapper optimizedModelDoor, Box box, double x, double y, double z, boolean flipped) {
+		private PartDetails(ObjectArrayList<ModelPartExtension> modelParts, @Nullable OptimizedModelWrapper optimizedModelDoor, @Nullable Supplier<OptimizedModelWrapper> lazyDoorModel, Box box, double x, double y, double z, boolean flipped) {
 			this.modelParts = OptimizedRenderer.hasOptimizedRendering() ? new ObjectArrayList<>() : modelParts;
 			this.optimizedModelDoor = optimizedModelDoor;
+			this.lazyDoorModel = lazyDoorModel;
 			this.box = box;
 			this.x = x;
 			this.y = y;
 			this.z = z;
 			this.flipped = flipped;
+		}
+
+		/** 有没有可能拿到门/雨刷模型（**不触发**惰性创建）—— 给渲染分支做条件用。 */
+		private boolean hasDoorModel() {
+			return optimizedModelDoor != null || (!lazyDoorResolved && lazyDoorModel != null);
+		}
+
+		/**
+		 * 门/雨刷模型（**渲染线程**；门那条路是第一次调用时才建）。
+		 *
+		 * <p>{@code beginReload/finishReload} 是必须的：`fromObjModels` 内部会 {@code upload()} 建 VBO，
+		 * 而 `VertexArray` 的构造要求 {@code GlStateTracker} 在保护区内（否则抛
+		 * {@code GlStateTracker: Not protected}，notes/398 §8.9.2 踩过）。这个包装器是**按嵌套层数**
+		 * 记账的（只有最外层碰 GL 状态），所以渲染中途再开一层是安全的 —— `MmtrDoorBatch.build`
+		 * 在渲染里做的就是同一件事。</p>
+		 */
+		@Nullable
+		private OptimizedModelWrapper doorModel() {
+			if (optimizedModelDoor == null && !lazyDoorResolved && lazyDoorModel != null) {
+				lazyDoorResolved = true;
+				final long lazyStartNanos = System.nanoTime();
+				final OptimizedModelWrapper built;
+				CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.beginReload();
+				try {
+					built = lazyDoorModel.get();
+				} finally {
+					CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.finishReload();
+				}
+				optimizedModelDoor = built;
+				if (built != null) {
+					// 只记**真的建出了模型**的那些：非门/非雨刷部件第一次解析也会走到这里（supplier 返回 null），
+					// 把那些也打出来只会把"惰性建了几个门"淹没掉。
+					reportLazyDoor((System.nanoTime() - lazyStartNanos) / 1_000_000L, built.partCount());
+				}
+			}
+			return optimizedModelDoor;
+		}
+	}
+
+	/** 惰性建门模型的累计次数（notes/401 §11.2）—— 用来证明"推迟"真的发生了，以及它推迟到了哪一帧。 */
+	private static int lazyDoorBuilds;
+	private static final int MAX_LAZY_DOOR_LOGS = 40;
+	private static int lazyDoorLogs;
+
+	private static void reportLazyDoor(long millis, int draws) {
+		lazyDoorBuilds++;
+		if (lazyDoorLogs < MAX_LAZY_DOOR_LOGS) {
+			lazyDoorLogs++;
+			Init.LOGGER.info("[MMTR-LAZYDOOR] 惰性建门模型 {} ms ｜ {} 次 draw ｜ 累计第 {} 次", millis, draws, lazyDoorBuilds);
+			if (lazyDoorLogs == MAX_LAZY_DOOR_LOGS) {
+				Init.LOGGER.info("[MMTR-LAZYDOOR] 读数已达 {} 条上限（惰性建仍在正常进行）", MAX_LAZY_DOOR_LOGS);
+			}
 		}
 	}
 

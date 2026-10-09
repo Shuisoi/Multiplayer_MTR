@@ -155,7 +155,6 @@ public final class MmtrDriverSeat {
 	/** The model ID of one car of a consist - the same lookup {@code ModelPropertiesPart} uses. */
 	@Nullable
 	private static String modelIdFor(VehicleExtension vehicle, int carNumber) {
-		final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<Vehicle.BogiePosition>>> cars = vehicle.getVehicleCarsAndPositions();
-		return carNumber < 0 || carNumber >= cars.size() ? null : cars.get(carNumber).left().getVehicleId();
+		return vehicle.mmtrCarResourceId(carNumber);
 	}
 }

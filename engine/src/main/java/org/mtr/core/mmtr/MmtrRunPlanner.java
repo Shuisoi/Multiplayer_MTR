@@ -24,6 +24,17 @@ import org.mtr.core.simulation.Simulator;
  */
 public final class MmtrRunPlanner {
 
+	/**
+	 * notes/411：这个走行位置是不是"**无人编组的走行器**"——即它答不出当前轨的唯一原因是
+	 * **驾驶室没有钥匙**（见 {@code MmtrConsistWalker.railHex()}：无人时按设计返回 null）。
+	 *
+	 * <p>用途只有一个：把"可自愈的没人值班"与"真的解不出位置"分开，
+	 * 前者不该让任务进 {@code FAILED} 终态（见 {@link Plan#unmannedConsist}）。</p>
+	 */
+	private static boolean isUnmannedConsist(MmtrMotionPosition walker) {
+		return walker instanceof final org.mtr.core.mmtr.consist.MmtrConsistWalker consistWalker && !consistWalker.cabs().isManned();
+	}
+
 	private static final class NodeRec {
 		final Position from;
 		final Rail rail;
@@ -37,6 +48,15 @@ public final class MmtrRunPlanner {
 	public static final class Plan {
 		public boolean feasible;
 		public String reason = "unplanned";
+		/**
+		 * notes/411：这次规划失败的原因是**编组没有值班驾驶室**（无人 ⇒ 走行器按设计不给
+		 * {@code railHex}/{@code peekNextRail}），而不是真的"轨位置解不出来"。
+		 *
+		 * <p>两者必须分开：前者**可自愈**（补一把引擎占位钥匙就能继续规划），后者不可。
+		 * 旧行为把两种情况都当"位置丢了"，于是任务被判 {@code FAILED} 进终态 ⇒
+		 * 现场整条线被两列 0 km/h 的车堵死（00101 / 00106）。</p>
+		 */
+		public boolean unmannedConsist;
 		/** Node chain from the vehicle's current ahead node to the far end of the target rail. */
 		public final ObjectArrayList<Position> nodes = new ObjectArrayList<>();
 		/** Turnout operator settings: {nodeX, nodeY, nodeZ, viaHex, op} for every en-route fork. */
@@ -178,7 +198,20 @@ public final class MmtrRunPlanner {
 		}
 		// An unplannable movement is an operator-visible event (a task will fail), so report all three
 		// attempts' reasons once: the forward search, the terminal flip and the setback search.
-		System.out.println("[MMTR-RUN] no plan for " + targetRailHex + ": forward=" + forward.reason + " | flip=" + viaFlip.reason + " | setback=" + viaSetback.reason);
+		//
+		// ★ **必须限流**（2026-10-09 现场）：作业单每 tick 重新自臂，而"车里没人（走行器没有当前轨）"
+		// 或"目标轨够不着"这两条**不会自己好** —— 无条件的 println 实测把日志刷到每 tick 一条
+		// （4 MB 日志里 2442 条 [MMTR-RUN]，与 [MMTR-SUB]/[MMTR-DRV] 一起把真正的事件淹掉）。
+		// 与尽头换向那两条同一个间隔常量：事件照旧可见，洪水不再。
+		final long nowMillis = System.currentTimeMillis();
+		final String noPlanKey = vehicle.getId() + "|" + targetRailHex;
+		if (nowMillis - mmtrNoPlanLogMillis.getLong(noPlanKey) >= FLIP_PLAN_LOG_INTERVAL_MILLIS) {
+			if (mmtrNoPlanLogMillis.size() > 512) {
+				mmtrNoPlanLogMillis.clear();
+			}
+			mmtrNoPlanLogMillis.put(noPlanKey, nowMillis);
+			System.out.println("[MMTR-RUN] no plan for " + targetRailHex + "（车 " + vehicle.getId() + "）: forward=" + forward.reason + " | flip=" + viaFlip.reason + " | setback=" + viaSetback.reason);
+		}
 		return forward;
 	}
 
@@ -305,6 +338,7 @@ public final class MmtrRunPlanner {
 		final Position startNode = travelAheadNode(walker);
 		final Rail currentRail = findRail(sim, walker.railHex());
 		if (startNode == null || currentRail == null) {
+			plan.unmannedConsist = isUnmannedConsist(walker);
 			plan.reason = "via: walker has no current rail / ahead node";
 			return plan;
 		}
@@ -695,6 +729,8 @@ public final class MmtrRunPlanner {
 	/** Minimum gap between two flip-plan reports, ms. */
 	private static final long FLIP_PLAN_LOG_INTERVAL_MILLIS = 5000;
 	private static long mmtrLastFlipPlanLogMillis;
+	/** {@code [MMTR-RUN] no plan} 那一行的限流：按（车 + 目标轨）各记一个时刻，不是全局一条。 */
+	private static final it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap<String> mmtrNoPlanLogMillis = new it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap<>();
 
 	private static Plan planToRailForward(Simulator sim, Vehicle vehicle, String targetRailHex, double stopFraction) {
 		final Plan plan = new Plan();
@@ -712,6 +748,7 @@ public final class MmtrRunPlanner {
 		final Position startNode = travelAheadNode(walker);
 		final Rail currentRail = findRail(sim, walker.railHex());
 		if (startNode == null || currentRail == null) {
+			plan.unmannedConsist = isUnmannedConsist(walker);
 			plan.reason = "walker has no current rail / ahead node";
 			return plan;
 		}

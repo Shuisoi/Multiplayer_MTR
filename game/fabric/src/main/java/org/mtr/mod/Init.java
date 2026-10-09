@@ -99,6 +99,32 @@ public final class Init implements Utilities {
 		REGISTRY.registerPacket(PacketMmtrVehicleMotion.class, PacketMmtrVehicleMotion::new);
 		// 服务端 → 客户端：「把这位玩家放进那辆车的驾驶室」（/mtr mmtrboard、引擎指令栏的 train board）
 		REGISTRY.registerPacket(PacketMmtrBoardPlayer.class, PacketMmtrBoardPlayer::new);
+		/*
+		 * 综合运转面板（notes/408 §3）的三个包：
+		 *   · PacketMmtrPdaScreen —— **服务端 → 客户端**的开屏请求（物品右键那条路；
+		 *     驾驶中按 TAB 那条路是客户端直接开屏，不经服务端）；
+		 *   · PacketMmtrDutyOp —— **客户端 → 服务端**的按钮（认领 / 马上退出 / 下一站退出）
+		 *     **以及"要一份全部车次的列表"**（{@code Op.LIST}，vehicleId 传 0）；
+		 *   · PacketMmtrDutyList —— **服务端 → 客户端**的"这就是全部车次"。
+		 *
+		 * 为什么名单要绕一圈问引擎：本地那份 `MinecraftClientData.vehicles` 是按玩家位置同步的镜像
+		 * （见 PacketMmtrBoardPlayer 的类注释），站在几百格外时车根本不在里面 —— 面板原来自己遍历它，
+		 * 于是"只有附近的车次"。引擎才是唯一真源。
+		 */
+		REGISTRY.registerPacket(PacketMmtrPdaScreen.class, PacketMmtrPdaScreen::new);
+		REGISTRY.registerPacket(PacketMmtrDutyOp.class, PacketMmtrDutyOp::new);
+		REGISTRY.registerPacket(PacketMmtrDutyList.class, PacketMmtrDutyList::new);
+		/*
+		 * **客户端 → 服务端：位置上行**（notes/409 §4）。
+		 *
+		 * <p>与 ① {@code PacketMmtrVehicleMotion} 是**一对**：① 是服务端把权威车辆的位置发下来
+		 * （10 Hz），这一条是位置权威在客户端期间把那个位置传回去（同样 10 Hz）。它不新开中继通路
+		 * —— ① 本来就是读"权威车辆"的 {@code railProgress} 打包的，引擎接受了上传之后，
+		 * 观察者拿到的自然就是上传后的位置（notes/409 §4.2 第 5 条）。</p>
+		 *
+		 * <p>默认关（{@code -Dmmtr.upload=false}，两端都要显式打开）：关着时这一条路一个字节都不发。</p>
+		 */
+		REGISTRY.registerPacket(PacketMmtrUploadMotion.class, PacketMmtrUploadMotion::new);
 		REGISTRY.registerPacket(PacketFetchArrivals.class, PacketFetchArrivals::new);
 		REGISTRY.registerPacket(PacketForwardClientRequest.class, PacketForwardClientRequest::new);
 		REGISTRY.registerPacket(PacketUpdateKeyDispenserConfig.class, PacketUpdateKeyDispenserConfig::new);
@@ -152,6 +178,91 @@ public final class Init implements Utilities {
 					});
 				});
 			});
+			/*
+			 * /mtr mmtrduty [status|take <车辆id>|wait <车辆id>|exit|next|cancel]
+			 *
+			 * **玩家自己敲的值守指令**（notes/408 §2）：查我现在是什么态、要哪趟车、什么时候退出。
+			 * 用户口径（2026-10-09）："退出也是暂时使用命令进行退出，需要我自己能够输入命令"——
+			 * 在它之前，接管/归还只能走网页指令栏（`job take` / `job release`），游戏里够不着，
+			 * 于是每次都得有人在旁边代敲。
+			 *
+			 * <p>权限 0（**任何玩家**都能用）：它动的只有**自己**的值守 —— 强制把别人的车派给自己
+			 * 那种事需要 OP，而那件事本来就要另一条指令（派车），不是这一条。</p>
+			 *
+			 * <p>动词**不在这里实现**：拼成一条引擎指令交给
+			 * {@link org.mtr.core.mmtr.command.MmtrCommandDispatcher}（`duty …` 名词，S1 落的）。
+			 * 这样"游戏里敲"与"网页指令栏敲"走的是同一套动词与同一份输出 —— 指令回显与 HUD
+			 * 于是天然是同一份状态编码（notes/408 §3.4），不会出现两个地方各写一套词。</p>
+			 */
+			commandBuilderMtr.then("mmtrduty", commandBuilderDuty -> {
+				commandBuilderDuty.permissionLevel(0);
+				commandBuilderDuty.executes(contextHandler -> mmtrDuty(contextHandler, "status", ""));
+				commandBuilderDuty.then("status", commandBuilderStatus ->
+					commandBuilderStatus.executes(contextHandler -> mmtrDuty(contextHandler, "status", "")));
+				commandBuilderDuty.then("take", commandBuilderTake -> {
+					commandBuilderTake.executes(contextHandler -> mmtrDuty(contextHandler, "take", ""));
+					commandBuilderTake.then("vehicleId", StringArgumentType.string(), commandBuilderVehicleId ->
+						commandBuilderVehicleId.executes(contextHandler -> mmtrDuty(contextHandler, "take", contextHandler.getString("vehicleId"))));
+				});
+				commandBuilderDuty.then("wait", commandBuilderWait -> {
+					commandBuilderWait.executes(contextHandler -> mmtrDuty(contextHandler, "wait", ""));
+					commandBuilderWait.then("vehicleId", StringArgumentType.string(), commandBuilderVehicleId ->
+						commandBuilderVehicleId.executes(contextHandler -> mmtrDuty(contextHandler, "wait", contextHandler.getString("vehicleId"))));
+				});
+				commandBuilderDuty.then("exit", commandBuilderExit ->
+					commandBuilderExit.executes(contextHandler -> mmtrDuty(contextHandler, "exit", "")));
+				commandBuilderDuty.then("next", commandBuilderNext ->
+					commandBuilderNext.executes(contextHandler -> mmtrDuty(contextHandler, "next", "")));
+				commandBuilderDuty.then("cancel", commandBuilderCancel ->
+					commandBuilderCancel.executes(contextHandler -> mmtrDuty(contextHandler, "cancel", "")));
+				/*
+				 * /mtr mmtrduty assign <玩家名> <车次> <驾驶室> [wait]
+				 *
+				 * **给别的玩家派车**（notes/409 §0 的 ①，用户口径）：输入玩家 / 车次（作业单名）/
+				 * 驾驶室编号 → 为他认领接下来要开的那辆车；末尾的 `wait` 是在下一停站车站站台等候、
+				 * 不写 `wait` 就是直接传送。
+				 *
+				 * <p>权限 2（OP）：它挪的是**别的玩家**的位置 —— 上面那棵树里 `take` / `wait` / `exit`
+				 * 权限 0 是因为它们只动自己的值守，而这一条是调度员的口径。</p>
+				 *
+				 * <p>与上面几条同一个约定：**动词的真源在引擎**。这里只做"名字 → uuid"、
+				 * "名字 → 在哪台模拟器里"两件事，然后拼一条
+				 * {@code duty assign <uuid> <车次> <驾驶室> [--wait] --name=<玩家名>} 交给
+				 * {@link org.mtr.core.mmtr.command.MmtrCommandDispatcher}，把 {@code Result.lines}
+				 * 原样回给执行者。</p>
+				 */
+				commandBuilderDuty.then("assign", commandBuilderAssign -> {
+					commandBuilderAssign.permissionLevel(2);
+					commandBuilderAssign.executes(contextHandler -> {
+						contextHandler.sendFailure("用法：/mtr mmtrduty assign <玩家名> <车次> <驾驶室> [wait]"
+							+ "（例如 /mtr mmtrduty assign Shuisoi 00103 1A wait）");
+						return 0;
+					});
+					commandBuilderAssign.then("player", StringArgumentType.string(), commandBuilderAssignPlayer -> {
+						commandBuilderAssignPlayer.executes(contextHandler -> {
+							contextHandler.sendFailure("用法：/mtr mmtrduty assign <玩家名> <车次> <驾驶室> [wait]"
+								+ "（例如 /mtr mmtrduty assign Shuisoi 00103 1A wait）");
+							return 0;
+						});
+						commandBuilderAssignPlayer.then("jobId", StringArgumentType.string(), commandBuilderAssignJob -> {
+							commandBuilderAssignJob.executes(contextHandler -> {
+								contextHandler.sendFailure("用法：/mtr mmtrduty assign <玩家名> <车次> <驾驶室> [wait]"
+									+ "（例如 /mtr mmtrduty assign Shuisoi 00103 1A wait）");
+								return 0;
+							});
+							commandBuilderAssignJob.then("cab", StringArgumentType.string(), commandBuilderAssignCab -> {
+								commandBuilderAssignCab.executes(contextHandler -> mmtrDutyAssign(contextHandler,
+									contextHandler.getString("player"), contextHandler.getString("jobId"),
+									contextHandler.getString("cab"), false));
+								commandBuilderAssignCab.then("mode", StringArgumentType.string(), commandBuilderAssignMode ->
+									commandBuilderAssignMode.executes(contextHandler -> mmtrDutyAssign(contextHandler,
+										contextHandler.getString("player"), contextHandler.getString("jobId"),
+										contextHandler.getString("cab"), true)));
+							});
+						});
+					});
+				});
+			});
 			commandBuilderMtr.then("restoreWorld", commandBuilderRestoreWorld -> {
 				commandBuilderRestoreWorld.permissionLevel(4);
 				commandBuilderRestoreWorld.then("worldDirectory", StringArgumentType.string(), innerCommandBuilder1 -> innerCommandBuilder1.then("backupDirectory", StringArgumentType.string(), innerCommandBuilder2 -> innerCommandBuilder2.executes(contextHandler -> {
@@ -195,6 +306,7 @@ public final class Init implements Utilities {
 		REGISTRY.eventRegistry.registerServerStarted(minecraftServer -> {
 			// Start up the backend
 			RAIL_ACTION_MODULES.clear();
+			org.mtr.mod.mmtr.crowd.MmtrCrowdModule.clear();
 			WORLD_ID_LIST.clear();
 			MinecraftServerHelper.iterateWorlds(minecraftServer, serverWorld -> {
 				RAIL_ACTION_MODULES.put(serverWorld, new RailActionModule(serverWorld));
@@ -205,6 +317,8 @@ public final class Init implements Utilities {
 			final int defaultPort = Config.getServer().getWebserverPort();
 			serverPort = defaultPort <= 0 ? -1 : findFreePort(defaultPort);
 			main = new Main(minecraftServer.getSavePath(WorldSavePath.getRootMapped()).resolve("mtr"), serverPort, Config.getServer().getUseThreadedSimulation(), Config.getServer().getUseThreadedFileLoading(), webserverSetup, WORLD_ID_LIST.toArray(new String[0]));
+			// 人数闸门（platform cap / platform radius）的镜像：引擎侧是权威值，这里把它从存档读回来。
+			org.mtr.mod.mmtr.crowd.MmtrCrowdModule.loadConfig(minecraftServer.getSavePath(WorldSavePath.getRootMapped()).resolve("mtr"));
 
 			serverTick = 0;
 			lastSavedMillis = System.currentTimeMillis();
@@ -247,6 +361,7 @@ public final class Init implements Utilities {
 			}
 			serverPort = 0;
 			RIDING_PLAYERS.clear();
+			org.mtr.mod.mmtr.crowd.MmtrCrowdModule.clear();
 		});
 
 		REGISTRY.eventRegistry.registerStartServerTick(() -> {
@@ -277,6 +392,9 @@ public final class Init implements Utilities {
 			if (railActionModule != null) {
 				railActionModule.tick();
 			}
+
+			// 站台客流：按各站台的有效客量在站台边缘铺/清「村民」方块（幂等、2ms/tick 预算）。
+			org.mtr.mod.mmtr.crowd.MmtrCrowdModule.tick(serverWorld);
 
 			if (main != null) {
 				final String dimension = getWorldId(new World(serverWorld.data));
@@ -460,5 +578,188 @@ public final class Init implements Utilities {
 		return 1;
 	}
 
+	/**
+	 * {@code /mtr mmtrduty …} 的实际执行体（notes/408 §2）。
+	 *
+	 * <h2>为什么只做"解参数 + 找模拟器 + 转交"</h2>
+	 * <p>动词的真源在引擎（{@code MmtrCommandDispatcher} 的 {@code duty} 名词）：网页指令栏、
+	 * 这里的指令、面板的按钮三条路必须说同一套词、给同一份回话。这一层若自己判一遍业务
+	 * （"车在动就不能接管"之类），就又多出一处会与引擎分叉的规则 —— 那正是 notes/215 的教训。</p>
+	 *
+	 * <h2>引擎按维度各有一份，选哪一份</h2>
+	 * <p>先按"这趟车在哪"选（给了车辆 id 时），选不到再按"我的值守记录在哪"选 —— 后者让
+	 * {@code exit} / {@code next} / {@code cancel} 不必再让人抄一遍车辆 id。</p>
+	 *
+	 * <h2>线程</h2>
+	 * <p>这条指令在 MC 服务端主线程上跑，而本局的 {@code useThreadedSimulation=false} ⇒
+	 * 模拟线程**就是**服务端主线程，所以这里直接改引擎状态是安全的（与 {@code /mtr mmtrboard}
+	 * 那条路同一个前提，见 {@code Simulator} 自己的注释）。</p>
+	 *
+	 * @param verb          {@code status} / {@code take} / {@code wait} / {@code exit} / {@code next} / {@code cancel}
+	 * @param rawVehicleId  车辆 id 原文（可空；{@code take} / {@code wait} 必需）
+	 * @return brigadier 的返回码（&gt;0 = 成功）
+	 */
+	private static int mmtrDuty(CommandBuilder.ContextHandler contextHandler, String verb, String rawVehicleId) {
+		final org.mtr.core.Main main = Init.getMain();
+		if (main == null) {
+			contextHandler.sendFailure("引擎还没起来（等世界加载完再敲）");
+			return 0;
+		}
+		final org.mtr.mapping.holder.ServerPlayerEntity player = contextHandler.getServerPlayer();
+		if (player == null) {
+			contextHandler.sendFailure("这条指令要由玩家执行（控制台里没有执行者）");
+			return 0;
+		}
+		final java.util.UUID uuid = player.getUuid();
+		if (uuid == null) {
+			contextHandler.sendFailure("拿不到你的 uuid，无法查值守");
+			return 0;
+		}
+
+		long vehicleId = 0;
+		if (rawVehicleId != null && !rawVehicleId.trim().isEmpty()) {
+			try {
+				vehicleId = Long.parseLong(rawVehicleId.trim());
+			} catch (NumberFormatException e) {
+				contextHandler.sendFailure("车辆 id 必须是数字：" + rawVehicleId);
+				return 0;
+			}
+		}
+		if ((verb.equals("take") || verb.equals("wait")) && vehicleId == 0) {
+			contextHandler.sendFailure("要给出车辆 id：/mtr mmtrduty " + verb + " <车辆id>"
+				+ "（先敲 /mtr mmtrduty 看你在哪趟车上；面板上车次那一行也写着车 id）");
+			return 0;
+		}
+
+		final org.mtr.core.simulation.Simulator[] vehicleOwner = {null};
+		final org.mtr.core.simulation.Simulator[] dutyOwner = {null};
+		// 必须是 final：下面那个 lambda 要捕获它，而 vehicleId 本身被赋过两次（= 不是 effectively final）。
+		final long targetVehicleId = vehicleId;
+		org.mtr.mapping.mapper.MinecraftServerHelper.iterateWorlds(contextHandler.getServer(), world -> {
+			final org.mtr.core.simulation.Simulator simulator = main.getSimulator(getWorldId(new World(world.data)));
+			if (simulator == null) {
+				return;
+			}
+			if (targetVehicleId != 0 && vehicleOwner[0] == null && simulator.mmtrFindVehicle(targetVehicleId) != null) {
+				vehicleOwner[0] = simulator;
+			}
+			if (dutyOwner[0] == null && simulator.mmtrDuties.of(uuid) != null) {
+				dutyOwner[0] = simulator;
+			}
+		});
+		final org.mtr.core.simulation.Simulator simulator = vehicleOwner[0] != null ? vehicleOwner[0] : dutyOwner[0];
+		if (simulator == null) {
+			contextHandler.sendFailure("找不到你或这趟车所属的引擎（这局里没有模拟器？）");
+			return 0;
+		}
+
+		final String playerName = player.getName() == null ? "" : player.getName().getString();
+		// 玩家名字引擎不知道（它只认 uuid），所以顺手带上 —— 日志与面板上的"谁"才有可读的名字。
+		final String command = switch (verb) {
+			case "take" -> "duty claim " + uuid + " " + vehicleId + " --name=" + playerName;
+			case "wait" -> "duty claim " + uuid + " " + vehicleId + " --wait --name=" + playerName;
+			case "exit" -> "duty exit " + uuid;
+			case "next" -> "duty exit " + uuid + " --next";
+			case "cancel" -> "duty cancel " + uuid;
+			default -> "duty status " + uuid;
+		};
+		final org.mtr.core.mmtr.command.MmtrCommandDispatcher.Result result =
+			org.mtr.core.mmtr.command.MmtrCommandDispatcher.execute(simulator, command);
+		for (final String line : result.lines) {
+			if (result.ok) {
+				contextHandler.sendSuccess(line, false);
+			} else {
+				contextHandler.sendFailure(line);
+			}
+		}
+		return result.ok ? 1 : 0;
+	}
+
+	/**
+	 * {@code /mtr mmtrduty assign <玩家名> <车次> <驾驶室> [wait]} 的实际执行体（notes/409 §0 的 ①）。
+	 *
+	 * <h2>为什么需要"先用引擎把车次名解析成车辆 id"这一步</h2>
+	 * <p>引擎按维度各有一份模拟器，而这条指令拿到的是**车次名**，要选哪一份只能问引擎
+	 * （{@code mmtrDuties.findVehicleIdByJobId} = 复用 {@code allVehicleRows()} 那份"场上有哪些车次"）。
+	 * 于是这一次解析同时干两件事：**给出车辆 id**（游戏端自己能据此核对），以及**选定模拟器** ——
+	 * 否则就只能瞎猜一个维度（现象是"明明有这趟车，指令却说找不到"）。</p>
+	 *
+	 * <p>解析不出来时**不拦**：照样把指令转交给第一条模拟器，让引擎给出那句能照着敲的拒绝
+	 * （"场上没有正在跑的车次 00103" / "同名多辆，请改用车辆 id"）—— 拒绝理由只有一处实现。</p>
+	 *
+	 * <h2>线程与"动词只有一处实现"</h2>
+	 * <p>与 {@link #mmtrDuty} 同一前提（模拟线程就是服务端主线程）；业务判据一条都不在这里，
+	 * 拼出来的就是引擎那条 {@code duty assign …}。</p>
+	 *
+	 * @param playerName 玩家名（必须在线 —— 引擎只认 uuid，而 uuid 要从这里拿）
+	 * @param jobId      车次名（作业单名，如 {@code 00103}）
+	 * @param cabSpec    驾驶室编号（{@code <车节><A|B>}，1 起，如 {@code 1A} / {@code 10B}）
+	 * @param waitAtPlatform {@code true} = 下一停站车站站台等候；{@code false} = 直接传送
+	 * @return brigadier 的返回码（&gt;0 = 成功）
+	 */
+	private static int mmtrDutyAssign(CommandBuilder.ContextHandler contextHandler, String playerName, String jobId, String cabSpec, boolean waitAtPlatform) {
+		final org.mtr.core.Main main = Init.getMain();
+		if (main == null) {
+			contextHandler.sendFailure("引擎还没起来（等世界加载完再敲）");
+			return 0;
+		}
+		final org.mtr.mapping.holder.ServerPlayerEntity target =
+			org.mtr.mod.mmtr.MmtrBoardPlayer.findPlayer(contextHandler.getServer(), playerName);
+		if (target == null) {
+			contextHandler.sendFailure("找不到在线玩家 " + playerName + " —— 用法：/mtr mmtrduty assign <玩家名> <车次> <驾驶室> [wait]");
+			return 0;
+		}
+		final java.util.UUID uuid = target.getUuid();
+		if (uuid == null) {
+			contextHandler.sendFailure("拿不到 " + playerName + " 的 uuid，无法派车");
+			return 0;
+		}
+		final String targetName = target.getName() == null ? playerName : target.getName().getString();
+		final String wantedJobId = jobId == null ? "" : jobId.trim();
+		final String wantedCab = cabSpec == null ? "" : cabSpec.trim();
+
+		// 车次名 → 车辆 id（顺便选定是哪一份模拟器）；0 = 没有，-1 = 同名多辆。
+		final org.mtr.core.simulation.Simulator[] jobOwner = {null};
+		final long[] resolvedVehicleId = {0};
+		final org.mtr.core.simulation.Simulator[] firstSimulator = {null};
+		MinecraftServerHelper.iterateWorlds(contextHandler.getServer(), world -> {
+			final org.mtr.core.simulation.Simulator simulator = main.getSimulator(getWorldId(new World(world.data)));
+			if (simulator == null) {
+				return;
+			}
+			if (firstSimulator[0] == null) {
+				firstSimulator[0] = simulator;
+			}
+			if (jobOwner[0] == null) {
+				final long found = simulator.mmtrDuties.findVehicleIdByJobId(wantedJobId);
+				if (found != 0) {
+					jobOwner[0] = simulator;
+					resolvedVehicleId[0] = found;
+				}
+			}
+		});
+		final org.mtr.core.simulation.Simulator simulator = jobOwner[0] != null ? jobOwner[0] : firstSimulator[0];
+		if (simulator == null) {
+			contextHandler.sendFailure("找不到这局里的引擎（没有模拟器？）");
+			return 0;
+		}
+		// 玩家名字引擎不知道（它只认 uuid），所以顺手带上 —— 日志与面板上的"谁"才有可读的名字。
+		final String command = "duty assign " + uuid + " " + wantedJobId + " " + wantedCab
+			+ (waitAtPlatform ? " --wait" : "") + " --name=" + targetName;
+		// 现场最容易出的疑问是"到底转交了什么"（名字解成了哪个 uuid、车次名有没有被裁空白、wait 有没有带上），
+		// 所以这一行是要看得见的 —— 与 mmtrClaimEngineCommand 那种"转交即留痕"同一个口径。
+		LOGGER.info("[MMTR-DUTY] 派车转交（执行者 {}）：{}", contextHandler.getServerPlayer() == null
+			? "控制台" : contextHandler.getServerPlayer().getName().getString(), command);
+		final org.mtr.core.mmtr.command.MmtrCommandDispatcher.Result result =
+			org.mtr.core.mmtr.command.MmtrCommandDispatcher.execute(simulator, command);
+		for (final String line : result.lines) {
+			if (result.ok) {
+				contextHandler.sendSuccess(line, false);
+			} else {
+				contextHandler.sendFailure(line);
+			}
+		}
+		return result.ok ? 1 : 0;
+	}
 
 }

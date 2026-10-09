@@ -76,6 +76,16 @@ public class CustomResourceLoader {
 	}
 
 	public static void reload() {
+		/*
+		 * 着色器重编译的**唯一**时机（notes/399）。
+		 *
+		 * MTR 原来把它绑在每一次模型构建上（OptimizedRenderer.beginReload），而一次车辆重建会走
+		 * 5 次 beginReload ⇒ 同一批着色器被重编译 15 次，实测让渲染线程卡 562 ms。
+		 * 建 VBO 只需要 GlStateTracker.capture() 那一半；着色器重编译应该是"资源重载时一次"。
+		 */
+		OPTIMIZED_RENDERER_WRAPPER.markShadersDirty();
+		// 同时把保护区的账本清零：防"上次构建抛异常漏掉 finishReload()"把层级永久留高（notes/399）
+		OPTIMIZED_RENDERER_WRAPPER.resetProtectionState();
 		MINECRAFT_MODEL_RESOURCES.clear();
 		MINECRAFT_TEXTURE_RESOURCES.clear();
 		RESOURCE_CACHE.clear();

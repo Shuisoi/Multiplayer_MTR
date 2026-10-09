@@ -310,6 +310,22 @@ public class Simulator extends Data implements Utilities {
 	/** C3a 调车授权 (subsidiary-aspect authority): one train at a time may pass a signal at danger into
 	 * an occupied section to couple; the registry is the data plane the vehicle/yard read. */
 	public final org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry mmtrShuntAuthorities = new org.mtr.core.mmtr.signal.MmtrShuntAuthorityRegistry(this::getCurrentMillis);
+	/**
+	 * notes/408 S1：**玩家值守状态机**（"玩家 X 现在是什么态"的唯一真源）。
+	 *
+	 * <p>与 {@link #mmtrPlanPlayerDriven}、{@link #mmtrShuntAuthorities} 一样是**运行时**状态
+	 * （不落盘、不进签名）：它描述"现在谁在开"，重启即回到空闲是对的。</p>
+	 *
+	 * <p>为什么在构造函数里初始化而不是像上面几个那样就地 new：它要 {@code this} 的引用
+	 * （每次迁移都要问作业调度器"这车挂在哪条作业单上"、问车辆表"这车还在不在"），
+	 * 而就地初始化时 {@code this} 还不能用。</p>
+	 */
+	public final org.mtr.core.mmtr.duty.MmtrDutyRegistry mmtrDuties;
+	/**
+	 * notes/411 **钥匙兜底网**：登记"丢过钥匙且还挂着在跑自动任务"的车，按有界重试补回引擎占位钥匙。
+	 * 稳态成本 = 每 tick 一次自增 + 一次取模 + 一次 {@code isEmpty}（表空即返回），不做全车队扫描。
+	 */
+	public final org.mtr.core.mmtr.duty.MmtrAutoKeyWatch mmtrAutoKeyWatch = new org.mtr.core.mmtr.duty.MmtrAutoKeyWatch();
 	/** S5 进路登记表 (route registry): the live route object per train (rails + turnouts + SET/PENDING
 	 * state), derived from {@link #mmtrPointAuthority}. The signal layer (A2) reads it to decide whether
 	 * a proceed aspect may be shown; the ops feed shows it per train. */
@@ -468,6 +484,7 @@ public class Simulator extends Data implements Utilities {
 	public Simulator(String dimension, String[] dimensions, Path rootPath, boolean threadedFileLoading) {
 		this.dimension = dimension;
 		this.dimensions = dimensions;
+		mmtrDuties = new org.mtr.core.mmtr.duty.MmtrDutyRegistry(this);
 
 		// Load data
 		final Path savePath = rootPath.resolve(dimension);
@@ -1380,6 +1397,13 @@ public class Simulator extends Data implements Utilities {
 		mmtrRoutes.release(vehicleId);
 		mmtrPointAuthority.releaseAll("v" + vehicleId);
 		mmtrShuntAuthorities.revoke(vehicleId);
+		/*
+		 * notes/408 S1：**值守记录也要跟着车走**。它是**按玩家 id 跨 tick 存活**的第四样东西 ——
+		 * 车主没了它不会自己消失，于是留下"某人正在开一辆不存在的车"这种幽灵值守，
+		 * 而那条记录会把这个人**永久挡在别的车次之外**（一个玩家同一时刻至多一个值守）。
+		 * {@code MmtrDutyRegistry.tick} 里也有"车没了就清"的兜底，这里多加一道是让**删除那一刻**就干净。
+		 */
+		mmtrDuties.forgetVehicle(vehicleId, "这趟车已经从世界里删掉了");
 	}
 
 	/**
@@ -1435,6 +1459,12 @@ public class Simulator extends Data implements Utilities {
 		vehicle.clearMmtrMotionStopTargetForHandover();
 		System.out.println("[MMTR-JOB] 计划内接管：车 " + vehicleId + " 的作业 " + jobId + " 交给司机 " + driver
 			+ "（静止交接；进路照发、油门留给司机）");
+		/*
+		 * notes/409 §4.4：**驾驶权刚换人 ⇒ 上行的位置权威立刻交回服务端**（换的是同一个人就不动他，
+		 * 免得把他的上行白打断 3 秒）。交回之后新司机的那一路要从"第一帧"重新走一遍交接
+		 * —— 这也正是 §0 里"明确赋予驾驶权利并使玩家与列车绑定"那一刻该发生的事。
+		 */
+		vehicle.mmtrRecallUploadAuthorityForNewHolder(driver, "驾驶权交接给 " + driver);
 		return null;
 	}
 
@@ -1466,9 +1496,43 @@ public class Simulator extends Data implements Utilities {
 		final org.mtr.core.mmtr.MmtrMission mission = vehicle.getMmtrMission();
 		if (mission != null && !mission.isTerminal()) {
 			mission.setExecutor(org.mtr.core.mmtr.MmtrMission.Executor.AUTOPILOT, null);
-			vehicle.setMmtrMotionAuto(true);
+			/*
+			 * ★★ 2026-10-09 实机修正：这里原来写的是 `vehicle.setMmtrMotionAuto(true)` —— **那是错的**，
+			 * 现场表现就是用户那句话："退出后也需要让AI重新接管啊"。
+			 *
+			 * <h3>为什么错</h3>
+			 * <p>{@code mmtrMotionAuto} 在这个代码库里**不是**"允许自动开"，而是
+			 * <b>"自动步进已经武装好了"</b> —— 它由自臂成功那一刻自己置真
+			 * （{@code Vehicle.mmtrMotionSelfArmMission}），也是"停车点/进路已经算出来了"的同义词。
+			 * 而每 tick 的自臂有一条门（{@code Vehicle} 里
+			 * {@code ... && !mmtrMotionAuto && mmtrMotionStopTargetM < 0}）：**已经上电就不要再规划**。</p>
+			 *
+			 * <p>于是交接一来一回就死锁了：{@link #mmtrJobTakeover} 把"有司机的这一份"清掉
+			 * （{@code clearMmtrMotionStopTargetForHandover()} ⇒ 停车点 = -1、
+			 * {@code mmtrResetTravelDirectionForDriver()} ⇒ 朝向也可能翻过），
+			 * 归还时又把 {@code mmtrMotionAuto} 手动置真 ⇒ 自臂被门挡住 ⇒
+			 * <b>执行者已经是 AUTOPILOT、车却没有任何目的地，停在原地</b>。
+			 * 实测读数（车 -440788602081002292 / 作业 00101）：归还后 20 秒
+			 * {@code speed=0 moving=false executor=AUTOPILOT}，`job status` 里
+			 * `行进方向=朝 A 端（领先端=无人）` —— 方向也还停在接管时翻过去的那一边。</p>
+			 *
+			 * <h3>改法</h3>
+			 * <p>不碰那个标志，改调 {@link Vehicle#mmtrArmActiveMissionNow}：它与调度器挂完一步之后
+			 * 调的是**同一个入口**（判据逐字一致），会在这一 tick 里规划进路、申请道岔、
+			 * 给出停车点，并把朝向按"规划得出来哪一边"归位。它自己的门要求
+			 * {@code !mmtrMotionAuto && 停车点 < 0} —— 正是交接之后的状态，所以这一步成立。</p>
+			 *
+			 * <p>帧任务已经在原地（{@code AT_TARGET}，例如站台作业停着）时它什么都不做，
+			 * 由任务状态机自己接着走 —— 这也是它原来的行为。</p>
+			 */
+			vehicle.mmtrArmActiveMissionNow(this);
 		}
 		System.out.println("[MMTR-JOB] 归还给自动：车 " + vehicleId + " 的作业 " + jobId);
+		/*
+		 * notes/409 §4.4：归还 = 司机不再持有驾驶权 ⇒ 上行权威交回服务端（否则"车归自动、位置却还是
+		 * 客户端说了算"，退出之后那一段就成了没人管的权威空洞）。
+		 */
+		vehicle.mmtrRecallUploadAuthority("作业归还自动（" + jobId + "）");
 		return null;
 	}
 
@@ -3449,6 +3513,26 @@ public class Simulator extends Data implements Utilities {
 			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			org.mtr.core.mmtr.MmtrAutoCoupler.tick(this);
 			org.mtr.core.mmtr.probe.MmtrProbe.end("autocoupler", probeT);
+			/*
+			 * notes/408 S1：**值守状态机**（"到站停稳 → 交接 / 自动交还 / 清理失效认领"）。
+			 *
+			 * <p>插入点刻意选在这里（车辆走行完、作业调度器还没跑）：于是"这一拍到站"对值守与
+			 * 作业调度器是**同一拍**看到的事实 —— 不会一边已经进了下一步、另一边还在等上一站。</p>
+			 *
+			 * <p>**不跟着 {@code mmtrAiJobStepsEnabled} 那道门**：值守是"玩家与列车"的关系，
+			 * 作业调度器是"AI 图表跑不跑"；把值守挂在作业调度器的开关后面，等于
+			 * "关掉 AI 排班 ⇒ 玩家也认领不了车"，那两件事没有一点关系。</p>
+			 */
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+			mmtrDuties.tick(getCurrentMillis());
+			org.mtr.core.mmtr.probe.MmtrProbe.end("duties", probeT);
+			/*
+			 * notes/411 钥匙兜底网：表里只会有"刚被拔了钥匙、还挂着在跑自动任务"的车（正常是空的）。
+			 * 稳态成本只是一次取模 + 一次 isEmpty —— 判断与重试都在 MmtrAutoKeyWatch 里按 250 ms 节拍做。
+			 */
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+			mmtrAutoKeyWatch.tick(this);
+			org.mtr.core.mmtr.probe.MmtrProbe.end("autoKeys", probeT);
 			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrPeriodicTaskSources.forEach(source -> source.tick(getCurrentMillis(), this));
 			org.mtr.core.mmtr.probe.MmtrProbe.end("periodic.sources", probeT);

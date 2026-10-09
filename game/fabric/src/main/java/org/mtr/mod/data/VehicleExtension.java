@@ -23,6 +23,7 @@ import org.mtr.mod.block.BlockTrainSensorBase;
 import org.mtr.mod.block.IBlock;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.MmtrDriverSeat;
 import org.mtr.mod.client.MmtrVehicleMotionClient;
 import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.generated.lang.TranslationProvider;
@@ -30,6 +31,7 @@ import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
 import org.mtr.mod.packet.PacketTurnOnBlockEntity;
 
 import org.mtr.mod.resource.VehicleResource;
+import org.mtr.mod.sound.MmtrTractionSoundModel;
 
 import javax.annotation.Nullable;
 
@@ -463,7 +465,83 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	}
 
 	public void playMotorSound(VehicleResource vehicleResource, int carNumber, Vector bogiePosition) {
+		/*
+		 * ★ 听者是不是就在**这一节车**的操纵位上（notes/403）。**必须先算**：它同时决定两件事 ——
+		 * ① 这一节车要不要忽略距离衰减；② 这一节车要不要**免掉"挂车静音"**（见下）。
+		 *
+		 * 为 ① 而存在的理由：声源位置是"这节车的中心"，而人坐在驾驶室时离它 8–9.75 m，
+		 * 等于把**自己的车声**当远处的车声削了一遍。
+		 *
+		 * 判据只有一份：MmtrDriverSeat（"坐在操纵位上"同时决定能不能操作手柄、要不要向引擎报
+		 * "我是司机"）。这里只多做一次比较：它的车 + 车节 == 我正在喂的这一节。
+		 * 非司机（站台上、别的车厢里、别的车上）一律保持原样 —— 距离衰减对他们是**对的**。
+		 *
+		 * ⚠ 整段包在 try/catch 里是**故意的**：本方法在渲染循环里逐车逐帧调用，而
+		 * MmtrDriverSeat 依赖骑行状态与锚点 JSON（notes/198 记过它从 render 里抛 NPE 会把整条
+		 * 车辆渲染循环打断）。**音效判据绝不能有让"整列车不画也不响"的本事** ——
+		 * 真抛了就当作"不在操纵位上"，并且留一行痕。
+		 */
+		boolean atControls = false;
+		try {
+			final MmtrDriverSeat.Seat seat = MmtrDriverSeat.current();
+			atControls = seat != null && seat.vehicleId() == getId() && seat.carNumber() == carNumber;
+		} catch (Exception e) {
+			Init.LOGGER.warn("[MMTR-SND] 判定「听者是否在操纵位上」时出错，本次按「不在」处理：{}", e.toString());
+		}
+		persistentVehicleData.setListenerAtControls(vehicleResource, carNumber, atControls);
+
+		// MMTR 牵引音要的是"电机出力"（N）：它是权威读数（引擎快照每 tick 下发，notes/257/259），
+		// 而且惰行时为 0、起步静止时不为 0 —— 用速度/加速度差分不出这两种情形。
+		//
+		// 拖车（**显式声明** mmtrPowered:false 的挂车）要把出力喂成 0，否则被牵引的那几节会跟动车
+		// 一起响 —— 音效是**每节车**一个实例，而引擎快照里的出力是**整列**口径。
+		// 判据刻意是"声明过且无动力"而不是"!powered"：没声明过的老车读出来也是 false，
+		// 把它们当无动力会把整批车静音（三态口径见 notes/271，判定在 MmtrTractionSoundModel）。
+		final boolean powered = carNumber >= 0 && carNumber < vehicleExtraData.immutableVehicleCars.size()
+				&& vehicleExtraData.immutableVehicleCars.get(carNumber).getMmtrPowered();
+		final boolean declared = carNumber >= 0 && carNumber < vehicleExtraData.immutableVehicleCars.size()
+				&& vehicleExtraData.immutableVehicleCars.get(carNumber).isMmtrPoweredDeclared();
+		final boolean hauled = MmtrTractionSoundModel.shouldMuteMotorSound(declared, powered);
+		/*
+		 * ★★ 车上有人操纵时，**这一节车不免静音**（notes/403 续）。
+		 *
+		 * <p>"显式声明无动力的挂车不响"这条对**被牵着走的货车**是对的（它自己没有电机）。
+		 * 但 SAF420 这种动车组里，**司机坐的那一节正好是 Tc 控制拖车**（世界清单里
+		 * {@code saf420cab_a: powered=false / saf420_trailer}）—— 于是司机所在的那节车被静音，
+		 * 而真正响的 6 节动车在 20–125 m 外、又被距离衰减削掉，现场就是
+		 * **"没有电机励磁音"**（notes/403 现场口径）。</p>
+		 *
+		 * <p>判据：**谁在操纵，谁就听得到** —— 与"驾驶位忽略距离衰减"是同一条口径的两半。
+		 * 输出口径本来就是**整列**的（{@code getMmtrMotorForceN()} 是列车级读数、每节车喂同一个），
+		 * 所以让司机这一节响不是"多算了一台电机"，而是把这条**列车级**读数还给唯一在听它的人。</p>
+		 */
+		final boolean mute = MmtrTractionSoundModel.muteTractionSound(hauled, atControls);
+		if (hauled) {
+			reportHauledCarOnce(carNumber, atControls);
+		}
+		persistentVehicleData.feedDemand(vehicleResource, carNumber, mute ? 0 : vehicleExtraData.getMmtrMotorForceN());
+
 		persistentVehicleData.playMotorSound(vehicleResource, carNumber, Init.newBlockPos(bogiePosition.x(), bogiePosition.y(), bogiePosition.z()), (float) speed, (float) (speed - oldSpeed), (float) vehicleExtraData.getAcceleration(), getIsOnRoute());
+	}
+
+	/** 已经解释过的"这节车挂车静音"组合（每辆车每一节一行，防止每帧刷屏）。 */
+	private final java.util.Set<String> reportedHauledCars = new java.util.HashSet<>();
+
+	/**
+	 * 说一次"这一节被判成无动力挂车"以及**这次有没有被操纵位豁免**。
+	 *
+	 * <p>为什么值得留痕：这一条是"没有电机励磁音"最可能的真因，而它在以前的日志里**一个字都没有**
+	 * （只表现为出力被喂成 0，看起来像"引擎没给牵引力"）。</p>
+	 */
+	private void reportHauledCarOnce(int carNumber, boolean overriddenByControls) {
+		final String key = getId() + "/" + carNumber + "/" + overriddenByControls;
+		if (reportedHauledCars.size() >= 32 || !reportedHauledCars.add(key)) {
+			return;
+		}
+		Init.LOGGER.info("[MMTR-SND] 第 {} 节被判成无动力挂车（显式声明 powered=false）⇒ 牵引音{}",
+				carNumber, overriddenByControls
+						? "**不静音**：听者就在这一节的操纵位上（notes/403 的豁免）"
+						: "静音（这是设计：它自己没有电机。想听牵引音就坐到有动力的车上，或坐到操纵位上）");
 	}
 
 	public void playDoorSound(VehicleResource vehicleResource, int carNumber, Vector vehiclePosition) {

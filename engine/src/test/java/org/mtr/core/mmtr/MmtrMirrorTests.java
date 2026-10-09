@@ -43,10 +43,10 @@ public final class MmtrMirrorTests {
 			physics.getBrake().getServiceForceN(), physics.getBrake().getEmergencyForceN(),
 			physics.getResistance().getAN(), physics.getResistance().getBN(), physics.getResistance().getCN(),
 			source.getAdhesion().usableMuMax(), source.getAdhesion().isSanding(),
-			source.getAirPipeChargeRatePerSecond(), source.getAirPipeDischargeRatePerSecond(),
-			source.getAirBrakeApplyRatePerSecond(), source.getAirBrakeReleaseRatePerSecond(),
 			source.getManualMaxSpeedMetersPerSecond() * 3.6,
-			null
+			source.getHandles(),
+			// notes/376：气压口径是必填项，镜像也必须带上它（客户端 HUD 的 bar 刻度靠它）。
+			source.getBrakes(), source.getElectricBrake(), source.getPayloadKg(), source.getCoupler(), source.hasMmtrLightOffPosition()
 		);
 	}
 
@@ -101,7 +101,7 @@ public final class MmtrMirrorTests {
 			speed = ConsistDynamics.step(speed, powerController.compute(power, freight, speed, 100), freight, 100);
 		}
 		// Server controller accumulates air state while braking...
-		final AirBrakeController server = new AirBrakeController();
+		final NotchedDriveController server = new NotchedDriveController();
 		final ControlState brake = ControlState.zero().setBrakeNotch(2);
 		for (int i = 0; i < 120; i++) {
 			server.compute(brake, freight, speed, 100);
@@ -109,15 +109,23 @@ public final class MmtrMirrorTests {
 		final double serverPipe = server.getPipePressure();
 		final double serverCylinder = server.getBrakeCylinderPressure();
 
-		// ...a freshly rebuilt mirror controller seeded from the snapshot state continues identically.
-		final AirBrakeController mirror = new AirBrakeController();
-		mirror.setState(serverPipe, serverCylinder);
+		/*
+		 * ...a freshly rebuilt mirror controller seeded from the snapshot state continues identically.
+		 *
+		 * notes/376：种子走**气压状态串**（{@code BrakeModel.applyState}，与生产端的 {@code mmtrAirState}
+		 * 同一条通道、同一套 bar 语义）。归一化读数（{@code setState}）只是镜像/HUD 那一层，
+		 * 在"系统还没建"的那一拍灌不进逐车 bar 状态 —— 所以这里用逐车状态串，并且额外钉住 bar 读数逐位相同。
+		 */
+		final NotchedDriveController mirror = new NotchedDriveController();
+		mirror.getBrakeModel().applyState(server.getBrakeModel().encodeState());
 		for (int i = 0; i < 60; i++) {
 			final DriveOutput a = server.compute(brake, freight, speed, 100);
 			final DriveOutput b = mirror.compute(brake, freight, speed, 100);
 			assertEquals(a.getAccelerationMetersPerSecondSquared(), b.getAccelerationMetersPerSecondSquared(), 1e-12, "mirror must follow the server controller");
 		}
 		assertEquals(server.getPipePressure(), mirror.getPipePressure(), 1e-12);
-		assertEquals(server.getBrakeCylinderPressure(), mirror.getBrakeCylinderPressure(), 1e-12);
+		assertEquals(serverCylinder, mirror.getBrakeCylinderPressure(), 1e-12);
+		assertEquals(server.getBrakeModel().getPipeBar(), mirror.getBrakeModel().getPipeBar(), 1e-12, "bar 读数也要逐位相同");
+		assertEquals(server.getBrakeModel().getCylinderBar(), mirror.getBrakeModel().getCylinderBar(), 1e-12, "缸压同理");
 	}
 }

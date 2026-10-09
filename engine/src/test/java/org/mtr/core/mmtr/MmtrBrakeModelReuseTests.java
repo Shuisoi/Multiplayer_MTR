@@ -26,7 +26,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *       {@link BrakeModel#applyState} / {@link BrakeModel#seedAfterCoupling}）跨过合并与切分。</li>
  * </ol>
  *
- * <p>外加两组**零回归**：没配 bar 键的车底三种操纵方式都不接管（逐位回到旧模型）。</p>
+ * <p>外加一组**口径补齐**：没配 bar 键的车底取出厂气压口径（notes/376 之后没有"退回旧模型"这条路），
+ * 模型照样接管、bar 读数照样非 0。</p>
  */
 public final class MmtrBrakeModelReuseTests {
 
@@ -43,6 +44,14 @@ public final class MmtrBrakeModelReuseTests {
 
 	/** 同一台 BR101 车底，只换 {@code controlMode} 与档数 —— "换一种操纵方式"在数据上就只是这两个键。 */
 	private static String loco(String controlMode, int brakeNotches) {
+		return loco(controlMode, brakeNotches, true);
+	}
+
+	/**
+	 * @param regen 要不要带 {@code rheostaticBrakeForceN} 那组键（notes/379）。量**气路本身**的用例要传
+	 *              {@code false} —— 有电制动的车底上，缸压会被 EP 阀削掉（那正是"B1/B2 是回生"的效果）。
+	 */
+	private static String loco(String controlMode, int brakeNotches, boolean regen) {
 		return "{"
 			+ "  \"consistTypes\": ["
 			+ "    {\"id\":\"bar\",\"name\":\"bar\",\"controlMode\":\"" + controlMode + "\",\"powerNotches\":97,"
@@ -52,7 +61,7 @@ public final class MmtrBrakeModelReuseTests {
 			+ "     \"brakeWeightTonnes\":120,\"emergencyBrakeWeightTonnes\":168,"
 			+ "     \"resistanceAN\":0,\"resistanceBN\":0,\"resistanceCN\":0,"
 			+ "     \"adhesionMuMax\":0.37,\"sanding\":false,"
-			+ "     \"rheostaticBrakeForceN\":150000,\"rheostaticFadeKmh\":15,\"rheostaticMaxPowerW\":6400000,"
+			+ (regen ? "     \"rheostaticBrakeForceN\":150000,\"rheostaticFadeKmh\":15,\"rheostaticMaxPowerW\":6400000," : "")
 			+ "     \"tractionLagMillis\":0,\"tractionRampNPerSecond\":0,"
 			+ "     " + AIR_KEYS
 			+ "     \"brakeRatios\":\"0,0.05,0.12,0.20,0.3333,0.4667,0.60,0.7333,0.8667,1.00,1.00\"}"
@@ -258,35 +267,55 @@ public final class MmtrBrakeModelReuseTests {
 		assertEquals(3.8 * 0.5, model.getCylinderBar(), 0.1, "缸压同理（第一拍按建压速率往上走了一点）");
 	}
 
-	// ---- ④ 零回归：没配 bar 键 ⇒ 三种操纵方式都不接管 ----------------------------------------------
+	// ---- ④ 没配 bar 键 ⇒ 取出厂口径（没有"旧模型"这条路）--------------------------------------------
 
-	/** 没配 bar 键的车底：模型不接管（{@code isPneumatic()} 假、bar 读数为 0），逐位回到旧归一化模型。 */
+	/**
+	 * **没配 bar 键的车底取出厂气压口径**（notes/376）：legacy 的比例制动力（{@code isPneumatic()} 假、
+	 * bar 读数为 0、{@code 档/档数 × 全制动力}）已整段删除，所以"没写 bar 键"不再是"换一套物理"，
+	 * 而是"这份配置该补数了"——{@link ConsistType#getBrakes()} 永不为 null，模型照样接管。
+	 */
 	@Test
-	public void aConsistWithoutAirKeysKeepsTheLegacyModel() {
+	public void aConsistWithoutAirKeysUsesTheFactoryPneumaticSpec() {
 		final ConsistType legacy = type(LEGACY_JSON, "legacy");
+		assertNotNull(legacy.getBrakes(), "没有 bar 键 ⇒ 出厂口径（不是「没有气压口径」）");
+		assertEquals(ConsistType.DEFAULT_BRAKES.getChargedBar(), legacy.getBrakes().getChargedBar(), 1e-12);
+		assertEquals(ConsistType.DEFAULT_BRAKES.getDistributorRatio(), legacy.getBrakes().getDistributorRatio(), 1e-12);
+		// 制动锚的缸压口径与车底的气压口径同源（ConsistType 构造器只认一个气压口径）
+		assertEquals(legacy.getBrakes().getCylinderMaxBar(), legacy.getBrake().getCylinderMaxBar(), 1e-12);
+
 		final NotchedDriveController notched = new NotchedDriveController();
 		final SteplessDriveController stepless = new SteplessDriveController();
-		final ConsistType notchedType = legacy;
 		final ConsistType steplessType = type(LEGACY_JSON.replace("\"controlMode\":\"NOTCHED\"", "\"controlMode\":\"STEPLESS\""), "legacy");
 		final ControlState brake = ControlState.zero().setBrakeNotch(9);
 		for (int i = 0; i < TICKS; i++) {
-			notched.compute(brake, notchedType, 50 / 3.6, DT_MS);
+			notched.compute(brake, legacy, 50 / 3.6, DT_MS);
 			stepless.compute(ControlState.zero().setBrakeAxis(0.5), steplessType, 50 / 3.6, DT_MS);
 		}
-		assertFalse(notched.getBrakeModel().isPneumatic(), "没有 bar 键 ⇒ 有级控制器不接管");
-		assertFalse(stepless.getBrakeModel().isPneumatic(), "没有 bar 键 ⇒ 无级控制器不接管");
-		assertEquals(0, notched.getBrakeModel().getCylinderBar(), 1e-9, "bar 读数为 0（那一路读数走归一化字段）");
-		assertEquals(0, stepless.getBrakeModel().getCylinderBar(), 1e-9);
-		// 旧口径的解析值一个字都不许变：减速度 = f(档位比例) + 运行阻力
-		final double expected = -(legacy.getPhysics().serviceBrakeDecelerationMps2(9.0 / legacy.getBrakeNotches(), 50 / 3.6));
-		assertEquals(expected, notched.compute(brake, notchedType, 50 / 3.6, DT_MS).getAccelerationMetersPerSecondSquared(), 1e-9,
-			"没配 bar 键 ⇒ 有级制动逐位还是旧公式");
+		System.out.println(String.format("[TEST] 没配 bar 键：有级 9 档管压 %.2f bar、缸压 %.2f bar；无级 0.5 轴缸压 %.2f bar",
+			notched.getBrakeModel().getPipeBar(), notched.getBrakeModel().getCylinderBar(), stepless.getBrakeModel().getCylinderBar()));
+		// 9 档 = 全常用（档/档数 × 常用诉求上限 = 0.9）⇒ 管压 3.5 bar、分配阀把缸压顶到 3.8 bar
+		assertEquals(3.5, notched.getBrakeModel().getPipeBar(), 0.01, "9 档管压停在全常用 3.5 bar");
+		assertEquals(3.8, notched.getBrakeModel().getCylinderBar(), 0.02, "缸压顶到出厂上限");
+		assertTrue(notched.getBrakeModel().isPneumaticHolding(), "模型真的接管了（缸压压着闸）");
+		assertTrue(stepless.getBrakeModel().getCylinderBar() > 0, "无级那一半同样接管（bar 读数不再是 0）");
+
+		// 力也必须是"缸压折成的力"（扣缸簧、含闸片衰减），不再等于"档/档数 × 全制动力"
+		final double speedMps = 50 / 3.6;
+		final double expected = -(legacy.getBrake().serviceForceNFromCylinderBar(legacy.getBrakes().getCylinderMaxBar(), speedMps)
+			+ legacy.getPhysics().resistanceForceN(speedMps)) / legacy.getPhysics().effectiveMassKg();
+		final DriveOutput output = notched.compute(brake, legacy, speedMps, DT_MS);
+		assertEquals(expected, output.getAccelerationMetersPerSecondSquared(), 1e-6,
+			"满缸压 ⇒ 锚 × 闸片衰减；旧口径是 9/9 × 150 kN = 150 kN 且不随速衰减");
+		assertTrue(output.getAccelerationMetersPerSecondSquared() > -(150_000 / legacy.getPhysics().effectiveMassKg()),
+			"闸片衰减让 50 km/h 的常用制动力小于锚（旧口径逐位等于锚）");
 	}
 
 	/** 有级/无级接管后**惰行不许点亮制动灯**，而闸没排空时**不许给牵引**（真车牵引联锁）。 */
 	@Test
 	public void thePneumaticPathKeepsTheInterlockAndDoesNotLightTheLampWhenCoasting() {
-		final ConsistType type = type(loco("NOTCHED", 9), "bar");
+		// notes/379：这条量的是**气路本身**（缸压顶到上限 + 联锁），所以用车底**不带电制动**的版本 ——
+		// 带 150 kN 回生的车底上，缸压会被 EP 阀削到 0（那由下面那条回生用例钉）。
+		final ConsistType type = type(loco("NOTCHED", 9, false), "bar");
 		final NotchedDriveController controller = new NotchedDriveController();
 		final double speedMps = 40 / 3.6;
 		for (int i = 0; i < TICKS; i++) {
@@ -317,5 +346,58 @@ public final class MmtrBrakeModelReuseTests {
 		// 排空后牵引恢复
 		assertTrue(controller.compute(ControlState.zero().setThrottleNotch(8), type, speedMps, DT_MS)
 			.getAccelerationMetersPerSecondSquared() > 0, "闸排空后牵引恢复");
+	}
+
+	/**
+	 * notes/379（用户口径 2026-10-03「这个车还有一个 B1,B2 是电再生制动逻辑」）：
+	 * **电制动只削动力车那一份**，拖车的空气闸照旧；EP 只削不加 ⇒ 总制动力与没有电制动时一致；
+	 * 到了**切除速度以下**电制动不投入，缸压回到纯空气闸那一份。
+	 */
+	@Test
+	public void regenerativeBrakingCoversTheMotorCarAndLeavesTheTrailerOnAir() {
+		final ConsistType withRegen = type(loco("NOTCHED", 9), "bar");
+		final ConsistType withoutRegen = type(loco("NOTCHED", 9, false), "bar");
+		final double fastMps = 60 / 3.6;
+		final ControlState brake = ControlState.zero().setBrakeNotch(4);
+
+		final NotchedDriveController mixed = new NotchedDriveController();
+		mixed.getBrakeModel().setCars(java.util.List.of(
+			new org.mtr.core.mmtr.brake.BrakeCar(withRegen.getBrake().getServiceForceN(), withRegen.getBrake().getEmergencyForceN(), true, withRegen.getBrakes()),
+			new org.mtr.core.mmtr.brake.BrakeCar(withRegen.getBrake().getServiceForceN(), withRegen.getBrake().getEmergencyForceN(), false, withRegen.getBrakes())));
+		for (int i = 0; i < TICKS; i++) {
+			mixed.compute(brake, withRegen, fastMps, DT_MS);
+		}
+		final double electricN = mixed.getBrakeModel().getBlendedElectricN();
+		final double pneumaticN = mixed.getBrakeModel().getPneumaticForceN();
+		System.out.println(String.format("[TEST] 回生混合（60 km/h、4 档）：电 %.1f kN / 气 %.1f kN；缸压 动力车 %.2f bar、拖车 %.2f bar",
+			electricN / 1000, pneumaticN / 1000, mixed.getBrakeModel().getCylinderBar(0), mixed.getBrakeModel().getCylinderBar(1)));
+		assertTrue(electricN > 0, "有电制动口径 ⇒ 混合真的吃进去了一份电制动力");
+		assertEquals(0, mixed.getBrakeModel().getCylinderBar(0), 1e-9, "动力车那一份被电制动整份覆盖 ⇒ 缸压 0");
+		assertTrue(mixed.getBrakeModel().getCylinderBar(1) > 0.5, "拖车没有电机 ⇒ 空气闸照旧建起来（不是 0）");
+
+		// 总制动力 = 气 + 电，且与"同一车底不配电制动"时的纯气制动力逐位相同（EP 只削不加）
+		final NotchedDriveController airOnly = new NotchedDriveController();
+		airOnly.getBrakeModel().setCars(java.util.List.of(
+			new org.mtr.core.mmtr.brake.BrakeCar(withoutRegen.getBrake().getServiceForceN(), withoutRegen.getBrake().getEmergencyForceN(), true, withoutRegen.getBrakes()),
+			new org.mtr.core.mmtr.brake.BrakeCar(withoutRegen.getBrake().getServiceForceN(), withoutRegen.getBrake().getEmergencyForceN(), false, withoutRegen.getBrakes())));
+		for (int i = 0; i < TICKS; i++) {
+			airOnly.compute(brake, withoutRegen, fastMps, DT_MS);
+		}
+		assertEquals(airOnly.getBrakeModel().getPneumaticForceN(), pneumaticN + electricN, 1.0,
+			"电替掉的那份要加回来：总制动力与没有电制动时相同（只削不加）");
+
+		// 切除速度以下：电制动不投入 ⇒ 两节车的缸压都回到空气闸那一份
+		final double crawlMps = 2 / 3.6;
+		final NotchedDriveController crawling = new NotchedDriveController();
+		crawling.getBrakeModel().setCars(java.util.List.of(
+			new org.mtr.core.mmtr.brake.BrakeCar(withRegen.getBrake().getServiceForceN(), withRegen.getBrake().getEmergencyForceN(), true, withRegen.getBrakes()),
+			new org.mtr.core.mmtr.brake.BrakeCar(withRegen.getBrake().getServiceForceN(), withRegen.getBrake().getEmergencyForceN(), false, withRegen.getBrakes())));
+		for (int i = 0; i < TICKS; i++) {
+			crawling.compute(brake, withRegen, crawlMps, DT_MS);
+		}
+		assertEquals(0, crawling.getBrakeModel().getBlendedElectricN(), 1e-9, "2 km/h < 切断点 ⇒ 电制动不投入");
+		assertTrue(crawling.getBrakeModel().getCylinderBar(0) > 0.5, "电制动退出后动力车自己也要建缸压");
+		assertEquals(crawling.getBrakeModel().getCylinderBar(0), crawling.getBrakeModel().getCylinderBar(1), 0.02,
+			"没有电制动时两节车的缸压应当一致");
 	}
 }

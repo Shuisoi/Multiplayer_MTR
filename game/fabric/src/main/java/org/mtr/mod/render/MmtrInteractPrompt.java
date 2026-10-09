@@ -12,8 +12,10 @@ import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.KeyBindings;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.MmtrDriverSeat;
 import org.mtr.mod.client.MmtrVehicleAnchors;
 import org.mtr.mod.client.MmtrVehicleAnchors.Anchor;
+import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.PositionAndRotation;
@@ -110,6 +112,17 @@ public final class MmtrInteractPrompt {
 	private static final Action ACTION_ENTER_CAB = new Action(keyLabel("MMTR_CAB_INTERACT", "G"), "进入驾驶室", true);
 
 	/**
+	 * **下车**。同一个 G 键、同一个车门锚点 —— 变的只是**玩家此刻的状态**：他已经坐在这个锚点所属的
+	 * 那间驾驶室里了（判据 {@link #isSeatedIn(MmtrDriverSeat.Seat, long, int, int, long, int, int)}）。
+	 *
+	 * <p>2026-10-05 之前这里只会写"进入驾驶室"，**即使人已经坐在里面**（用户现场：按 G 上了车，
+	 * 再看向同一扇门，提示行仍然写"进入驾驶室"）—— 提示行说假话比不提示更坏：玩家会以为 G 只会上车，
+	 * 于是永远找不到下车那条路。文案由 {@link #actionFor} 按状态二选一，键位标签从同一条
+	 * {@code MMTR_CAB_INTERACT} 读，所以改了键位两边一起改。</p>
+	 */
+	private static final Action ACTION_ALIGHT = new Action(keyLabel("MMTR_CAB_INTERACT", "G"), "下车", true);
+
+	/**
 	 * Doors. <b>LIVE since 2026-09-21</b>: {@code MmtrDoorInteraction} consumes Y (both sides) and
 	 * U (right side only) — the station sub-task chain requires the driver to actually open and close
 	 * the doors, and the riding-layer rebuild had left no key bound to that engine command at all.
@@ -174,6 +187,35 @@ public final class MmtrInteractPrompt {
 		final double lookY = -Math.sin(pitch);
 		final double lookZ = Math.cos(yaw) * cosPitch;
 		final double cosMaxAngle = Math.cos(Math.toRadians(MAX_VIEW_ANGLE_DEGREES));
+		/*
+		 * **"我正坐在这间驾驶室里" → 那扇司机门不受 50° 视野锥限制**（2026-10-05，用户口径"对着门按 G
+		 * 下车"）。
+		 *
+		 * <p>为什么非绕过不可：司机门的锚点在**司机背后**（saf420cab 座位 |z|=8.2、司机门 7.502、
+		 * 风挡 9.725，司机朝风挡坐），所以坐着的时候那扇门永远在视野背后，永远过不了
+		 * {@link #MAX_VIEW_ANGLE_DEGREES} —— 于是 {@code [G] 下车} 根本画不出来，"对着门按 G"这条
+		 * 通路等于不存在。站在门口按 G 是"我要进来"的口径，坐着朝前看是"我要出去"的口径，
+		 * 后者不该要求玩家把头转 180° 去证明他坐在哪儿。</p>
+		 *
+		 * <p>**只放宽角度，不放宽距离**：{@link #REACH_M} 照旧在下面判（人真的在那节车的那一端），
+		 * 而"我在不在这个驾驶室"用的是位置判据 {@link MmtrDriverSeat#current()} 与锚点的
+		 * {@code vehicleId/carNumber/cab} 比对 —— 与"能不能操作手柄"同一条规则，不另立一套。</p>
+		 *
+		 * <p>只在**目标就是自己那间驾驶室**时放宽：别的车门（包括同一列车另一端的驾驶室门）仍然要
+		 * 玩家真的朝它看，否则车厢里坐着不动就会看到自己背后飘着一行"下车"。</p>
+		 *
+		 * <p>⚠️ 位置判据**依赖风挡锚点**（{@link MmtrDriverSeat#current()} 用
+		 * {@code MmtrVehicleAnchors.nearestCab} 找"离我最近的风挡"），而 SAF101 这类模型根本没有
+		 * {@code mmtr_windshield} 锚点 ⇒ 在那些车上它永远返回 null，这条放宽就永远不成立、
+		 * "对着门按 G 下车"在那里等于没有。所以判据退化为：**位置判据优先，判不出来时才用本地骑乘
+		 * 状态**（我握着的车/车节/驾驶室编号 —— 进舱时写入、{@code leaveRide} 清空，判据见
+		 * {@link #isSeatedIn(MmtrDriverSeat.Seat, long, int, int, long, int, int)} 的注释）。这份本地状态在同一帧里
+		 * 就是"我在哪间驾驶室"的等价说法。</p>
+		 */
+		final MmtrDriverSeat.Seat seat = MmtrDriverSeat.current();
+		final long heldCabVehicleId = VehicleRidingMovement.mmtrCabVehicleId();
+		final int heldCabCarNumber = VehicleRidingMovement.mmtrCabCarNumber();
+		final int heldCabNumber = VehicleRidingMovement.mmtrCabNumber();
 
 		for (final VehicleExtension vehicle : MinecraftClientData.getInstance().vehicles) {
 			final ObjectArrayList<CarTransform> cars = carTransforms(vehicle);
@@ -184,7 +226,7 @@ public final class MmtrInteractPrompt {
 					continue;
 				}
 				for (final Anchor anchor : anchors) {
-					final Action action = actionFor(anchor);
+					final Action action = actionFor(anchor, seat, heldCabVehicleId, heldCabCarNumber, heldCabNumber, vehicle.getId(), carNumber);
 					if (action == null) {
 						continue;
 					}
@@ -197,7 +239,9 @@ public final class MmtrInteractPrompt {
 						continue;
 					}
 					final double distance = Math.sqrt(distanceSquared);
-					if ((dx * lookX + dy * lookY + dz * lookZ) / distance < cosMaxAngle) {
+					if ((dx * lookX + dy * lookY + dz * lookZ) / distance < cosMaxAngle
+							&& !(anchor.kind == MmtrVehicleAnchors.Kind.CABDOOR
+								&& isSeatedIn(seat, heldCabVehicleId, heldCabCarNumber, heldCabNumber, vehicle.getId(), carNumber, anchor.cab))) {
 						continue;
 					}
 					result.add(new Candidate(
@@ -219,16 +263,54 @@ public final class MmtrInteractPrompt {
 		return result;
 	}
 
+	/**
+	 * 这个锚点此刻对应哪个动作 —— 同时决定**提示行写什么**与**按 G 会发生什么**（见 {@link #findAlightTarget}）。
+	 *
+	 * <p>司机门有两种含义，取决于玩家站在哪儿/坐在哪儿：门外的"进入驾驶室"，和坐在里面时的"下车"。
+	 * 判据是 {@link #isSeatedIn(MmtrDriverSeat.Seat, long, int, int, long, int, int)}：**位置优先**
+	 * （{@link MmtrDriverSeat#current()}，与司机 HUD / 手柄 / "谁是司机"上报同源，所以上车请求被引擎
+	 * 拒绝时——人还在车上但钥匙不是他的——提示行不会骗人说"你能下车"），位置判不出来时才退回本地
+	 * 骑乘状态。</p>
+	 */
 	@Nullable
-	private static Action actionFor(Anchor anchor) {
+	private static Action actionFor(Anchor anchor, @Nullable MmtrDriverSeat.Seat seat, long heldCabVehicleId, int heldCabCarNumber, int heldCabNumber, long vehicleId, int carNumber) {
 		switch (anchor.kind) {
 			case CABDOOR:
-				return ACTION_ENTER_CAB;
+				return isSeatedIn(seat, heldCabVehicleId, heldCabCarNumber, heldCabNumber, vehicleId, carNumber, anchor.cab) ? ACTION_ALIGHT : ACTION_ENTER_CAB;
 			case DOOR:
 				return ACTION_DOORS;
 			default:
 				return null;
 		}
+	}
+
+	/**
+	 * **我此刻是不是坐在 {@code (vehicleId, carNumber, cab)} 这间驾驶室里**。
+	 *
+	 * <p>比的是三元组 {@code 车 + 车节 + 驾驶室编号}，而驾驶室编号用的是**模型自己的**
+	 * 锚点编号（{@code anchor.cab}）：{@link MmtrDriverSeat.Seat#cab()} 与
+	 * {@link MmtrVehicleAnchors#nearestCab} 是同一个编号空间，锚点编号与引擎的 A/B 端在 BR101 上
+	 * 是反的，所以这里绝不能拿引擎端来比（见 {@link MmtrVehicleAnchors#engineEndOfSeat}）。</p>
+	 *
+	 * <h3>两级判据</h3>
+	 * <ol>
+	 *   <li><b>位置判据优先</b>：{@link MmtrDriverSeat#current()}（"我离这节车的哪个风挡最近，且站在
+	 *       操纵位附近"）。它与司机 HUD、手柄、"谁是司机"上报是同一条规则，所以提示行不会说假话。</li>
+	 *   <li><b>判不出来时退回本地骑乘状态</b>（{@code heldCabVehicleId/CarNumber/Number}）。
+	 *       为什么需要这一级：位置判据要**风挡锚点**才成立，而 SAF101 没有
+	 *       {@code mmtr_windshield} 锚点 ⇒ 在那辆车上它永远是 null，只用第一级的话
+	 *       "对着门按 G 下车"在 SAF101 上根本没救（提示不出现、也没有任何提示说明为什么）。
+	 *       本地这三项在进舱时写入、在 {@code leaveRide} 清空，同一帧里就是同一个事实。</li>
+	 * </ol>
+	 *
+	 * <p>两级都要求驾驶室编号相等，所以"同一列车另一端的驾驶室门"在两种判据下都不会被误认成
+	 * "我在的那间"。</p>
+	 */
+	private static boolean isSeatedIn(@Nullable MmtrDriverSeat.Seat seat, long heldCabVehicleId, int heldCabCarNumber, int heldCabNumber, long vehicleId, int carNumber, int cab) {
+		if (seat != null && seat.vehicleId() == vehicleId && seat.carNumber() == carNumber && seat.cab() == cab) {
+			return true;
+		}
+		return heldCabVehicleId != 0 && heldCabVehicleId == vehicleId && heldCabCarNumber == carNumber && heldCabNumber == cab;
 	}
 
 	/**
@@ -444,9 +526,13 @@ public final class MmtrInteractPrompt {
 	 * so the pixel transform is {@code half + (camera / depth / m) * half}.</p>
 	 *
 	 * @return {m00, m11} in framebuffer pixels per NDC unit, or null when it could not be read
+	 *
+	 * <p>⚠️ 也被 {@code RenderRails} 用来做**逐实例视锥剔除**（同一包内可见）：那里需要的是这两个
+	 * 对角线本身的语义 —— 相机空间里 {@code |x| * m00 <= z} 且 {@code |y| * m11 <= z} 即在视锥内。
+	 * 所以**改这个方法的语义会同时影响交互提示与钢轨剔除**。</p>
 	 */
 	@Nullable
-	private static double[] projectionScale(MinecraftClient minecraftClient) {
+	static double[] projectionScale(MinecraftClient minecraftClient) {
 		try {
 			final Object gameRenderer = minecraftClient.getGameRendererMapped().data;
 			final Object camera = minecraftClient.getGameRendererMapped().getCamera().data;
@@ -690,6 +776,44 @@ public final class MmtrInteractPrompt {
 	public static CabTarget findCabTarget(ClientPlayerEntity player) {
 		for (final Candidate candidate : collect(player)) {
 			if (candidate.action == ACTION_ENTER_CAB) {
+				return candidate.toCabTarget();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * **准星方向有没有"能下车的那扇门"** —— 给 {@code MmtrCabInteraction} 的"对着门按 G 下车"用。
+	 *
+	 * <p>两个条件，缺一不可：</p>
+	 * <ol>
+	 *   <li><b>门属于我正握着的那间驾驶室</b>（车 + 车节 + 驾驶室编号三元组，见
+	 *       {@link #isSeatedIn(MmtrDriverSeat.Seat, long, int, int, long, int, int)}）。
+	 *       不比对的话，站在门口按 G 会"下车"到同一列车的另一端去 —— 玩家在 1A 里朝 2A 的门按 G，
+	 *       期望是下车，而不是被丢进 2A 接着开。</li>
+	 *   <li><b>它出现在 {@link #collect} 的结果里</b>，也就是在 {@link #REACH_M} 内（6 m）。
+	 *       5.4 m 的车里"坐着就能下车"是刻意的：司机门在背后，绕过视野锥之后距离是唯一还成立的约束。</li>
+	 * </ol>
+	 *
+	 * <p>复用 {@code collect} 而不是自己遍历锚点：提示行画的与按 G 执行的必须是**同一批候选**，
+	 * 否则就会出现"提示写着下车、按下去上了车"这种自相矛盾（这个类存在的全部理由）。</p>
+	 *
+	 * <ul>
+	 *   <li>{@code heldCabVehicleId}：玩家正握着的驾驶室所属车（0 = 没握着，调用方应先判掉）</li>
+	 *   <li>{@code heldCabCarNumber}：正握着的那节车（{@code VehicleRidingMovement.mmtrCabCarNumber()}）</li>
+	 *   <li>{@code heldCabNumber}：正握着的那间驾驶室编号（{@link MmtrVehicleAnchors} 的编号空间）</li>
+	 * </ul>
+	 */
+	@Nullable
+	public static CabTarget findAlightTarget(ClientPlayerEntity player, long heldCabVehicleId, int heldCabCarNumber, int heldCabNumber) {
+		if (heldCabVehicleId == 0) {
+			return null;
+		}
+		for (final Candidate candidate : collect(player)) {
+			if (candidate.action == ACTION_ALIGHT
+					&& candidate.vehicleId == heldCabVehicleId
+					&& candidate.carNumber == heldCabCarNumber
+					&& candidate.cab == heldCabNumber) {
 				return candidate.toCabTarget();
 			}
 		}

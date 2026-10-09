@@ -53,6 +53,20 @@ public class RenderRails implements IGui {
 	private static final double LIGHT_REFERENCE_OFFSET = 0.1;
 	private static final ModelSmallCube MODEL_SMALL_CUBE = new ModelSmallCube(new Identifier(Init.MOD_ID, "textures/block/white.png"));
 
+	/**
+	 * 本帧的投影对角 {@code {m00, m11}} —— 取自**游戏真正在用的**投影矩阵
+	 * （{@link MmtrInteractPrompt#projectionScale}），逐实例视锥剔除要用。
+	 * 在 {@link #render()} 开头取一次（每 pass 一次就够）；{@code null} = 取不到 ⇒ 只做前后剔除。
+	 */
+	@Nullable
+	private static double[] frameProjectionScale;
+	/** 视锥剔除的宽容系数：判得比真实视锥宽这么多，防画面边缘"钢轨闪掉"。 */
+	private static final double CULL_MARGIN = 1.3;
+	/** 允许"相机平面之后"这么多米内仍照画 —— 实例约 0.5 m 长，取点只是它的一个角。 */
+	private static final double CULL_BEHIND_METRES = 2.0;
+	/** 深度下限：实例贴近相机时视锥退化成一条线，用下限保证近处照画。 */
+	private static final double CULL_NEAR_DEPTH = 1.0;
+
 	public static void render() {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final ClientWorld clientWorld = minecraftClient.getWorldMapped();
@@ -61,6 +75,11 @@ public class RenderRails implements IGui {
 		if (clientWorld == null || clientPlayerEntity == null) {
 			return;
 		}
+
+		// 本帧的投影对角，逐实例视锥剔除要用（见 renderWithinRenderDistance / insideViewFrustum）。
+		frameProjectionScale = MmtrInteractPrompt.projectionScale(minecraftClient);
+		// 合并烘焙缓存：逐 pass 重置预算，主 pass 递增帧号（见 MmtrRailMeshCache.beginPass）。
+		MmtrRailMeshCache.beginPass(OptimizedRenderer.renderingShadows());
 
 		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
 		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
@@ -207,6 +226,14 @@ public class RenderRails implements IGui {
 				renderNode(clientWorld.getBlockState(blockPos), blockPos, () -> true, GraphicsHolder.getDefaultLight());
 			});
 
+			/*
+			 * ★ 这一段是"手持轨道工具时每帧一个 33³ = 35937 次的循环"，每次迭代都做一次
+			 * {@code getBlockState}（跨 chunk section 的调色板查询）并**分配一个捕获 lambda**
+			 * （下面 renderNode 的那个 BooleanSupplier 捕获了 blockState/blockPos，不是能被缓存的无捕获 lambda）
+			 * ⇒ 120 FPS 下约 430 万短命对象/秒。它只在手持轨道类工具时发生，所以单独立一个段：
+			 * 读数里 {@code nodes} 的次数 ÷ 帧数 = 1 就意味着"这一帧手里拿着轨道工具"。
+			 */
+			final long probeNodes = MmtrFrameProbe.begin();
 			// Render nodes with the connected block state but isn't actually connected
 			for (int x = -INVALID_NODE_CHECK_RADIUS; x <= INVALID_NODE_CHECK_RADIUS; x++) {
 				for (int y = -INVALID_NODE_CHECK_RADIUS; y <= INVALID_NODE_CHECK_RADIUS; y++) {
@@ -217,6 +244,7 @@ public class RenderRails implements IGui {
 					}
 				}
 			}
+			MmtrFrameProbe.end("nodes", probeNodes);
 
 			// 信号绑定工具（铲子=绑节点、木斧=分轨）：把"这盏灯守哪几根轨"画进世界里（见 MmtrSignalBindingOverlay）
 			MmtrSignalBindingOverlay.render(clientPlayerEntity);
@@ -296,21 +324,57 @@ public class RenderRails implements IGui {
 				renderType[0] = true;
 			} else {
 				final boolean flip = newStyle.endsWith("_2");
-				CustomResourceLoader.getRailById(RailResource.getIdWithoutDirection(newStyle), railResource -> renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
-					final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
-					final double differenceX = x3 - x1;
-					final double differenceZ = z3 - z1;
-					final double yaw = Math.atan2(differenceZ, differenceX);
-					final double pitch = Math.atan2(y2 - y1, Math.sqrt(differenceX * differenceX + differenceZ * differenceZ));
-					final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations((x1 + x3) / 2, (y1 + y2) / 2 + railResource.getModelYOffset(), (z1 + z3) / 2);
-					storedMatrixTransformations.add(graphicsHolder -> {
-						graphicsHolder.rotateYRadians((float) (Math.PI / 2 - yaw + (flip ? Math.PI : 0)));
-						graphicsHolder.rotateXRadians((float) (Math.PI - pitch * (flip ? -1 : 1)));
-						graphicsHolder.rotateZDegrees((float) ((x1 * z1) % 10) / 100);
-					});
-					railResource.render(storedMatrixTransformations, light);
-					renderType[1] = true;
-				}, railResource.getRepeatInterval(), 0, 0));
+				CustomResourceLoader.getRailById(RailResource.getIdWithoutDirection(newStyle), railResource -> {
+					/*
+					 * ★ 合并烘焙路径（notes/398）：这一根轨的**全部实例**早就烘成一个模型了，
+					 * 这里一帧只排一次队 ⇒ 一个材质一次 draw。
+					 *
+					 * <p>为什么能"建一次就一直用"：钢轨是引擎数据、只有玩家编辑线路时才会变，
+					 * 而光照是逐顶点烘在 VBO 里的 —— 所以失效只有两个来源：键（几何）与光照哈希。
+					 * 二者都由 MmtrRailMeshCache 管，这里不用管。</p>
+					 *
+					 * <p>视锥剔除**故意不在这里做**：烘进去的是整个轨的所有实例，
+					 * 相机一动就重建等于白干。粗一级的剔除由 railWrapper 的整轨 AABB 承担
+					 * （见 render() 里的 occlusionCulling），细一级交给 GPU 裁剪。</p>
+					 */
+					final MmtrRailMeshCache.Baked baked = MmtrRailMeshCache.get(clientWorld, rail, railResource, newStyle, flip);
+					if (baked == null) {
+						/*
+						 * 回退：烘不出来（`.bbmodel`、映射库改了字段名、或本 pass 的烘焙预算用完了）。
+						 * 逐实例渲染原样保留 —— 这条路径必须永远能画，否则就是"钢轨没了"。
+						 */
+						renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
+							final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
+							final double differenceX = x3 - x1;
+							final double differenceZ = z3 - z1;
+							final double yaw = Math.atan2(differenceZ, differenceX);
+							final double pitch = Math.atan2(y2 - y1, Math.sqrt(differenceX * differenceX + differenceZ * differenceZ));
+							final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations((x1 + x3) / 2, (y1 + y2) / 2 + railResource.getModelYOffset(), (z1 + z3) / 2);
+							storedMatrixTransformations.add(graphicsHolder -> {
+								graphicsHolder.rotateYRadians((float) (Math.PI / 2 - yaw + (flip ? Math.PI : 0)));
+								graphicsHolder.rotateXRadians((float) (Math.PI - pitch * (flip ? -1 : 1)));
+								graphicsHolder.rotateZDegrees((float) ((x1 * z1) % 10) / 100);
+							});
+							railResource.render(storedMatrixTransformations, light);
+							renderType[1] = true;
+						}, railResource.getRepeatInterval(), 0, 0);
+					} else {
+						renderType[1] = true;
+						MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
+							graphicsHolder.push();
+							// 顶点已经烘成"本轨局部坐标"，所以这里只需要把本轨原点搬到相机相对位置。
+							// 减 offset 在 double 上做完才交给 translate ⇒ 精度不受世界坐标大小影响。
+							graphicsHolder.translate(baked.originX - offset.getXMapped(), baked.originY - offset.getYMapped(), baked.originZ - offset.getZMapped());
+							/*
+							 * 光照已经逐顶点烘在 VBO 里（UV_LIGHTMAP → VERTEX_BUFFER），这里的 light 只是占位。
+							 * 故意传"默认（全亮）"：万一那条顶点映射没生效，整根轨会明显发白 —— 失效要一眼可见，
+							 * 而不是悄悄退化成"整根轨一个光照值"看着还行。判定方法见运行手册。
+							 */
+							CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(baked.model, graphicsHolder, GraphicsHolder.getDefaultLight());
+							graphicsHolder.pop();
+						});
+					}
+				});
 			}
 		}
 
@@ -370,16 +434,50 @@ public class RenderRails implements IGui {
 			final BlockPos blockPos = Init.newBlockPos(x1, y1 + LIGHT_REFERENCE_OFFSET, z1);
 			final double distanceToCamera = new Vector3d(x1, 0, z1).distanceTo(new Vector3d(cameraPosition.getXMapped(), 0, cameraPosition.getZMapped())); // Minecraft does not have vertical render distance, no need to compare the Y-axis.
 			if (distanceToCamera <= renderDistance) {
-				if (distanceToCamera < 32) {
+				/*
+				 * ★ 逐实例视锥剔除（2026-10-05）。
+				 *
+				 * <p>为什么必须做到实例级：上一级剔除是**整根轨一个 AABB**
+				 * （{@code railWrapper.startVector → endVector}），而一根轨最长 100 m（节点段）、
+				 * 每 {@code repeatInterval} 米一个实例 ⇒ **一根轨约 200 个实例**。只要那一角 AABB
+				 * 落在视锥里，这 200 个实例就全画。实测 {@code draws/frame≈767} ⇒ 约 4 根长轨全画。</p>
+				 *
+				 * <p>原来的写法有两个洞：**32 格以内完全不剔除**（背后的轨道也画）、
+				 * **32 格以外只判前后、不判左右**。这里两带用同一套判据一次补齐。
+				 * 相机空间的 {@code z} 就是前向深度（与原 {@code z > 0} 同一套语义）。</p>
+				 */
+				final Vector3d rotatedVector = new Vector3d(x1, y1, z1).subtract(cameraPosition).rotateY((float) Math.toRadians(camera.getYaw())).rotateX((float) Math.toRadians(camera.getPitch()));
+				if (insideViewFrustum(rotatedVector)) {
 					callback.renderRail(blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
-				} else {
-					final Vector3d rotatedVector = new Vector3d(x1, y1, z1).subtract(cameraPosition).rotateY((float) Math.toRadians(camera.getYaw())).rotateX((float) Math.toRadians(camera.getPitch()));
-					if (rotatedVector.getZMapped() > 0) {
-						callback.renderRail(blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
-					}
 				}
 			}
 		}, interval, offsetRadius1, offsetRadius2);
+	}
+
+	/**
+	 * 一个轨道实例在不在画面里。{@code offset} 是**相机空间**里的偏移（+Z 为前）。
+	 *
+	 * <p>判据直接来自投影矩阵对角：{@code |x| * m00 ≤ z} 且 {@code |y| * m11 ≤ z} 即在视锥内
+	 * （{@code m00 = m11/aspect}、{@code m11 = 1/tan(fov/2)}，正是
+	 * {@link MmtrInteractPrompt#projectionScale} 读出来的那两项）。<b>不手推 FOV 语义</b> ——
+	 * 那个方法的注释记着上一次靠猜造成的 bug。</p>
+	 *
+	 * <p>两处刻意的宽容：{@link #CULL_MARGIN} 把视锥放宽；{@link #CULL_BEHIND_METRES} 让相机平面
+	 * 之后一小段仍照画 —— 取点只是实例的一个角，不留余量会在画面边缘看到"钢轨闪掉"。
+	 * 取不到投影矩阵时退化成"只剔背后的"，比改前更保守也更正确。</p>
+	 */
+	private static boolean insideViewFrustum(Vector3d offset) {
+		final double depth = offset.getZMapped();
+		if (depth <= -CULL_BEHIND_METRES) {
+			return false;
+		}
+		final double[] scale = frameProjectionScale;
+		if (scale == null) {
+			return true;
+		}
+		final double safeDepth = Math.max(depth, CULL_NEAR_DEPTH);
+		return Math.abs(offset.getXMapped()) <= safeDepth / scale[0] * CULL_MARGIN
+				&& Math.abs(offset.getYMapped()) <= safeDepth / scale[1] * CULL_MARGIN;
 	}
 
 	private static void renderNode(BlockState blockState, BlockPos blockPos, BooleanSupplier shouldRender, int light) {

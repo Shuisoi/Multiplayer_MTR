@@ -43,7 +43,9 @@ public final class MmtrCompositionFromCarsTests {
 		assertFalse(train.unit(1).isPowered(), "a hauled wagon contributes no traction");
 		assertFalse(train.unit(2).isPowered());
 		assertEquals(240_000, train.totalEffectiveMassKg(), 1e-9, "loco 120 t + two wagons of 60 t（λ=1）");
-		final DriveOutput out = train.aggregate(ControlState.zero().setThrottleNotch(7), 0);
+		// notes/376：编组级的力走"等效车底 + 控制器"（旧的 MmtrComposition.aggregate 已删除）。
+		final DriveOutput out = new NotchedDriveController()
+			.compute(ControlState.zero().setThrottleNotch(7), train.toConsistType("consist:test"), 0, 50);
 		assertEquals(0.15, out.getAccelerationMetersPerSecondSquared(), 1e-9, "0.3 accel from the loco (mass 2 of 4) spread over the whole train");
 	}
 
@@ -77,13 +79,20 @@ public final class MmtrCompositionFromCarsTests {
 			registry,
 			registry.get("loco"));
 		assertNotNull(train);
+		final ConsistType consist = train.toConsistType("consist:test");
+		// notes/376：逐车气路走 BrakeModel，控制器自己持模型（与 Vehicle 的接线同一个写法）；
+		// 旧的 MmtrComposition.stepAir / Unit.getPipePressure 已删除。
+		final NotchedDriveController controller = new NotchedDriveController();
+		controller.getBrakeModel().setCars(train.brakeCars());
 		final ControlState apply = ControlState.zero().setBrakeNotch(8);
 		double speed = 6;
 		for (int i = 0; i < 600; i++) {
-			speed = Math.max(0, speed + train.stepAir(apply, speed, 50).getAccelerationMetersPerSecondSquared() * 0.05);
+			speed = Math.max(0, speed + controller.compute(apply, consist, speed, 50).getAccelerationMetersPerSecondSquared() * 0.05);
 		}
+		System.out.println(String.format("[TEST] 拼出来的货列 30 s 全常用：6 m/s → %.4f m/s（尾车缸压 %.2f bar）",
+			speed, controller.getBrakeModel().getCylinderBar(2)));
 		assertTrue(speed < 0.5, "30 s of full service air brake must stop the built freight, got " + speed);
-		assertTrue(train.unit(2).getBrakeCylinderPressure() > 0, "the hauled wagon's own brake cylinder applies");
-		assertTrue(train.unit(0).getPipePressure() < 0.995, "the driver's handle acts on the leading unit");
+		assertTrue(controller.getBrakeModel().getCylinderBar(2) > 0, "the hauled wagon's own brake cylinder applies");
+		assertTrue(controller.getPipePressure() < 0.995, "the driver's handle acts on the leading unit");
 	}
 }

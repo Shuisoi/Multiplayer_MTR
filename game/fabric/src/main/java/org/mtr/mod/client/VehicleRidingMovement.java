@@ -12,6 +12,7 @@ import org.mtr.mapping.mapper.EntityHelper;
 import org.mtr.mod.InitClient;
 import org.mtr.mod.item.ItemDepotDriverKey;
 import org.mtr.mod.item.ItemDriverKey;
+import org.mtr.mod.packet.PacketMmtrCabOp;
 import org.mtr.mod.packet.PacketUpdateVehicleRidingEntities;
 import org.mtr.mod.render.RenderVehicleHelper;
 import org.mtr.mod.screen.LiftSelectionScreen;
@@ -136,7 +137,12 @@ public class VehicleRidingMovement {
 		} else {
 			// Nothing is moving the player: end the ride. This is the timer that catches "the ride was
 			// established but movePlayer never ran for it" - the likeliest way a cab entry dies silently.
-			mmtrRideDiag("计时器到期：连续 " + ridingVehicleCooldown + " 拍没有 movePlayer");
+			// 只在**真的有人骑乘**时才报"骑手停滞"。没人在车上时 ridingVehicleCooldown 会一路饱和，
+			// 这个 else 分支于是每拍都成立 —— 日志被"没有骑手"的假事件刷屏（实测 1294 行 / 32 分钟，
+			// 行里明明是 骑乘车=0 镜像车数=-1）。leaveRide 调用保持原样，行为不变。
+			if (ridingVehicleId != 0) {
+				mmtrRideDiag("计时器到期：连续 " + ridingVehicleCooldown + " 拍没有 movePlayer");
+			}
 			leaveRide("计时器：movePlayer 没再推动玩家（没上车 / 车节号不匹配 / 车没了）");
 		}
 
@@ -514,6 +520,23 @@ public class VehicleRidingMovement {
 	}
 
 	/**
+	 * **下车**：人离开这列车（与"拔钥匙但留在车上"相对，后者见 {@link #mmtrLeaveCab()}）。
+	 *
+	 * <h3>为什么不自己清状态</h3>
+	 * <p>这里只是给 {@link #leaveRide(String)} 一个 public 名字。结束骑乘要做的是一整套互相咬合的
+	 * 动作（最后一个包必须说"我已不是司机"、清 {@code mmtrCab*}、{@code sendUpdate(dismount=true)}
+	 * 让服务端复位 {@code noGravity/noClip/inTeleportationState} —— 见 {@code Init.updatePlayer}），
+	 * 另写一份"下车时该清什么"必然与潜行离车那条路分叉：那边的现场教训就是这个类曾经有四个清驾驶室
+	 * 状态的地方（notes/184 §6 #4）。</p>
+	 *
+	 * <p>调用方（{@code MmtrCabInteraction}）负责"车停稳了没有"这一道闸门 —— 那是交互层的口径，
+	 * 不是骑乘层的。</p>
+	 */
+	public static void mmtrAlight() {
+		leaveRide("玩家下车（对着车门按 G）");
+	}
+
+	/**
 	 * Ends the ride: tells the server, and forgets everything about being on board.
 	 *
 	 * <p>The reason is logged, but ONLY when there was actually something to leave: {@code tick} calls this
@@ -527,6 +550,29 @@ public class VehicleRidingMovement {
 		if (wasRiding || hadCab) {
 			org.mtr.mod.Init.LOGGER.info("[MMTR-RIDE] 结束骑乘（{}）车={} 车节={} 驾驶室={} 已确认={}",
 					reason, ridingVehicleId, ridingVehicleCarNumber, mmtrCabNumber, mmtrCabConfirmed);
+		}
+		/*
+		 * **结束骑乘要把引擎侧那把钥匙交回去**（2026-10-05 修）。
+		 *
+		 * <p>原样的 {@code leaveRide} **不发** {@code PacketMmtrCabOp.Op.LEAVE} —— 潜行离车、被服务端
+		 * 移出、地板盒找不到而掉出车外，三条路都是"人走了、引擎侧的 {@code mmtrCabKeyHolder=CREW} +
+		 * {@code mmtrCabCrew=<我的 uuid>} 还留着"。后果不是"少拔一次钥匙"，而是**这间驾驶室对别人
+		 * 永久上锁**：{@code MmtrCabState.insertKey} 见到 crew 钥匙就拒绝第二名乘务员，
+		 * 而按 G 上车（{@code Op.ENTER}）也走同一道门 ⇒ 现场表现是"这列车再也进不去驾驶室了"。</p>
+		 *
+		 * <p>放在 {@code mmtrCab*} 被清**之前**、且读的是那份本地状态：这正是"我还握着哪间驾驶室"
+		 * 的唯一记录，清掉之后就没有任何东西能说出钥匙该还给哪辆车了。因为清空就发生在本方法末尾，
+		 * 同一帧内不可能再进来一次，所以这里只会发一个包。</p>
+		 *
+		 * <p>**拔钥匙失败不影响下车**：这是 sendPacketToServer（不可靠、无应答），本地状态照清、
+		 * 人照走 —— 与"引擎的闸门说了算"同一个规矩：引擎可以拒绝拔（比如钥匙不是这个 uuid 的），
+		 * 那它就自己留着，但客户端不能因为一次没有回执的失败把人扣在车上。</p>
+		 */
+		if (hadCab) {
+			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketMmtrCabOp(mmtrCabVehicleId, PacketMmtrCabOp.Op.LEAVE, ""));
+			// 立刻清：这条路径上 mmtrCabVehicleId 的用途到此为止（下面的日志用的是 mmtrCabNumber），
+			// 而"还握着钥匙"的窗口开着，就等于给"同一间驾驶室发两次 out"留门。
+			mmtrCabVehicleId = 0;
 		}
 		// THE LAST PACKET MUST SAY "I AM NOT THE DRIVER", and it has to be cleared BEFORE the packet is built:
 		// the server keeps whatever flag the last ride packet carried (Vehicle.updateRidingEntities), so a

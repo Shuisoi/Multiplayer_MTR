@@ -1783,13 +1783,34 @@ if(soundBase){
   // Register one event per name a sound.cfg line points at (mirrors BveConfigFile's parsing: strip
   // comments, lower-case, drop the path prefix and any ".wav" suffix - the shipped files are .ogg).
   const cfgPath=path.join(soundSrc,'sound.cfg');
-  if(!fs.existsSync(cfgPath)) throw new Error('sound.cfg not found in soundDir: '+soundSrc);
-  for(const line of fs.readFileSync(cfgPath,'utf8').split(/[\r\n]+/)){
-    const clean=line.trim().replace(/\s*(;|#|\/\/).+$/,'');
-    const m=/^(.+?)=(.*)$/.exec(clean);
-    if(!m) continue;
-    const name=m[2].trim().toLowerCase().replace(/\\/g,'/').replace(/\.wav|\s|.+\//g,'');
-    if(name&&available.has(name)) soundNames[soundBase+'_'+name]='mtr:'+soundBase+'/'+name;
+  const mmtrManifest=path.join(soundSrc,'mmtr_traction.json');
+  const mmtrSounds=path.join(soundSrc,'mmtr_traction.sounds.json');
+  if(fs.existsSync(mmtrManifest)){
+    // MMTR 自研牵引音集（notes/377/378）：事件 id 与文件路径都由烘焙器写进清单，
+    // 连同现成的 sounds.json 片段一起产出。这里**只做合并** ——
+    // 打包器不需要懂清单格式，清单以后加字段也不必回来改这里。
+    if(!fs.existsSync(mmtrSounds)) throw new Error('soundDir 里有 mmtr_traction.json 但缺 mmtr_traction.sounds.json：'+soundSrc);
+    const fragment=JSON.parse(fs.readFileSync(mmtrSounds,'utf8'));
+    let count=0;
+    for(const id of Object.keys(fragment)){
+      const def=fragment[id];
+      const name=def&&def.sounds&&def.sounds[0]&&def.sounds[0].name;
+      // 登记前核对 ogg 真的在包里：登记了却缺文件 = 进游戏只有一行"unknown soundEvent"日志 + 静音
+      const file=name&&name.split('/').pop();
+      if(name&&file&&available.has(file.toLowerCase())){ soundNames[id]=name; count++; }
+      else console.warn('  [warn] mmtr 音效事件 '+id+' 指向的 ogg 不在 soundDir 里，已跳过：'+name);
+    }
+    console.log('mmtr sound set: '+soundBase+' events='+count+'（来自 mmtr_traction.sounds.json）');
+  } else if(!fs.existsSync(cfgPath)){
+    throw new Error('soundDir 里既没有 mmtr_traction.json（MMTR 牵引音）也没有 sound.cfg（BVE 音效集）：'+soundSrc);
+  } else {
+    for(const line of fs.readFileSync(cfgPath,'utf8').split(/[\r\n]+/)){
+      const clean=line.trim().replace(/\s*(;|#|\/\/).+$/,'');
+      const m=/^(.+?)=(.*)$/.exec(clean);
+      if(!m) continue;
+      const name=m[2].trim().toLowerCase().replace(/\\/g,'/').replace(/\.wav|\s|.+\//g,'');
+      if(name&&available.has(name)) soundNames[soundBase+'_'+name]='mtr:'+soundBase+'/'+name;
+    }
   }
 }
 // MTR builds NO floor boxes for OBJ models.

@@ -118,14 +118,19 @@ public final class MmtrManualPriorityTests {
 	}
 
 	/**
-	 * 手动车开到"区间被占"的界限上：**施加紧急制动**（不是把速度钉成 0），司机按响应键解除之后
-	 * 可以照他的意思开进被占用的区间（闯区间）—— 这正是用户口径里"这才是正常逻辑"的那一条。
+	 * 手动车开到"**前方区间被另一列车占着**"的界限上：施加紧急制动（不是把速度钉成 0），
+	 * **而且按了响应键也进不去** —— 硬界限（notes/409 §4.6 第 17 条，2026-10-09 第二次实机：
+	 * 用户那趟车顶到对面那列车车头前 **2.00 m**，两车正面相对）。
 	 *
-	 * <p>不变量：① 紧急制动施加在**界限之前**（车不会在没刹住的情况下冲进去）；② 不按响应键就一直被刹住；
-	 * ③ 按了之后同一处界限不再拦、也不再触发（否则一按解除就立刻再刹一次，永远走不动）。</p>
+	 * <p>"司机优先"仍然成立的地方是**红灯 / 自己的进路没设好**（那是信号，按响应键可以闯，
+	 * 见 {@code MmtrSignalAuthorityStopTests} / {@code MmtrRedLampStopTests}）；
+	 * "前方真的有一列车 / 岔区被压着"不行 —— 真车 SCR 拦的是信号，不是另一列车。</p>
+	 *
+	 * <p>不变量：① 紧急制动施加在**界限之前**（车不会在没刹住的情况下冲进去）；② 不按响应键一直刹住；
+	 * ③ 按了之后紧急制动不再反复触发，但**位置仍被硬界限钉住**（同一脚油门也开不进那条被占的轨）。</p>
 	 */
 	@Test
-	public void aManualDriverIsEmergencyBrakeAppliedAtAnOccupiedBlockAndReleasedByTheResponseKey() {
+	public void aManualDriverIsHeldAtAnOccupiedBlockEvenAfterResponding() {
 		final Net n = new Net("build/mmtr-manual-priority-block");
 		final Vehicle v = n.spawn();
 		final UUID driver = boardDriver(n.sim, v, 3, false);
@@ -152,17 +157,18 @@ public final class MmtrManualPriorityTests {
 		// 理由是在**下一拍**才镜像出去的（闸门跑在 tick 入口）：所以在这里断言，而不是刚触发那一拍。
 		assertTrue(v.getMmtrHoldReasonFromSync().contains("响应键"), "the HUD must tell the driver which key releases it: " + v.getMmtrHoldReasonFromSync());
 
-		// The response key releases the emergency brake and the SAME held throttle drives on into the
-		// occupied section - the driver-priority rule: nothing blocks him once he has responded.
+		// ★ 2026-10-09 现场口径（第二次实机撞车）：响应键解除的是**紧急制动**，不是那条界限 ——
+		// 同一脚油门**开不进**被另一列车占着的轨。红灯/进路没设好那一路才按响应键放行。
 		new MmtrDriveControl(v.getId(), new ControlState().setThrottleNotch(3).setReverser(1).setAcknowledge(true), driver).apply(n.sim);
 		assertFalse(v.isMmtrProtectionFromSync(), "the response key releases the emergency brake");
 		assertFalse(v.isMmtrAuthorityTripped(), "and it does not re-arm for the same boundary");
-		boolean entered = false;
-		for (int i = 0; i < 4000 && !entered; i++) {
+		for (int i = 0; i < 200; i++) {
 			n.tick(true);
-			entered = n.pl.getHexId().equals(v.getMmtrMotionWalker().railHex());
 		}
-		assertTrue(entered, "after responding, the driver may drive on (rail=" + v.getMmtrMotionWalker().railHex() + ")");
+		assertEquals(n.ma.getHexId(), v.getMmtrMotionWalker().railHex(),
+			"按了响应键也**不许**开进被另一列车占着的轨（rail=" + v.getMmtrMotionWalker().railHex() + "）");
+		assertTrue(v.getRailProgress() <= entranceM + 0.5,
+			"位置被硬界限钉在区间入口：progress=" + v.getRailProgress() + " / 入口 " + entranceM);
 	}
 
 	/**
