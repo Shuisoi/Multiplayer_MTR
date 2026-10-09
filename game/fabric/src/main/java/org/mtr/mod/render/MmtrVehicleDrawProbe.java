@@ -88,8 +88,9 @@ public final class MmtrVehicleDrawProbe {
 	 * @param parts             这一辆车这一帧排队的 draw 数之和；{@code -1} 表示取不到
 	 * @param totalCars         车辆编组节数（服务端数据）
 	 * @param noOpenDoorways    {@code true} = 这一帧没有任何车门处在可开状态（走"关门"bundle）
+	 * @param vehicleId         车辆 id（只用来在报告里点名"是哪些车"，见 {@link Bucket#describe()}）
 	 */
-	public static void onCarQueued(int conditionMask, int matchingConditions, int parts, int totalCars, boolean noOpenDoorways) {
+	public static void onCarQueued(int conditionMask, int matchingConditions, int parts, int totalCars, boolean noOpenDoorways, long vehicleId) {
 		if (!ENABLED) {
 			return;
 		}
@@ -120,11 +121,12 @@ public final class MmtrVehicleDrawProbe {
 		final Bucket bucket = SIGNATURES.get(key);
 		if (bucket != null) {
 			bucket.add(parts);
+			bucket.noteVehicle(vehicleId);
 		} else if (SIGNATURES.size() < MAX_SIGNATURES) {
-			SIGNATURES.put(key, new Bucket(key).add(parts));
+			SIGNATURES.put(key, new Bucket(key).add(parts).noteVehicle(vehicleId));
 		} else {
 			// 桶满了就并进 -1（"其它"），否则输出无界
-			SIGNATURES.computeIfAbsent(-1, Bucket::new).add(parts);
+			SIGNATURES.computeIfAbsent(-1, Bucket::new).add(parts).noteVehicle(vehicleId);
 		}
 
 		if (now - windowStartNanos >= WINDOW_NANOS) {
@@ -249,6 +251,16 @@ public final class MmtrVehicleDrawProbe {
 		private int count;
 		private long parts;
 		private int partsMax;
+		/**
+		 * 这个桶里**第一辆**被记进来的车（2026-10-10 加）。
+		 *
+		 * <p>为什么要有它：本局实测出现了一个 `车=1 … draw avg=0.0 max=0` 的桶 —— 一台**单节车**
+		 * 被排队画了 5980 个"车·帧"、一次都没画出去。而引擎那边十列车全是 10 节（00101–00110），
+		 * 所以这台单节车**不在引擎的车辆表里**（幽灵车 / 只同步到一节）。光看"车=1、draw=0"点不出是谁，
+		 * 把车辆 id 带出来就能直接和 `mmtr-trains` 对表。</p>
+		 */
+		private long sampleVehicleId;
+		private boolean hasSampleVehicle;
 
 		private Bucket(int key) {
 			this.key = key;
@@ -265,6 +277,14 @@ public final class MmtrVehicleDrawProbe {
 			return this;
 		}
 
+		private Bucket noteVehicle(long vehicleId) {
+			if (!hasSampleVehicle) {
+				hasSampleVehicle = true;
+				sampleVehicleId = vehicleId;
+			}
+			return this;
+		}
+
 		private String describe() {
 			if (key < 0) {
 				return String.format("其它 n=%d draw avg=%.1f", count, parts / (double) count);
@@ -272,8 +292,9 @@ public final class MmtrVehicleDrawProbe {
 			final boolean doorsClosed = (key >> 20 & 1) != 0;
 			final int totalCars = key >> 16 & 0xF;
 			final int conditionMask = key & 0xFFFF;
-			return String.format("%s 车=%d [%s] n=%d draw avg=%.1f max=%d",
-					doorsClosed ? "门关" : "门开", totalCars, describeMask(conditionMask), count, parts / (double) count, partsMax);
+			return String.format("%s 车=%d [%s] n=%d draw avg=%.1f max=%d%s",
+					doorsClosed ? "门关" : "门开", totalCars, describeMask(conditionMask), count, parts / (double) count, partsMax,
+					hasSampleVehicle ? " 样本车=" + sampleVehicleId : "");
 		}
 	}
 }

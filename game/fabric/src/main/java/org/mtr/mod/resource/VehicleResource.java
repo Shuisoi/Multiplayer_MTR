@@ -599,7 +599,7 @@ public final class VehicleResource extends VehicleResourceSchema {
 		});
 
 		if (probe) {
-			MmtrVehicleDrawProbe.onCarQueued(conditionMask, matchingConditions, parts, totalCars, noOpenDoorways);
+			MmtrVehicleDrawProbe.onCarQueued(conditionMask, matchingConditions, parts, totalCars, noOpenDoorways, vehicle.getId());
 		}
 	}
 
