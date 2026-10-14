@@ -1,46 +1,64 @@
-# MMTR (Multiplayer MTR)
+# 🚄 MMTR (Multiplayer MTR)
 
-基于 Minecraft Transit Railway（MIT）派生的客货运服务器模组项目。
-- 目标 MC：1.20.4（Fabric）；基线：MTR 4.0.5 / TSC ce3a509082（= MTR 打包的 0.0.1 状态）
-- 平台：Fabric 先行；mod id = mmtr；**资源命名空间与 Java 包 v1 保留 mtr / org.mtr.**（继承语义 + 资源包兼容）
-- 玩法边界：MTR 方块/铁轨/乘客/景观/电子屏等全部保留；只改列车操控与玩法层（任务驱动、车底牵引制动、货运、连解挂、UI）
-- 服务器形态：MMTR Engine 独立进程（fork TSC standalone）+ MC 端桥（选项 2：一开始就外置引擎）
-- 授权：MIT（保留全部上游版权/许可声明）
+> 让 Minecraft 里的轨道交通真正「活」起来。
 
-## monorepo 结构
+欢迎来到 **MMTR**！这是一个基于 Minecraft Transit Railway (MTR) 深度演进的铁路模拟与多人运营模组。
+
+如果你玩过原版 MTR，你一定感受过在方块世界里铺设轨道、看列车穿梭的快乐。但我们总觉得还差了那么一点味道：为什么站台上总是冷冷清清？为什么列车停站总是随缘一停，车门对不上屏蔽门？为什么开火车像开碰碰车，没有大闸小闸、没有牵引与气压？
+
+MMTR 就是为了回答这些遗憾而生的 —— 我们保留了 MTR 优秀的建轨与造景体验，把重心放在了**「真实的行车操控」**与**「充满烟火气的车站运营」**上。
+
+---
+
+## ✨ 核心特色
+
+### 👥 会呼吸的车站人流 (Dynamic Crowd)
+站台不再是一成不变的雕塑布景。
+- **动态早晚高峰**：客流量随游戏内的日出日落自然起伏 —— 清晨与黄昏人潮涌动，深夜归于寂静。
+- **进站人聚，离站人散**：列车进站停靠时，冲量机制会让站台候车人群自然聚拢；随着列车鸣笛驶离，乘客慢慢散开走向出站口。
+- **沉浸式车站细节**：车站不仅有配套的座椅、半高安全门（APG），还会根据真实客流与车次密度自动调节车站的繁忙度。
+
+### 🎯 严谨的停车对标 (Stop Marker)
+- 告别「随缘刹车」和「门洞对不准」的尴尬。
+- 引入了基于真实 6 米门栅格的**停车对标系统**：提供悬挂、立柱、贴墙三种标牌方块，精准匹配各编组列车。
+- 进站时看着司机室读数对标停车，车门与屏蔽门分毫不差地严密重合。
+
+### 🕹️ 硬核而有温度的驾驶与物理
+- **三手柄操纵台**：AFB 定速巡航手柄、双向牵引/制动油门、独立列车管气制动大闸，换向器与机械联锁。
+- **真实气路与轮轨物理**：列车管充排气延迟、电空混合制动、黏着极限与防滑（WSP），甚至连非动力挂车与长编组的制动波传播都做了真实模拟。
+- **双端驾驶与交路作业**：像现实中的司机一样到站交接、拔插钥匙换端；配合行车许可与任务调度，多人联机时一人一台车、一条进路一个故事。
+
+### 📺 活灵活现的车辆动态面 (Dynamic PIS)
+- 告别贴图固化的车身。
+- 车载动态面系统支持随交路自动更新的车头车侧水牌、车厢内下一站滚动屏、PIS 综合显示屏，以及逐片元采光的世界光注入，进出隧道明暗分明。
+
+---
+
+## 🧭 项目指引
+
+如果你想深入探索，我们整理了清晰的文档入口：
+
+- **📖 [文档全景 (docs/README.md)](docs/README.md)**：包含系统的设计规格、技术总纲与详细台账。
+- **🛠️ [部署与运行指南 (deploy/BUILD.md)](deploy/BUILD.md)**：如何配置环境、构建引擎、启动服务端与客户端。
+- **🎨 [车辆与资源包制作 (docs/02-运行与作业/MMTR-车辆动态面-作者指南.md)](docs/02-运行与作业/MMTR-车辆动态面-作者指南.md)**：想要给自己的列车加上动态水牌与内屏？看这一篇就够了。
+- **📝 [技术决策日志 (notes/)](notes/)**：记录了从第一版架构到现在的每一项设计思考、实机排错与演进过程。
+
+---
+
+## 🛠️ 项目结构速览
 
 ```text
 mmtr/
-├─ engine/   # TSC fork（分支 mmtr-baseline = ce3a509082）——仿真/任务/物理/货运
-├─ game/     # MTR 4.0.5 fork —— Fabric mod（方块/渲染/乘客/UI/桥），mod id=mmtr
-├─ tools/    # 第一方工具：obj-mtr-packager（OBJ -> MTR 资源包打包器）
-├─ apps/     # 第一方旁路工程：creator-studio（原版 MTR 作者端，独立 Gradle build）
-├─ scripts/  # 构建/运行/打包/自检脚本（含 check-paths.ps1 路径守卫）
-├─ notes/    # 逐轮技术笔记与决策（01–，只增不改）
-├─ docs/     # 本项目文档（入口 docs/README.md：00-历史 / 01-设计 / 02-运行与作业 / 03-交接与实机 / reference）
-├─ deploy/   # 部署信息（入口 deploy/README.md：工作区重建 + 被排除项来源；命令级见 deploy/BUILD.md）
-└─ mappings/ # (规划) Minecraft-Mappings / Mod-API-Tools 源码级参与（如需）
+├─ engine/     # 独立仿真与调度引擎（物理、任务、信号与动态客流系统）
+├─ game/       # Minecraft Fabric 模组端（方块、渲染、音效、驾驶操控与客户端桥）
+├─ tools/      # 配套工具集（模型资源打包、客流烘焙、对标牌与车站标准化脚本）
+├─ docs/       # 架构设计、运行手册与车站台账
+└─ notes/      # 逐轮开发记录与实机排错日志（notes/01 ~ notes/425+）
 ```
 
-> **部署 / 换机 / 想跑起来**：先看 [`deploy/README.md`](deploy/README.md)（工作区怎么摆、
-> JDK 与第三方 jar 从哪来）→ [`deploy/BUILD.md`](deploy/BUILD.md)（构建/运行/打包/发布命令）。
-> 工具链 / 第三方 / 资产 / 日志放哪、路径真源，都在 `deploy/` 里说明；本仓库**只有源码**，
-> `env/` `vendor/` `assets/` `artifacts/` `logs/` `instances/` 都在工作区里、在仓库之外。
-> 2026-09-09 的目录整理记录见 [`deploy/workspace-template/整理方案.md`](deploy/workspace-template/整理方案.md)。
+---
 
-## 里程碑速览
-M0 派生跑通 → M0b 桥接原型(EngineBridge+带宽) → M1 车底与物理 → M2 任务引擎+AI+连解挂 → M3 货运 → M4 UI → M5 运营化。
-入口：docs/README.md（文档地图）。早期里程碑（M0-M5 规划）见 docs/00-历史/03-MMTR-架构决策与里程碑.md（历史，已入库）。
-最新交接：docs/03-交接与实机/MotionCore-Vehicle集成-交接.md。
+## 📜 开源与致谢
 
-## 本地开发速记
-
-完整命令见 [`deploy/BUILD.md`](deploy/BUILD.md)；换机/首次搭建见 [`deploy/README.md`](deploy/README.md)。
-
-- JDK 21 必需（engine 要求 toolchain 21，与上游 CI 一致）：工作区 `env\jdk-21`（Adoptium/Temurin，见 [`deploy/workspace-template/env/README.md`](deploy/workspace-template/env/README.md)）
-- 所有脚本的路径真源：`. env\workspace.env.ps1` / `call env\workspace.env.bat`；禁止硬编码绝对路径
-- engine 编译：`cd engine && gradlew.bat shadowJar`（产出 `build\libs\Transport-Simulation-Core-*.jar`）
-- engine jar 同步进 `game/libs`：`scripts\deploy-engine.ps1 -Build`（带停机检查；`scripts\sync-engine.bat` 是不检查的粗暴版）
-- game 编译：`cd game && gradlew.bat :fabric:build`（发布物 `game\fabric\build\libs\fabric-4.0.5.jar`）
-- 起 dev 服务端 / 客户端：`scripts\dev-server.ps1` / `scripts\dev-client.ps1`
-- 提交前自检：`pwsh -File scripts\check-paths.ps1`
+- 本项目基于 [Minecraft Transit Railway (MTR)](https://github.com/jonafanho/Minecraft-Transit-Railway) 派生开发，遵循 **MIT 许可证**，保留原项目所有版权与声明。
+- 感谢所有为轨道交通仿真与 Minecraft 模组生态做出贡献的开发者与爱好者。
