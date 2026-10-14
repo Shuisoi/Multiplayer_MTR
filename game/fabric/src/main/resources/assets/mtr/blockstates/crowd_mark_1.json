@@ -1,0 +1,760 @@
+{
+  "variants": {
+    "occupied=true,variant=0,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=0,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=0,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=0,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=0,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=0,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=0,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=0,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=0,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=0,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=0,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=0,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=0,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=0,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=0,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=0,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=0,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=0,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=1,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=1,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=1,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=1,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=1,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=1,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=1,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=1,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=1,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=1,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=1,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=1,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=1,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=1,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=1,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=1,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=1,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=2,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=2,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=2,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=2,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=2,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=2,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=2,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=2,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=2,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=2,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=2,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=2,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=2,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=2,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=2,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=2,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=2,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=3,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=3,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=3,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=3,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=3,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=3,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=3,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=3,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=3,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=3,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=3,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=3,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=3,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=3,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=3,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=3,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=3,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=4,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=4,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=4,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=4,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=4,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=4,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=4,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=4,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=4,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=4,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=4,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=4,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=4,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=4,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=4,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=4,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=4,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=5,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=5,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=5,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=5,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=5,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=5,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=5,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=5,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=5,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=5,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=5,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=5,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=5,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=5,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=5,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=5,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=5,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=north,head=north": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=6,facing=north,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=north,head=east": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=6,facing=north,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=north,head=south": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=6,facing=north,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=north,head=west": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "occupied=false,variant=6,facing=north,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=east,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=6,facing=east,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=east,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=6,facing=east,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=east,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=6,facing=east,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=east,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 90
+    },
+    "occupied=false,variant=6,facing=east,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=south,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=6,facing=south,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=south,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=6,facing=south,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=south,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=6,facing=south,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=south,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 180
+    },
+    "occupied=false,variant=6,facing=south,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=west,head=north": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=6,facing=west,head=north": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=west,head=east": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=6,facing=west,head=east": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=west,head=south": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=6,facing=west,head=south": {
+      "model": "mtr:block/crowd_marker_empty"
+    },
+    "occupied=true,variant=6,facing=west,head=west": {
+      "model": "mtr:block/crowd_statue_empty",
+      "y": 270
+    },
+    "occupied=false,variant=6,facing=west,head=west": {
+      "model": "mtr:block/crowd_marker_empty"
+    }
+  }
+}

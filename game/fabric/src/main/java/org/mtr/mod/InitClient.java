@@ -34,6 +34,7 @@ import org.mtr.mod.item.ItemDriverKey;
 import org.mtr.mod.mmtr.MmtrDynamicLoad;
 import org.mtr.mod.mmtr.MmtrLoadProbe;
 import org.mtr.mod.packet.PacketRequestData;
+import org.mtr.mod.mmtr.crowd.MmtrCrowdStatues;
 import org.mtr.mod.render.*;
 import org.mtr.mod.resource.CachedResource;
 import org.mtr.mod.screen.BetaWarningScreen;
@@ -191,6 +192,16 @@ public final class InitClient {
 		REGISTRY_CLIENT.registerBlockEntityRenderer(BlockEntityTypes.STATION_NAME_WALL_GRAY, dispatcher -> new RenderStationNameTiled<>(dispatcher, false));
 		REGISTRY_CLIENT.registerBlockEntityRenderer(BlockEntityTypes.STATION_NAME_WALL_BLACK, dispatcher -> new RenderStationNameTiled<>(dispatcher, false));
 		REGISTRY_CLIENT.registerBlockEntityRenderer(BlockEntityTypes.EYE_CANDY, RenderEyeCandy::new);
+		// 客流标记：平时不画，手持任意一种标记方块时才现形（见 RenderCrowdMarker）
+		REGISTRY_CLIENT.registerBlockEntityRenderer(BlockEntityTypes.CROWD_MARKER, RenderCrowdMarker::new);
+		// 停车对标牌子：模型（三个样式）+ 牌面文字（几辆 / 归属状态）由方块实体渲染器画，见 RenderStopMarker
+		REGISTRY_CLIENT.registerBlockEntityRenderer(BlockEntityTypes.STOP_MARKER, RenderStopMarker::new);
+		// 站定客流雕像：**离线烘好的网格**（mmtr/tools/crowd-bake/bake_crowd.py 出场，
+		// 客户端只读资源、不烘不写），按附近 occupied=true 的标记格画人。见 MmtrCrowdStatues。
+		// ★ 必须是 BEFORE_ENTITIES：雕像走 MTR 的渲染队列（MainRenderer.scheduleRender），
+		//   队列是在实体 pass 内部派发的，所以要在实体 pass 之前把这一帧的格子排进去。
+		net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents.BEFORE_ENTITIES.register(MmtrCrowdStatues::render);
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(MmtrCrowdStatues::clientTick);
 
 		REGISTRY_CLIENT.registerEntityRenderer(EntityTypes.RENDERING, MainRenderer::new);
 

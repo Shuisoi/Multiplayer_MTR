@@ -66,7 +66,23 @@ public final class PacketUpdateData extends PacketRequestResponseBase {
 		new PacketUpdateData(new UpdateDataRequest(new MinecraftClientData()).addSignalModification(signalModification)).runServerOutbound(serverWorld, null);
 	}
 
-	public static void sendDirectlyToClientDepotUpdate(ServerWorld serverWorld, UpdateDataResponse updateDataResponse) {
+	/**
+	 * MMTR：把一份**静态数据增量**（{@code UpdateDataResponse}）直接推给这个世界的所有玩家。
+	 *
+	 * <p>这条路与"玩家改了东西 → 引擎回一份 {@code UpdateDataResponse} → 广播给所有玩家"是**同一条**
+	 * （{@link PacketRequestResponseBase#runServerOutbound} 里 {@code ResponseType.ALL} 那一支发的就是这个类、
+	 * 这个载荷），无非是发起方不是玩家而是服务端自己。客户端落地走 {@code UpdateDataResponse.write()}：
+	 * 载荷里出现的每一条**原地替换**镜像对象，所以只放"变了的那几条"就够。</p>
+	 *
+	 * <p>两个调用方：①引擎那边的 depot 生成状态更新（{@code GENERATION_STATUS_UPDATE}）；
+	 * ②站台客量变了（notes/416 客流方案 A，见 {@code MmtrCrowdModule#syncCrowdLevelsToClients}）——
+	 * 客量是"已经下发过的对象的字段"，客户端不会再来要第二次（{@code DataRequest} 对已知 id 只回 id），
+	 * 不推就永远停在旧值上。</p>
+	 *
+	 * <p>历史名字是 {@code sendDirectlyToClientDepotUpdate}（那时只有 depot 生成在用），
+	 * 2026-10-12 改成现在这个名字：它推的是"静态数据"，与 depot 无关。</p>
+	 */
+	public static void sendDirectlyToClientStaticData(ServerWorld serverWorld, UpdateDataResponse updateDataResponse) {
 		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, new PacketUpdateData(Utilities.getJsonObjectFromData(updateDataResponse).toString())));
 	}
 

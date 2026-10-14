@@ -84,12 +84,33 @@ public final class MmtrCommandExecutor {
 			return;
 		}
 		/*
+		 * 停车对标牌子扫描（引擎指令 `world scan-stop-markers`）：牌子是自由摆放的方块，引擎只有登记表、
+		 * 读不到世界，所以"世界里现在有哪些牌子、辆数改过没有"永远只能由游戏端数。
+		 */
+		if (command.equals("stop-markers scan")) {
+			scanStopMarkers(simulator, serverWorld);
+			return;
+		}
+		/*
 		 * 站台客流核对（引擎指令 `platform scan`）：只有游戏端数得到世界里的方块。
 		 * 报告逐站台给"应有 / 实有"，见 MmtrCrowdModule.report —— 这是"客量设了到底生效没有"的决定性读数。
 		 */
 		if (command.equals("crowd scan")) {
 			for (final String line : org.mtr.mod.mmtr.crowd.MmtrCrowdModule.report(
 				new org.mtr.mapping.holder.ServerWorld(serverWorld), simulator)) {
+				simulator.mmtrCommandResult(line);
+			}
+			return;
+		}
+		/*
+		 * 逐格现场读数（引擎指令 `platform dump <站台hex>`）：站台方块范围 / 标记逐格 / 走道逐格 / 每只走动人流。
+		 * 三个只有逐格才能回答的问题：我放的标记认到没有、算给谁了、走动的人为什么不动。
+		 */
+		if (command.startsWith("crowd dump")) {
+			final String[] parts = command.trim().split("\\s+");
+			final String token = parts.length >= 3 ? parts[2] : "";
+			for (final String line : org.mtr.mod.mmtr.crowd.MmtrCrowdModule.dump(
+				new org.mtr.mapping.holder.ServerWorld(serverWorld), simulator, token)) {
 				simulator.mmtrCommandResult(line);
 			}
 			return;
@@ -1001,6 +1022,21 @@ public final class MmtrCommandExecutor {
 			+ " 个 AUTO 条目, 保留人工绑定 " + total.skippedBound + " 个（只刷新朝向，不动绑定）, 清理已拆掉的 " + total.removed + " 个"
 			+ (total.removedBound > 0 ? "（其中 " + total.removedBound + " 个是人工绑定：世界里的灯没了，绑定一并移除）" : "")
 			+ "; 节点朝向 " + scanNodeAngles(simulator, serverWorld));
+	}
+
+	/**
+	 * 停车对标牌子扫描（{@code stop-markers scan}）：把世界里现有的牌子全量核对进登记表。
+	 *
+	 * <p>与 {@code signals scan} 同一个理由：牌子是自由摆放的方块，"世界里有哪些"只有游戏端
+	 * 数得出来（引擎只有登记表）。批量铺牌子走 {@code /setblock} + {@code /data merge block}，
+	 * 没有放置事件，所以这条指令（以及轮转扫）是它唯一的登记路径。</p>
+	 */
+	private static void scanStopMarkers(Simulator simulator, ServerWorld serverWorld) {
+		final org.mtr.mod.mmtr.stopmark.MmtrStopMarkerSync.Result total =
+			org.mtr.mod.mmtr.stopmark.MmtrStopMarkerSync.scanAll(simulator, serverWorld);
+		simulator.mmtrCommandResult("[stop-markers] 扫描完成: 找到 " + total.found + " 块牌子, 新增/刷新 " + total.added
+			+ " 条登记, 清理已拆掉的 " + total.removed + " 条, 辆数未设定跳过 " + total.skipped + " 块"
+			+ "; 登记表共 " + simulator.mmtrStopMarkers.markers.size() + " 条");
 	}
 
 	/**

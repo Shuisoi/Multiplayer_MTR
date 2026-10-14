@@ -1,0 +1,3076 @@
+{
+  "variants": {
+    "facing=east,bodysub=0,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=0,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=1,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=2,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=east,bodysub=3,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=0,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=1,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=2,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=north,bodysub=3,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=0,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=1,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=2,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=south,bodysub=3,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=0,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=1,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=2,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=0,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=0,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=0,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=0,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=1,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=1,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=1,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=1,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=10,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=10,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=10,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=10,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=11,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=11,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=11,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=11,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=12,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=12,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=12,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=12,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=13,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=13,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=13,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=13,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=14,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=14,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=14,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=14,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=15,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=15,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=15,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=15,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=2,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=2,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=2,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=2,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=3,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=3,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=3,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=3,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=4,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=4,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=4,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=4,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=5,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=5,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=5,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=5,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=6,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=6,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=6,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=6,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=7,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=7,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=7,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=7,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=8,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=8,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=8,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=8,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=9,variant=0": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=9,variant=1": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=9,variant=2": {
+      "model": "mtr:block/crowd_statue_empty"
+    },
+    "facing=west,bodysub=3,head=9,variant=3": {
+      "model": "mtr:block/crowd_statue_empty"
+    }
+  }
+}

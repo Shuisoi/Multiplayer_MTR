@@ -9,6 +9,7 @@ import org.mtr.mod.mmtr.MmtrRouteMirror;
 import org.mtr.mod.mmtr.MmtrSignalSync;
 import org.mtr.mod.mmtr.MmtrTickProbe;
 import org.mtr.mod.mmtr.MmtrVehicleMotionSync;
+import org.mtr.mod.mmtr.stopmark.MmtrStopMarkerSync;
 
 public final class MTR implements ModInitializer {
 
@@ -17,6 +18,7 @@ public final class MTR implements ModInitializer {
 		Init.init();
 		MmtrChunkTracker.register();
 		MmtrSignalSync.register();
+		MmtrStopMarkerSync.register();
 		MmtrCommandExecutor.register();
 		MmtrPlayerSessions.register();
 		/*

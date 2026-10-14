@@ -66,6 +66,8 @@ public final class SystemMapServlet extends ServletBase {
 		FEEDS.put("mmtr-track-sections", new FeedSpec(SystemMapServlet::getMmtrTrackSections, FEED_WARM_MAX_AGE_MILLIS));
 		FEEDS.put("mmtr-block-sections", new FeedSpec(SystemMapServlet::getMmtrBlockSections, FEED_WARM_MAX_AGE_MILLIS));
 		FEEDS.put("mmtr-lamps", new FeedSpec(SystemMapServlet::getMmtrLamps, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-stop-markers", new FeedSpec(SystemMapServlet::getMmtrStopMarkers, FEED_WARM_MAX_AGE_MILLIS));
+		FEEDS.put("mmtr-crowd-system", new FeedSpec(SystemMapServlet::getMmtrCrowdSystem, FEED_WARM_MAX_AGE_MILLIS));
 		FEEDS.put("mmtr-sections", new FeedSpec(SystemMapServlet::getMmtrSections, FEED_WARM_MAX_AGE_MILLIS));
 		FEEDS.put("mmtr-schematic", new FeedSpec(SystemMapServlet::getMmtrSchematic, FEED_WARM_MAX_AGE_MILLIS));
 		FEEDS.put("mmtr-topology", new FeedSpec(SystemMapServlet::getMmtrTopology, FEED_STATIC_MAX_AGE_MILLIS));
@@ -611,6 +613,7 @@ public final class SystemMapServlet extends ServletBase {
 				 *	/mmtr-track-sections  Level 1 轨道区间（无方向、双向共用）—— **占用判定单位**
 				 *	/mmtr-block-sections  Level 2 行车区间（有方向、灯到灯）—— **授权单位**，带 L1 成员表
 				 *	/mmtr-lamps           每盏灯的**绑定**（它开的段 + 段的状态 + 显示）
+				 *	/mmtr-stop-markers    停车对标牌子（登记表 + 冲突标记）
 				 *	/mmtr-total-sections  **总区间**（地图上一条带 = 一个位置 + 覆盖它的各方向区间）
 				 *
 				 * `/mmtr-sections` 仍在（运营台在用），它是"区间图层"的综合包；这四个是新代码该用的入口。
@@ -1410,6 +1413,166 @@ public final class SystemMapServlet extends ServletBase {
 		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
 		result.add("lamps", lamps);
 		result.addProperty("count", lamps.size());
+		return result;
+	}
+
+	/**
+	 * **停车对标牌子**（`/mmtr-stop-markers`）：牌子登记表的只读出口（设计 §5.5），台账核对用。
+	 *
+	 * <p>每条给出：牌子坐标、归属站台（id + hex）、辆数、方向（{@code towardEnd0} = 朝站台轨的有序端点 0）、
+	 * 归属股道（**规范 hex**，与 `/mmtr-topology` 的 {@code rails[].hex} 同一写法，前端按它取轨的
+	 * {@code path}）、车头停点比例 {@code fraction} 与头点世界坐标、牌面文字、以及 {@code conflict}。</p>
+	 *
+	 * <p>{@code conflict} 是**现算**的（同一 (站台, 辆数, 方向) 里只有离站台中点最近的那块算数，§4.3）：
+	 * 它是记录之间的关系、还依赖站台中点，落盘存下来就得在每次登记/删除/站台改动时重写一遍，
+	 * 而它只在读的时候有意义。</p>
+	 */
+	static JsonObject getMmtrStopMarkers(org.mtr.core.simulation.Simulator simulator) {
+		final java.util.TreeMap<String, Boolean> conflicts = org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.conflictFlags(simulator);
+		final com.google.gson.JsonArray markers = new com.google.gson.JsonArray();
+		simulator.mmtrStopMarkers.markers.forEach((key, entry) -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("key", key);
+			out.addProperty("x", entry.x);
+			out.addProperty("y", entry.y);
+			out.addProperty("z", entry.z);
+			out.addProperty("cars", entry.cars);
+			out.addProperty("towardEnd0", entry.towardEnd0);
+			// id 与 hex 都发：id 是引擎内部的键（指令 --platform= 用它），hex 是网页/台账里对账的写法
+			out.addProperty("platformId", String.valueOf(entry.platformId));
+			out.addProperty("platformHex", entry.platformHex);
+			out.addProperty("railHex", entry.railHex);
+			out.addProperty("fraction", entry.fraction);
+			out.addProperty("datumM", entry.datumM);
+			out.addProperty("label", entry.label);
+			out.addProperty("headX", entry.headX);
+			out.addProperty("headY", entry.headY);
+			out.addProperty("headZ", entry.headZ);
+			out.addProperty("conflict", Boolean.TRUE.equals(conflicts.get(key)));
+			markers.add(out);
+		});
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		result.add("markers", markers);
+		result.addProperty("count", markers.size());
+		return result;
+	}
+
+	/**
+	 * **车站人流系统**（`/mmtr-crowd-system`）：客量自动动态设置的只读出口。
+	 *
+	 * <p>与 {@link #getMmtrPlatforms} 是同一个数值的两个视角：那边问"每条站台现在是多少"，
+	 * 这边问"**为什么**是这个数" —— 曲线上限、基准、实测到站计数、班次因子、停站冲量、事件，
+	 * 以及目标 / 字段 / 平滑中三个值。三者的关系（目标 ≠ 字段 = 还没写或系统关着；
+	 * 字段 ≠ 平滑中 = 刚被别的通道改过）就是现场判断"系统生效没有"的读数。</p>
+	 *
+	 * <p>纯只读：只读运行态与配置，不算不动（{@code decide()} 是纯函数）。所以把它放进
+	 * {@link #FEEDS} 的快照层是安全的 —— 没有任何一路写接口藏在计算里。</p>
+	 */
+	static JsonObject getMmtrCrowdSystem(org.mtr.core.simulation.Simulator simulator) {
+		final org.mtr.core.mmtr.crowd.MmtrCrowdSystem system = simulator.mmtrCrowdSystem;
+		final com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+		final long hour = system.hourOf(simulator);
+		result.addProperty("enabled", system.isEnabled());
+		result.addProperty("clock", system.isWorldClock() ? "world" : "real");
+		result.addProperty("hour", hour);
+		result.addProperty("curveAtHour", system.curveAt(hour));
+		result.addProperty("profile", system.getProfileName());
+		final com.google.gson.JsonArray curve = new com.google.gson.JsonArray();
+		for (final long value : system.getCurve()) {
+			curve.add(value);
+		}
+		result.add("curve", curve);
+		result.addProperty("periodMillis", system.getPeriodMillis());
+		result.addProperty("tauSeconds", system.getTauSeconds());
+		result.addProperty("surgeTauSeconds", system.getSurgeTauSeconds());
+		result.addProperty("step", system.getStep());
+		result.addProperty("serviceBoost", system.getServiceBoost());
+		result.addProperty("dwellSurge", system.getDwellSurge());
+		result.addProperty("defaultBase", system.getDefaultBase());
+		result.addProperty("tickCount", system.getTickCount());
+		result.addProperty("lastWrittenCount", system.getLastWrittenCount());
+		result.addProperty("totalArrivals", system.getTotalArrivals());
+		result.addProperty("maxRate", system.maxRate());
+
+		final com.google.gson.JsonArray platforms = new com.google.gson.JsonArray();
+		final com.google.gson.JsonArray stations = new com.google.gson.JsonArray();
+		for (final org.mtr.core.data.Platform platform : simulator.platforms) {
+			final org.mtr.core.mmtr.crowd.MmtrCrowdSystem.Decision decision = system.decide(simulator, platform);
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("platformId", String.valueOf(platform.getId()));
+			out.addProperty("platformHex", platform.getHexId());
+			out.addProperty("platformName", platform.getName());
+			out.addProperty("stationId", String.valueOf(org.mtr.core.mmtr.crowd.MmtrCrowdSystem.stationIdOf(platform)));
+			out.addProperty("stationName", platform.getStationName());
+			out.addProperty("curve", decision.curve());
+			out.addProperty("basePercent", decision.basePercent());
+			out.addProperty("serviceFactor", decision.serviceFactor());
+			out.addProperty("rate", Math.round(system.rateOf(platform) * 100.0) / 100.0);
+			out.addProperty("surge", decision.surge());
+			out.addProperty("eventAdd", decision.eventAdd());
+			out.addProperty("eventMul", decision.eventMul());
+			out.addProperty("target", decision.target());
+			out.addProperty("crowdLevel", platform.getCrowdLevel());
+			out.addProperty("effectiveCrowdLevel", platform.getEffectiveCrowdLevel());
+			out.addProperty("smooth", Math.round(system.currentLevelOf(platform.getId(), platform.getCrowdLevel()) * 10.0) / 10.0);
+			out.addProperty("lengthM", Math.round(Math.hypot(
+				platform.mmtrOrderedPositions()[1].getX() - platform.mmtrOrderedPositions()[0].getX(),
+				platform.mmtrOrderedPositions()[1].getZ() - platform.mmtrOrderedPositions()[0].getZ()) * 10.0) / 10.0);
+			platforms.add(out);
+		}
+		final java.util.TreeMap<Long, com.google.gson.JsonObject> byStation = new java.util.TreeMap<>();
+		for (final com.google.gson.JsonElement element : platforms) {
+			final com.google.gson.JsonObject row = element.getAsJsonObject();
+			final long stationId = row.get("stationId").getAsLong();
+			final com.google.gson.JsonObject agg = byStation.computeIfAbsent(stationId, ignored -> {
+				final com.google.gson.JsonObject created = new com.google.gson.JsonObject();
+				created.addProperty("stationId", String.valueOf(stationId));
+				created.addProperty("stationName", row.get("stationName").getAsString());
+				created.addProperty("platforms", 0);
+				created.addProperty("targetSum", 0);
+				created.addProperty("fieldSum", 0);
+				created.addProperty("base", row.get("basePercent").getAsLong());
+				created.addProperty("rate", 0.0);
+				created.addProperty("serviceSum", 0.0);
+				created.addProperty("surgeSum", 0);
+				return created;
+			});
+			agg.addProperty("platforms", agg.get("platforms").getAsInt() + 1);
+			agg.addProperty("targetSum", agg.get("targetSum").getAsInt() + row.get("target").getAsInt());
+			agg.addProperty("fieldSum", agg.get("fieldSum").getAsInt() + row.get("crowdLevel").getAsInt());
+			agg.addProperty("rate", Math.round((agg.get("rate").getAsDouble() + row.get("rate").getAsDouble()) * 100.0) / 100.0);
+			agg.addProperty("serviceSum", agg.get("serviceSum").getAsDouble() + row.get("serviceFactor").getAsDouble());
+			agg.addProperty("surgeSum", Math.max(agg.get("surgeSum").getAsInt(), row.get("surge").getAsInt()));
+		}
+		byStation.values().forEach(agg -> {
+			final int count = Math.max(1, agg.get("platforms").getAsInt());
+			agg.addProperty("target", agg.get("targetSum").getAsInt() / count);
+			agg.addProperty("crowdLevel", agg.get("fieldSum").getAsInt() / count);
+			agg.addProperty("surge", agg.get("surgeSum").getAsInt());
+			agg.addProperty("serviceFactor", Math.round(agg.get("serviceSum").getAsDouble() / count * 1000.0) / 1000.0);
+			agg.remove("targetSum");
+			agg.remove("fieldSum");
+			agg.remove("surgeSum");
+			agg.remove("serviceSum");
+			stations.add(agg);
+		});
+
+		final com.google.gson.JsonArray events = new com.google.gson.JsonArray();
+		system.eventsView().forEach(event -> {
+			final com.google.gson.JsonObject out = new com.google.gson.JsonObject();
+			out.addProperty("id", event.id);
+			out.addProperty("stationId", String.valueOf(event.stationId));
+			out.addProperty("stationLabel", event.stationLabel);
+			out.addProperty("add", event.add);
+			out.addProperty("mul", event.mul);
+			out.addProperty("untilMillis", event.untilMillis == Long.MAX_VALUE ? -1 : event.untilMillis);
+			events.add(out);
+		});
+
+		result.add("platforms", platforms);
+		result.add("stations", stations);
+		result.add("events", events);
+		result.addProperty("count", platforms.size());
 		return result;
 	}
 

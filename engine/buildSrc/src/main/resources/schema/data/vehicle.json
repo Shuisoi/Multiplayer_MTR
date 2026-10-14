@@ -229,6 +229,14 @@
 			"type": "number",
 			"default": -1
 		},
+		"mmtrStopMarkerTargetM": {
+			"type": "number",
+			"default": -1
+		},
+		"mmtrStopMarkerCars": {
+			"type": "integer",
+			"default": 0
+		},
 		"mmtrAwsWarningPending": {
 			"type": "boolean",
 			"default": false

@@ -651,4 +651,26 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	public double getMmtrDistanceToStopTargetM() {
 		return mmtrRunStopTarget < 0 ? -1 : Math.max(0, mmtrRunStopTarget - railProgress);
 	}
+
+	/**
+	 * **到对标点（停车牌子）的剩余距离**（米）；{@code < 0} = 这趟没有牌子可用。
+	 *
+	 * <h3>与 {@link #getMmtrDistanceToStopTargetM()} 的区别（两条读数，别混）</h3>
+	 * <p>那一条是**任务的停车点**（自动车刹车用的那个目标；玩家任务按用户口径没有它，所以玩家开车时
+	 * 它恒为 -1）。这一条是**站台上牌子算出来的车头停点**（notes/422：一个辆数一块牌子，方向由牌子位置
+	 * 编码）—— 引擎在自臂时把"牌子说的那个点"折算成同一条距离坐标发下来
+	 * （{@code mmtrStopMarkerTargetM}），这里同样只做一次减法，算法与上面那条**逐字相同**。</p>
+	 *
+	 * <p>为什么玩家也有这一条：牌子存在的意义就是"给玩家一个对标的点"，而玩家这条路**不夹刹车**
+	 * （notes/229 的口径一个字没动）—— 它只是把"还有多远"画出来，踩不踩、什么时候踩完全归司机。</p>
+	 */
+	public double getMmtrStopMarkerDistanceM() {
+		return mmtrStopMarkerTargetM < 0 ? -1 : Math.max(0, mmtrStopMarkerTargetM - railProgress);
+	}
+
+	/** 这块牌子认几辆（0 = 这趟没有牌子）；只给 HUD/PDA 拼那行字用。
+	 *  引擎侧 schema 的 {@code integer} 生成的是 {@code long}，所以这里跟着用 long（别缩成 int）。 */
+	public long getMmtrStopMarkerCars() {
+		return mmtrStopMarkerCars;
+	}
 }

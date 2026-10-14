@@ -1,0 +1,52 @@
+{
+  "variants": {
+    "facing=north,variant=0": {
+      "model": "mtr:block/stop_marker_pole",
+      "y": 180
+    },
+    "facing=north,variant=1": {
+      "model": "mtr:block/stop_marker_hanging",
+      "y": 180
+    },
+    "facing=north,variant=2": {
+      "model": "mtr:block/stop_marker_wall",
+      "y": 180
+    },
+    "facing=east,variant=0": {
+      "model": "mtr:block/stop_marker_pole",
+      "y": 270
+    },
+    "facing=east,variant=1": {
+      "model": "mtr:block/stop_marker_hanging",
+      "y": 270
+    },
+    "facing=east,variant=2": {
+      "model": "mtr:block/stop_marker_wall",
+      "y": 270
+    },
+    "facing=south,variant=0": {
+      "model": "mtr:block/stop_marker_pole",
+      "y": 0
+    },
+    "facing=south,variant=1": {
+      "model": "mtr:block/stop_marker_hanging",
+      "y": 0
+    },
+    "facing=south,variant=2": {
+      "model": "mtr:block/stop_marker_wall",
+      "y": 0
+    },
+    "facing=west,variant=0": {
+      "model": "mtr:block/stop_marker_pole",
+      "y": 90
+    },
+    "facing=west,variant=1": {
+      "model": "mtr:block/stop_marker_hanging",
+      "y": 90
+    },
+    "facing=west,variant=2": {
+      "model": "mtr:block/stop_marker_wall",
+      "y": 90
+    }
+  }
+}

@@ -354,6 +354,13 @@ public class PdaScreen extends MTRScreenBase implements IGui {
 		}
 		y = line(graphicsHolder, "速度：" + Math.round(vehicle.getSpeed() * 3600) + " km/h"
 			+ "  到停车点：" + Math.round(vehicle.getMmtrDistanceToStopTargetM()) + " m", y, ARGB_WHITE);
+		// 对标点（站台上的牌子，notes/422）：与上面那一行并列写，有牌子才写。
+		// 玩家自己开的时候上面那个"到停车点"恒为 -1（引擎不干预玩家停车），能用的就是这一条。
+		final double stopMarkerDistance = vehicle.getMmtrStopMarkerDistanceM();
+		if (stopMarkerDistance >= 0) {
+			y = line(graphicsHolder, "对标点：" + Math.round(stopMarkerDistance) + " m"
+				+ (vehicle.getMmtrStopMarkerCars() > 0 ? "（" + vehicle.getMmtrStopMarkerCars() + " 辆的牌子）" : ""), y, ARGB_WHITE);
+		}
 		line(graphicsHolder, "子任务：" + (vehicle.getMmtrSubTasksFromSync().isEmpty() ? "（这一步没有子任务）" : vehicle.getMmtrSubTasksFromSync()), y, ARGB_LIGHT_GRAY);
 	}
 

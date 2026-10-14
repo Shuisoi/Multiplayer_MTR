@@ -1,29 +1,32 @@
 {
-	"required": true,
-	"minVersion": "0.8",
-	"package": "org.mtr.mixin",
-	"compatibilityLevel": "JAVA_8",
-	"refmap": "mtr.refmap.json",
-	"mixins": [
-		"PlayerTeleportationStateAccessor"
-	],
-	"client": [
-		"BatchManagerRenderCallMixin",
-		"ClientInputDecoupleMixin",
-		"ClientPlayNetworkHandlerLightMixin",
-		"ClientWorldRenderingMixin",
-		"DummyClassMixin",
-		"GameOptionsWriteMixin",
-		"HeldItemRendererMixin",
-		"InGameHudMixin",
-		"MaterialPropertiesMixin",
-		"PatchingResourceProviderMixin",
-		"PlayerRendererOffsetMixin",
-		"ShaderManagerMixin",
-		"VertexAttributeStateMixin"
-	],
-	"server": [],
-	"injectors": {
-		"defaultRequire": 1
-	}
+  "required": true,
+  "minVersion": "0.8",
+  "package": "org.mtr.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "refmap": "mtr.refmap.json",
+  "mixins": [
+    "MmtrCrowdEntityMixin",
+    "MmtrCrowdLivingEntityMixin",
+    "PlayerTeleportationStateAccessor"
+  ],
+  "client": [
+    "BatchManagerRenderCallMixin",
+    "ClientInputDecoupleMixin",
+    "ClientPlayNetworkHandlerLightMixin",
+    "ClientWorldRenderingMixin",
+    "DummyClassMixin",
+    "GameOptionsWriteMixin",
+    "HeldItemRendererMixin",
+    "InGameHudMixin",
+    "MaterialPropertiesMixin",
+    "PatchingResourceProviderMixin",
+    "PlayerRendererOffsetMixin",
+    "ShaderManagerMixin",
+    "VertexAttributeStateMixin",
+    "MmtrVillagerDebugMixin"
+  ],
+  "server": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
 }

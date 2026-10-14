@@ -29,7 +29,7 @@ public final class MinecraftOperationProcessor {
 				break;
 			case OperationProcessor.GENERATION_STATUS_UPDATE:
 				if (queueObject.data instanceof UpdateDataResponse) {
-					PacketUpdateData.sendDirectlyToClientDepotUpdate(serverWorld, (UpdateDataResponse) queueObject.data);
+					PacketUpdateData.sendDirectlyToClientStaticData(serverWorld, (UpdateDataResponse) queueObject.data);
 				}
 				break;
 		}

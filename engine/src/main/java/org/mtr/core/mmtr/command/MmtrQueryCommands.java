@@ -28,7 +28,15 @@ final class MmtrQueryCommands {
 				result.line("结果会写进指令日志，可用 query signals 查看登记后的灯。");
 				return result;
 			}
-			return MmtrCommandDispatcher.usage("world 支持 scan-signals");
+			// 同理：牌子是自由摆放的方块，引擎只有登记表，世界的真相只有游戏端看得见
+			if (verb.equals("scan-stop-markers")) {
+				simulator.mmtrPushCommand("stop-markers scan");
+				final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "world", "scan-stop-markers");
+				result.line("已把 stop-markers scan 交给游戏端执行（只有它能枚举已加载区块里的停车对标牌子）。");
+				result.line("结果会写进指令日志，可用 stop-marker list 查看登记后的牌子。");
+				return result;
+			}
+			return MmtrCommandDispatcher.usage("world 支持 scan-signals / scan-stop-markers");
 		}
 
 		switch (verb) {
@@ -53,6 +61,137 @@ final class MmtrQueryCommands {
 				return node(simulator, positional);
 			default:
 				return MmtrCommandDispatcher.usage("query 支持 depots / trains / signals / points / topology / sections / totals / occupancy / node <x,y,z>");
+		}
+	}
+
+	/**
+	 * {@code stop-marker …}：停车对标牌子登记表的手工出入口（设计 §5.5）。
+	 *
+	 * <h3>为什么引擎侧也要能增删</h3>
+	 * <p>牌子的常规入口是游戏端的世界扫描（{@code world scan-stop-markers}），但它要求人站在牌子旁边、
+	 * 区块已加载。而排障真正要问的只有两件事："引擎现在拿哪一块当停车基准"（{@code list}）与
+	 * "这一块是错的，先摘掉"（{@code remove}）—— 这两件事不该逼人进游戏。登记表本来就在引擎手里，
+	 * 所以这一组动词住在引擎侧；{@code add} 则给"补一条丢了归属的牌子、或演练一组数据"用
+	 * （牌子的**位置**没法凭空产生，这里只是把坐标喂给与扫描同一条登记路径）。</p>
+	 */
+	static MmtrCommandDispatcher.Result executeStopMarker(Simulator simulator, String verb, List<String> positional, Map<String, String> options) {
+		switch (verb) {
+			case "list":
+				return stopMarkerList(simulator);
+			case "add":
+				return stopMarkerAdd(simulator, positional, options);
+			case "remove":
+				return stopMarkerRemove(simulator, positional);
+			default:
+				return MmtrCommandDispatcher.usage("stop-marker 支持 list / add <x> <y> <z> [--cars=n] [--platform=<站台id>] [--label=牌面] [--datum=n] / remove <x> <y> <z>");
+		}
+	}
+
+	/**
+	 * {@code stop-marker list}：逐条报坐标 / 站台 / 辆数 / 方向 / fraction / 冲突。
+	 *
+	 * <p>方向只报"朝 ends[0] / 朝 ends[1]"，不报南北：这是引擎自己的口径（站台轨的两个有序端点，
+	 * 字典序小的在前），而"南北"取决于站台怎么摆。报南北会让人以为方向是从世界里读出来的 ——
+	 * 它其实是从牌子位置推的（{@code deriveTowardEnd0}）。</p>
+	 */
+	private static MmtrCommandDispatcher.Result stopMarkerList(Simulator simulator) {
+		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(true, "stop-marker", "list");
+		final java.util.TreeMap<String, Boolean> conflicts = org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.conflictFlags(simulator);
+		int conflicting = 0;
+		for (final org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.StopMarkerEntry entry : simulator.mmtrStopMarkers.markers.values()) {
+			final String key = org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.key(entry.x, entry.y, entry.z);
+			final boolean conflict = Boolean.TRUE.equals(conflicts.get(key));
+			if (conflict) {
+				conflicting++;
+			}
+			result.add(key);
+			result.line("  牌子 (" + entry.x + "," + entry.y + "," + entry.z + ")  站台=" + platformLabel(entry)
+				+ "  辆数=" + entry.cars + "  方向=朝 ends[" + (entry.towardEnd0 ? "0" : "1") + "]"
+				+ "  fraction=" + roundTo4(entry.fraction) + "  datum=" + roundTo4(entry.datumM) + "m"
+				+ "  车头=(" + roundTo4(entry.headX) + "," + roundTo4(entry.headY) + "," + roundTo4(entry.headZ) + ")"
+				+ "  轨=" + entry.railHex
+				+ (entry.label.isEmpty() ? "" : "  牌面=" + entry.label)
+				+ (conflict ? "  **冲突**（同一站台同一辆数同一方向有多块牌，基准取离站台中点最近的那块）" : ""));
+		}
+		result.line("共 " + simulator.mmtrStopMarkers.markers.size() + " 块牌子，其中冲突 " + conflicting + " 块。");
+		if (simulator.mmtrStopMarkers.markers.isEmpty()) {
+			result.line("世界里还没扫到牌子：先在站台上立牌、拨好辆数，再 `world scan-stop-markers`。");
+		}
+		return result;
+	}
+
+	/**
+	 * {@code stop-marker add <x> <y> <z> [--cars=n] [--platform=<id>] [--label=…] [--datum=n]}。
+	 *
+	 * <p>走与扫描**同一条**登记路径（{@code Simulator.mmtrStopMarkerRegister}）：归属解析、方向推导、
+	 * 投影、冲突判定全都只有一份实现，手工加一条与世界里扫一条不会有任何差别。</p>
+	 */
+	private static MmtrCommandDispatcher.Result stopMarkerAdd(Simulator simulator, List<String> positional, Map<String, String> options) {
+		final int[] xyz = parseXyz(positional);
+		if (xyz == null) {
+			return MmtrCommandDispatcher.usage("stop-marker add <x> <y> <z> [--cars=n] [--platform=<站台id>] [--label=牌面] [--datum=n]");
+		}
+		final String key = org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.key(xyz[0], xyz[1], xyz[2]);
+		final boolean changed = simulator.mmtrStopMarkerRegister(
+			xyz[0], xyz[1], xyz[2],
+			MmtrCommandDispatcher.intOption(options, "cars", 0),
+			MmtrCommandDispatcher.longOption(options, "platform", 0),
+			options.getOrDefault("label", ""),
+			doubleOption(options, "datum", 1.25)
+		);
+		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(changed, "stop-marker", "add");
+		result.add(key);
+		final org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.StopMarkerEntry entry = simulator.mmtrStopMarkers.get(xyz[0], xyz[1], xyz[2]);
+		if (changed && entry != null) {
+			result.line("已登记 " + key + "  站台=" + platformLabel(entry) + "  辆数=" + entry.cars
+				+ "  方向=朝 ends[" + (entry.towardEnd0 ? "0" : "1") + "]  fraction=" + roundTo4(entry.fraction));
+		} else if (entry != null) {
+			result.line(key + " 已经在登记表里，内容与这次给的完全一样（没有改动）。");
+		} else {
+			result.line("没有登记 " + key + "：可能是辆数不在 2..10、找不到站台（--platform 写错，或牌子离站台超过容差）、");
+			result.line("站台还没铺图轨、或车头停点落在股道之外（牌子离股道端头太近）。");
+			result.line("用 `stop-marker list` 与 `query platforms` 对一遍归属，或把牌子往股道中间挪一格。");
+		}
+		return result;
+	}
+
+	/** {@code stop-marker remove <x> <y> <z>}：只删登记，不动世界里的方块（方块由游戏端扫描负责）。 */
+	private static MmtrCommandDispatcher.Result stopMarkerRemove(Simulator simulator, List<String> positional) {
+		final int[] xyz = parseXyz(positional);
+		if (xyz == null) {
+			return MmtrCommandDispatcher.usage("stop-marker remove <x> <y> <z>");
+		}
+		final String key = org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.key(xyz[0], xyz[1], xyz[2]);
+		final boolean removed = simulator.mmtrStopMarkerRemove(xyz[0], xyz[1], xyz[2]);
+		final MmtrCommandDispatcher.Result result = new MmtrCommandDispatcher.Result(removed, "stop-marker", "remove");
+		result.add(key);
+		if (removed) {
+			result.line("已删掉 " + key + " 的牌子登记（世界里的方块没动；它若还在，下一次扫描会把它重新登记回来）。");
+		} else {
+			result.line(key + " 本来就不在登记表里。");
+		}
+		return result;
+	}
+
+	/** 站台怎么写给人看：有 hex 用 hex（与只读出口同一写法），否则退回 id。 */
+	private static String platformLabel(org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.StopMarkerEntry entry) {
+		return entry.platformHex.isEmpty() ? String.valueOf(entry.platformId) : entry.platformHex;
+	}
+
+	private static double roundTo4(double value) {
+		return Math.round(value * 10000) / 10000.0;
+	}
+
+	/** {@code --key=} 的浮点值；没给或解析不出来时用 fallback（照 {@code intOption} 的口径）。 */
+	private static double doubleOption(Map<String, String> options, String key, double fallback) {
+		final String raw = options.get(key);
+		if (raw == null || raw.isEmpty()) {
+			return fallback;
+		}
+		try {
+			return Double.parseDouble(raw.trim());
+		} catch (NumberFormatException e) {
+			return fallback;
 		}
 	}
 

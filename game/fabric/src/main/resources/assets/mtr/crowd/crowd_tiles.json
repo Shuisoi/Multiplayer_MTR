@@ -1,0 +1,812 @@
+{
+ "atlas": {
+  "gutter": 2,
+  "height": 1452,
+  "tile": 128,
+  "width": 1188
+ },
+ "groups": {
+  "level": [
+   94,
+   95,
+   96,
+   97,
+   98
+  ],
+  "profession": [
+   80,
+   81,
+   82,
+   83,
+   84,
+   85,
+   86,
+   87,
+   88,
+   89,
+   90,
+   91,
+   92,
+   93
+  ],
+  "skin": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   53,
+   54,
+   55,
+   56,
+   57,
+   58,
+   59,
+   60,
+   61,
+   62,
+   63,
+   64,
+   65,
+   66,
+   67,
+   68,
+   69,
+   70,
+   71,
+   72
+  ],
+  "type": [
+   73,
+   74,
+   75,
+   76,
+   77,
+   78,
+   79
+  ]
+ },
+ "tiles": [
+  {
+   "group": "skin",
+   "index": 0,
+   "name": "aaaaa",
+   "x": 2,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 1,
+   "name": "aaaaaa",
+   "x": 134,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 2,
+   "name": "villager10",
+   "x": 266,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 3,
+   "name": "villager11",
+   "x": 398,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 4,
+   "name": "villager12",
+   "x": 530,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 5,
+   "name": "villager13",
+   "x": 662,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 6,
+   "name": "villager14",
+   "x": 794,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 7,
+   "name": "villager15",
+   "x": 926,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 8,
+   "name": "villager16",
+   "x": 1058,
+   "y": 2
+  },
+  {
+   "group": "skin",
+   "index": 9,
+   "name": "villager17",
+   "x": 2,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 10,
+   "name": "villager18",
+   "x": 134,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 11,
+   "name": "villager19",
+   "x": 266,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 12,
+   "name": "villager2",
+   "x": 398,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 13,
+   "name": "villager20",
+   "x": 530,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 14,
+   "name": "villager21",
+   "x": 662,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 15,
+   "name": "villager22",
+   "x": 794,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 16,
+   "name": "villager23",
+   "x": 926,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 17,
+   "name": "villager24",
+   "x": 1058,
+   "y": 134
+  },
+  {
+   "group": "skin",
+   "index": 18,
+   "name": "villager25",
+   "x": 2,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 19,
+   "name": "villager26",
+   "x": 134,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 20,
+   "name": "villager27",
+   "x": 266,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 21,
+   "name": "villager28",
+   "x": 398,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 22,
+   "name": "villager29",
+   "x": 530,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 23,
+   "name": "villager3",
+   "x": 662,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 24,
+   "name": "villager30",
+   "x": 794,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 25,
+   "name": "villager31",
+   "x": 926,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 26,
+   "name": "villager32",
+   "x": 1058,
+   "y": 266
+  },
+  {
+   "group": "skin",
+   "index": 27,
+   "name": "villager33",
+   "x": 2,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 28,
+   "name": "villager34",
+   "x": 134,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 29,
+   "name": "villager35",
+   "x": 266,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 30,
+   "name": "villager36",
+   "x": 398,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 31,
+   "name": "villager37",
+   "x": 530,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 32,
+   "name": "villager38",
+   "x": 662,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 33,
+   "name": "villager39",
+   "x": 794,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 34,
+   "name": "villager4",
+   "x": 926,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 35,
+   "name": "villager40",
+   "x": 1058,
+   "y": 398
+  },
+  {
+   "group": "skin",
+   "index": 36,
+   "name": "villager41",
+   "x": 2,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 37,
+   "name": "villager42",
+   "x": 134,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 38,
+   "name": "villager43",
+   "x": 266,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 39,
+   "name": "villager44",
+   "x": 398,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 40,
+   "name": "villager45",
+   "x": 530,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 41,
+   "name": "villager46",
+   "x": 662,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 42,
+   "name": "villager47",
+   "x": 794,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 43,
+   "name": "villager48",
+   "x": 926,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 44,
+   "name": "villager49",
+   "x": 1058,
+   "y": 530
+  },
+  {
+   "group": "skin",
+   "index": 45,
+   "name": "villager5",
+   "x": 2,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 46,
+   "name": "villager50",
+   "x": 134,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 47,
+   "name": "villager51",
+   "x": 266,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 48,
+   "name": "villager52",
+   "x": 398,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 49,
+   "name": "villager53",
+   "x": 530,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 50,
+   "name": "villager54",
+   "x": 662,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 51,
+   "name": "villager55",
+   "x": 794,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 52,
+   "name": "villager56",
+   "x": 926,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 53,
+   "name": "villager57",
+   "x": 1058,
+   "y": 662
+  },
+  {
+   "group": "skin",
+   "index": 54,
+   "name": "villager58",
+   "x": 2,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 55,
+   "name": "villager59",
+   "x": 134,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 56,
+   "name": "villager6",
+   "x": 266,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 57,
+   "name": "villager60",
+   "x": 398,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 58,
+   "name": "villager61",
+   "x": 530,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 59,
+   "name": "villager62",
+   "x": 662,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 60,
+   "name": "villager63",
+   "x": 794,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 61,
+   "name": "villager64",
+   "x": 926,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 62,
+   "name": "villager65",
+   "x": 1058,
+   "y": 794
+  },
+  {
+   "group": "skin",
+   "index": 63,
+   "name": "villager66",
+   "x": 2,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 64,
+   "name": "villager67",
+   "x": 134,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 65,
+   "name": "villager68",
+   "x": 266,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 66,
+   "name": "villager69",
+   "x": 398,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 67,
+   "name": "villager7",
+   "x": 530,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 68,
+   "name": "villager70",
+   "x": 662,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 69,
+   "name": "villager71",
+   "x": 794,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 70,
+   "name": "villager8",
+   "x": 926,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 71,
+   "name": "villager9",
+   "x": 1058,
+   "y": 926
+  },
+  {
+   "group": "skin",
+   "index": 72,
+   "name": "villager",
+   "x": 2,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 73,
+   "name": "desert",
+   "x": 134,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 74,
+   "name": "jungle",
+   "x": 266,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 75,
+   "name": "plains",
+   "x": 398,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 76,
+   "name": "savanna",
+   "x": 530,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 77,
+   "name": "snow",
+   "x": 662,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 78,
+   "name": "swamp",
+   "x": 794,
+   "y": 1058
+  },
+  {
+   "group": "type",
+   "index": 79,
+   "name": "taiga",
+   "x": 926,
+   "y": 1058
+  },
+  {
+   "group": "profession",
+   "index": 80,
+   "name": "armorer",
+   "x": 1058,
+   "y": 1058
+  },
+  {
+   "group": "profession",
+   "index": 81,
+   "name": "butcher",
+   "x": 2,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 82,
+   "name": "cartographer",
+   "x": 134,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 83,
+   "name": "cleric",
+   "x": 266,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 84,
+   "name": "farmer",
+   "x": 398,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 85,
+   "name": "fisherman",
+   "x": 530,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 86,
+   "name": "fletcher",
+   "x": 662,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 87,
+   "name": "leatherworker",
+   "x": 794,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 88,
+   "name": "librarian",
+   "x": 926,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 89,
+   "name": "mason",
+   "x": 1058,
+   "y": 1190
+  },
+  {
+   "group": "profession",
+   "index": 90,
+   "name": "nitwit",
+   "x": 2,
+   "y": 1322
+  },
+  {
+   "group": "profession",
+   "index": 91,
+   "name": "shepherd",
+   "x": 134,
+   "y": 1322
+  },
+  {
+   "group": "profession",
+   "index": 92,
+   "name": "toolsmith",
+   "x": 266,
+   "y": 1322
+  },
+  {
+   "group": "profession",
+   "index": 93,
+   "name": "weaponsmith",
+   "x": 398,
+   "y": 1322
+  },
+  {
+   "group": "level",
+   "index": 94,
+   "name": "diamond",
+   "x": 530,
+   "y": 1322
+  },
+  {
+   "group": "level",
+   "index": 95,
+   "name": "emerald",
+   "x": 662,
+   "y": 1322
+  },
+  {
+   "group": "level",
+   "index": 96,
+   "name": "gold",
+   "x": 794,
+   "y": 1322
+  },
+  {
+   "group": "level",
+   "index": 97,
+   "name": "iron",
+   "x": 926,
+   "y": 1322
+  },
+  {
+   "group": "level",
+   "index": 98,
+   "name": "stone",
+   "x": 1058,
+   "y": 1322
+  }
+ ]
+}

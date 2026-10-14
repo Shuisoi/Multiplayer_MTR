@@ -72,6 +72,16 @@ public final class BlockEntityTypes {
 		TRAIN_REDSTONE_SENSOR = Init.REGISTRY.registerBlockEntityType(new Identifier(Init.MOD_ID, "train_redstone_sensor"), BlockTrainRedstoneSensor.BlockEntity::new, Blocks.TRAIN_REDSTONE_SENSOR::get);
 		TRAIN_SCHEDULE_SENSOR = Init.REGISTRY.registerBlockEntityType(new Identifier(Init.MOD_ID, "train_schedule_sensor"), BlockTrainScheduleSensor.BlockEntity::new, Blocks.TRAIN_SCHEDULE_SENSOR::get);
 		EYE_CANDY = Init.REGISTRY.registerBlockEntityType(new Identifier(Init.MOD_ID_NTE, "eye_candy"), BlockEyeCandy.BlockEntity::new, Blocks.EYE_CANDY::get);
+		// 客流标记：四种标记（一级/二级/流动/归属锚）**加上两个座位方块**共用**一个**方块实体类型。
+		//
+		// ★ 座位方块（crowd_seat_1/2）必须登记进来：一格被人顶替后会变成座位方块，
+		//   而"手持标记物现形"（RenderCrowdMarker）是**走方块实体渲染器**的 —— 不登记的话
+		//   客户端会把这些方块实体判成 `invalid for ticking` 直接丢掉，于是**勘测时第 1/2 级格看不见**
+		//   （实测踩过：日志里成片 "Block entity mtr:crowd_marker ... invalid for ticking"）。
+		// 种类从方块状态反推（BlockCrowdMarker.kindOf，它对标记和座位都认），不用往 NBT 里存。
+		CROWD_MARKER = Init.REGISTRY.registerBlockEntityType(new Identifier(Init.MOD_ID, "crowd_marker"), BlockCrowdMarker.BlockEntity::new, Blocks.CROWD_MARK_1::get, Blocks.CROWD_MARK_2::get, Blocks.CROWD_FLOW::get, Blocks.CROWD_ANCHOR::get, Blocks.CROWD_SEAT_1::get, Blocks.CROWD_SEAT_2::get);
+		// 停车对标牌子：一个方块一个类型（三个样式是同一个方块的 variant，所以只登记一次）。
+		STOP_MARKER = Init.REGISTRY.registerBlockEntityType(new Identifier(Init.MOD_ID, "stop_marker"), BlockStopMarker.BlockEntity::new, Blocks.STOP_MARKER::get);
 	}
 
 	public static final BlockEntityTypeRegistryObject<BlockAPGDoor.BlockEntity> APG_DOOR;
@@ -138,6 +148,10 @@ public final class BlockEntityTypes {
 	public static final BlockEntityTypeRegistryObject<BlockTrainRedstoneSensor.BlockEntity> TRAIN_REDSTONE_SENSOR;
 	public static final BlockEntityTypeRegistryObject<BlockTrainScheduleSensor.BlockEntity> TRAIN_SCHEDULE_SENSOR;
 	public static final BlockEntityTypeRegistryObject<BlockEyeCandy.BlockEntity> EYE_CANDY;
+	/** 客流标记（四种标记共用；见 {@link BlockCrowdMarker}）。 */
+	public static final BlockEntityTypeRegistryObject<BlockCrowdMarker.BlockEntity> CROWD_MARKER;
+	/** 停车对标牌子（一个样式一个模型，但只有一个方块实体类型）。 */
+	public static final BlockEntityTypeRegistryObject<BlockStopMarker.BlockEntity> STOP_MARKER;
 
 	public static void init() {
 		Init.LOGGER.info("Registering Minecraft Transit Railway block entity types");

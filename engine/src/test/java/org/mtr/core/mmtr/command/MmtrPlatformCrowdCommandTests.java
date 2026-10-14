@@ -213,6 +213,39 @@ public final class MmtrPlatformCrowdCommandTests {
 		}
 	}
 
+	/**
+	 * {@code platform rows}：自动区宽度（没打标记时，站台方块**后面**几格算人流区）。
+	 *
+	 * <p>验三件事：数进去了、超范围被夹到 0–{@code AUTO_ROWS_LIMIT}、0 是"关掉自动区"的合法值
+	 * （不是"没填参数"）。用例跑完把自己改过的值还原，免得影响后面用例对默认值的假设。</p>
+	 */
+	@Test
+	public void autoRowsGateIsClampedAndZeroMeansOff() {
+		final Net net = new Net();
+		try {
+			final MmtrCommandDispatcher.Result set = MmtrCommandDispatcher.execute(net.sim, "platform rows 5");
+			assertTrue(set.ok, Net.text(set));
+			assertEquals(5, MmtrCrowd.autoRows());
+
+			assertTrue(MmtrCommandDispatcher.execute(net.sim, "platform rows 0").ok, "0 = 关掉自动区，是合法值");
+			assertEquals(0, MmtrCrowd.autoRows());
+
+			assertTrue(MmtrCommandDispatcher.execute(net.sim, "platform rows 99").ok);
+			assertEquals(MmtrCrowd.AUTO_ROWS_LIMIT, MmtrCrowd.autoRows(), "超上限要夹到 " + MmtrCrowd.AUTO_ROWS_LIMIT);
+
+			assertTrue(MmtrCommandDispatcher.execute(net.sim, "platform rows -3").ok);
+			assertEquals(0, MmtrCrowd.autoRows(), "负数夹到 0");
+
+			final MmtrCommandDispatcher.Result show = MmtrCommandDispatcher.execute(net.sim, "platform rows show");
+			assertTrue(show.ok, Net.text(show));
+			assertTrue(Net.text(show).contains("自动区宽度"), Net.text(show));
+
+			assertFalse(MmtrCommandDispatcher.execute(net.sim, "platform rows abc").ok, "非整数必须报用法");
+		} finally {
+			MmtrCrowd.setAutoRows(MmtrCrowd.DEFAULT_AUTO_ROWS);
+		}
+	}
+
 	@Test
 	public void badInputIsRejectedWithUsage() {		final Net net = new Net();
 

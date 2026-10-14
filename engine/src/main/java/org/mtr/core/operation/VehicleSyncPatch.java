@@ -97,6 +97,14 @@ public final class VehicleSyncPatch {
 		"mmtrPneumaticBrakeForceN",
 		// 任务/许可读数
 		"mmtrMotionMirror", "mmtrRunTotalDistance", "mmtrRunStopTarget",
+		/*
+		 * notes/422 P1：**停车对标牌子的读数**（牌子说的车头停点 + 它认几辆）。
+		 *
+		 * <p>只发一次就够（自臂那一刻定下来），但必须在白名单里：司机在站台前减速的那几十秒里
+		 * 速度与门都在变、整份快照本来就会发 —— 而"刚进站台那一下"读数从无到有，
+		 * 不进这张表就可能要等到下一次整份快照才出现在 HUD 上。</p>
+		 */
+		"mmtrStopMarkerTargetM", "mmtrStopMarkerCars",
 		"mmtrAwsWarningPending", "mmtrAwsWarningAcknowledged", "mmtrBlockHeld", "mmtrSpeedLimitKmh",
 		"mmtrLzbSupervising", "mmtrLzbCeilingKmh", "mmtrLzbTargetKmh", "mmtrLzbTargetDistanceM",
 		// 任务提示（作业号 / 这一步的人话说明 / 第几步 / mission 状态与执行者）—— 司机 HUD 读它。

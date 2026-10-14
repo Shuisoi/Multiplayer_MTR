@@ -4,6 +4,7 @@ import org.jspecify.annotations.Nullable;
 import org.mtr.core.data.Data;
 import org.mtr.core.data.Platform;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -102,8 +103,16 @@ public final class MmtrCrowd {
 
 	/** 单站台同时存在的人数上限的默认值。 */
 	public static final int DEFAULT_MAX_PER_PLATFORM = 48;
-	/** 单站台人数上限的硬顶（防手滑写成几千）。 */
-	public static final int MAX_PER_PLATFORM_LIMIT = 400;
+	/**
+	 * 单站台人数上限的硬顶（防手滑写成几千）。
+	 *
+	 * <p>2026-10-10 从 400 放宽到 4000：用户口径"**无需限制站台村民数，塞满**" ——
+	 * 客量 100% 要能把**每一个候选格**都站上人，而一条 220 格站台的候选是
+	 * 一级 180 + 二级 460 + 流动 ~190 ≈ **820–834 格**，400 会把"塞满"拦腰截断。
+	 * 放宽之后 {@code cap ≥ 候选数} 时，{@code 人数 = 满员 × 客量%} 就退化为
+	 * "100% = 每格一人"，与旧口径完全等价（见设计文档 §13 与 MmtrCrowdModule#select）。</p>
+	 */
+	public static final int MAX_PER_PLATFORM_LIMIT = 4000;
 	/** 玩家半径的默认值（格）。 */
 	public static final int DEFAULT_PLAYER_RADIUS = 96;
 	/** 玩家半径的硬顶（格）。 */
@@ -145,6 +154,53 @@ public final class MmtrCrowd {
 
 	public static void setPlayerRadius(int value) {
 		PLAYER_RADIUS.set(Math.max(16, Math.min(PLAYER_RADIUS_LIMIT, value)));
+	}
+
+	/** 自动区宽度（格）的默认值：没打标记时，从站台方块往站台里数几格算人流区。 */
+	public static final int DEFAULT_AUTO_ROWS = 2;
+	/** 自动区宽度的硬顶（格）。 */
+	public static final int AUTO_ROWS_LIMIT = 8;
+
+	/**
+	 * **自动区宽度**：没打标记方块时，游戏侧从站台方块（MTR 站台方块那一排）**往站台里**数几格。
+	 *
+	 * <p>用户口径（2026-10）："站台方块本身不能站人，所以外扩二格即可" —— 现场量过（上水村 x=900）：
+	 * 站台方块那一排（z=1798）紧贴轨道，人站的那一层地面在它**后面**（z=1797、1796，同为 y=65 的
+	 * 平滑石台面），站台方块自己那一格上不站人。所以默认 2：站台方块后面那两排是人流区。</p>
+	 *
+	 * <p>0 = **关掉自动区**（站台上只认手动放的标记方块）。站台比两格宽得多时，
+	 * 就把自动区关掉、用标记方块精确画（一级/二级/流动见 {@code MmtrCrowdModule}）。</p>
+	 */
+	private static final AtomicInteger AUTO_ROWS = new AtomicInteger(DEFAULT_AUTO_ROWS);
+
+	public static int autoRows() {
+		return AUTO_ROWS.get();
+	}
+
+	public static void setAutoRows(int value) {
+		AUTO_ROWS.set(Math.max(0, Math.min(AUTO_ROWS_LIMIT, value)));
+	}
+
+	/**
+	 * **勘测模式**：打开后，玩家半径那道闸门不再生效 —— 只要区块加载着，站台就按客量铺出人来。
+	 *
+	 * <p>为什么要有这个开关：</p>
+	 * <ul>
+	 *   <li>布景/截图：人不在场（或者人在站厅、在调试别的站台）时也想看这条站台铺出来什么样；</li>
+	 *   <li>核对：{@code platform scan} 报"半径内没玩家 ⇒ 整条站台收走"时，用它区分
+	 *       "是闸门收走的"还是"根本没铺出来"。</li>
+	 * </ul>
+	 * <p><b>代价</b>：所有**已加载区块**里的站台都会铺人（forceload 的站台也算），
+	 * 所以它默认是关的 —— 平时靠玩家半径把看不见的人省掉。用完记得关。</p>
+	 */
+	private static final AtomicBoolean FORCE_POPULATE = new AtomicBoolean(false);
+
+	public static boolean forcePopulate() {
+		return FORCE_POPULATE.get();
+	}
+
+	public static void setForcePopulate(boolean value) {
+		FORCE_POPULATE.set(value);
 	}
 
 	// ------------------------------------------------------------------ 重算版本号

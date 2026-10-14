@@ -160,6 +160,23 @@ public class Simulator extends Data implements Utilities {
 	 * block/section model, with optional covered binds (which rail/approach a light reads). */
 	public final org.mtr.core.mmtr.signal.MmtrSignalRegistry mmtrSignals = new org.mtr.core.mmtr.signal.MmtrSignalRegistry();
 	private java.nio.file.Path mmtrSignalsPath;
+	/**
+	 * 停车对标牌子登记表（设计《停车对标-牌子方块与站台停车基准》§5.1）：每一块世界里立着的
+	 * {@code mmtr:stop_marker} 牌子在这里登记一条"这个辆数、这个方向的车头停在这根轨的这个位置"。
+	 *
+	 * <p>为什么与信号灯登记表并列单开一份：牌子是**自由摆放的方块**（位置任意、拆装频繁），
+	 * 生命周期与站台对象无关；登记表才是"停车基准"的权威来源（§5.2 的自动车、§5.3 的司机读数都查它），
+	 * 方块只是它的输入面。落盘到 {@code mmtr-stop-markers.json}，随存档回来。</p>
+	 */
+	public final org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry mmtrStopMarkers = new org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry();
+	private java.nio.file.Path mmtrStopMarkersPath;
+	/**
+	 * **车站人流系统**（客量的自动动态设置）：按"时段曲线 × 车站基准 × 实测班次 × 事件 + 停站冲量"
+	 * 算出每个站台该有多少人，平滑量化后写进 {@code Platform.crowdLevel}。默认**关着**
+	 * （{@code crowd on} 打开），关着时只观察、一行都不写。配置落在 {@code mmtr-crowd-system.json}。
+	 */
+	public final org.mtr.core.mmtr.crowd.MmtrCrowdSystem mmtrCrowdSystem = new org.mtr.core.mmtr.crowd.MmtrCrowdSystem();
+	private java.nio.file.Path mmtrCrowdSystemPath;
 	/** OP command queue (指令栏): web-pushed commands wait here for the game-side executor
 	 * (fabric server) to poll and run (e.g. /signals scan); results come back as log lines. */
 	public final java.util.ArrayDeque<String> mmtrCommandQueue = new java.util.ArrayDeque<>();
@@ -592,6 +609,22 @@ public class Simulator extends Data implements Utilities {
 		mmtrSignalsPath = savePath.resolve("mmtr-signals.json");
 		final org.mtr.core.mmtr.signal.MmtrSignalRegistry loadedSignals = org.mtr.core.mmtr.signal.MmtrSignalRegistry.load(mmtrSignalsPath);
 		loadedSignals.signals.forEach(mmtrSignals.signals::put);
+
+		// MMTR: stop-marker registry (停车对标牌子登记表) - placed mmtr:stop_marker blocks whose
+		// platform/direction/fraction were resolved when they were registered.
+		mmtrStopMarkersPath = savePath.resolve("mmtr-stop-markers.json");
+		final org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry loadedStopMarkers = org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.load(mmtrStopMarkersPath);
+		loadedStopMarkers.markers.forEach(mmtrStopMarkers.markers::put);
+
+		// MMTR: crowd system (车站人流系统) - 客量的自动动态设置（时段曲线 / 车站基准 / 班次 / 事件 / 停站冲量）。
+		mmtrCrowdSystemPath = savePath.resolve("mmtr-crowd-system.json");
+		try {
+			final org.mtr.core.mmtr.crowd.MmtrCrowdSystem loaded = org.mtr.core.mmtr.crowd.MmtrCrowdSystem.load(mmtrCrowdSystemPath);
+			mmtrCrowdSystem.replaceWith(loaded);
+			log.info("MMTR: crowd system loaded for {} (enabled={}, profile={})", dimension, mmtrCrowdSystem.isEnabled(), mmtrCrowdSystem.getProfileName());
+		} catch (Exception e) {
+			log.warn("Failed to load MMTR crowd system for {}: {}", dimension, e.getMessage());
+		}
 
 		// MMTR: web-authored consist jobs (replaces the depot timetable for mmtr-managed stock).
 		mmtrJobsPath = savePath.resolve("mmtr-jobs.json");
@@ -2450,6 +2483,109 @@ public class Simulator extends Data implements Utilities {
 	}
 
 	/**
+	 * 登记/刷新一块停车对标牌子（游戏端的世界扫描与刷子都走它），**内容真的变了**才落盘。
+	 *
+	 * <h3>为什么方向与归属在这里算，而不是让游戏端上报</h3>
+	 * <p>方块那边只有 {@code facing}（牌面朝哪）与一个可选的 {@code platformId}：方向是"牌子落在股道哪半段"
+	 * 的函数（驾驶室在列车前端、牌子在车头后方，见
+	 * {@link org.mtr.core.mmtr.stopmark.MmtrStopMarkerGeometry#deriveTowardEnd0}），归属是"就近解析 + 显式绑定优先"。
+	 * 这两件事都在引擎里做，两个方向就永远对称、两台机器上的结论也永远一致。</p>
+	 *
+	 * <h3>什么情况下拒收（返回 false 且不写入）</h3>
+	 * <ul>
+	 *   <li>辆数不在 2..10（设计 §4.3：门栅格表只覆盖这些编组）；</li>
+	 *   <li>显式给的 platformId 在数据里不存在（**不**偷偷退回就近解析：显式绑定优选就意味着它错了该报错）；</li>
+	 *   <li>就近解析找不到站台，或站台还没铺图轨；</li>
+	 *   <li>车头停点落在股道之外（{@code fraction ∉ [0,1]}，设计 §4.3）。</li>
+	 * </ul>
+	 *
+	 * <p>拒收时**不留**一条"没有基准"的牌子：登记表里的每一条都必须能直接当停车基准用，
+	 * 否则 P2 的自动车就要在查表之后再判一次有效性 —— 那是把同一个判据写两遍。</p>
+	 *
+	 * @param platformIdHint block entity 里写的归属；0 = 按位置就近解析（设计 §4.2 的解析顺序）
+	 * @param datumM         参照点相对车头的偏移；非正数按默认 1.25 m（驾驶室侧窗）
+	 * @return 是否新增，或已有那条的内容变了（调用方据此写扫描报告）
+	 */
+	public boolean mmtrStopMarkerRegister(int x, int y, int z, int cars, long platformIdHint, String label, double datumM) {
+		if (cars < 2 || cars > 10) {
+			return false;
+		}
+		/*
+		 * ★ 坐标口径：传进来的是**方块坐标**（游戏端 {@code pos.getX/getY/getZ}），而牌面画在方块中心
+		 * 那一竖列上，所以投影一律按 {@code x+0.5 / z+0.5} 算。
+		 *
+		 * <p>差这半格不会报任何错，只会让车头**系统性地**停偏半米 —— 而对位容差只有 ±0.45 m
+		 * （设计 §10.4），半米就是门对不上洞。理想牌位落在 {@code *.225/*.775}，方块中心栅格是
+		 * {@code *.5}，剩下的 ±0.275 m 才是这条方案真正的精度下限（设计 §12.2）。</p>
+		 */
+		final double markerX = x + 0.5;
+		final double markerZ = z + 0.5;
+		final org.mtr.core.data.Platform platform = platformIdHint == 0
+			? org.mtr.core.mmtr.stopmark.MmtrStopMarkerGeometry.nearbyPlatform(this, markerX, y, markerZ)
+			: mmtrPlatformById(platformIdHint);
+		if (platform == null) {
+			return false;
+		}
+		final long platformId = platform.getId();
+		final boolean towardEnd0 = org.mtr.core.mmtr.stopmark.MmtrStopMarkerGeometry.deriveTowardEnd0(this, platformId, markerX, markerZ);
+		final double datum = datumM > 0 ? datumM : 1.25;
+		final org.mtr.core.mmtr.stopmark.MmtrStopMarkerGeometry.Projection projection =
+			org.mtr.core.mmtr.stopmark.MmtrStopMarkerGeometry.project(this, platformId, markerX, y, markerZ, towardEnd0, datum);
+		if (projection == null) {
+			return false;
+		}
+		final org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.StopMarkerEntry entry = new org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.StopMarkerEntry();
+		entry.x = x;
+		entry.y = y;
+		entry.z = z;
+		entry.cars = cars;
+		entry.towardEnd0 = towardEnd0;
+		entry.platformId = platformId;
+		entry.platformHex = platform.getHexId();
+		entry.railHex = projection.railHex();
+		entry.fraction = projection.fraction();
+		entry.datumM = datum;
+		entry.label = label == null ? "" : label;
+		entry.headX = projection.headX();
+		entry.headY = projection.headY();
+		entry.headZ = projection.headZ();
+		final boolean changed = mmtrStopMarkers.upsert(entry);
+		if (changed && mmtrStopMarkersPath != null) {
+			org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.save(mmtrStopMarkersPath, mmtrStopMarkers.markers);
+		}
+		return changed;
+	}
+
+	/**
+	 * 删掉一条停车对标牌子登记并落盘（世界扫描发现"那一格已经没有牌子了"、玩家敲掉、或指令删除时用）。
+	 *
+	 * @return 是否真的删掉了一条
+	 */
+	public boolean mmtrStopMarkerRemove(int x, int y, int z) {
+		final boolean changed = mmtrStopMarkers.remove(x, y, z);
+		if (changed && mmtrStopMarkersPath != null) {
+			org.mtr.core.mmtr.stopmark.MmtrStopMarkerRegistry.save(mmtrStopMarkersPath, mmtrStopMarkers.markers);
+		}
+		return changed;
+	}
+
+	/**
+	 * 按 id 找站台；不存在返回 null。
+	 *
+	 * <p>刻意不做"找不到就退回就近解析"：显式绑定是设计 §4.2 里的**第一优先**，
+	 * 它写错了就该表现为"这块牌子没登记"（世界里红叉），而不是悄悄绑到隔壁股道上 ——
+	 * 后者会静默地把车停错地方，是这条链路上最难查的一类故障。</p>
+	 */
+	private org.mtr.core.data.@org.jspecify.annotations.Nullable Platform mmtrPlatformById(long platformId) {
+		for (final org.mtr.core.data.Platform platform : platforms) {
+			if (platform.getId() == platformId) {
+				return platform;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * 删掉一条信号灯登记并落盘（世界扫描发现"那一格已经没有灯了"时用）。
 	 *
 	 * <p>与 {@link #mmtrSignalOp} 的 remove 区别：那个是走指令通道的通用删除，这个专门给**扫描**
@@ -3526,6 +3662,15 @@ public class Simulator extends Data implements Utilities {
 			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
 			mmtrDuties.tick(getCurrentMillis());
 			org.mtr.core.mmtr.probe.MmtrProbe.end("duties", probeT);
+			/*
+			 * **车站人流系统**（客量的自动动态设置）：自己带周期闸门（默认 5 秒一次），
+			 * 周期没到就是一次 long 比较。放在车辆走行**之后**：这一拍"哪些车停在哪条站台上"
+			 * （进站/出站确认、停稳判据）才是**本 tick 的事实**，于是"车进站 ⇒ 站台上人聚起来"
+			 * 是同一拍发生的，而不是晚一拍。
+			 */
+			probeT = org.mtr.core.mmtr.probe.MmtrProbe.begin();
+			mmtrCrowdSystem.tick(this);
+			org.mtr.core.mmtr.probe.MmtrProbe.end("crowd.system", probeT);
 			/*
 			 * notes/411 钥匙兜底网：表里只会有"刚被拔了钥匙、还挂着在跑自动任务"的车（正常是空的）。
 			 * 稳态成本只是一次取模 + 一次 isEmpty —— 判断与重试都在 MmtrAutoKeyWatch 里按 250 ms 节拍做。

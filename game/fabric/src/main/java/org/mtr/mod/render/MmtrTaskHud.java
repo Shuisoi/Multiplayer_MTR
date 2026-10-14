@@ -619,6 +619,22 @@ public final class MmtrTaskHud {
 		}
 
 		/*
+		 * ⑤b **到对标点（停车牌子）的距离**（notes/422）。
+		 *
+		 * 与上面那一行同一个形状、不同的来源：上面那一行是**任务/自动车的停车点**，这一行是
+		 * **站台上牌子说的那个点**（一个辆数一块牌子）。玩家开车做站台作业时前者恒为 -1（引擎不干预
+		 * 玩家停车），而后者正是"给玩家一个对标的点"这条需求的落点 —— 所以两行都要有，缺哪一行都会让
+		 * 一类司机看不到自己要读的数。
+		 *
+		 * 没铺牌子的线路这一行**永远不出现**（引擎发的是 -1）：老线路的 HUD 一字不变。
+		 */
+		final double stopMarkerDistance = vehicle.getMmtrStopMarkerDistanceM();
+		if (stopMarkerDistance >= 0) {
+			rows.add(Row.of("对标点 " + distanceText(stopMarkerDistance)
+				+ (vehicle.getMmtrStopMarkerCars() > 0 ? "（" + vehicle.getMmtrStopMarkerCars() + " 辆）" : ""), VALUE_COLOR));
+		}
+
+		/*
 		 * ⑥ 子任务链（用户口径 2026-09-21）：到站停稳 → 开门 → 停够 → 关门 ——
 		 * **一次只显示一条**（用户口径 2026-09-25「不一次性全部显示，单独显示每一步」）。
 		 *

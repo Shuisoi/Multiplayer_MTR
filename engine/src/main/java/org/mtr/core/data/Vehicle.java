@@ -991,11 +991,26 @@ public class Vehicle extends VehicleSchema implements Utilities {
 				return;
 			}
 			targetRail = MmtrRunPlanner.findSavedRailRail(simulator, targetSidingId);
-			stopFraction = 1.0;
 			if (targetRail == null) {
 				mission.fail("target siding " + targetSidingId + " has no graph rail");
 				return;
 			}
+			/*
+			 * **按停车对标牌子停**（notes/422，设计 §5.2）：站台装了牌子（一个辆数一块、方向由牌子位置
+			 * 编码）时，车头停到牌子算出来的那一点，而不是站台轨在行进方向上的远端端点。
+			 *
+			 * <p>为什么默认仍是 1.0：牌子是**新增的、可缺省的**一层。没有牌子的线路（老世界、还没铺的
+			 * 站台）必须与今天逐位相同 —— 查不到牌子就是 -1，落回原来那一句 {@code stopFraction = 1.0}。</p>
+			 *
+			 * <p>这里只改"车头停在哪"，不动进路、不动联锁、不动到站判据：锚点校正
+			 * （{@link #mmtrResolveStopAnchor}）与门/PSD 联动都按新比例走同一条老路。</p>
+			 */
+			final double stopMarkerFraction = org.mtr.core.mmtr.stopmark.MmtrStopMarkerStops.stopFractionFor(
+				simulator, this, targetSidingId, targetRail, mission.getTargetViaNodes());
+			stopFraction = stopMarkerFraction >= 0 ? stopMarkerFraction : 1.0;
+			// P1（notes/422）：牌子的辆数记下来 —— 客户端 HUD/PDA 用它在"对标点"那一行写"（N 辆）"。
+			// 只记不刹车：玩家任务那条路（下面的 PLAYER 分支）原样不设停车目标（notes/229）。
+			mmtrStopMarkerCars = stopMarkerFraction >= 0 ? vehicleExtraData.immutableVehicleCars.size() : 0;
 		}
 		if (targetRail.getHexId().equals(mmtrMotionWalker.railHex())) {
 			// Already standing on the target rail: the movement is complete. This is the normal end of a
@@ -1118,6 +1133,15 @@ public class Vehicle extends VehicleSchema implements Utilities {
 		}
 		mmtrTurnoutWaitSinceMillis = 0;
 		mmtrTurnoutYieldUntilMillis = 0;
+		/*
+		 * P1（notes/422）：**只读对标读数** —— 牌子说的那个点在哪。
+		 *
+		 * <p>与 {@code setMmtrMotionStopTarget} 是两件事：那个会成为**刹车目标**（自动车那条路走），
+		 * 而玩家任务按用户口径不许干预停车（notes/229），所以玩家那条路只把"还有多远"发给 HUD/PDA，
+		 * 踩不踩、什么时候踩归司机。这里记的是**同一个 plan** 算出来的累计里程，于是两条读数的口径
+		 * 完全一致（客户端都是"目标 − railProgress"）。</p>
+		 */
+		mmtrStopMarkerTargetM = mmtrStopMarkerCars > 0 ? plan.stopCumulativeM : -1;
 		if (mission.getExecutor() == MmtrMission.Executor.AUTOPILOT) {
 			setMmtrMotionAuto(true);
 			setMmtrMotionStopTarget(plan.stopCumulativeM, plan.stopRailHex, plan.stopFraction, mission.getKind() == MmtrMission.Kind.PASSENGER);
@@ -5857,6 +5881,12 @@ public class Vehicle extends VehicleSchema implements Utilities {
 	 * vehicle fields so clients can mirror the physics and show the authoritative state.
 	 */
 	private void updateMmtrSyncFields() {
+		// notes/422 P1：牌子读数只在"这一趟任务还有效"时有意义 —— 任务完成/失败/取消之后必须清掉，
+		// 否则 HUD/PDA 会一直挂着一个陈旧的"到对标点 37 m"（而车早开走了）。
+		if (mmtrMission == null || mmtrMission.isTerminal()) {
+			mmtrStopMarkerTargetM = -1;
+			mmtrStopMarkerCars = 0;
+		}
 		mmtrActive = mmtrManualOverride && mmtrConsistType != null;
 		mmtrMode = mmtrConsistType == null ? "" : mmtrConsistType.getControlMode().name();
 		mmtrDriver = mmtrDriverUuid == null ? "" : mmtrDriverUuid.toString();
@@ -6245,6 +6275,10 @@ public class Vehicle extends VehicleSchema implements Utilities {
 
 	/** 本次运行的停车目标（m，走行器距离空间；{@code < 0} = 没有目标）。 */
 	public double getMmtrRunStopTargetFromSync() { return mmtrRunStopTarget; }
+	/** notes/422 P1：牌子说的车头停点（同 mmtrRunStopTarget 的距离坐标）；{@code < 0} = 这趟没有牌子。 */
+	public double getMmtrStopMarkerTargetMFromSync() { return mmtrStopMarkerTargetM; }
+	/** notes/422 P1：牌子认几辆；0 = 这趟没有牌子。 */
+	public long getMmtrStopMarkerCarsFromSync() { return mmtrStopMarkerCars; }
 
 	/** 本次运行的总里程（m，同一坐标空间；{@code <= 0} = 没有路线）。 */
 	public double getMmtrRunTotalDistanceFromSync() { return mmtrRunTotalDistance; }

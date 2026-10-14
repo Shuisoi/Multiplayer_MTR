@@ -89,6 +89,13 @@ public final class Blocks {
 		PLATFORM_UK_1_SLAB = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "platform_uk_1_slab"), () -> new Block(new BlockPlatformSlab(createDefaultBlockSettings(false))), CreativeModeTabs.STATION_BUILDING_BLOCKS);
 		// 客流「村民」：由 MmtrCrowdModule 按站台客量自动铺在站台边缘；也可以手动放一个看效果。
 		CROWD_VILLAGER = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_villager"), () -> new Block(new BlockCrowdVillager()), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		// 客流标记（透明、手持现形；见 BlockCrowdMarker）：一级排队区 / 二级候车区 / 流动走道 / 归属锚
+		CROWD_MARK_1 = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_mark_1"), () -> new Block(new BlockCrowdMarker(BlockCrowdMarker.Kind.GRADE_1)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		CROWD_MARK_2 = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_mark_2"), () -> new Block(new BlockCrowdMarker(BlockCrowdMarker.Kind.GRADE_2)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		CROWD_FLOW = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_flow"), () -> new Block(new BlockCrowdMarker(BlockCrowdMarker.Kind.FLOW)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		CROWD_ANCHOR = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_anchor"), () -> new Block(new BlockCrowdMarker(BlockCrowdMarker.Kind.ANCHOR)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		// 停车对标牌子（站台上声明"这个辆数、这个方向的车头停在哪"；三个样式共用一个方块，见 BlockStopMarker）
+		STOP_MARKER = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "stop_marker"), () -> new Block(new BlockStopMarker()), CreativeModeTabs.STATION_BUILDING_BLOCKS);
 
 		// Signs
 		RAILWAY_SIGN_2_EVEN = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "railway_sign_2_even"), () -> new Block(new BlockRailwaySign(2, false)), CreativeModeTabs.RAILWAY_FACILITIES);
@@ -253,6 +260,18 @@ public final class Blocks {
 
 		// NTE
 		EYE_CANDY = registerBlockWithBlockItem(new Identifier(Init.MOD_ID_NTE, "eye_candy"), () -> new Block(new BlockEyeCandy()), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+
+		/*
+		 * 客流「雕像座位」（站定客流）：由 MmtrCrowdModule 铺在标记格上 —— 站定的人 = 烘好的方块模型
+		 * （进区块网格，每帧成本≈0），走动的仍然是村民实体。
+		 *
+		 * ★★ **必须留在枚举最末尾、只准追加**：区块调色板存的是**全局 block state id**，
+		 * 把新方块插在中间会把它后面所有方块的状态 id 顶开 ⇒ 老存档里的方块会变成别人。
+		 * 同理，这两个方块各有 1024 个状态（facing 4 × bodysub 4 × head 16 × variant 4），
+		 * 本身也**不准再改状态数**（改了就动到排在它们后面的方块 —— 现在没有，将来也只在末尾加）。
+		 */
+		CROWD_SEAT_1 = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_seat_1"), () -> new Block(new BlockCrowdSeat(BlockCrowdMarker.Kind.GRADE_1)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
+		CROWD_SEAT_2 = registerBlockWithBlockItem(new Identifier(Init.MOD_ID, "crowd_seat_2"), () -> new Block(new BlockCrowdSeat(BlockCrowdMarker.Kind.GRADE_2)), CreativeModeTabs.STATION_BUILDING_BLOCKS);
 	}
 
 	public static final BlockRegistryObject AIRPLANE_NODE;
@@ -310,6 +329,20 @@ public final class Blocks {
 	public static final BlockRegistryObject PIDS_4;
 	public static final BlockRegistryObject PIDS_POLE;
 	public static final BlockRegistryObject CROWD_VILLAGER;
+	/** 客流标记·一级（贴站台边的排队格）。 */
+	public static final BlockRegistryObject CROWD_MARK_1;
+	/** 客流标记·二级（往里一层的候车格）。 */
+	public static final BlockRegistryObject CROWD_MARK_2;
+	/** 客流标记·流动（人流走道，沿朝向来回走）。 */
+	public static final BlockRegistryObject CROWD_FLOW;
+	/** 客流归属锚（放在站台方块上，声明标记区归哪条站台）。 */
+	public static final BlockRegistryObject CROWD_ANCHOR;
+	/** 客流雕像·一级（站定客流的一个人 = 一格烘好的方块模型；顶替 {@link #CROWD_MARK_1}）。 */
+	public static final BlockRegistryObject CROWD_SEAT_1;
+	/** 客流雕像·二级（同上，顶替 {@link #CROWD_MARK_2}）。 */
+	public static final BlockRegistryObject CROWD_SEAT_2;
+	/** 停车对标牌子（一个方块三个样式；牌子属性见 {@code BlockStopMarker.BlockEntity}）。 */
+	public static final BlockRegistryObject STOP_MARKER;
 	public static final BlockRegistryObject PIDS_SINGLE_ARRIVAL_1;
 	public static final BlockRegistryObject PLATFORM;
 	public static final BlockRegistryObject PLATFORM_INDENTED;

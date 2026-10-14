@@ -37,7 +37,9 @@ import java.util.List;
  *   manifest list | manifest add … | manifest remove … | manifest reload
  *   point set|lock|unlock|locks|release …
  *   query &lt;topology|signals|trains|points|sections|depots&gt;
+ *   stop-marker list | stop-marker add … | stop-marker remove &lt;x&gt; &lt;y&gt; &lt;z&gt;   （停车对标牌子登记表，设计 §5.5）
  *   world scan-signals          （转交游戏端：只有它能枚举已加载区块）
+ *   world scan-stop-markers     （同上：扫已加载区块里的停车对标牌子）
  * </pre>
  *
  * <h3>回复</h3>
@@ -119,6 +121,8 @@ public final class MmtrCommandDispatcher {
 				return MmtrRailCommands.execute(simulator, verb, positional, options);
 			case "platform":
 				return MmtrPlatformCommands.execute(simulator, verb, positional, options);
+			case "crowd":
+				return MmtrCrowdCommands.execute(simulator, verb, positional, options);
 			case "manifest":
 				return MmtrManifestCommands.execute(simulator, verb, positional, options);
 			case "job":
@@ -128,6 +132,8 @@ public final class MmtrCommandDispatcher {
 			case "query":
 			case "world":
 				return MmtrQueryCommands.execute(simulator, namespace, verb, positional, options);
+			case "stop-marker":
+				return MmtrQueryCommands.executeStopMarker(simulator, verb, positional, options);
 			case "server":
 				return MmtrServerCommands.execute(simulator, verb, positional, options);
 			case "probe":
@@ -200,13 +206,24 @@ public final class MmtrCommandDispatcher {
 		result.line("      ★ 不给 --angle1/--angle2 只会画直线（两端朝向被钉在弦向上）；给了才能画转角与 S 弯");
 		result.line("  rail remove <x> <y> <z>   ← 删掉挂在这个节点上的所有轨（= 玩家敲掉该节点方块），不用人在游戏里敲");
 		result.line("  rail list");
-		result.line("  platform list [--station=<车站id|16位hex|名>]                          ← 逐站台报客量与折合人数（1 格一人 = 100%）");
+		result.line("  platform list [--station=<车站id|16位hex|名>]                          ← 逐站台报客量与折合人数（站台面 1 格一人 = 100%）");
 		result.line("  platform set <站台16位hex|站台id> <0-100> | platform station <车站id|hex|名> <0-100> | platform all <0-100>");
+		result.line("       ★ 车站人流系统（crowd on）开着时，这三条改的是**系统的基准**，不是直接写字段");
 		result.line("  platform refresh                                                     ← 立刻重铺一遍（不改客量；站台上的人被敲掉了就用它）");
 		result.line("  platform scan                                                        ← 让游戏端数一遍世界里**实际**站着几个村民（核对用）");
 		result.line("  platform cap <n|show> | platform radius <n|show>                      ← 人数闸门：单站台上限（默认 48）/ 玩家半径（默认 96 格），防客户端卡顿");
+		result.line("  platform rows <n|show>                                               ← 自动区宽度（默认 2 格：站台方块**后面**那两排；0 = 只认手动标记）");
+		result.line("  platform force <on|off|show>                                         ← 勘测模式：忽略玩家半径，所有已加载区块的站台都铺人（布景/截图用，用完关掉）");
+		result.line("  crowd status [--detail] | crowd why <站台hex>                         ← 车站人流系统：站台客量的自动动态设置（读数 = 算式逐项）");
+		result.line("  crowd on | off | toggle | crowd now | crowd snap                       ← 开/关系统；now = 立刻重算（平滑），snap = 直接到位");
+		result.line("  crowd clock world|real | crowd profile 通勤|全天|夜间|空                ← 时钟来源；曲线预设");
+		result.line("  crowd curve [show|<小时 0-23> <0-100>|<24 个逗号分隔的数>]              ← 看/改「一天里的客流节律」");
+		result.line("  crowd base <车站id|hex|名|站台hex|all> <0-100|default>                  ← 自动系统的基准客量（乘在曲线上；default = 去掉覆盖）");
+		result.line("  crowd tune [--period=秒 --tau=秒 --surge-tau=秒 --step=% --service=0-1 --surge=%]  ← 周期 / 平滑 / 冲量跟进 / 量化 / 班次强度 / 停站冲量");
+		result.line("  crowd event add <+n|-n|x倍> <分钟|forever> [--station=<车站|all>] | crowd event list | crowd event clear [id|all]");
 		result.line("  query <topology|signals|trains|points|sections|depots>");
-		result.line("  world scan-signals");
+		result.line("  stop-marker list | stop-marker add <x> <y> <z> [--cars=n] [--platform=<id>] [--label=牌面] [--datum=n] | stop-marker remove <x> <y> <z>");
+		result.line("  world scan-signals | world scan-stop-markers");
 		result.line("  probe on | probe off | probe dump | probe reset | probe status   ← 服务端性能探针（notes/337）");
 		result.line("  server restart [--delay=<秒>] | server stop");
 		return result;
